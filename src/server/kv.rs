@@ -63,6 +63,7 @@ impl StoreHandler {
             .async_scan(msg.take_context(),
                         Key::from_raw(start_key),
                         req.get_limit() as usize,
+                        req.get_key_only(),
                         req.get_version(),
                         cb)
             .map_err(Error::Storage)

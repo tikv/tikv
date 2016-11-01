@@ -79,12 +79,28 @@ impl AssertionStorage {
                ts: u64,
                expect: Vec<Option<(&[u8], &[u8])>>) {
         let key_address = make_key(start_key);
-        let result = self.0.scan(Context::new(), key_address, limit, ts).unwrap();
+        let result = self.0.scan(Context::new(), key_address, limit, false, ts).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter()
             .map(Result::ok)
             .collect();
         let expect: Vec<Option<KvPair>> = expect.into_iter()
             .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    fn scan_key_only_ok(&self,
+                        start_key: &[u8],
+                        limit: usize,
+                        ts: u64,
+                        expect: Vec<Option<&[u8]>>) {
+        let key_address = make_key(start_key);
+        let result = self.0.scan(Context::new(), key_address, limit, true, ts).unwrap();
+        let result: Vec<Option<KvPair>> = result.into_iter()
+            .map(Result::ok)
+            .collect();
+        let expect: Vec<Option<KvPair>> = expect.into_iter()
+            .map(|x| x.map(|k| (k.to_vec(), vec![])))
             .collect();
         assert_eq!(result, expect);
     }
@@ -372,6 +388,15 @@ fn test_txn_store_scan() {
     check_v20();
     check_v30();
     check_v40();
+}
+
+#[test]
+fn test_txn_store_scan_key_only() {
+    let store = new_assertion_storage();
+    store.put_ok(b"A", b"A", 5, 10);
+    store.put_ok(b"B", b"B", 5, 10);
+    store.put_ok(b"C", b"C", 5, 10);
+    store.scan_key_only_ok(b"AA", 2, 10, vec![Some(b"B"), Some(b"C")]);
 }
 
 fn lock(key: &[u8], primary: &[u8], ts: u64) -> LockInfo {

@@ -167,19 +167,25 @@ impl Snapshot for RocksSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self, upper_bound: Option<&[u8]>, mode: ScanMode) -> Result<Cursor<'b>> {
+    fn iter<'b>(&'b self,
+                upper_bound: Option<&[u8]>,
+                fill_cache: bool,
+                mode: ScanMode)
+                -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create iterator");
-        Ok(Cursor::new(self.new_iterator(upper_bound), mode))
+        Ok(Cursor::new(self.new_iterator(upper_bound, fill_cache), mode))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self,
                    cf: CfName,
                    upper_bound: Option<&[u8]>,
+                   fill_cache: bool,
                    mode: ScanMode)
                    -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound)), mode))
+        Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound, fill_cache)),
+                       mode))
     }
 }
 

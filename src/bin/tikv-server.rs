@@ -623,12 +623,29 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           config,
                           Some(80 * 1024 * 1024),
                           |v| v.as_integer()) as u64;
+
     cfg.raft_store.region_check_size_diff =
         get_integer_value("",
                           "raftstore.region-split-check-diff",
                           matches,
                           config,
                           Some(8 * 1024 * 1024),
+                          |v| v.as_integer()) as u64;
+
+    cfg.raft_store.region_compact_check_tick_interval =
+        get_integer_value("",
+                          "raftstore.region-compact-check-tick-interval",
+                          matches,
+                          config,
+                          Some(300_000),
+                          |v| v.as_integer()) as u64;
+
+    cfg.raft_store.region_compact_delete_keys_count =
+        get_integer_value("",
+                          "raftstore.region-compact-delete-keys-count",
+                          matches,
+                          config,
+                          Some(200_000),
                           |v| v.as_integer()) as u64;
 
     let max_peer_down_millis =
@@ -675,7 +692,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           "storage.scheduler-concurrency",
                           matches,
                           config,
-                          Some(1024),
+                          Some(10240),
                           |v| v.as_integer()) as usize;
     cfg.storage.sched_worker_pool_size =
         get_integer_value("",
@@ -788,7 +805,7 @@ fn handle_signal(ch: SendCh<Msg>) {}
 
 fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
-    let ch = SendCh::new(event_loop.channel());
+    let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_endpoints = get_string_value("pd",
                                         "pd.endpoints",
                                         matches,
@@ -850,6 +867,7 @@ fn main() {
                 "log-file",
                 "set log file",
                 "if not set, output log to stdout");
+    opts.optflag("v", "version", "print version information");
     opts.optflag("h", "help", "print this help menu");
     opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
@@ -864,10 +882,7 @@ fn main() {
                 "dsn",
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
                 "dsn: raftkv");
-    opts.optopt("I",
-                "cluster-id",
-                "set cluster id",
-                "in raftkv, must greater than 0; in rocksdb, it will be ignored.");
+    opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
@@ -875,7 +890,12 @@ fn main() {
         print_usage(&program, opts);
         return;
     }
-
+    if matches.opt_present("v") {
+        let (hash, date) = util::build_info();
+        println!("Git Commit Hash: {}", hash);
+        println!("UTC Build Time:  {}", date);
+        return;
+    }
     let config = match matches.opt_str("C") {
         Some(path) => {
             let mut config_file = fs::File::open(&path).expect("config open failed");

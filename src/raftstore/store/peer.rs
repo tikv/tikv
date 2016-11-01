@@ -31,7 +31,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              RegionLocalState};
 use kvproto::pdpb::PeerStats;
-use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -60,7 +60,22 @@ pub enum StaleState {
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
-    pub cb: Callback,
+    pub cb: Option<Callback>,
+}
+
+impl PendingCmd {
+    #[inline]
+    fn call(&mut self, resp: RaftCmdResponse) {
+        self.cb.take().unwrap().call_box((resp,));
+    }
+}
+
+impl Drop for PendingCmd {
+    fn drop(&mut self) {
+        if self.cb.is_some() {
+            panic!("callback of {} is leak.", self.uuid);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -139,7 +154,7 @@ impl PendingCmdQueue {
 }
 
 /// Call the callback of `cmd` that the region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     let region_not_found = Error::RegionNotFound(region_id);
     let mut resp = cmd_resp::new_error(region_not_found);
     cmd_resp::bind_uuid(&mut resp, cmd.uuid);
@@ -147,9 +162,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
            region_id,
            peer_id,
            cmd.uuid);
-    if let Err(e) = cmd.cb.call_box((resp,)) {
-        error!("failed to notify {}: {:?}", cmd.uuid, e);
-    }
+    cmd.call(resp);
 }
 
 pub struct Peer {
@@ -173,6 +186,8 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
 
     pub tag: String,
+
+    pub last_compacted_idx: u64,
 }
 
 impl Peer {
@@ -258,6 +273,7 @@ impl Peer {
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
+            last_compacted_idx: 0,
         };
 
         peer.load_all_coprocessors();
@@ -363,12 +379,9 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T>(&mut self,
-               trans: &T,
-               msgs: &[eraftpb::Message],
-               metrics: &mut RaftMessageMetrics)
-               -> Result<()>
-        where T: Transport
+    fn send<T, I>(&mut self, trans: &T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
+        where T: Transport,
+              I: Iterator<Item = eraftpb::Message>
     {
         for msg in msgs {
             match msg.get_msg_type() {
@@ -480,7 +493,7 @@ impl Peer {
 
         debug!("{} handle raft ready", self.tag);
 
-        let ready = self.raft_group.ready();
+        let mut ready = self.raft_group.ready();
 
         let t = SlowTimer::new();
 
@@ -489,13 +502,13 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1
         if self.is_leader() {
-            try!(self.send(trans, &ready.messages, &mut metrics.message));
+            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
         let apply_result = try!(self.mut_store().handle_raft_ready(&ready));
 
         if !self.is_leader() {
-            try!(self.send(trans, &ready.messages, &mut metrics.message));
+            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
@@ -517,14 +530,18 @@ impl Peer {
         }))
     }
 
+    /// Propose a request.
+    ///
+    /// Return true means the request has been proposed successfully.
     pub fn propose(&mut self,
-                   cmd: PendingCmd,
+                   mut cmd: PendingCmd,
                    req: RaftCmdRequest,
                    mut err_resp: RaftCmdResponse)
-                   -> Result<()> {
+                   -> bool {
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
-            return cmd.cb.call_box((err_resp,));
+            cmd.call(err_resp);
+            return false;
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
@@ -550,7 +567,8 @@ impl Peer {
 
             cmd_resp::bind_uuid(&mut resp, cmd.uuid);
             cmd_resp::bind_term(&mut resp, self.term());
-            return cmd.cb.call_box((resp,));
+            cmd.call(resp);
+            return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
@@ -565,10 +583,16 @@ impl Peer {
 
             // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            return cmd.cb.call_box((make_transfer_leader_response(),));
+            cmd.call(make_transfer_leader_response());
+            return false;
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
-                return Err(box_err!("there is a pending conf change, try later"));
+                info!("{} there is a pending conf change, try later", self.tag);
+                cmd_resp::bind_error(&mut err_resp,
+                                     box_err!("{} there is a pending conf change, try later",
+                                              self.tag));
+                cmd.call(err_resp);
+                return false;
             }
             if let Some(cmd) = self.pending_cmds.take_conf_change() {
                 // if it loses leadership before conf change is replicated, there may be
@@ -580,18 +604,20 @@ impl Peer {
 
             if let Err(e) = self.propose_conf_change(req) {
                 cmd_resp::bind_error(&mut err_resp, e);
-                return cmd.cb.call_box((err_resp,));
+                cmd.call(err_resp);
+                return false;
             }
 
             self.pending_cmds.set_conf_change(cmd);
         } else if let Err(e) = self.propose_normal(req) {
             cmd_resp::bind_error(&mut err_resp, e);
-            return cmd.cb.call_box((err_resp,));
+            cmd.call(err_resp);
+            return false;
         } else {
             self.pending_cmds.append_normal(cmd);
         }
 
-        Ok(())
+        true
     }
 
     fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
@@ -619,17 +645,12 @@ impl Peer {
     ///
     /// Please note that, `NotLeader` here doesn't mean that currently this
     /// peer is not leader.
-    fn notify_not_leader(&self, cmd: PendingCmd) {
+    fn notify_not_leader(&self, mut cmd: PendingCmd) {
         let leader = self.get_peer_from_cache(self.leader_id());
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
         warn!("{} command {} is stale, skip", self.tag, cmd.uuid);
-        if let Err(e) = cmd.cb.call_box((resp,)) {
-            error!("{} failed to clean stale callback of {}: {:?}",
-                   self.tag,
-                   cmd.uuid,
-                   e);
-        }
+        cmd.call(resp);
     }
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
@@ -751,11 +772,9 @@ impl Peer {
         None
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: &eraftpb::Message, trans: &T) -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
-        // TODO: can we use move instead?
-        send_msg.set_message(msg.clone());
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         let mut unreachable = false;
@@ -790,6 +809,25 @@ impl Peer {
 
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
+
+        // There could be two cases:
+        // 1. Target peer already exists but has not established communication with leader yet
+        // 2. Target peer is added newly due to member change or region split, but it's not
+        //    created yet
+        // For both cases the region start key and end key are attached in RequestVote and
+        // Heartbeat message for the store of that peer to check whether to create a new peer
+        // when receiving these messages, or just to wait for a pending region split to perform
+        // later.
+        if self.get_store().is_initialized() &&
+           (msg_type == MessageType::MsgRequestVote ||
+            // the peer has not been known to this leader, it may exist or not.
+            (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)) {
+            let region = self.region();
+            send_msg.set_start_key(region.get_start_key().to_vec());
+            send_msg.set_end_key(region.get_end_key().to_vec());
+        }
+
+        send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
             warn!("{} failed to send msg to {} in store {}, err: {:?}",
@@ -855,6 +893,11 @@ impl Peer {
             try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
             self.mut_store().applied_index_term = term;
+            assert!(term > 0);
+            while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
+                // apprently, all the callbacks whose term is less than entry's term are stale.
+                self.notify_not_leader(cmd);
+            }
             return Ok(None);
         }
 
@@ -897,18 +940,18 @@ impl Peer {
 
     fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
         if get_change_peer_cmd(cmd).is_some() {
-            if let Some(cmd) = self.pending_cmds.take_conf_change() {
+            if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some(cmd.cb);
+                    return Some(cmd.cb.take().unwrap());
                 } else {
                     self.notify_not_leader(cmd);
                 }
             }
             return None;
         }
-        while let Some(head) = self.pending_cmds.pop_normal(term) {
+        while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some(head.cb);
+                return Some(head.cb.take().unwrap());
             }
             // because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
@@ -952,9 +995,7 @@ impl Peer {
         // Bind uuid here.
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term());
-        if let Err(e) = cb.call_box((resp,)) {
-            error!("{} callback err {:?}", self.tag, e);
-        }
+        cb.call_box((resp,));
 
         Ok(exec_result)
     }
@@ -1025,6 +1066,25 @@ impl Peer {
         };
 
         Ok((resp, exec_result))
+    }
+
+    /// Clear all the pending commands.
+    ///
+    /// Please note that all the pending callbacks will be lost.
+    /// Should not do this when dropping a peer in case of possible leak.
+    pub fn clear_pending_commands(&mut self) {
+        if !self.pending_cmds.normals.is_empty() {
+            info!("{} clear {} commands",
+                  self.tag,
+                  self.pending_cmds.normals.len());
+            while let Some(mut cmd) = self.pending_cmds.normals.pop_front() {
+                cmd.cb.take();
+            }
+        }
+        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            info!("{} clear pending conf change", self.tag);
+            cmd.cb.take();
+        }
     }
 }
 

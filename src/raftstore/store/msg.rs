@@ -14,14 +14,13 @@
 use std::boxed::{Box, FnBox};
 use std::fmt;
 
-use raftstore::Result;
 use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
 
-pub type Callback = Box<FnBox(RaftCmdResponse) -> Result<()> + Send>;
+pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 
 #[derive(Debug)]
 pub enum Tick {
@@ -102,6 +101,7 @@ impl fmt::Debug for Msg {
 #[cfg(test)]
 mod tests {
     use std::thread;
+    use std::boxed::FnBox;
     use std::time::Duration;
 
     use mio::{EventLoop, Handler};
@@ -115,13 +115,10 @@ mod tests {
                     request: RaftCmdRequest,
                     timeout: Duration)
                     -> Result<RaftCmdResponse, Error> {
-        wait_event!(|cb: Box<Fn(RaftCmdResponse) + 'static + Send>| {
+        wait_event!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
             sendch.try_send(Msg::RaftCmd {
                     request: request,
-                    callback: box move |resp| {
-                        cb(resp);
-                        Ok(())
-                    },
+                    callback: cb,
                 })
                 .unwrap()
         },
@@ -143,7 +140,7 @@ mod tests {
                     if request.get_header().get_region_id() == u64::max_value() {
                         thread::sleep(Duration::from_millis(100));
                     }
-                    callback.call_box((RaftCmdResponse::new(),)).unwrap()
+                    callback.call_box((RaftCmdResponse::new(),));
                 }
                 // we only test above message types, others panic.
                 _ => unreachable!(),
@@ -154,7 +151,7 @@ mod tests {
     #[test]
     fn test_sender() {
         let mut event_loop = EventLoop::new().unwrap();
-        let sendch = &SendCh::new(event_loop.channel());
+        let sendch = &SendCh::new(event_loop.channel(), "test-sender");
 
         let t = thread::spawn(move || {
             event_loop.run(&mut TestHandler).unwrap();

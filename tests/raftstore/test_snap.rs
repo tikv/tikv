@@ -17,7 +17,6 @@ use std::sync::{Arc, RwLock, Mutex};
 use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tikv::pd::PdClient;
 use tikv::raftstore::Result;
 use tikv::util::HandyRwLock;
 use kvproto::eraftpb::{Message, MessageType};
@@ -106,28 +105,17 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
     cluster.cfg.raft_store.snap_gc_timeout = 2;
 
-    // We use three nodes([1, 2, 3]) for this test.
-    cluster.run();
-
-    // guarantee node 1 is leader
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    cluster.must_put(b"k0", b"v0");
-    assert_eq!(cluster.leader_of_region(1), Some(new_peer(1, 1)));
-
     let pd_client = cluster.pd_client.clone();
-
-    // isolate node 3 for region 1, but keep the heartbeat to make
-    // 3 not vote after filters are cleared.
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
-        .msg_type(MessageType::MsgSnapshot)));
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
-        .msg_type(MessageType::MsgAppend)));
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+    let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    // drop all the snapshot so we can detect stale snapfile.
+    cluster.sim.wl().add_recv_filter(3, box DropSnapshotFilter);
+    pd_client.must_add_peer(r1, new_peer(3, 3));
 
-    let region = pd_client.get_region(b"").unwrap();
-
-    // split (-inf, +inf) -> (-inf, k2), [k2, +inf]
-    cluster.must_split(&region, b"k2");
     cluster.must_put(b"k2", b"v2");
 
     // node 1 and node 2 must have k2, but node 3 must not.
@@ -151,7 +139,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
     assert!(snapfiles.len() > 2);
 
-    cluster.clear_send_filters();
+    cluster.sim.wl().clear_recv_filters(3);
     debug!("filters cleared.");
 
     // node 3 must have k1, k2.

@@ -566,7 +566,7 @@ impl<T: Simulator> Cluster<T> {
         let mut try_cnt = 0;
         loop {
             self.reset_leader_of_region(region_id);
-            if self.leader_of_region(region_id).as_ref().unwrap() == &leader {
+            if self.leader_of_region(region_id) == Some(leader.clone()) {
                 return;
             }
             if try_cnt > 250 {

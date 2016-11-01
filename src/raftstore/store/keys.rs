@@ -176,10 +176,15 @@ pub fn enc_end_key(region: &Region) -> Vec<u8> {
     // only initialized region's end_key can be encoded, otherwise there must be bugs
     // somewhere.
     assert!(!region.get_peers().is_empty());
-    if region.get_end_key().is_empty() {
+    data_end_key(region.get_end_key())
+}
+
+#[inline]
+pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
+    if region_end_key.is_empty() {
         DATA_MAX_KEY.to_vec()
     } else {
-        data_key(region.get_end_key())
+        data_key(region_end_key)
     }
 }
 

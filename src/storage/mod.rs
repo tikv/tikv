@@ -86,6 +86,7 @@ pub enum Command {
         ctx: Context,
         start_key: Key,
         limit: usize,
+        key_only: bool,
         start_ts: u64,
     },
     Prewrite {
@@ -243,7 +244,7 @@ impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel(), "kv-storage");
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
@@ -357,6 +358,7 @@ impl Storage {
                       ctx: Context,
                       start_key: Key,
                       limit: usize,
+                      key_only: bool,
                       start_ts: u64,
                       callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
@@ -364,6 +366,7 @@ impl Storage {
             ctx: ctx,
             start_key: start_key,
             limit: limit,
+            key_only: key_only,
             start_ts: start_ts,
         };
         let tag = cmd.tag();
@@ -703,6 +706,7 @@ mod tests {
         storage.async_scan(Context::new(),
                         make_key(b"\x00"),
                         1000,
+                        false,
                         5,
                         expect_scan(tx.clone(),
                                     vec![

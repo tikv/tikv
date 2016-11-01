@@ -15,6 +15,7 @@ mod reader;
 mod txn;
 mod lock;
 mod write;
+mod metrics;
 
 use std::io;
 pub use self::txn::MvccTxn;
