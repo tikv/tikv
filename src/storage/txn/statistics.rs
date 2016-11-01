@@ -100,7 +100,7 @@ impl RegionsWriteStats {
         let expired = self.collect_expired(timeout_secs);
 
         for region_id in expired {
-            info!("Remove expired statistics for region {}", region_id);
+            info!("region [{}] Remove expired statistics", region_id);
             self.stats.remove(&region_id);
         }
     }

@@ -54,4 +54,11 @@ lazy_static! {
             "Bucketed histogram of latch wait",
             &["type"]
         ).unwrap();
+
+    pub static ref SCHED_GC_EXECUTE_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_scheduler_gc_command_total",
+            "Total number of commands executed by worker pool.",
+            &["type"]
+        ).unwrap();
 }

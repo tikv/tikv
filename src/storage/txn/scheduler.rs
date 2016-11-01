@@ -627,7 +627,15 @@ impl Scheduler {
 
     fn should_schedule(&mut self, cmd: &Command) -> bool {
         match *cmd {
-            Command::Gc { ref ctx, .. } => self.should_schedule_gc(ctx),
+            Command::Gc { ref ctx, .. } => {
+                SCHED_GC_EXECUTE_COUNTER_VEC.with_label_values(&["received"]).inc();
+                if self.should_schedule_gc(ctx) {
+                    SCHED_GC_EXECUTE_COUNTER_VEC.with_label_values(&["executed"]).inc();
+                    true
+                } else {
+                    false
+                }
+            }
             _ => true,
         }
     }
