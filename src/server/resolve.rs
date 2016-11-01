@@ -167,6 +167,9 @@ mod tests {
     }
 
     impl PdClient for MockPdClient {
+        fn get_cluster_id(&self) -> Result<u64> {
+            unimplemented!();
+        }
         fn bootstrap_cluster(&self, _: metapb::Store, _: metapb::Region) -> Result<()> {
             unimplemented!();
         }

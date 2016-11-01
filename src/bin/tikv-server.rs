@@ -803,16 +803,14 @@ fn handle_signal(ch: SendCh<Msg>) {
 #[cfg(not(unix))]
 fn handle_signal(ch: SendCh<Msg>) {}
 
-fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Value, cfg: &Config) {
+fn run_raft_server(listener: TcpListener,
+                   pd_client: RpcClient,
+                   matches: &Matches,
+                   config: &toml::Value,
+                   cfg: &Config) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel(), "raft-server");
-    let pd_endpoints = get_string_value("pd",
-                                        "pd.endpoints",
-                                        matches,
-                                        config,
-                                        None,
-                                        |v| v.as_str().map(|s| s.to_owned()));
-    let pd_client = Arc::new(RpcClient::new(&pd_endpoints, cfg.cluster_id).unwrap());
+    let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
     let store_path = get_store_path(matches, config);
@@ -882,7 +880,6 @@ fn main() {
                 "dsn",
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
                 "dsn: raftkv");
-    opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
@@ -921,12 +918,16 @@ fn main() {
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
     panic_hook::set_exit_hook();
-    let cluster_id = get_integer_value("I",
-                                       "raft.cluster-id",
-                                       &matches,
-                                       &config,
-                                       Some(DEFAULT_CLUSTER_ID as i64),
-                                       |v| v.as_integer()) as u64;
+
+    let pd_endpoints = get_string_value("pd",
+                                        "pd.endpoints",
+                                        &matches,
+                                        &config,
+                                        None,
+                                        |v| v.as_str().map(|s| s.to_owned()));
+    let pd_client = RpcClient::new(&pd_endpoints).unwrap();
+    let cluster_id = pd_client.cluster_id;
+
     let mut cfg = build_cfg(&matches,
                             &config,
                             cluster_id,
@@ -937,5 +938,5 @@ fn main() {
         panic!("in raftkv, cluster_id must greater than 0");
     }
     let _m = TimeMonitor::default();
-    run_raft_server(listener, &matches, &config, &cfg);
+    run_raft_server(listener, pd_client, &matches, &config, &cfg);
 }
