@@ -191,49 +191,19 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
                                             mvcc_type: CfName)
                                             -> Option<Vec<MvccKv<T>>> {
     let prefix = gen_key_prefix(key_prefix);
-    let mut iter = match mvcc_type {
-        CF_DEFAULT => db.new_iterator(None, true),
-        CF_LOCK | CF_WRITE => db.new_iterator_cf(mvcc_type, None, true).unwrap(),
-        _ => return None,
-    };
+    let mut iter = db.new_iterator_cf(mvcc_type, None, false).unwrap();
     iter.seek(prefix.as_slice().into());
     if !iter.valid() {
         None
     } else {
-        match mvcc_type {
-            CF_DEFAULT => {
-                Some(iter.map(|s| {
-                        let key = &keys::origin_key(&s.0);
-                        MvccKv {
-                            key: Key::from_encoded(key.to_vec()),
-                            value: T::deserialize(&s.1[..]),
-                        }
-                    })
-                    .collect())
-            }
-            CF_LOCK => {
-                Some(iter.map(|s| {
-                        let key = s.0;
-                        MvccKv {
-                            key: Key::from_raw(keys::origin_key(&key)),
-                            value: T::deserialize(s.1.clone().as_mut_slice()),
-                        }
-                    })
-                    .collect())
-            }
-            CF_WRITE => {
-                Some(iter.map(|s| {
-                        let key = &keys::origin_key(&s.0);
-                        MvccKv {
-                            key: Key::from_encoded(key.to_vec()),
-                            value: T::deserialize(&s.1),
-                        }
-                    })
-                    .collect())
-            }
-            _ => None,
-
-        }
+        Some(iter.map(|s| {
+                let key = &keys::origin_key(&s.0);
+                MvccKv {
+                    key: Key::from_encoded(key.to_vec()),
+                    value: T::deserialize(&s.1),
+                }
+            })
+            .collect())
     }
 }
 
@@ -370,15 +340,16 @@ mod tests {
         }
         let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
         let mut test_iter = test_data.clone();
+        assert_eq!(test_iter.len(), test_data.len());
         for kv in kvs_gen {
             let ts = kv.key.decode_ts().unwrap();
             let key = kv.key.truncate_ts().unwrap().raw().unwrap();
             let value = kv.value.as_slice();
-            test_iter.retain(|&s| &s.0[..] == key.as_slice() && &s.1[..] == value && s.2 == ts);
+            test_iter.retain(|&s| !(&s.0[..] == key.as_slice() && &s.1[..] == value && s.2 == ts));
         }
         assert_eq!(test_iter.len(), 0);
 
-
+        // Test MVCC Lock
         let test_data_lock = vec![(PREFIX, LockType::Put, b"v", 5),
                                   (PREFIX, LockType::Lock, b"x", 10),
                                   (PREFIX, LockType::Delete, b"y", 15)];
@@ -392,20 +363,32 @@ mod tests {
             .map(|data| Lock::new(data.1, data.2.to_vec(), data.3).to_bytes())
             .collect();
         let kvs = keys.iter().zip(lock_value.iter());
+        println!("KVs: {:?}", kvs.clone().collect::<Vec<_>>());
         let lock_cf = db.cf_handle(CF_LOCK).unwrap();
+        let mut count = 0;
         for (k, v) in kvs.clone() {
+            count = count + 1;
             db.put_cf(lock_cf, k.as_slice(), v.as_slice()).unwrap();
         }
+        assert_eq!(count, 3);
         let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "k", CF_LOCK).unwrap();
         let mut test_iter = test_data_lock.clone();
+        assert_eq!(test_iter.len(), test_data_lock.len());
+        println!("Before: {:?}", test_iter);
         for kv in kvs_gen {
             let lock = &kv.value;
             let key = kv.key.raw().unwrap();
+            println!("Key:{:?}, Lock:{:?}, Primary:{:?}, TS:{:?}",
+                     key,
+                     lock.lock_type,
+                     lock.primary,
+                     lock.ts);
             test_iter.retain(|&s| {
-                &s.0[..] == key.as_slice() && s.1 == lock.lock_type &&
-                &s.2[..] == &lock.primary[..] && s.3 == lock.ts
+                !(&s.0[..] == key.as_slice() && s.1 == lock.lock_type &&
+                  &s.2[..] == &lock.primary[..] && s.3 == lock.ts)
             });
         }
+        println!("Rest: {:?}", test_iter);
         assert_eq!(test_iter.len(), 0);
 
         // Test MVCC Write
@@ -431,13 +414,14 @@ mod tests {
         }
         let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", CF_WRITE).unwrap();
         let mut test_iter = test_data_write.clone();
+        assert_eq!(test_iter.len(), test_data_write.len());
         for kv in kvs_gen {
             let write = &kv.value;
             let ts = kv.key.decode_ts().unwrap();
             let key = kv.key.truncate_ts().unwrap().raw().unwrap();
             test_iter.retain(|&s| {
-                &s.0[..] == key.as_slice() && s.1 == write.write_type && s.2 == write.start_ts &&
-                s.3 == ts
+                !(&s.0[..] == key.as_slice() && s.1 == write.write_type && s.2 == write.start_ts &&
+                  s.3 == ts)
             });
         }
         assert_eq!(test_iter.len(), 0);
