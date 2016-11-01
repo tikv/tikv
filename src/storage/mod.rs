@@ -269,21 +269,20 @@ impl Storage {
 
         let engine = self.engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
-        let el = handle.event_loop.take().unwrap();
+        let mut el = handle.event_loop.take().unwrap();
         let sched_concurrency = config.sched_concurrency;
         let sched_worker_pool_size = config.sched_worker_pool_size;
-        let sched_pro_exec_gc = config.sched_pro_exec_gc;
+        let sched_exec_gc_on_statistics = config.sched_exec_gc_on_statistics;
         let sched_too_busy_threshold = config.sched_too_busy_threshold;
         let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
             let mut sched = Scheduler::new(engine,
                                            ch,
                                            sched_concurrency,
-                                           sched_pro_exec_gc,
+                                           sched_exec_gc_on_statistics,
                                            sched_too_busy_threshold,
                                            sched_worker_pool_size);
-            let mut event_loop = el;
-            if let Err(e) = sched.run(&mut event_loop) {
+            if let Err(e) = sched.run(&mut el) {
                 panic!("scheduler run err: {:?}", e);
             }
             info!("scheduler stopped");
