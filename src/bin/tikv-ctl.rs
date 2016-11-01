@@ -30,7 +30,6 @@ use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
-use tikv::util::codec::number::{self, NumberDecoder};
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
 use tikv::storage::{ALL_CFS, CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT};
@@ -156,10 +155,8 @@ fn main() {
 }
 
 fn gen_key_prefix(key: &str) -> Vec<u8> {
-    let mut prefix = keys::DATA_PREFIX_KEY.to_vec();
-    let mut encoded = encode_bytes(key.as_bytes());
-    prefix.append(&mut encoded);
-    prefix
+    let encoded = encode_bytes(key.as_bytes());
+    keys::data_key(encoded.as_slice())
 }
 
 pub struct MVCCDefaultKV {
@@ -177,14 +174,10 @@ pub fn gen_mvcc_default_iter(db: &DB, key_prefix: &str) -> Vec<MVCCDefaultKV> {
     }
     iter.map(|s| {
             let key = &keys::origin_key(&s.0);
-            let len = key.len();
-            let (raw, mut ts) = key.split_at(len - number::U64_SIZE);
-            let mut kv = MVCCDefaultKV {
-                key: Key::from_encoded(raw.to_vec()),
+            MVCCDefaultKV {
+                key: Key::from_encoded(key.to_vec()),
                 value: s.1,
-            };
-            kv.key = kv.key.append_ts(ts.decode_u64_desc().unwrap());
-            kv
+            }
         })
         .collect()
 }
@@ -227,14 +220,10 @@ pub fn gen_mvcc_write_iter(db: &DB, key_prefix: &str) -> Vec<MVCCWriteKV> {
     }
     iter.map(|s| {
             let key = &keys::origin_key(&s.0);
-            let len = key.len();
-            let (raw, mut ts) = key.split_at(len - number::U64_SIZE);
-            let mut kv = MVCCWriteKV {
-                key: Key::from_encoded(raw.to_vec()),
+            MVCCWriteKV {
+                key: Key::from_encoded(key.to_vec()),
                 value: Write::parse(&s.1).unwrap(),
-            };
-            kv.key = kv.key.append_ts(ts.decode_u64_desc().unwrap());
-            kv
+            }
         })
         .collect()
 }
