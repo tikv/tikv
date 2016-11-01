@@ -132,6 +132,14 @@ impl AssertionStorage {
         self.0.commit(Context::new(), keys, start_ts, commit_ts).unwrap();
     }
 
+    fn cleanup_ok(&self, key: &[u8], start_ts: u64) {
+        self.0.cleanup(Context::new(), make_key(key), start_ts).unwrap();
+    }
+
+    fn cleanup_err(&self, key: &[u8], start_ts: u64) {
+        assert!(self.0.cleanup(Context::new(), make_key(key), start_ts).is_err());
+    }
+
     fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
         self.0.rollback(Context::new(), keys, start_ts).unwrap();
@@ -194,6 +202,7 @@ fn test_txn_store_cleanup_rollback() {
                       5);
     store.get_err(b"secondary", 10);
     store.rollback_ok(vec![b"primary"], 5);
+    store.cleanup_ok(b"primary", 5);
 }
 
 #[test]
@@ -207,6 +216,7 @@ fn test_txn_store_cleanup_commit() {
     store.get_err(b"secondary", 8);
     store.get_err(b"secondary", 12);
     store.commit_ok(vec![b"primary"], 5, 10);
+    store.cleanup_err(b"primary", 5);
     store.rollback_err(vec![b"primary"], 5);
 }
 
