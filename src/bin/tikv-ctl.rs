@@ -32,7 +32,7 @@ use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
-use tikv::storage::{ALL_CFS, CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT};
+use tikv::storage::{ALL_CFS, CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
 use tikv::storage::mvcc::{Lock, Write};
 use tikv::storage::types::Key;
 
@@ -159,77 +159,87 @@ fn gen_key_prefix(key: &str) -> Vec<u8> {
     keys::data_key(encoded.as_slice())
 }
 
-pub struct MVCCDefaultKV {
-    key: Key,
-    value: Vec<u8>,
+pub trait MvccDeserializable {
+    fn deserialize(bytes: &[u8]) -> Self;
 }
 
-pub fn gen_mvcc_default_iter(db: &DB, key_prefix: &str) -> Vec<MVCCDefaultKV> {
+impl MvccDeserializable for Write {
+    fn deserialize(bytes: &[u8]) -> Self {
+        Write::parse(bytes).unwrap()
+    }
+}
+
+impl MvccDeserializable for Lock {
+    fn deserialize(bytes: &[u8]) -> Self {
+        Lock::parse(bytes).unwrap()
+    }
+}
+
+impl MvccDeserializable for Vec<u8> {
+    fn deserialize(bytes: &[u8]) -> Self {
+        bytes.to_vec()
+    }
+}
+
+pub struct MvccKv<T> {
+    key: Key,
+    value: T,
+}
+
+pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
+                                            key_prefix: &str,
+                                            mvcc_type: CfName)
+                                            -> Option<Vec<MvccKv<T>>> {
     let prefix = gen_key_prefix(key_prefix);
-    let mut iter = db.new_iterator(None);
+    let mut iter = match mvcc_type {
+        CF_DEFAULT => db.new_iterator(None, true),
+        CF_LOCK | CF_WRITE => db.new_iterator_cf(mvcc_type, None, true).unwrap(),
+        _ => return None,
+    };
     iter.seek(prefix.as_slice().into());
     if !iter.valid() {
-        println!("No such Default record!");
-        return Vec::new();
-    }
-    iter.map(|s| {
-            let key = &keys::origin_key(&s.0);
-            MVCCDefaultKV {
-                key: Key::from_encoded(key.to_vec()),
-                value: s.1,
+        None
+    } else {
+        match mvcc_type {
+            CF_DEFAULT => {
+                Some(iter.map(|s| {
+                        let key = &keys::origin_key(&s.0);
+                        MvccKv {
+                            key: Key::from_encoded(key.to_vec()),
+                            value: T::deserialize(&s.1[..]),
+                        }
+                    })
+                    .collect())
             }
-        })
-        .collect()
-}
-
-pub struct MVCCLockKV {
-    key: Key,
-    value: Lock,
-}
-
-pub fn gen_mvcc_lock_iter(db: &DB, key_prefix: &str) -> Vec<MVCCLockKV> {
-    let prefix = gen_key_prefix(key_prefix);
-    let mut iter = db.new_iterator_cf(CF_LOCK, None).unwrap();
-    iter.seek(prefix.as_slice().into());
-    if !iter.valid() {
-        println!("No such Lock record!");
-        return Vec::new();
-    }
-    iter.map(|s| {
-            let key = s.0;
-            MVCCLockKV {
-                key: Key::from_raw(keys::origin_key(&key)),
-                value: Lock::parse(s.1.clone().as_mut_slice()).unwrap(),
+            CF_LOCK => {
+                Some(iter.map(|s| {
+                        let key = s.0;
+                        MvccKv {
+                            key: Key::from_raw(keys::origin_key(&key)),
+                            value: T::deserialize(s.1.clone().as_mut_slice()),
+                        }
+                    })
+                    .collect())
             }
-        })
-        .collect()
-}
-
-pub struct MVCCWriteKV {
-    key: Key,
-    value: Write,
-}
-
-pub fn gen_mvcc_write_iter(db: &DB, key_prefix: &str) -> Vec<MVCCWriteKV> {
-    let prefix = gen_key_prefix(key_prefix);
-    let mut iter = db.new_iterator_cf(CF_WRITE, None).unwrap();
-    iter.seek(prefix.as_slice().into());
-    if !iter.valid() {
-        println!("No such Write record!");
-        return Vec::new();
-    }
-    iter.map(|s| {
-            let key = &keys::origin_key(&s.0);
-            MVCCWriteKV {
-                key: Key::from_encoded(key.to_vec()),
-                value: Write::parse(&s.1).unwrap(),
+            CF_WRITE => {
+                Some(iter.map(|s| {
+                        let key = &keys::origin_key(&s.0);
+                        MvccKv {
+                            key: Key::from_encoded(key.to_vec()),
+                            value: T::deserialize(&s.1),
+                        }
+                    })
+                    .collect())
             }
-        })
-        .collect()
+            _ => None,
+
+        }
+    }
 }
+
 
 fn dump_mvcc_default(db: DB, key: &str) {
-    let kvs = gen_mvcc_default_iter(&db, key);
+    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, key, CF_DEFAULT).unwrap();
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
@@ -240,7 +250,7 @@ fn dump_mvcc_default(db: DB, key: &str) {
 }
 
 fn dump_mvcc_lock(db: DB, key: &str) {
-    let kvs = gen_mvcc_lock_iter(&db, key);
+    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, key, CF_LOCK).unwrap();
     for kv in kvs {
         let lock = &kv.value;
         println!("Key: {:?}", escape(kv.key.raw().unwrap().as_slice()));
@@ -251,7 +261,7 @@ fn dump_mvcc_lock(db: DB, key: &str) {
 }
 
 fn dump_mvcc_write(db: DB, key: &str) {
-    let kvs = gen_mvcc_write_iter(&db, key);
+    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, key, CF_WRITE).unwrap();
     for kv in kvs {
         let write = &kv.value;
         let commit_ts = kv.key.decode_ts();
@@ -332,7 +342,7 @@ mod tests {
     use tikv::util::codec::bytes::encode_bytes;
     use tikv::util::codec::number::NumberEncoder;
     use tikv::raftstore::store::keys;
-    use tikv::storage::{ALL_CFS, CF_LOCK, CF_WRITE};
+    use tikv::storage::{ALL_CFS, CF_LOCK, CF_WRITE, CF_DEFAULT};
     use tikv::storage::mvcc::{Lock, Write, LockType, WriteType};
     use tempdir::TempDir;
     use tikv::util::rocksdb::new_engine;
@@ -358,7 +368,7 @@ mod tests {
         for (k, v) in kvs.clone() {
             db.put(k.as_slice(), v).unwrap();
         }
-        let kvs_gen = gen_mvcc_default_iter(&db, "k");
+        let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
         let mut test_iter = test_data.clone();
         for kv in kvs_gen {
             let ts = kv.key.decode_ts().unwrap();
@@ -386,7 +396,7 @@ mod tests {
         for (k, v) in kvs.clone() {
             db.put_cf(lock_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        let kvs_gen = gen_mvcc_lock_iter(&db, "k");
+        let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "k", CF_LOCK).unwrap();
         let mut test_iter = test_data_lock.clone();
         for kv in kvs_gen {
             let lock = &kv.value;
@@ -419,7 +429,7 @@ mod tests {
         for (k, v) in kvs.clone() {
             db.put_cf(write_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        let kvs_gen = gen_mvcc_write_iter(&db, "k");
+        let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", CF_WRITE).unwrap();
         let mut test_iter = test_data_write.clone();
         for kv in kvs_gen {
             let write = &kv.value;
