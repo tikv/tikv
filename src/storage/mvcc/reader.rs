@@ -49,7 +49,7 @@ impl<'a> MvccReader<'a> {
             return Ok(vec![]);
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            self.data_cursor = Some(try!(self.snapshot.iter(None, self.get_scan_mode(false))));
+            self.data_cursor = Some(try!(self.snapshot.iter(None, self.get_scan_mode(true))));
         }
 
         let k = key.append_ts(ts);
