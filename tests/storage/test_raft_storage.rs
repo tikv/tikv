@@ -51,7 +51,11 @@ fn test_raft_storage() {
     assert_eq!(storage.get(ctx.clone(), &key, 20).unwrap().unwrap(),
                b"value".to_vec());
 
+    // Test wronng region id.
     let region_id = ctx.get_region_id();
     ctx.set_region_id(region_id + 1);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
+    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
+    assert!(storage.scan(ctx.clone(), key.clone(), 1, false, 20).is_err());
+    assert!(storage.scan_lock(ctx.clone(), 20).is_err());
 }
