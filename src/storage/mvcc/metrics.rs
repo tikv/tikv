@@ -19,7 +19,8 @@ lazy_static! {
             histogram_opts!{
                 "tikv_storage_mvcc_versions",
                 "Histogram of versions for each key",
-                [ exponential_buckets(1.0, 2.0, 10).unwrap() ]
+                [ vec![1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 50.0, 100.0,
+                       500.0, 1000.0, 5000.0, 10000.0, 50000.0, 100000.0] ]
             }
         ).unwrap();
 
