@@ -559,6 +559,9 @@ impl Peer {
                 apply_state: self.get_store().apply_state.clone(),
                 wb: WriteBatch::new(),
                 req: &req,
+                // We don't care index and term for local read, use 0 here.
+                index: 0,
+                term: 0,
             };
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
                 error!("{} execute raft command err: {:?}", self.tag, e);
@@ -649,7 +652,7 @@ impl Peer {
         let leader = self.get_peer_from_cache(self.leader_id());
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
-        warn!("{} command {} is stale, skip", self.tag, cmd.uuid);
+        info!("{} command {} is stale, skip", self.tag, cmd.uuid);
         cmd.call(resp);
     }
 
@@ -1031,6 +1034,8 @@ impl Peer {
             apply_state: self.get_store().apply_state.clone(),
             wb: WriteBatch::new(),
             req: req,
+            index: index,
+            term: term,
         };
         let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             error!("{} execute raft command err: {:?}", self.tag, e);
@@ -1117,6 +1122,8 @@ struct ExecContext<'a> {
     pub apply_state: RaftApplyState,
     pub wb: WriteBatch,
     pub req: &'a RaftCmdRequest,
+    pub index: u64,
+    pub term: u64,
 }
 
 impl<'a> ExecContext<'a> {
@@ -1148,7 +1155,11 @@ impl Peer {
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
-        info!("{} execute admin command {:?}", self.tag, request);
+        info!("{} execute admin command {:?} at [term: {}, index: {}]",
+              self.tag,
+              request,
+              ctx.term,
+              ctx.index);
 
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
@@ -1174,7 +1185,7 @@ impl Peer {
         let change_type = request.get_change_type();
         let mut region = self.region().clone();
 
-        warn!("{} exec ConfChange {:?}, epoch: {:?}",
+        info!("{} exec ConfChange {:?}, epoch: {:?}",
               self.tag,
               util::conf_change_type_str(&change_type),
               region.get_region_epoch());
@@ -1193,10 +1204,10 @@ impl Peer {
                     error!("{} can't add duplicated peer {:?} to region {:?}",
                            self.tag,
                            peer,
-                           region);
+                           self.region());
                     return Err(box_err!("can't add duplicated peer {:?} to region {:?}",
                                         peer,
-                                        region));
+                                        self.region()));
                 }
                 // TODO: Do we allow adding peer in same node?
 
@@ -1207,7 +1218,7 @@ impl Peer {
 
                 PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["add_peer", "success"]).inc();
 
-                warn!("{} add peer {:?} to region {:?}",
+                info!("{} add peer {:?} to region {:?}",
                       self.tag,
                       peer,
                       self.region());
@@ -1219,8 +1230,10 @@ impl Peer {
                     error!("{} remove missing peer {:?} from region {:?}",
                            self.tag,
                            peer,
-                           region);
-                    return Err(box_err!("remove missing peer {:?} from region {:?}", peer, region));
+                           self.region());
+                    return Err(box_err!("remove missing peer {:?} from region {:?}",
+                                        peer,
+                                        self.region()));
                 }
 
                 if self.peer_id() == peer.get_id() {
@@ -1236,7 +1249,7 @@ impl Peer {
 
                 PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["remove_peer", "success"]).inc();
 
-                warn!("{} remove {} from region:{:?}",
+                info!("{} remove {} from region:{:?}",
                       self.tag,
                       peer.get_id(),
                       self.region());
