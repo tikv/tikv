@@ -31,6 +31,7 @@ fn test_raftkv(read_quorum: bool) {
     near_seek(&ctx, storage.as_ref());
     cf(&ctx, storage.as_ref());
     empty_write(&ctx, storage.as_ref());
+    wrong_context(&ctx, storage.as_ref());
     // TODO: test multiple node
 }
 
@@ -228,4 +229,11 @@ fn cf(ctx: &Context, engine: &Engine) {
 
 fn empty_write(ctx: &Context, engine: &Engine) {
     engine.write(ctx, vec![]).unwrap();
+}
+
+fn wrong_context(ctx: &Context, engine: &Engine) {
+    let region_id = ctx.get_region_id();
+    let mut ctx = ctx.to_owned();
+    ctx.set_region_id(region_id + 1);
+    assert!(engine.write(&ctx, vec![]).is_err());
 }
