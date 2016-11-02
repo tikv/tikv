@@ -1604,7 +1604,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_snap_gen_res(region_id, snap);
             }
         }
-        slow_log!(t, "{} handle {:?}", self.tag, msg_str);
+        slow_log!(t, "{} handle {}", self.tag, msg_str);
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
