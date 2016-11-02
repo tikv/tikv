@@ -176,7 +176,9 @@ impl<'a> MvccTxn<'a> {
             versions += 1;
         }
         MVCC_VERSIONS_HISTOGRAM.observe(versions as f64);
-        GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
+        if delete_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
+        }
         Ok(())
     }
 }
