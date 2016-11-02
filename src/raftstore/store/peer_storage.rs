@@ -284,6 +284,7 @@ impl PeerStorage {
         try!(self.engine.scan_cf(CF_RAFT,
                                  &start_key,
                                  &end_key,
+                                 true, // fill_cache
                                  &mut |_, value| {
             let mut entry = Entry::new();
             try!(entry.merge_from_bytes(value));
@@ -548,6 +549,7 @@ impl PeerStorage {
                                       keys::region_meta_prefix(region_id + 1));
         try!(self.engine.scan(&meta_start,
                               &meta_end,
+                              false,
                               &mut |key, _| {
                                   try!(wb.delete(key));
                                   meta_count += 1;
@@ -560,6 +562,7 @@ impl PeerStorage {
         try!(self.engine.scan_cf(CF_RAFT,
                                  &raft_start,
                                  &raft_end,
+                                 false,
                                  &mut |key, _| {
                                      try!(wb.delete_cf(handle, key));
                                      raft_count += 1;
@@ -773,6 +776,7 @@ fn build_snap_file(f: &mut SnapFile,
         try!(snap.scan_cf(cf,
                           &begin_key,
                           &end_key,
+                          false,
                           &mut |key, value| {
             snap_size += key.len();
             snap_size += value.len();

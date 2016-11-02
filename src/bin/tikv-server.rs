@@ -37,7 +37,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use getopts::{Options, Matches};
-use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
+use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::tcp::TcpListener;
 use mio::EventLoop;
 use fs2::FileExt;
@@ -54,6 +54,8 @@ use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
+
+const ROCKSDB_STATS_KEY: &'static str = "rocksdb.stats";
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -692,7 +694,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           "storage.scheduler-concurrency",
                           matches,
                           config,
-                          Some(1024),
+                          Some(10240),
                           |v| v.as_integer()) as usize;
     cfg.storage.sched_worker_pool_size =
         get_integer_value("",
@@ -709,7 +711,7 @@ fn build_raftkv(matches: &Matches,
                 ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
-                -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager) {
+                -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_option(matches, config);
@@ -734,7 +736,11 @@ fn build_raftkv(matches: &Matches,
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
 
-    (node, create_raft_storage(router.clone(), engine, cfg).unwrap(), router, snap_mgr)
+    (node,
+     create_raft_storage(router.clone(), engine.clone(), cfg).unwrap(),
+     router,
+     snap_mgr,
+     engine)
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
@@ -759,7 +765,7 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
-fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>)
+fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
     where T: RaftStoreRouter,
           S: StoreAddrResolver + Send + 'static
 {
@@ -770,12 +776,12 @@ fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>)
             server.run(&mut el).unwrap();
         })
         .unwrap();
-    handle_signal(ch);
+    handle_signal(ch, engine);
     h.join().unwrap();
 }
 
 #[cfg(unix)]
-fn handle_signal(ch: SendCh<Msg>) {
+fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
     use signal::trap::Trap;
     use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1};
     let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1]);
@@ -793,6 +799,16 @@ fn handle_signal(ch: SendCh<Msg>) {
                 let encoder = TextEncoder::new();
                 encoder.encode(&metric_familys, &mut buffer).unwrap();
                 info!("{}", String::from_utf8(buffer).unwrap());
+
+                // Log common rocksdb stats.
+                if let Some(v) = engine.get_property_value(ROCKSDB_STATS_KEY) {
+                    info!("{}", v)
+                }
+
+                // Log more stats if enable_statistics is true.
+                if let Some(v) = engine.get_statistics() {
+                    info!("{}", v)
+                }
             }
             // TODO: handle more signal
             _ => unreachable!(),
@@ -824,7 +840,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                store_path);
     }
 
-    let (mut node, mut store, raft_router, snap_mgr) =
+    let (mut node, mut store, raft_router, snap_mgr, engine) =
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
 
@@ -843,7 +859,7 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                           resolver,
                           snap_mgr)
         .unwrap();
-    start_server(svr, event_loop);
+    start_server(svr, event_loop, engine);
     node.stop().unwrap();
 }
 

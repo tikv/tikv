@@ -81,11 +81,16 @@ pub trait Snapshot: Send {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
-    fn iter<'a>(&'a self, upper_bound: Option<&[u8]>, mode: ScanMode) -> Result<Cursor<'a>>;
+    fn iter<'a>(&'a self,
+                upper_bound: Option<&[u8]>,
+                fill_cache: bool,
+                mode: ScanMode)
+                -> Result<Cursor<'a>>;
     #[allow(needless_lifetimes)]
     fn iter_cf<'a>(&'a self,
                    cf: CfName,
                    upper_bound: Option<&[u8]>,
+                   fill_cache: bool,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
 }
@@ -122,7 +127,7 @@ macro_rules! near_loop {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ScanMode {
     Forward,
-    // No Backward here, because we won't just use pure Backward.
+    Backward,
     Mixed,
 }
 
@@ -145,6 +150,7 @@ impl<'a> Cursor<'a> {
     }
 
     pub fn seek(&mut self, key: &Key) -> Result<bool> {
+        assert!(self.scan_mode != ScanMode::Backward);
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
             try!(self.iter.validate_key(key));
             return Ok(false);
@@ -166,6 +172,7 @@ impl<'a> Cursor<'a> {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
     pub fn near_seek(&mut self, key: &Key) -> Result<bool> {
+        assert!(self.scan_mode != ScanMode::Backward);
         if !self.iter.valid() {
             return self.seek(key);
         }
@@ -206,19 +213,30 @@ impl<'a> Cursor<'a> {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
     pub fn get(&mut self, key: &Key) -> Result<Option<&[u8]>> {
-        if try!(self.near_seek(key)) && self.iter.key() == &**key.encoded() {
-            Ok(Some(self.iter.value()))
-        } else {
-            Ok(None)
+        if self.scan_mode != ScanMode::Backward {
+            if try!(self.near_seek(key)) && self.iter.key() == &**key.encoded() {
+                return Ok(Some(self.iter.value()));
+            }
+            return Ok(None);
         }
+        if try!(self.near_reverse_seek_le(key)) && self.iter.key() == &**key.encoded() {
+            return Ok(Some(self.iter.value()));
+        }
+        Ok(None)
     }
 
-    pub fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
+    fn reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
         assert!(self.scan_mode != ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             try!(self.iter.validate_key(key));
             return Ok(false);
         }
+
+        if self.scan_mode == ScanMode::Backward && self.valid() &&
+           self.iter.key() <= key.encoded() {
+            return Ok(true);
+        }
+
         if !try!(self.iter.seek(key)) && !self.iter.seek_to_last() {
             self.min_key = Some(key.encoded().to_owned());
             if self.max_key.as_ref().map_or(true, |k| k > key.encoded()) {
@@ -227,7 +245,45 @@ impl<'a> Cursor<'a> {
             return Ok(false);
         }
 
-        while self.iter.key() >= key.encoded() && self.iter.prev() {
+        if self.iter.key() > key.encoded() && !self.iter.prev() {
+            self.min_key = Some(key.encoded().to_owned());
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// Find the largest key that is not greater than the specific key.
+    fn near_reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
+        assert!(self.scan_mode != ScanMode::Forward);
+        if !self.iter.valid() {
+            return self.reverse_seek_le(key);
+        }
+        let ord = self.iter.key().cmp(key.encoded());
+        if ord == Ordering::Equal ||
+           (self.scan_mode == ScanMode::Backward && ord == Ordering::Less) {
+            return Ok(true);
+        }
+
+        if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
+            try!(self.iter.validate_key(key));
+            return Ok(false);
+        }
+
+        if ord == Ordering::Less {
+            near_loop!(self.iter.next() && self.iter.key() < key.encoded(),
+                       self.reverse_seek_le(key));
+            if self.iter.valid() {
+                if self.iter.key() > key.encoded() {
+                    self.iter.prev();
+                }
+            } else {
+                assert!(self.iter.seek_to_last());
+                return Ok(true);
+            }
+        } else {
+            near_loop!(self.iter.prev() && self.iter.key() > key.encoded(),
+                       self.reverse_seek_le(key));
         }
 
         if !self.iter.valid() {
@@ -237,40 +293,33 @@ impl<'a> Cursor<'a> {
         Ok(true)
     }
 
+    pub fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
+        if !try!(self.reverse_seek_le(key)) {
+            return Ok(false);
+        }
+
+        if self.iter.key() == &**key.encoded() {
+            // should not update min_key here. otherwise reverse_seek_le may not
+            // work as expected.
+            return Ok(self.iter.prev());
+        }
+
+        Ok(true)
+    }
+
     /// Reverse seek the specified key.
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
     pub fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        assert!(self.scan_mode != ScanMode::Forward);
-        if !self.iter.valid() {
-            return self.reverse_seek(key);
-        }
-        if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
-            try!(self.iter.validate_key(key));
+        if !try!(self.near_reverse_seek_le(key)) {
             return Ok(false);
         }
 
-        let ord = self.iter.key().cmp(key.encoded());
-
-        if ord == Ordering::Less {
-            near_loop!(self.iter.next() && self.iter.key() < key.encoded(),
-                       self.reverse_seek(key));
-            if self.iter.valid() {
-                self.iter.prev();
-            } else {
-                assert!(self.iter.seek_to_last());
-                return Ok(true);
-            }
-        } else {
-            near_loop!(self.iter.prev() && self.iter.key() >= key.encoded(),
-                       self.reverse_seek(key));
+        if self.iter.key() == &**key.encoded() {
+            return Ok(self.iter.prev());
         }
 
-        if !self.iter.valid() {
-            self.min_key = Some(key.encoded().to_owned());
-            return Ok(false);
-        }
         Ok(true)
     }
 
@@ -421,7 +470,7 @@ mod tests {
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
         iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -429,7 +478,7 @@ mod tests {
 
     fn assert_reverse_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
         iter.reverse_seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -483,7 +532,7 @@ mod tests {
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
         assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         assert!(!iter.reverse_seek(&make_key(b"x")).unwrap());
         must_delete(engine, b"x");
@@ -494,7 +543,7 @@ mod tests {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
         assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
@@ -508,7 +557,7 @@ mod tests {
             must_put(engine, key.as_bytes(), b"3");
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
 
@@ -522,7 +571,7 @@ mod tests {
 
     fn test_empty_seek(engine: &Engine) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
         assert!(!cursor.near_reverse_seek(&make_key(b"x")).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"z")).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"w")).unwrap());
@@ -543,12 +592,16 @@ mod tests {
     }
 
     // use step to controll the distance between target key and current key in cursor.
-    fn test_linear_seek(snapshot: &Snapshot, mode: ScanMode, reverse: bool, step: usize) {
-        let mut cursor = snapshot.iter(None, mode).unwrap();
-        let mut near_cursor = snapshot.iter(None, mode).unwrap();
+    fn test_linear_seek(snapshot: &Snapshot,
+                        mode: ScanMode,
+                        reverse: bool,
+                        start: usize,
+                        step: usize) {
+        let mut cursor = snapshot.iter(None, false, mode).unwrap();
+        let mut near_cursor = snapshot.iter(None, false, mode).unwrap();
         let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 
-        for (_, mut i) in (0..SEEK_BOUND * 30).enumerate().filter(|&(i, _)| i % step == 0) {
+        for (_, mut i) in (start..SEEK_BOUND * 30).enumerate().filter(|&(i, _)| i % step == 0) {
             if reverse {
                 i = SEEK_BOUND * 30 - 1 - i;
             }
@@ -595,11 +648,28 @@ mod tests {
         let snapshot = e.snapshot(&Context::new()).unwrap();
 
         for step in 1..SEEK_BOUND * 3 {
-            test_linear_seek(snapshot.as_ref(), ScanMode::Forward, false, step);
+            for start in 0..10 {
+                test_linear_seek(snapshot.as_ref(),
+                                 ScanMode::Forward,
+                                 false,
+                                 start * SEEK_BOUND,
+                                 step);
+                test_linear_seek(snapshot.as_ref(),
+                                 ScanMode::Backward,
+                                 true,
+                                 start * SEEK_BOUND,
+                                 step);
+            }
         }
         for &reverse in &[true, false] {
             for step in 1..SEEK_BOUND * 3 {
-                test_linear_seek(snapshot.as_ref(), ScanMode::Mixed, reverse, step);
+                for start in 0..10 {
+                    test_linear_seek(snapshot.as_ref(),
+                                     ScanMode::Mixed,
+                                     reverse,
+                                     start * SEEK_BOUND,
+                                     step);
+                }
             }
         }
     }
