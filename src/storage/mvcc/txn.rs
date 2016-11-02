@@ -96,7 +96,7 @@ impl<'a> MvccTxn<'a> {
                     Some(_) => Ok(()),
                     // Rollbacked by concurrent transaction.
                     None => {
-                        warn!("txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
+                        info!("txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
                               key,
                               self.start_ts,
                               commit_ts);
@@ -121,7 +121,7 @@ impl<'a> MvccTxn<'a> {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
                     // Already committed by concurrent transaction.
                     Some(ts) => {
-                        warn!("txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
+                        info!("txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
                               key,
                               self.start_ts,
                               ts);
