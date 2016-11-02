@@ -145,6 +145,7 @@ fn main() {
                 dump_mvcc_write(db, key);
             }
             _ => {
+                println!("The cf: {} cannot be dumped", cf_name);
                 let _ = app.print_help();
             }
         }
@@ -155,7 +156,7 @@ fn main() {
 }
 
 fn gen_key_prefix(key: &str) -> Vec<u8> {
-    let encoded = encode_bytes(key.as_bytes());
+    let encoded = encode_bytes(unescape(key).as_slice());
     keys::data_key(encoded.as_slice())
 }
 
@@ -224,7 +225,7 @@ fn dump_mvcc_lock(db: DB, key: &str) {
     for kv in kvs {
         let lock = &kv.value;
         println!("Key: {:?}", escape(kv.key.raw().unwrap().as_slice()));
-        println!("Value: {:?}", escape(lock.primary.as_slice()));
+        println!("Primary: {:?}", escape(lock.primary.as_slice()));
         println!("Type: {:?}", lock.lock_type);
         println!("Start_ts: {:?}", lock.ts);
     }
@@ -316,6 +317,7 @@ mod tests {
     use tikv::storage::mvcc::{Lock, Write, LockType, WriteType};
     use tempdir::TempDir;
     use tikv::util::rocksdb::new_engine;
+    use tikv::storage::types::Key;
 
     const PREFIX: &'static [u8] = b"k";
 
@@ -327,15 +329,12 @@ mod tests {
         let test_data = vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
         let keys: Vec<_> = test_data.iter()
             .map(|data| {
-                let encoded = encode_bytes(&data.0[..]);
-                let mut d = keys::data_key(encoded.as_slice());
-                let _ = d.encode_u64_desc(data.2);
-                d
+                keys::data_key(Key::from_raw(&data.0[..]).append_ts(data.2).encoded().as_slice())
             })
             .collect();
         let default_value: Vec<_> = test_data.iter().map(|data| *data.1).collect();
         let kvs = keys.iter().zip(default_value.iter());
-        for (k, v) in kvs.clone() {
+        for (k, v) in kvs {
             db.put(k.as_slice(), v).unwrap();
         }
         let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
@@ -350,9 +349,9 @@ mod tests {
         assert_eq!(test_iter.len(), 0);
 
         // Test MVCC Lock
-        let test_data_lock = vec![(PREFIX, LockType::Put, b"v", 5),
-                                  (PREFIX, LockType::Lock, b"x", 10),
-                                  (PREFIX, LockType::Delete, b"y", 15)];
+        let test_data_lock = vec![(b"kv", LockType::Put, b"v", 5),
+                                  (b"kx", LockType::Lock, b"x", 10),
+                                  (b"kz", LockType::Delete, b"y", 15)];
         let keys: Vec<_> = test_data_lock.iter()
             .map(|data| {
                 let encoded = encode_bytes(&data.0[..]);
@@ -365,12 +364,9 @@ mod tests {
         let kvs = keys.iter().zip(lock_value.iter());
         println!("KVs: {:?}", kvs.clone().collect::<Vec<_>>());
         let lock_cf = db.cf_handle(CF_LOCK).unwrap();
-        let mut count = 0;
-        for (k, v) in kvs.clone() {
-            count = count + 1;
+        for (k, v) in kvs {
             db.put_cf(lock_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        assert_eq!(count, 3);
         let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "k", CF_LOCK).unwrap();
         let mut test_iter = test_data_lock.clone();
         assert_eq!(test_iter.len(), test_data_lock.len());
@@ -384,7 +380,7 @@ mod tests {
                      lock.primary,
                      lock.ts);
             test_iter.retain(|&s| {
-                !(&s.0[..] == key.as_slice() && s.1 == lock.lock_type &&
+                !(key.starts_with(PREFIX) && s.1 == lock.lock_type &&
                   &s.2[..] == &lock.primary[..] && s.3 == lock.ts)
             });
         }
@@ -409,7 +405,7 @@ mod tests {
             .collect();
         let kvs = keys.iter().zip(write_value.iter());
         let write_cf = db.cf_handle(CF_WRITE).unwrap();
-        for (k, v) in kvs.clone() {
+        for (k, v) in kvs {
             db.put_cf(write_cf, k.as_slice(), v.as_slice()).unwrap();
         }
         let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", CF_WRITE).unwrap();
