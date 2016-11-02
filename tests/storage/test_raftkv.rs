@@ -145,7 +145,7 @@ fn assert_seek(ctx: &Context, engine: &Engine, key: &[u8], pair: (&[u8], &[u8]))
 
 fn assert_seek_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot.iter_cf(cf, None, ScanMode::Mixed).unwrap();
+    let mut iter = snapshot.iter_cf(cf, None, false, ScanMode::Mixed).unwrap();
     iter.seek(&make_key(key)).unwrap();
     assert_eq!((iter.key(), iter.value()),
                (&*bytes::encode_bytes(pair.0), pair.1));
