@@ -18,6 +18,9 @@ use super::{Error, Result, RpcClient};
 
 impl super::PdClient for RpcClient {
     fn get_cluster_id(&self) -> Result<u64> {
+        // PD will not check the cluster ID in the GetPDMembersRequest, so we
+        // can send this request with any cluster ID, then PD will return its
+        // cluster ID in the response header.
         let get_pd_members = pdpb::GetPDMembersRequest::new();
         let mut req = self.new_request(pdpb::CommandType::GetPDMembers);
         req.set_get_pd_members(get_pd_members);
