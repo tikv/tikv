@@ -982,13 +982,16 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
         // for region to be shutdown, move the range of it to `region_ranges_to_shutdown`
         self.region_ranges_to_shutdown.insert(enc_end_key(&to_shutdown), to_shutdown.get_id());
 
-        // schedule a task to report to PD that the region merge is done
-        let report_task = PdTask::ReportMerge {
-            new: new,
-            old: old,
-            to_shutdown: to_shutdown,
-        };
-        util::ensure_schedule(self.pd_worker.scheduler(), report_task)
+        let peer = self.region_peers.get(&new.get_id()).unwrap();
+        if peer.is_leader() {
+            // schedule a task to report to PD that the region merge is done
+            let report_task = PdTask::ReportMerge {
+                new: new,
+                old: old,
+                to_shutdown: to_shutdown,
+            };
+            util::ensure_schedule(self.pd_worker.scheduler(), report_task);
+        }
     }
 
     fn on_ready_shutdown_region(&mut self, region: metapb::Region, peer: metapb::Peer) {

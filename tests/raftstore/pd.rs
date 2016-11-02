@@ -57,6 +57,7 @@ struct Cluster {
 
     merging_region_ids: HashSet<u64>,
     shutdown_region_ids: HashSet<u64>,
+    merge_count: usize,
 }
 
 impl Cluster {
@@ -78,6 +79,7 @@ impl Cluster {
             down_peers: HashMap::new(),
             merging_region_ids: HashSet::new(),
             shutdown_region_ids: HashSet::new(),
+            merge_count: 0,
         }
     }
 
@@ -129,7 +131,7 @@ impl Cluster {
     fn get_idle_neighbour_region(&self, region: &metapb::Region) -> Option<metapb::Region> {
         let end_key = enc_end_key(region);
         if let Some(r) = self.regions
-            .range::<Key, Key>(Included(&end_key), Unbounded)
+            .range::<Key, Key>(Excluded(&end_key), Unbounded)
             .next()
             .map(|(_, region)| region.clone()) {
             if self.check_idle_for_region_merge(r.get_id()) {
@@ -138,7 +140,7 @@ impl Cluster {
         }
         let start_key = enc_start_key(region);
         if let Some(r) = self.regions
-            .range::<Key, Key>(Unbounded, Excluded(&start_key))
+            .range::<Key, Key>(Unbounded, Included(&start_key))
             .last()
             .map(|(_, region)| region.clone()) {
             if self.check_idle_for_region_merge(r.get_id()) {
@@ -149,7 +151,10 @@ impl Cluster {
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<(metapb::Region, Option<metapb::Peer>)> {
-        let key = self.region_id_keys.get(&region_id).unwrap();
+        let key = match self.region_id_keys.get(&region_id) {
+            Some(key) => key,
+            None => return Err(Error::Other(box_err!("region {} not found", region_id))),
+        };
         let region = self.regions.get(key).cloned().unwrap();
         let leader = match self.region_leaders.get(&region_id) {
             Some(peer) => Some(peer.clone()),
@@ -216,12 +221,16 @@ impl Cluster {
         self.shutdown_region_ids.insert(to_shutdown.get_id());
         // add a new region after regions are merged
         self.add_region(&new);
+        self.merge_count += 1;
     }
 
     fn handle_heartbeat_merge(&mut self,
                               region: metapb::Region,
                               leader: metapb::Peer)
                               -> Result<pdpb::RegionHeartbeatResponse> {
+        // TODO add dada migration if peers of `from_region` don't locate in the
+        // same stores of `into_region`
+
         let end_key = enc_end_key(&region);
         let cur_region = self.regions.get(&end_key).cloned().unwrap();
         let cur_region_merge = cur_region.get_region_merge().clone();
@@ -618,12 +627,36 @@ impl TestPdClient {
         true
     }
 
+    pub fn check_merge(&self, region: &metapb::Region) -> bool {
+        if let Ok(r) = self.get_region(region.get_start_key()) {
+            if r.get_start_key() < region.get_start_key() {
+                return true;
+            }
+        }
+        if let Ok(r) = self.get_region(region.get_end_key()) {
+            if region.get_end_key().is_empty() {
+                return false;
+            }
+            if r.get_end_key().is_empty() {
+                return true;
+            }
+            if r.get_end_key() > region.get_end_key() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {
         self.cluster.rl().store_stats.get(&store_id).cloned()
     }
 
     pub fn get_split_count(&self) -> usize {
         self.cluster.rl().split_count
+    }
+
+    pub fn get_merge_count(&self) -> usize {
+        self.cluster.rl().merge_count
     }
 
     pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
@@ -751,8 +784,13 @@ impl PdClient for TestPdClient {
                     -> Result<()> {
         try!(self.check_bootstrap());
 
-        assert!(self.cluster.rl().is_merging_region(&old));
-        assert!(self.cluster.rl().is_merging_region(&to_shutdown));
+        if !(self.cluster.rl().is_merging_region(&old) &&
+             self.cluster.rl().is_merging_region(&to_shutdown)) {
+            // PD is already notified that the region merge is done
+            // by previous report merge message or region heartbeat.
+            // It just ignores this message.
+            return Ok(());
+        }
         let (cur_old, _) = try!(self.get_region_by_id(old.get_id()));
         let cur_old_region_merge = cur_old.get_region_merge();
         assert_eq!(old.get_id(), cur_old_region_merge.get_into_id());

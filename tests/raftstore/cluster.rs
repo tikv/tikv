@@ -619,6 +619,36 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn ask_merge(&mut self, region: &metapb::Region) {
+        let region_id = region.get_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        let ch = self.sim.rl().get_store_sendch(leader.get_store_id()).unwrap();
+        let msg = Msg::ReportStorageGc {
+            region_id: region_id,
+            peer_id: leader.get_id(),
+        };
+        ch.send(msg).unwrap();
+    }
+
+    pub fn must_merge(&mut self, region: &metapb::Region) {
+        self.ask_merge(region);
+
+        let mut try_cnt = 0;
+        let merge_count = self.pd_client.get_merge_count();
+        loop {
+            if self.pd_client.check_merge(region) &&
+               self.pd_client.get_merge_count() > merge_count {
+                return;
+            }
+
+            if try_cnt > 250 {
+                panic!("region {:?} has not been merged", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));

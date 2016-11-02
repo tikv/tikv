@@ -24,6 +24,7 @@ mod test_conf_change;
 mod test_compact_log;
 mod test_compact_lock_cf;
 mod test_split_region;
+mod test_region_merge;
 mod test_status_command;
 mod test_tombstone;
 mod test_transport;
