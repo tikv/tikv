@@ -1356,6 +1356,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             used_size += cf_used_size;
         }
 
+        used_size += self.snap_mgr.rl().get_total_snap_size();
+
         let mut available = if capacity > used_size {
             capacity - used_size
         } else {
