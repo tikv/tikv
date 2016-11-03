@@ -375,8 +375,7 @@ mod tests {
         for (k, v) in kvs {
             db.put_cf(lock_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        fn assert_iter(kvs_gen: &Vec<MvccKv<Lock>>,
-                       test_data: (&[u8; 2], LockType, &[u8; 1], u64)) {
+        fn assert_iter(kvs_gen: &[MvccKv<Lock>], test_data: (&[u8; 2], LockType, &[u8; 1], u64)) {
             assert_eq!(kvs_gen.len(), 1);
             let kv = &kvs_gen[0];
             let lock = &kv.value;
