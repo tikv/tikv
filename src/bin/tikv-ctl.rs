@@ -375,30 +375,22 @@ mod tests {
         for (k, v) in kvs {
             db.put_cf(lock_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "kv", CF_LOCK).unwrap();
-        assert_eq!(kvs_gen.len(), 1);
-        let kv = &kvs_gen[0];
-        let lock = &kv.value;
-        let key = kv.key.raw().unwrap();
-        let test_data = &test_data_lock[0];
-        assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
-                &test_data.2[..] == &lock.primary[..] && test_data.3 == lock.ts);
-        let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "kx", CF_LOCK).unwrap();
-        assert_eq!(kvs_gen.len(), 1);
-        let kv = &kvs_gen[0];
-        let lock = &kv.value;
-        let key = kv.key.raw().unwrap();
-        let test_data = &test_data_lock[1];
-        assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
-                &test_data.2[..] == &lock.primary[..] && test_data.3 == lock.ts);
-        let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "kz", CF_LOCK).unwrap();
-        assert_eq!(kvs_gen.len(), 1);
-        let kv = &kvs_gen[0];
-        let lock = &kv.value;
-        let key = kv.key.raw().unwrap();
-        let test_data = &test_data_lock[2];
-        assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
-                &test_data.2[..] == &lock.primary[..] && test_data.3 == lock.ts);
+        fn assert_iter(kvs_gen: &Vec<MvccKv<Lock>>,
+                       test_data: (&[u8; 2], LockType, &[u8; 1], u64)) {
+            assert_eq!(kvs_gen.len(), 1);
+            let kv = &kvs_gen[0];
+            let lock = &kv.value;
+            let key = kv.key.raw().unwrap();
+            assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
+                    &test_data.2[..] == &lock.primary[..] &&
+                    test_data.3 == lock.ts);
+        }
+        assert_iter(&gen_mvcc_iter(&db, "kv", CF_LOCK).unwrap(),
+                    test_data_lock[0]);
+        assert_iter(&gen_mvcc_iter(&db, "kx", CF_LOCK).unwrap(),
+                    test_data_lock[1]);
+        assert_iter(&gen_mvcc_iter(&db, "kz", CF_LOCK).unwrap(),
+                    test_data_lock[2]);
 
         // Test MVCC Write
         let test_data_write = vec![(PREFIX, WriteType::Delete, 5, 10),
