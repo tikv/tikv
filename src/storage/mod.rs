@@ -843,23 +843,20 @@ mod tests {
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
-                               vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
-                               b"x".to_vec(),
-                               100,
-                               expect_ok(tx.clone()))
-        .unwrap();
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            expect_ok(tx.clone()))
+            .unwrap();
         rx.recv().unwrap();
-        storage.async_cleanup(Context::new(),
-                             make_key(b"x"),
-                             100,
-                             expect_ok(tx.clone()))
-        .unwrap();
+        storage.async_cleanup(Context::new(), make_key(b"x"), 100, expect_ok(tx.clone()))
+            .unwrap();
         rx.recv().unwrap();
         storage.async_get(Context::new(),
-                          make_key(b"x"),
-                          105,
-                          expect_get_none(tx.clone()))
-        .unwrap();
+                       make_key(b"x"),
+                       105,
+                       expect_get_none(tx.clone()))
+            .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
     }
