@@ -288,15 +288,6 @@ impl Peer {
     pub fn destroy(&mut self) -> Result<()> {
         let t = Instant::now();
 
-        // TODO: figure out a way to unit test this.
-        let peer_id = self.peer_id();
-        for cmd in self.pending_cmds.normals.drain(..) {
-            notify_region_removed(self.region_id, peer_id, cmd);
-        }
-        if let Some(cmd) = self.pending_cmds.conf_change.take() {
-            notify_region_removed(self.region_id, peer_id, cmd);
-        }
-
         let region = self.get_store().get_region().clone();
         info!("{} begin to destroy", self.tag);
 
@@ -308,10 +299,22 @@ impl Peer {
             try!(write_peer_state(&wb, &region, PeerState::Tombstone));
             try!(self.engine.write(wb));
         }
+
+        // TODO: figure out a way to unit test this.
+        let peer_id = self.peer_id();
+        for cmd in self.pending_cmds.normals.drain(..) {
+            notify_region_removed(self.region_id, peer_id, cmd);
+        }
+        if let Some(cmd) = self.pending_cmds.conf_change.take() {
+            notify_region_removed(self.region_id, peer_id, cmd);
+        }
+
         if self.get_store().is_initialized() {
             // If we meet panic when deleting data and raft log, the dirty data
             // will be cleared by a newer snapshot applying or restart.
-            try!(self.get_store().clear_data());
+            if let Err(e) = self.get_store().clear_data() {
+                error!("{} failed to schedule clear data task: {:?}", self.tag, e);
+            }
         }
         self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
@@ -507,7 +510,20 @@ impl Peer {
             try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
-        let apply_result = try!(self.mut_store().handle_raft_ready(&ready));
+        let apply_result = match self.mut_store().handle_raft_ready(&ready) {
+            Ok(r) => r,
+            Err(e) => {
+                // Because we send the messages before handle raft ready when self
+                // is leader so if we don't panic here, the entries in memory may
+                // be committed before next handle raft ready. If next handle raft
+                // ready still failed to write rocksdb, then entries are committed
+                // before it's actually replicated to majority.
+                if self.is_leader() {
+                    panic!("{} failed to handle raft ready: {:?}", self.tag, e);
+                }
+                return Err(e);
+            }
+        };
 
         if !self.is_leader() {
             try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
@@ -903,14 +919,7 @@ impl Peer {
         }
 
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data));
-        // no need to return error here.
-        self.process_raft_cmd(index, term, cmd).or_else(|e| {
-            error!("{} process raft command at index {} err: {:?}",
-                   self.tag,
-                   index,
-                   e);
-            Ok(None)
-        })
+        Ok(self.process_raft_cmd(index, term, cmd))
     }
 
     fn handle_raft_entry_conf_change(&mut self,
@@ -918,25 +927,16 @@ impl Peer {
                                      -> Result<Option<ExecResult>> {
         let index = entry.get_index();
         let term = entry.get_term();
-        let mut conf_change =
-            try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
+        let conf_change = try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
-        let res = match self.process_raft_cmd(index, term, cmd) {
-            a @ Ok(Some(_)) => a,
-            e => {
-                error!("{} process raft command at index {} err: {:?}",
-                       self.tag,
-                       index,
-                       e);
-                // If failed, tell raft that the config change was aborted.
-                conf_change = eraftpb::ConfChange::new();
-                Ok(None)
-            }
+        let (res, cc) = match self.process_raft_cmd(index, term, cmd) {
+            res @ Some(_) => (res, conf_change),
+            // If failed, tell raft that the config change was aborted.
+            None => (None, eraftpb::ConfChange::new()),
         };
+        self.raft_group.apply_conf_change(cc);
 
-        self.raft_group.apply_conf_change(conf_change);
-
-        res
+        Ok(res)
     }
 
     fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
@@ -966,18 +966,16 @@ impl Peer {
                         index: u64,
                         term: u64,
                         cmd: RaftCmdRequest)
-                        -> Result<Option<ExecResult>> {
+                        -> Option<ExecResult> {
         if index == 0 {
-            return Err(box_err!("processing raft command needs a none zero index"));
+            panic!("{} processing raft command needs a none zero index",
+                   self.tag);
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
-        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd).unwrap_or_else(|e| {
-            error!("{} apply raft command err {:?}", self.tag, e);
-            (cmd_resp::new_error(e), None)
-        });
+        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
         timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
@@ -986,7 +984,7 @@ impl Peer {
                index);
 
         if cb.is_none() {
-            return Ok(exec_result);
+            return exec_result;
         }
 
         let cb = cb.unwrap();
@@ -998,25 +996,34 @@ impl Peer {
         cmd_resp::bind_term(&mut resp, self.term());
         cb.call_box((resp,));
 
-        Ok(exec_result)
+        exec_result
     }
 
     pub fn term(&self) -> u64 {
         self.raft_group.raft.term
     }
 
+    // apply operation can fail as following situation:
+    //   1. encouter an error that will occur on all store, it can continue
+    // applying next entry safely;
+    //   2. encouter an error that any not occur on all store, in this case
+    // we should try to apply the entry again or panic. Considering that this
+    // usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(&mut self,
                       index: u64,
                       term: u64,
                       req: &RaftCmdRequest)
-                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+                      -> (RaftCmdResponse, Option<ExecResult>) {
+        // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
         let last_applied_index = self.get_store().applied_index();
         if last_applied_index >= index {
-            return Err(box_err!("applied index moved backwards, {} >= {}",
-                                last_applied_index,
-                                index));
+            // How can it happen?
+            panic!("{} applied index moved backwards, {} >= {}",
+                   self.tag,
+                   last_applied_index,
+                   index);
         }
 
         let mut ctx = ExecContext::new(self, index, term, req);
@@ -1027,14 +1034,12 @@ impl Peer {
 
         ctx.apply_state.set_applied_index(index);
         if !self.pending_remove {
-            ctx.save(self.region_id).expect("save state must not fail");
+            assert_op!(self.tag, ctx.save(self.region_id));
         }
 
         // Commit write and change storage fields atomically.
         let mut storage = self.mut_store();
-        if let Err(e) = storage.engine.write(ctx.wb) {
-            panic!("{} commit batch failed err {:?}", storage.tag, e);
-        }
+        assert_op!(storage.tag, storage.engine.write(ctx.wb));
 
         storage.apply_state = ctx.apply_state;
         storage.applied_index_term = term;
@@ -1051,7 +1056,7 @@ impl Peer {
             }
         }
 
-        Ok((resp, exec_result))
+        (resp, exec_result)
     }
 
     /// Clear all the pending commands.
@@ -1130,6 +1135,7 @@ impl<'a> ExecContext<'a> {
 
 // Here we implement all commands.
 impl Peer {
+    // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(&mut self,
                      ctx: &mut ExecContext)
                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
@@ -1249,10 +1255,12 @@ impl Peer {
         }
 
         if self.pending_remove {
-            try!(self.get_store().clear_meta(&ctx.wb));
-            try!(write_peer_state(&ctx.wb, &region, PeerState::Tombstone));
+            assert_op!(self.tag, self.get_store().clear_meta(&ctx.wb));
+            assert_op!(self.tag,
+                       write_peer_state(&ctx.wb, &region, PeerState::Tombstone));
         } else {
-            try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
+            assert_op!(self.tag,
+                       write_peer_state(&ctx.wb, &region, PeerState::Normal));
         }
 
         let mut resp = AdminResponse::new();
@@ -1321,9 +1329,12 @@ impl Peer {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
-        try!(write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
-        try!(write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()));
+        assert_op!(self.tag,
+                   write_peer_state(&ctx.wb, &region, PeerState::Normal));
+        assert_op!(self.tag,
+                   write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
+        assert_op!(self.tag,
+                   write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()));
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());
@@ -1359,6 +1370,7 @@ impl Peer {
             return Ok((resp, None));
         }
 
+        // compact failure is safe to omitted, no need to assert.
         try!(self.get_store().compact(&mut ctx.apply_state, compact_index));
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
@@ -1406,9 +1418,10 @@ impl Peer {
         let mut resp = Response::new();
         let res = if req.get_get().has_cf() {
             let cf = req.get_get().get_cf();
-            try!(ctx.snap.get_value_cf(cf, &keys::data_key(key)))
+            // TODO: check whether cf exists or not.
+            assert_op!(self.tag, ctx.snap.get_value_cf(cf, &keys::data_key(key)))
         } else {
-            try!(ctx.snap.get_value(&keys::data_key(key)))
+            assert_op!(self.tag, ctx.snap.get_value(&keys::data_key(key)))
         };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
@@ -1433,10 +1446,11 @@ impl Peer {
         self.size_diff_hint += value.len() as u64;
         if req.get_put().has_cf() {
             let cf = req.get_put().get_cf();
-            let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
-            try!(ctx.wb.put_cf(handle, &key, value));
+            // TODO: check whether cf exists or not.
+            let handle = assert_op!(self.tag, rocksdb::get_cf_handle(&self.engine, cf));
+            assert_op!(self.tag, ctx.wb.put_cf(handle, &key, value));
         } else {
-            try!(ctx.wb.put(&key, value));
+            assert_op!(self.tag, ctx.wb.put(&key, value));
         }
         Ok(resp)
     }
@@ -1456,14 +1470,15 @@ impl Peer {
         let resp = Response::new();
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();
-            let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
-            try!(ctx.wb.delete_cf(handle, &key));
+            // TODO: check whether cf exists or not.
+            let handle = assert_op!(self.tag, rocksdb::get_cf_handle(&self.engine, cf));
+            assert_op!(self.tag, ctx.wb.delete_cf(handle, &key));
             // lock cf is compact periodically.
             if cf != CF_LOCK {
                 self.delete_keys_hint += 1;
             }
         } else {
-            try!(ctx.wb.delete(&key));
+            assert_op!(self.tag, ctx.wb.delete(&key));
             self.delete_keys_hint += 1;
         }
 

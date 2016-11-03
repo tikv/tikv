@@ -11,6 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Assert the operation must succeed.
+macro_rules! assert_op {
+    ($tag:expr, $op:expr) => ({
+        match $op {
+            Ok(r) => r,
+            Err(e) => panic!("{} op is failed: {:?}", $tag, e),
+        }
+    })
+}
 
 pub mod store;
 pub mod errors;

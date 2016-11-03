@@ -831,13 +831,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let is_initialized = p.is_initialized();
         if let Err(e) = p.destroy() {
-            // should panic here?
-            error!("[region {}] destroy peer {:?} in store {} err {:?}",
+            // If not panic here, the peer will be recreated in the next restart,
+            // then it will be gc again. But if some overlap region is created
+            // before restarting, the gc action will delete the overlap region's
+            // data too.
+            panic!("[region {}] destroy peer {:?} in store {} err {:?}",
                    region_id,
                    peer,
                    self.store_id(),
                    e);
-            return;
         }
 
         if is_initialized && self.region_ranges.remove(&enc_end_key(p.region())).is_none() {
