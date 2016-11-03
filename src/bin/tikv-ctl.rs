@@ -197,7 +197,13 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
     if !iter.valid() {
         None
     } else {
-        Some(iter.map(|s| {
+        Some(iter.take_while(|s| {
+                Key::from_encoded(keys::origin_key(&s.0).to_vec())
+                    .raw()
+                    .unwrap()
+                    .starts_with(key_prefix.as_bytes())
+            })
+            .map(|s| {
                 let key = &keys::origin_key(&s.0);
                 MvccKv {
                     key: Key::from_encoded(key.to_vec()),
@@ -217,6 +223,7 @@ fn dump_mvcc_default(db: DB, key: &str) {
         println!("Key: {:?}", escape(key.raw().unwrap().as_slice()));
         println!("Value: {:?}", escape(kv.value.as_slice()));
         println!("Start_ts: {:?}", ts);
+        println!("");
     }
 }
 
@@ -228,6 +235,7 @@ fn dump_mvcc_lock(db: DB, key: &str) {
         println!("Primary: {:?}", escape(lock.primary.as_slice()));
         println!("Type: {:?}", lock.lock_type);
         println!("Start_ts: {:?}", lock.ts);
+        println!("");
     }
 }
 
@@ -235,12 +243,13 @@ fn dump_mvcc_write(db: DB, key: &str) {
     let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, key, CF_WRITE).unwrap();
     for kv in kvs {
         let write = &kv.value;
-        let commit_ts = kv.key.decode_ts();
+        let commit_ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
         println!("Key: {:?}", escape(key.raw().unwrap().as_slice()));
         println!("Type: {:?}", write.write_type);
         println!("Start_ts: {:?}", write.start_ts);
         println!("Commit_ts: {:?}", commit_ts);
+        println!("");
     }
 }
 
@@ -362,30 +371,34 @@ mod tests {
             .map(|data| Lock::new(data.1, data.2.to_vec(), data.3).to_bytes())
             .collect();
         let kvs = keys.iter().zip(lock_value.iter());
-        println!("KVs: {:?}", kvs.clone().collect::<Vec<_>>());
         let lock_cf = db.cf_handle(CF_LOCK).unwrap();
         for (k, v) in kvs {
             db.put_cf(lock_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "k", CF_LOCK).unwrap();
-        let mut test_iter = test_data_lock.clone();
-        assert_eq!(test_iter.len(), test_data_lock.len());
-        println!("Before: {:?}", test_iter);
-        for kv in kvs_gen {
-            let lock = &kv.value;
-            let key = kv.key.raw().unwrap();
-            println!("Key:{:?}, Lock:{:?}, Primary:{:?}, TS:{:?}",
-                     key,
-                     lock.lock_type,
-                     lock.primary,
-                     lock.ts);
-            test_iter.retain(|&s| {
-                !(key.starts_with(PREFIX) && s.1 == lock.lock_type &&
-                  &s.2[..] == &lock.primary[..] && s.3 == lock.ts)
-            });
-        }
-        println!("Rest: {:?}", test_iter);
-        assert_eq!(test_iter.len(), 0);
+        let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "kv", CF_LOCK).unwrap();
+        assert_eq!(kvs_gen.len(), 1);
+        let kv = &kvs_gen[0];
+        let lock = &kv.value;
+        let key = kv.key.raw().unwrap();
+        let test_data = &test_data_lock[0];
+        assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
+                &test_data.2[..] == &lock.primary[..] && test_data.3 == lock.ts);
+        let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "kx", CF_LOCK).unwrap();
+        assert_eq!(kvs_gen.len(), 1);
+        let kv = &kvs_gen[0];
+        let lock = &kv.value;
+        let key = kv.key.raw().unwrap();
+        let test_data = &test_data_lock[1];
+        assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
+                &test_data.2[..] == &lock.primary[..] && test_data.3 == lock.ts);
+        let kvs_gen: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, "kz", CF_LOCK).unwrap();
+        assert_eq!(kvs_gen.len(), 1);
+        let kv = &kvs_gen[0];
+        let lock = &kv.value;
+        let key = kv.key.raw().unwrap();
+        let test_data = &test_data_lock[2];
+        assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
+                &test_data.2[..] == &lock.primary[..] && test_data.3 == lock.ts);
 
         // Test MVCC Write
         let test_data_write = vec![(PREFIX, WriteType::Delete, 5, 10),
