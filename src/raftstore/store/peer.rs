@@ -303,14 +303,14 @@ impl Peer {
         // If pending_remove, meta was destroyed when applying removal.
         if !self.pending_remove {
             // First set Tombstone state explicitly, and clear raft meta.
-            // If we meet panic when deleting data and raft log, the dirty data
-            // will be cleared by Compaction Filter later or a newer snapshot applying.
             let wb = WriteBatch::new();
             try!(self.get_store().clear_meta(&wb));
             try!(write_peer_state(&wb, &region, PeerState::Tombstone));
             try!(self.engine.write(wb));
         }
         if self.get_store().is_initialized() {
+            // If we meet panic when deleting data and raft log, the dirty data
+            // will be cleared by a newer snapshot applying or restart.
             try!(self.get_store().clear_data());
         }
         self.coprocessor_host.shutdown();
@@ -1020,7 +1020,7 @@ impl Peer {
         }
 
         let mut ctx = ExecContext::new(self, index, term, req);
-        let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             error!("{} execute raft command err: {:?}", self.tag, e);
             (cmd_resp::new_error(e), None)
         });
@@ -1032,28 +1032,24 @@ impl Peer {
 
         // Commit write and change storage fields atomically.
         let mut storage = self.mut_store();
-        match storage.engine.write(ctx.wb) {
-            Ok(_) => {
-                storage.apply_state = ctx.apply_state;
-                storage.applied_index_term = term;
+        if let Err(e) = storage.engine.write(ctx.wb) {
+            panic!("{} commit batch failed err {:?}", storage.tag, e);
+        }
 
-                if let Some(ref exec_result) = exec_result {
-                    match *exec_result {
-                        ExecResult::ChangePeer { ref region, .. } => {
-                            storage.region = region.clone();
-                        }
-                        ExecResult::CompactLog { .. } => {}
-                        ExecResult::SplitRegion { ref left, .. } => {
-                            storage.region = left.clone();
-                        }
-                    }
-                };
+        storage.apply_state = ctx.apply_state;
+        storage.applied_index_term = term;
+
+        if let Some(ref exec_result) = exec_result {
+            match *exec_result {
+                ExecResult::ChangePeer { ref region, .. } => {
+                    storage.region = region.clone();
+                }
+                ExecResult::CompactLog { .. } => {}
+                ExecResult::SplitRegion { ref left, .. } => {
+                    storage.region = left.clone();
+                }
             }
-            Err(e) => {
-                error!("{} commit batch failed err {:?}", storage.tag, e);
-                resp = cmd_resp::message_error(e);
-            }
-        };
+        }
 
         Ok((resp, exec_result))
     }

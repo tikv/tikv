@@ -14,14 +14,15 @@
 use std::time::Duration;
 
 use rocksdb::Writable;
+use protobuf::Message;
 
-use kvproto::raft_serverpb::{self, RegionLocalState, PeerState};
+use kvproto::raft_serverpb::{self, RegionLocalState, PeerState, StoreIdent};
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::transport_simulate::*;
 use super::server::new_server_cluster;
 use super::util::*;
-use tikv::raftstore::store::{keys, Peekable};
+use tikv::raftstore::store::{keys, Peekable, Iterable};
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -58,6 +59,33 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_2 = cluster.get_engine(2);
     must_get_none(&engine_2, b"k1");
     must_get_none(&engine_2, b"k3");
+    let mut existing_kvs = vec![];
+    for cf in engine_2.cf_names() {
+        engine_2.scan_cf(cf,
+                     b"",
+                     &[0xFF],
+                     false,
+                     &mut |k, v| {
+                         existing_kvs.push((k.to_vec(), v.to_vec()));
+                         Ok(true)
+                     })
+            .unwrap();
+    }
+    // only tombstone key and store ident key exist.
+    assert_eq!(existing_kvs.len(), 2);
+    existing_kvs.sort();
+    assert_eq!(existing_kvs[0].0, keys::store_ident_key());
+    assert_eq!(existing_kvs[1].0, keys::region_state_key(r1));
+
+    let mut ident = StoreIdent::new();
+    ident.set_cluster_id(cluster.id());
+    ident.set_store_id(2);
+    assert_eq!(ident.write_to_bytes().unwrap(), existing_kvs[0].1);
+
+    let mut state: RegionLocalState =
+        engine_3.get_msg(&keys::region_state_key(r1)).unwrap().unwrap();
+    state.set_state(PeerState::Tombstone);
+    assert_eq!(state.write_to_bytes().unwrap(), existing_kvs[1].1);
 
     // Send a stale raft message to peer (2, 2)
     let mut raft_msg = raft_serverpb::RaftMessage::new();
