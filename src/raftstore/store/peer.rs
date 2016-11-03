@@ -1034,13 +1034,17 @@ impl Peer {
 
         ctx.apply_state.set_applied_index(index);
         if !self.pending_remove {
-            assert_op!(self.tag, ctx.save(self.region_id));
+            ctx.save(self.region_id)
+                .unwrap_or_else(|e| panic!("{} failed to save apply context: {:?}", self.tag, e));
         }
 
         // Commit write and change storage fields atomically.
-        let mut storage = self.mut_store();
-        assert_op!(storage.tag, storage.engine.write(ctx.wb));
+        self.mut_store()
+            .engine
+            .write(ctx.wb)
+            .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
 
+        let mut storage = self.mut_store();
         storage.apply_state = ctx.apply_state;
         storage.applied_index_term = term;
 
@@ -1255,12 +1259,13 @@ impl Peer {
         }
 
         if self.pending_remove {
-            assert_op!(self.tag, self.get_store().clear_meta(&ctx.wb));
-            assert_op!(self.tag,
-                       write_peer_state(&ctx.wb, &region, PeerState::Tombstone));
+            self.get_store()
+                .clear_meta(&ctx.wb)
+                .and_then(|_| write_peer_state(&ctx.wb, &region, PeerState::Tombstone))
+                .unwrap_or_else(|e| panic!("{} failed to remove self: {:?}", self.tag, e));
         } else {
-            assert_op!(self.tag,
-                       write_peer_state(&ctx.wb, &region, PeerState::Normal));
+            write_peer_state(&ctx.wb, &region, PeerState::Normal)
+                .unwrap_or_else(|e| panic!("{} failed to update region state: {:?}", self.tag, e));
         }
 
         let mut resp = AdminResponse::new();
@@ -1329,12 +1334,15 @@ impl Peer {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        assert_op!(self.tag,
-                   write_peer_state(&ctx.wb, &region, PeerState::Normal));
-        assert_op!(self.tag,
-                   write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
-        assert_op!(self.tag,
-                   write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()));
+        write_peer_state(&ctx.wb, &region, PeerState::Normal)
+            .and_then(|_| write_peer_state(&ctx.wb, &new_region, PeerState::Normal))
+            .and_then(|_| write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()))
+            .unwrap_or_else(|e| {
+                panic!("{} failed to save split region {:?}: {:?}",
+                       self.tag,
+                       new_region,
+                       e)
+            });
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());
@@ -1419,9 +1427,17 @@ impl Peer {
         let res = if req.get_get().has_cf() {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
-            assert_op!(self.tag, ctx.snap.get_value_cf(cf, &keys::data_key(key)))
+            ctx.snap.get_value_cf(cf, &keys::data_key(key)).unwrap_or_else(|e| {
+                panic!("{} failed to get {} with cf {}: {:?}",
+                       self.tag,
+                       escape(key),
+                       cf,
+                       e)
+            })
         } else {
-            assert_op!(self.tag, ctx.snap.get_value(&keys::data_key(key)))
+            ctx.snap
+                .get_value(&keys::data_key(key))
+                .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", self.tag, escape(key), e))
         };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
@@ -1447,10 +1463,24 @@ impl Peer {
         if req.get_put().has_cf() {
             let cf = req.get_put().get_cf();
             // TODO: check whether cf exists or not.
-            let handle = assert_op!(self.tag, rocksdb::get_cf_handle(&self.engine, cf));
-            assert_op!(self.tag, ctx.wb.put_cf(handle, &key, value));
+            rocksdb::get_cf_handle(&self.engine, cf)
+                .and_then(|handle| ctx.wb.put_cf(handle, &key, value))
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to write ({}, {}) to cf {}: {:?}",
+                           self.tag,
+                           escape(&key),
+                           escape(value),
+                           cf,
+                           e)
+                });
         } else {
-            assert_op!(self.tag, ctx.wb.put(&key, value));
+            ctx.wb.put(&key, value).unwrap_or_else(|e| {
+                panic!("{} failed to write ({}, {}): {:?}",
+                       self.tag,
+                       escape(&key),
+                       escape(value),
+                       e);
+            });
         }
         Ok(resp)
     }
@@ -1471,14 +1501,19 @@ impl Peer {
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            let handle = assert_op!(self.tag, rocksdb::get_cf_handle(&self.engine, cf));
-            assert_op!(self.tag, ctx.wb.delete_cf(handle, &key));
+            rocksdb::get_cf_handle(&self.engine, cf)
+                .and_then(|handle| ctx.wb.delete_cf(handle, &key))
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                });
             // lock cf is compact periodically.
             if cf != CF_LOCK {
                 self.delete_keys_hint += 1;
             }
         } else {
-            assert_op!(self.tag, ctx.wb.delete(&key));
+            ctx.wb.delete(&key).unwrap_or_else(|e| {
+                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+            });
             self.delete_keys_hint += 1;
         }
 
