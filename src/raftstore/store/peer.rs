@@ -28,8 +28,7 @@ use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
-                             RegionLocalState};
+use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX};
 use raftstore::{Result, Error};
@@ -301,13 +300,16 @@ impl Peer {
         let region = self.get_store().get_region().clone();
         info!("{} begin to destroy", self.tag);
 
-        // First set Tombstone state explicitly, and clear raft meta.
-        // If we meet panic when deleting data and raft log, the dirty data
-        // will be cleared by Compaction Filter later or a newer snapshot applying.
-        let wb = WriteBatch::new();
-        try!(self.get_store().clear_meta(&wb));
-        try!(write_peer_state(&wb, &region, PeerState::Tombstone));
-        try!(self.engine.write(wb));
+        // If pending_remove, meta was destroyed when applying removal.
+        if !self.pending_remove {
+            // First set Tombstone state explicitly, and clear raft meta.
+            // If we meet panic when deleting data and raft log, the dirty data
+            // will be cleared by Compaction Filter later or a newer snapshot applying.
+            let wb = WriteBatch::new();
+            try!(self.get_store().clear_meta(&wb));
+            try!(write_peer_state(&wb, &region, PeerState::Tombstone));
+            try!(self.engine.write(wb));
+        }
         if self.get_store().is_initialized() {
             try!(self.get_store().clear_data());
         }
@@ -553,16 +555,7 @@ impl Peer {
 
             // for read-only, if we don't care stale read, we can
             // execute these commands immediately in leader.
-            let engine = self.engine.clone();
-            let mut ctx = ExecContext {
-                snap: Snapshot::new(engine),
-                apply_state: self.get_store().apply_state.clone(),
-                wb: WriteBatch::new(),
-                req: &req,
-                // We don't care index and term for local read, use 0 here.
-                index: 0,
-                term: 0,
-            };
+            let mut ctx = ExecContext::new(self, 0, 0, &req);
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
                 error!("{} execute raft command err: {:?}", self.tag, e);
                 (cmd_resp::new_error(e), None)
@@ -863,6 +856,11 @@ impl Peer {
         let mut results = vec![];
         let committed_count = committed_entries.len();
         for entry in committed_entries {
+            if self.pending_remove {
+                // This peer is about to be destroyed, skip everything.
+                break;
+            }
+
             let res = try!(match entry.get_entry_type() {
                 eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
                 eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
@@ -1012,14 +1010,7 @@ impl Peer {
                       term: u64,
                       req: &RaftCmdRequest)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        if self.pending_remove {
-            let region_not_found = Error::RegionNotFound(self.region_id);
-            let mut resp = cmd_resp::new_error(region_not_found);
-            if let Some(uuid) = util::get_uuid_from_req(req) {
-                cmd_resp::bind_uuid(&mut resp, uuid);
-            }
-            return Ok((resp, None));
-        }
+        assert!(!self.pending_remove);
 
         let last_applied_index = self.get_store().applied_index();
         if last_applied_index >= index {
@@ -1028,22 +1019,16 @@ impl Peer {
                                 index));
         }
 
-        let engine = self.engine.clone();
-        let mut ctx = ExecContext {
-            snap: Snapshot::new(engine),
-            apply_state: self.get_store().apply_state.clone(),
-            wb: WriteBatch::new(),
-            req: req,
-            index: index,
-            term: term,
-        };
+        let mut ctx = ExecContext::new(self, index, term, req);
         let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             error!("{} execute raft command err: {:?}", self.tag, e);
             (cmd_resp::new_error(e), None)
         });
 
         ctx.apply_state.set_applied_index(index);
-        ctx.save(self.region_id).expect("save state must not fail");
+        if !self.pending_remove {
+            ctx.save(self.region_id).expect("save state must not fail");
+        }
 
         // Commit write and change storage fields atomically.
         let mut storage = self.mut_store();
@@ -1127,6 +1112,17 @@ struct ExecContext<'a> {
 }
 
 impl<'a> ExecContext<'a> {
+    fn new<'b>(peer: &'b Peer, index: u64, term: u64, req: &'a RaftCmdRequest) -> ExecContext<'a> {
+        ExecContext {
+            snap: Snapshot::new(peer.engine.clone()),
+            apply_state: peer.get_store().apply_state.clone(),
+            wb: WriteBatch::new(),
+            req: req,
+            index: index,
+            term: term,
+        }
+    }
+
     fn save(&self, region_id: u64) -> Result<()> {
         let raft_cf = try!(self.snap.cf_handle(CF_RAFT));
         try!(self.wb.put_msg_cf(raft_cf,
@@ -1256,9 +1252,12 @@ impl Peer {
             }
         }
 
-        let mut state = RegionLocalState::new();
-        state.set_region(region.clone());
-        try!(ctx.wb.put_msg(&keys::region_state_key(region.get_id()), &state));
+        if self.pending_remove {
+            try!(self.get_store().clear_meta(&ctx.wb));
+            try!(write_peer_state(&ctx.wb, &region, PeerState::Tombstone));
+        } else {
+            try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
+        }
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
