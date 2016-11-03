@@ -35,6 +35,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
+use std::collections::HashSet;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -144,6 +145,31 @@ fn get_integer_value<F>(short: &str,
                     info!("{}, use default {:?}", long, default);
                     default
                 })
+        })
+        .expect(&format!("please specify {}", long))
+}
+
+fn get_array_value<F>(short: &str,
+                      long: &str,
+                      matches: &Matches,
+                      config: &toml::Value,
+                      default: Option<Vec<String>>,
+                      f: F)
+                      -> Vec<String>
+    where F: Fn(&toml::Value) -> Option<Vec<String>>
+{
+    // avoid panic if short is not defined.
+    let s: Option<Vec<String>> = if matches.opt_defined(short) {
+        matches.opt_str(short).map(|x| x.split(',').map(|s| s.to_owned()).collect())
+    } else {
+        None
+    };
+
+    s.or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("{}, use default {:?}", long, default);
+                default
+            })
         })
         .expect(&format!("please specify {}", long))
 }
@@ -542,6 +568,7 @@ fn get_rocksdb_raftlog_cf_option(matches: &Matches, config: &toml::Value) -> Roc
 fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
+    cfg.tags = get_server_tags(matches, config);
     cfg.addr = addr.to_owned();
     cfg.notify_capacity = get_integer_value("",
                                             "server.notify-capacity",
@@ -765,6 +792,36 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
+fn get_server_tags(matches: &Matches, config: &toml::Value) -> Vec<String> {
+    let tags = get_array_value("tags",
+                               "server.tags",
+                               matches,
+                               config,
+                               Some(Vec::new()),
+                               |v| {
+        v.as_slice().and_then(|s| {
+            let mut tags = Vec::new();
+            for x in s {
+                if let Some(t) = x.as_str() {
+                    tags.push(t.to_owned());
+                } else {
+                    panic!("tag {} is not a string", x);
+                }
+            }
+            Some(tags)
+        })
+    });
+
+    // Convert tags to lowercase, and remove empty or duplicated tags
+    let mut set = HashSet::new();
+    for t in tags {
+        if !t.is_empty() {
+            set.insert(t.to_lowercase());
+        }
+    }
+    set.into_iter().collect()
+}
+
 fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
     where T: RaftStoreRouter,
           S: StoreAddrResolver + Send + 'static
@@ -900,6 +957,7 @@ fn main() {
                 "dsn: raftkv");
     opts.optopt("I", "cluster-id", "set cluster id", "must greater than 0");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
+    opts.optopt("", "tags", "set server tags", "default: \"\"");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
