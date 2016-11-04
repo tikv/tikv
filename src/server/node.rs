@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use mio::EventLoop;
 use rocksdb::DB;
+use protobuf::RepeatedField;
 
 use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
@@ -63,6 +64,7 @@ impl<C> Node<C>
     {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
+        store.set_tags(RepeatedField::from_vec(cfg.tags.to_owned()));
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
         } else {
