@@ -335,16 +335,12 @@ mod tests {
         let tmp_dir = TempDir::new("mvcc_tmp").expect("create mvcc_tmp dir");
         let file_path = tmp_dir.path().join("tmp_db");
         let db = new_engine(file_path.to_str().unwrap(), ALL_CFS).unwrap();
-        let test_data = vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
-        let keys: Vec<_> = test_data.iter()
-            .map(|data| {
-                keys::data_key(Key::from_raw(&data.0[..]).append_ts(data.2).encoded().as_slice())
-            })
-            .collect();
-        let default_value: Vec<_> = test_data.iter().map(|data| *data.1).collect();
-        let kvs = keys.iter().zip(default_value.iter());
-        for (k, v) in kvs {
-            db.put(k.as_slice(), v).unwrap();
+        let test_data: Vec<(_, _, u64)> =
+            vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
+        for &(k, v, ts) in &test_data {
+            let key = keys::data_key(Key::from_raw(&k[..]).append_ts(ts).encoded().as_slice());
+            let value = v;
+            db.put(key.as_slice(), &value[..]).unwrap();
         }
         let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
         let mut test_iter = test_data.clone();
