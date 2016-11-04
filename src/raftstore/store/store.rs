@@ -25,6 +25,7 @@ use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
+use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
@@ -216,6 +217,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     raft_metrics: RaftMetrics,
 
     tag: String,
+
+    start_time: Timespec,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -267,6 +270,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             tag: tag,
+            start_time: time::get_time(),
         };
         try!(s.init());
         Ok(s)
@@ -1386,6 +1390,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .set(snap_stats.sending_count as f64);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as f64);
+
+        stats.set_start_time(self.start_time.sec as u32);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("{} failed to notify pd: {}", self.tag, e);
