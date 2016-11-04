@@ -1005,8 +1005,8 @@ impl Peer {
 
     // apply operation can fail as following situation:
     //   1. encouter an error that will occur on all store, it can continue
-    // applying next entry safely;
-    //   2. encouter an error that any not occur on all store, in this case
+    // applying next entry safely, like stale epoch for example;
+    //   2. encouter an error that may not occur on all store, in this case
     // we should try to apply the entry again or panic. Considering that this
     // usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(&mut self,
@@ -1378,7 +1378,7 @@ impl Peer {
             return Ok((resp, None));
         }
 
-        // compact failure is safe to omitted, no need to assert.
+        // compact failure is safe to be omitted, no need to assert.
         try!(self.get_store().compact(&mut ctx.apply_state, compact_index));
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
