@@ -64,36 +64,10 @@ max-peer-down-duration = "5m"
 # pd endpoints 
 endpoints = ""
 
-# For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/options.h
 [rocksdb]
-# compression method (if any) is used to compress a block.
-#   no:     kNoCompression
-#   snappy: kSnappyCompression
-#   zlib:   kZlibCompression
-#   bzip2:  kBZip2Compression
-#   lz4:    kLZ4Compression
-#   lz4hc:  kLZ4HCCompression
-
-# per level compression
-compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
-
-# Amount of data to build up in memory (backed by an unsorted log
-# on disk) before converting to a sorted on-disk file.
-write-buffer-size = "64MB"
-
-# The maximum number of write buffers that are built up in memory.
-max-write-buffer-number = 5
-
-# The minimum number of write buffers that will be merged together
-# before writing to storage.
-min-write-buffer-number-to-merge = 1
-
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
 max-background-compactions = 6
-
-# Control maximum total data size for base level (level 1).
-max-bytes-for-level-base = "64MB"
 
 # Number of open files that can be used by the DB.  You may need to
 # increase this if your database has a large working set. Value -1 means
@@ -105,17 +79,12 @@ max-bytes-for-level-base = "64MB"
 # take several minutes to open the db.
 max-open-files = 40960
 
-# Target file size for compaction.
-target-file-size-base = "16MB"
+# Max size of rocksdb's MANIFEST file.
+# For detailed explanation please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
+max-manifest-file-size = "20MB"
 
 # If true, the database will be created if it is missing.
 create-if-missing = true
-
-# Soft limit on number of level-0 files. We start slowing down writes at this point.
-level0-slowdown-writes-trigger = 12
-
-# Maximum number of level-0 files.  We stop writes at this point.
-level0-stop-writes-trigger = 16
 
 # rocksdb wal recovery mode
 # 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
@@ -132,10 +101,63 @@ enable-statistics = false
 # Same as rocksdb's default value (10 min).
 stats-dump-period-sec = 600
 
+# Column Family default used to store actual data of the database.
+[rocksdb.defaultcf]
+# compression method (if any) is used to compress a block.
+#   no:     kNoCompression
+#   snappy: kSnappyCompression
+#   zlib:   kZlibCompression
+#   bzip2:  kBZip2Compression
+#   lz4:    kLZ4Compression
+#   lz4hc:  kLZ4HCCompression
+
+# per level compression
+compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
+
+# Approximate size of user data packed per block.  Note that the
+# block size specified here corresponds to uncompressed data.
+block-size = "64KB"
+
+# If you're doing point lookups you definitely want to turn bloom filters on, We use
+# bloom filters to avoid unnecessary disk reads. Default bits_per_key is 10, which
+# yields ~1% false positive rate. Larger bits_per_key values will reduce false positive
+# rate, but increase memory usage and space amplification.
+bloom-filter-bits-per-key = 10
+
+# false means one sst file one bloom filter, true means evry block has a corresponding bloom filter
+block-based-bloom-filter = false
+
+# Soft limit on number of level-0 files. We start slowing down writes at this point.
+level0-slowdown-writes-trigger = 12
+
+# Maximum number of level-0 files.  We stop writes at this point.
+level0-stop-writes-trigger = 16
+
+# Amount of data to build up in memory (backed by an unsorted log
+# on disk) before converting to a sorted on-disk file.
+write-buffer-size = "64MB"
+
+# The maximum number of write buffers that are built up in memory.
+max-write-buffer-number = 5
+
+# The minimum number of write buffers that will be merged together
+# before writing to storage.
+min-write-buffer-number-to-merge = 1
+
+# Control maximum total data size for base level (level 1).
+max-bytes-for-level-base = "64MB"
+
+# Target file size for compaction.
+target-file-size-base = "16MB"
+
+# block-cache used to cache uncompressed blocks, big block-cache can speed up read
+block-cache-size = "1GB"
+
 # options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
+block-size = "16KB"
 write-buffer-size = "64MB"
 max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
@@ -147,30 +169,13 @@ block-cache-size = "256MB"
 # Column Family raft is used to store raft log and raft states.
 [rocksdb.raftcf]
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
+block-size = "16KB"
 write-buffer-size = "64MB"
 max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
 max-bytes-for-level-base = "64MB"
 target-file-size-base = "16MB"
 block-cache-size = "256MB"
-
-# For detailed explanation please refer to https://github.com/facebook/rocksdb/blob/master/include/rocksdb/table.h
-[rocksdb.block-based-table]
-# Approximate size of user data packed per block.  Note that the 
-# block size specified here corresponds to uncompressed data.
-block-size = "64KB"
-
-# block-cache used to cache uncompressed blocks, big block-cache can speed up read
-block-cache-size = "1GB"
-
-# If you're doing point lookups you definitely want to turn bloom filters on, We use
-# bloom filters to avoid unnecessary disk reads. Default bits_per_key is 10, which
-# yields ~1% false positive rate. Larger bits_per_key values will reduce false positive
-# rate, but increase memory usage and space amplification.
-bloom-filter-bits-per-key = 10
-
-# false means one sst file one bloom filter, true means evry block has a corresponding bloom filter
-block-based-bloom-filter = false
 
 [storage]
 # notify capacity of scheduler's channel
