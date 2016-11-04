@@ -335,15 +335,14 @@ mod tests {
         let tmp_dir = TempDir::new("mvcc_tmp").expect("create mvcc_tmp dir");
         //        let file_path = tmp_dir.path().join("tmp_db");
         let db = new_engine(tmp_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
-        let test_data: Vec<(_, _, u64)> =
-            vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
+        let test_data = vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
         for &(k, v, ts) in &test_data {
             let key = keys::data_key(Key::from_raw(k).append_ts(ts).encoded().as_slice());
             db.put(key.as_slice(), v).unwrap();
         }
         let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
         let mut test_iter = test_data.clone();
-        assert_eq!(test_iter.len(), test_data.len());
+        assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
             let ts = kv.key.decode_ts().unwrap();
             let key = kv.key.truncate_ts().unwrap().raw().unwrap();
@@ -409,7 +408,7 @@ mod tests {
         }
         let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", CF_WRITE).unwrap();
         let mut test_iter = test_data_write.clone();
-        assert_eq!(test_iter.len(), test_data_write.len());
+        assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
             let write = &kv.value;
             let ts = kv.key.decode_ts().unwrap();
