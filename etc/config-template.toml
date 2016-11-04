@@ -60,10 +60,6 @@ region-split-check-diff = "8MB"
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
 
-[raft]
-# set cluster id, must greater than 0.
-cluster-id = 1
-
 [pd]
 # pd endpoints 
 endpoints = ""
