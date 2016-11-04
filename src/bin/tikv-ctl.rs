@@ -136,13 +136,18 @@ fn main() {
         println!("You are searching Key {}: ", key);
         match cf_name {
             CF_DEFAULT => {
-                dump_mvcc_default(db, key);
+                dump_mvcc_default(&db, key);
             }
             CF_LOCK => {
-                dump_mvcc_lock(db, key);
+                dump_mvcc_lock(&db, key);
             }
             CF_WRITE => {
-                dump_mvcc_write(db, key);
+                dump_mvcc_write(&db, key);
+            }
+            "all" => {
+                dump_mvcc_default(&db, key);
+                dump_mvcc_lock(&db, key);
+                dump_mvcc_write(&db, key);
             }
             _ => {
                 println!("The cf: {} cannot be dumped", cf_name);
@@ -215,7 +220,7 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
 }
 
 
-fn dump_mvcc_default(db: DB, key: &str) {
+fn dump_mvcc_default(db: &DB, key: &str) {
     let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, key, CF_DEFAULT).unwrap();
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
@@ -227,7 +232,7 @@ fn dump_mvcc_default(db: DB, key: &str) {
     }
 }
 
-fn dump_mvcc_lock(db: DB, key: &str) {
+fn dump_mvcc_lock(db: &DB, key: &str) {
     let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, key, CF_LOCK).unwrap();
     for kv in kvs {
         let lock = &kv.value;
@@ -239,7 +244,7 @@ fn dump_mvcc_lock(db: DB, key: &str) {
     }
 }
 
-fn dump_mvcc_write(db: DB, key: &str) {
+fn dump_mvcc_write(db: &DB, key: &str) {
     let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, key, CF_WRITE).unwrap();
     for kv in kvs {
         let write = &kv.value;
