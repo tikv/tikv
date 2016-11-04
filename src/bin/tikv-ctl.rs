@@ -220,7 +220,7 @@ fn dump_mvcc_default(db: &DB, key: &str) {
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        println!("Key: {:?}", escape(key.raw().unwrap().as_slice()));
+        println!("Key: {:?}", key);
         println!("Value: {:?}", escape(kv.value.as_slice()));
         println!("Start_ts: {:?}", ts);
         println!("");
@@ -231,7 +231,7 @@ fn dump_mvcc_lock(db: &DB, key: &str) {
     let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, CF_LOCK).unwrap();
     for kv in kvs {
         let lock = &kv.value;
-        println!("Key: {:?}", escape(kv.key.raw().unwrap().as_slice()));
+        println!("Key: {:?}", kv.key);
         println!("Primary: {:?}", escape(lock.primary.as_slice()));
         println!("Type: {:?}", lock.lock_type);
         println!("Start_ts: {:?}", lock.ts);
@@ -245,7 +245,7 @@ fn dump_mvcc_write(db: &DB, key: &str) {
         let write = &kv.value;
         let commit_ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        println!("Key: {:?}", escape(key.raw().unwrap().as_slice()));
+        println!("Key: {:?}", key);
         println!("Type: {:?}", write.write_type);
         println!("Start_ts: {:?}", write.start_ts);
         println!("Commit_ts: {:?}", commit_ts);
