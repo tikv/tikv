@@ -216,7 +216,7 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
 
 
 fn dump_mvcc_default(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, key, CF_DEFAULT).unwrap();
+    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, CF_DEFAULT).unwrap();
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
@@ -228,7 +228,7 @@ fn dump_mvcc_default(db: &DB, key: &str) {
 }
 
 fn dump_mvcc_lock(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(&db, key, CF_LOCK).unwrap();
+    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, CF_LOCK).unwrap();
     for kv in kvs {
         let lock = &kv.value;
         println!("Key: {:?}", escape(kv.key.raw().unwrap().as_slice()));
@@ -240,7 +240,7 @@ fn dump_mvcc_lock(db: &DB, key: &str) {
 }
 
 fn dump_mvcc_write(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, key, CF_WRITE).unwrap();
+    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, CF_WRITE).unwrap();
     for kv in kvs {
         let write = &kv.value;
         let commit_ts = kv.key.decode_ts().unwrap();
