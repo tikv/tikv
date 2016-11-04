@@ -55,7 +55,11 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"k1", b"v1");
     must_get_equal(&engine_2, b"k2", b"v2");
 
-    let epoch = cluster.pd_client.get_region_by_id(1).unwrap().get_region_epoch().clone();
+    let epoch = cluster.pd_client
+        .get_region_by_id(1)
+        .unwrap()
+        .get_region_epoch()
+        .clone();
 
     // Conf version must change.
     assert!(epoch.get_conf_ver() > 1);
@@ -263,7 +267,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();
-    let region = pd_client.get_region(b"").unwrap();
+    let mut region = pd_client.get_region(b"").unwrap();
     let region_id = region.get_id();
 
     let stores = pd_client.get_stores().unwrap();
@@ -275,7 +279,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let region = pd_client.get_region_by_id(region_id).unwrap();
+    region = pd_client.get_region_by_id(region_id).unwrap();
     let i = stores.iter()
         .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
         .unwrap();
@@ -292,7 +296,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.reset_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 
-    let region = pd_client.get_region_by_id(region_id).unwrap();
+    region = pd_client.get_region_by_id(region_id).unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
     pd_client.must_remove_peer(region_id, peer);
     wait_till_reach_count(pd_client.clone(), region_id, 4);

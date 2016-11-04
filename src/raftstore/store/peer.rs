@@ -779,10 +779,10 @@ impl Peer {
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
+                AdminCmdType::SuspendRegion |
                 AdminCmdType::InvalidAdmin => {}
                 AdminCmdType::Split |
                 AdminCmdType::Merge |
-                AdminCmdType::SuspendRegion |
                 AdminCmdType::CommitMerge |
                 AdminCmdType::ShutdownRegion => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,

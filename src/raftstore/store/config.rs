@@ -26,7 +26,11 @@ const RAFT_LOG_GC_THRESHOLD: u64 = 50;
 const RAFT_LOG_GC_LIMIT: u64 = 100000;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
+// When the db size of a region goes beyond `REGION_MAX_SIZE`,
+// the leader peer of this region will request PD to perform a region split action.
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
+// When the db size of a region goes below `REGION_MERGE_SIZE`,
+// the leader peer of this region will request PD to perform a region merge action.
 const REGION_MERGE_SIZE: u64 = 10 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
@@ -38,10 +42,12 @@ const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
-// If the leader missing for over 2 hours,
+// If the leader is missing for over 2 hours,
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
+// If the region merge could not succeed over 60 seconds, the peer in "the into region"
+// (also known as "the control region") will retry the region merge procedure.
 const DEFAULT_RETRY_REGION_MERGE_DURATION_SECS: u64 = 60;
 
 #[derive(Debug, Clone)]
@@ -72,8 +78,8 @@ pub struct Config {
     /// be region_split_size (or a little bit smaller).
     pub region_max_size: u64,
     pub region_split_size: u64,
-    /// When the size of a region decreases to `region_merge_size` after GC,
-    /// the corresponding peer will ask PD to perform a region merge.
+    /// When the size of a region decreases to `region_merge_size` after a storage GC,
+    /// the corresponding peer will request PD to perform a region merge.
     pub region_merge_size: u64,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
@@ -98,6 +104,9 @@ pub struct Config {
 
     pub snap_apply_batch_size: usize,
 
+    /// If the region merge could not succeed over the time of `retry_region_merge_duration`,
+    /// (probably due to admin command lost), the peer in "the into region" (also known as
+    /// "the control region") will retry the region merge procedure.
     pub retry_region_merge_duration: Duration,
 }
 
