@@ -476,6 +476,10 @@ impl TestPdClient {
 }
 
 impl PdClient for TestPdClient {
+    fn get_cluster_id(&self) -> Result<u64> {
+        Ok(self.cluster_id)
+    }
+
     fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
         if self.is_cluster_bootstrapped().unwrap() {
             return Err(Error::ClusterBootstrapped(self.cluster_id));

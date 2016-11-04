@@ -25,7 +25,7 @@ use rand::{self, Rng};
 use kvproto::pdpb::{Request, Response};
 use kvproto::msgpb::{Message, MessageType};
 
-use super::Result;
+use super::{Result, PdClient};
 use super::metrics::*;
 
 const MAX_PD_SEND_RETRY_COUNT: usize = 100;
@@ -147,12 +147,14 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(endpoints: &str, cluster_id: u64) -> Result<RpcClient> {
-        Ok(RpcClient {
+    pub fn new(endpoints: &str) -> Result<RpcClient> {
+        let mut client = RpcClient {
             msg_id: AtomicUsize::new(0),
             core: Mutex::new(RpcClientCore::new(endpoints)),
-            cluster_id: cluster_id,
-        })
+            cluster_id: 0,
+        };
+        client.cluster_id = try!(client.get_cluster_id());
+        Ok(client)
     }
 
     pub fn send(&self, req: &Request) -> Result<Response> {
