@@ -202,19 +202,14 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
     if !iter.valid() {
         None
     } else {
-        Some(iter.take_while(|s| {
-                Key::from_encoded(keys::origin_key(&s.0).to_vec())
-                    .raw()
-                    .unwrap()
-                    .starts_with(key_prefix.as_bytes())
-            })
-            .map(|s| {
-                let key = &keys::origin_key(&s.0);
-                MvccKv {
-                    key: Key::from_encoded(key.to_vec()),
-                    value: T::deserialize(&s.1),
-                }
-            })
+        let kvs = iter.map(|s| {
+            let key = &keys::origin_key(&s.0);
+            MvccKv {
+                key: Key::from_encoded(key.to_vec()),
+                value: T::deserialize(&s.1),
+            }
+        });
+        Some(kvs.take_while(|s| s.key.raw().unwrap().starts_with(key_prefix.as_bytes()))
             .collect())
     }
 }
@@ -338,14 +333,13 @@ mod tests {
     #[test]
     fn test_ctl_mvcc() {
         let tmp_dir = TempDir::new("mvcc_tmp").expect("create mvcc_tmp dir");
-        let file_path = tmp_dir.path().join("tmp_db");
-        let db = new_engine(file_path.to_str().unwrap(), ALL_CFS).unwrap();
+        //        let file_path = tmp_dir.path().join("tmp_db");
+        let db = new_engine(tmp_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
         let test_data: Vec<(_, _, u64)> =
             vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
         for &(k, v, ts) in &test_data {
-            let key = keys::data_key(Key::from_raw(&k[..]).append_ts(ts).encoded().as_slice());
-            let value = v;
-            db.put(key.as_slice(), &value[..]).unwrap();
+            let key = keys::data_key(Key::from_raw(k).append_ts(ts).encoded().as_slice());
+            db.put(key.as_slice(), v).unwrap();
         }
         let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
         let mut test_iter = test_data.clone();
