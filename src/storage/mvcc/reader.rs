@@ -295,7 +295,7 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn scan_lock<F>(&mut self, filter: F) -> Result<Vec<(Key, Lock)>>
+    pub fn scan_lock<F>(&mut self, filter: F, limit: Option<usize>) -> Result<Vec<(Key, Lock)>>
         where F: Fn(&Lock) -> bool
     {
         try!(self.create_lock_cursor());
@@ -307,6 +307,11 @@ impl<'a> MvccReader<'a> {
             let lock = try!(Lock::parse(cursor.value()));
             if filter(&lock) {
                 locks.push((key, lock));
+                if let Some(limit) = limit {
+                    if locks.len() >= limit {
+                        break;
+                    }
+                }
             }
             cursor.next();
         }

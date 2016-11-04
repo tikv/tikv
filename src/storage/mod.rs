@@ -116,6 +116,7 @@ pub enum Command {
         ctx: Context,
         start_ts: u64,
         commit_ts: Option<u64>,
+        keys: Vec<Key>,
     },
     Gc {
         ctx: Context,
@@ -204,8 +205,8 @@ impl Command {
             Command::Get { .. } |
             Command::BatchGet { .. } |
             Command::Scan { .. } |
-            Command::ScanLock { .. } |
-            Command::ResolveLock { .. } => true,
+            Command::ScanLock { .. } => true,
+            Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
@@ -472,6 +473,7 @@ impl Storage {
             ctx: ctx,
             start_ts: start_ts,
             commit_ts: commit_ts,
+            keys: vec![],
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));

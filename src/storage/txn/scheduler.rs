@@ -53,6 +53,8 @@ use super::super::metrics::*;
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
 
+pub const RESOLVE_LOCK_BATCH_SIZE: usize = 512;
+
 /// Process result of a command.
 pub enum ProcessResult {
     Res,
@@ -281,7 +283,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock { max_ts, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward));
-            let res = reader.scan_lock(|lock| lock.ts <= max_ts)
+            let res = reader.scan_lock(|lock| lock.ts <= max_ts, None)
                 .map_err(Error::from)
                 .and_then(|v| {
                     let mut locks = vec![];
@@ -301,33 +303,26 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Gets the lock with timestamp `start_ts`, then sends either a `Commit` command if the
         // lock has commit timestamp populated or a `Rollback` command otherwise.
-        Command::ResolveLock { ref ctx, start_ts, commit_ts } => {
+        Command::ResolveLock { ref ctx, start_ts, commit_ts, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward));
-            let res = reader.scan_lock(|lock| lock.ts == start_ts)
+            let res = reader.scan_lock(|lock| lock.ts == start_ts, Some(RESOLVE_LOCK_BATCH_SIZE))
                 .map_err(Error::from)
                 .and_then(|v| {
-                    let keys = v.into_iter().map(|x| x.0).collect();
-                    let next_cmd = match commit_ts {
-                        Some(ts) => {
-                            Command::Commit {
-                                ctx: ctx.clone(),
-                                keys: keys,
-                                lock_ts: start_ts,
-                                commit_ts: ts,
-                            }
-                        }
-                        None => {
-                            Command::Rollback {
-                                ctx: ctx.clone(),
-                                keys: keys,
-                                start_ts: start_ts,
-                            }
-                        }
-                    };
-                    Ok(next_cmd)
+                    let keys: Vec<Key> = v.into_iter().map(|x| x.0).collect();
+                    if keys.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(Command::ResolveLock {
+                            ctx: ctx.clone(),
+                            start_ts: start_ts,
+                            commit_ts: commit_ts,
+                            keys: keys,
+                        }))
+                    }
                 });
             match res {
-                Ok(cmd) => ProcessResult::NextCommand { cmd: cmd },
+                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
+                Ok(None) => ProcessResult::Res,
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
@@ -420,6 +415,30 @@ fn process_write_impl(cid: u64,
             }
 
             let pr = ProcessResult::Res;
+            (pr, txn.modifies())
+        }
+        Command::ResolveLock { ref ctx, start_ts, commit_ts, ref keys } => {
+            let mut txn = MvccTxn::new(snapshot, start_ts, None);
+            match commit_ts {
+                Some(ts) => {
+                    for k in keys {
+                        try!(txn.commit(&k, ts));
+                    }
+                }
+                None => {
+                    for k in keys {
+                        try!(txn.rollback(&k));
+                    }
+                }
+            }
+            let pr = ProcessResult::NextCommand {
+                cmd: Command::ResolveLock {
+                    ctx: ctx.clone(),
+                    start_ts: start_ts,
+                    commit_ts: commit_ts,
+                    keys: vec![],
+                },
+            };
             (pr, txn.modifies())
         }
         Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
