@@ -306,8 +306,8 @@ fn get_rocksdb_cf_option(matches: &Matches,
                 .as_bool()
                 .unwrap_or(false);
         block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
-        opts.set_block_based_table_factory(&block_base_opts);
     }
+    opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_string_value("",
                                (prefix.clone() + "compression-per-level").as_str(),
