@@ -19,6 +19,7 @@ extern crate clap;
 extern crate protobuf;
 extern crate kvproto;
 extern crate rocksdb;
+extern crate tempdir;
 
 use std::{str, u64};
 use clap::{Arg, App, SubCommand};
@@ -28,9 +29,12 @@ use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState};
 use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
+use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::engine::{Peekable, Iterable};
-use tikv::storage::{ALL_CFS, CF_RAFT};
+use tikv::storage::{ALL_CFS, CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
+use tikv::storage::mvcc::{Lock, Write};
+use tikv::storage::types::Key;
 
 fn main() {
     let mut app = App::new("TiKV Ctl")
@@ -85,7 +89,17 @@ fn main() {
             .arg(Arg::with_name("key")
                 .short("k")
                 .takes_value(true)
-                .help("set the query raw key, in escaped form")));
+                .help("set the query raw key, in escaped form")))
+        .subcommand(SubCommand::with_name("mvcc")
+            .about("print the mvcc value")
+            .arg(Arg::with_name("cf")
+                .short("c")
+                .takes_value(true)
+                .help("column family name, only can be default/lock/write"))
+            .arg(Arg::with_name("key")
+                .short("key")
+                .takes_value(true)
+                .help("the query key")));
     let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
@@ -116,10 +130,127 @@ fn main() {
             }
         }
         dump_range(db, from, to, limit, cf_name);
+    } else if let Some(matches) = matches.subcommand_matches("mvcc") {
+        let cf_name = matches.value_of("cf").unwrap_or("default");
+        let key = matches.value_of("key").unwrap();
+        println!("You are searching Key {}: ", key);
+        match cf_name {
+            CF_DEFAULT => {
+                dump_mvcc_default(&db, key);
+            }
+            CF_LOCK => {
+                dump_mvcc_lock(&db, key);
+            }
+            CF_WRITE => {
+                dump_mvcc_write(&db, key);
+            }
+            "all" => {
+                dump_mvcc_default(&db, key);
+                dump_mvcc_lock(&db, key);
+                dump_mvcc_write(&db, key);
+            }
+            _ => {
+                println!("The cf: {} cannot be dumped", cf_name);
+                let _ = app.print_help();
+            }
+        }
     } else {
         let _ = app.print_help();
     }
 
+}
+
+fn gen_key_prefix(key: &str) -> Vec<u8> {
+    let encoded = encode_bytes(unescape(key).as_slice());
+    keys::data_key(encoded.as_slice())
+}
+
+pub trait MvccDeserializable {
+    fn deserialize(bytes: &[u8]) -> Self;
+}
+
+impl MvccDeserializable for Write {
+    fn deserialize(bytes: &[u8]) -> Self {
+        Write::parse(bytes).unwrap()
+    }
+}
+
+impl MvccDeserializable for Lock {
+    fn deserialize(bytes: &[u8]) -> Self {
+        Lock::parse(bytes).unwrap()
+    }
+}
+
+impl MvccDeserializable for Vec<u8> {
+    fn deserialize(bytes: &[u8]) -> Self {
+        bytes.to_vec()
+    }
+}
+
+pub struct MvccKv<T> {
+    key: Key,
+    value: T,
+}
+
+pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
+                                            key_prefix: &str,
+                                            mvcc_type: CfName)
+                                            -> Option<Vec<MvccKv<T>>> {
+    let prefix = gen_key_prefix(key_prefix);
+    let mut iter = db.new_iterator_cf(mvcc_type, None, false).unwrap();
+    iter.seek(prefix.as_slice().into());
+    if !iter.valid() {
+        None
+    } else {
+        let kvs = iter.map(|s| {
+            let key = &keys::origin_key(&s.0);
+            MvccKv {
+                key: Key::from_encoded(key.to_vec()),
+                value: T::deserialize(&s.1),
+            }
+        });
+        Some(kvs.take_while(|s| s.key.raw().unwrap().starts_with(key_prefix.as_bytes()))
+            .collect())
+    }
+}
+
+
+fn dump_mvcc_default(db: &DB, key: &str) {
+    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, CF_DEFAULT).unwrap();
+    for kv in kvs {
+        let ts = kv.key.decode_ts().unwrap();
+        let key = kv.key.truncate_ts().unwrap();
+        println!("Key: {:?}", key);
+        println!("Value: {:?}", escape(kv.value.as_slice()));
+        println!("Start_ts: {:?}", ts);
+        println!("");
+    }
+}
+
+fn dump_mvcc_lock(db: &DB, key: &str) {
+    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, CF_LOCK).unwrap();
+    for kv in kvs {
+        let lock = &kv.value;
+        println!("Key: {:?}", kv.key);
+        println!("Primary: {:?}", escape(lock.primary.as_slice()));
+        println!("Type: {:?}", lock.lock_type);
+        println!("Start_ts: {:?}", lock.ts);
+        println!("");
+    }
+}
+
+fn dump_mvcc_write(db: &DB, key: &str) {
+    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, CF_WRITE).unwrap();
+    for kv in kvs {
+        let write = &kv.value;
+        let commit_ts = kv.key.decode_ts().unwrap();
+        let key = kv.key.truncate_ts().unwrap();
+        println!("Key: {:?}", key);
+        println!("Type: {:?}", write.write_type);
+        println!("Start_ts: {:?}", write.start_ts);
+        println!("Commit_ts: {:?}", commit_ts);
+        println!("");
+    }
 }
 
 fn dump_raw_value(db: DB, cf: &str, key: String) {
@@ -181,4 +312,112 @@ fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: 
                      Ok(cnt < limit)
                  })
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str;
+    use rocksdb::Writable;
+    use tikv::util::codec::bytes::encode_bytes;
+    use tikv::util::codec::number::NumberEncoder;
+    use tikv::raftstore::store::keys;
+    use tikv::storage::{ALL_CFS, CF_LOCK, CF_WRITE, CF_DEFAULT};
+    use tikv::storage::mvcc::{Lock, Write, LockType, WriteType};
+    use tempdir::TempDir;
+    use tikv::util::rocksdb::new_engine;
+    use tikv::storage::types::Key;
+
+    const PREFIX: &'static [u8] = b"k";
+
+    #[test]
+    fn test_ctl_mvcc() {
+        let tmp_dir = TempDir::new("mvcc_tmp").expect("create mvcc_tmp dir");
+        //        let file_path = tmp_dir.path().join("tmp_db");
+        let db = new_engine(tmp_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
+        let test_data = vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
+        for &(k, v, ts) in &test_data {
+            let key = keys::data_key(Key::from_raw(k).append_ts(ts).encoded().as_slice());
+            db.put(key.as_slice(), v).unwrap();
+        }
+        let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
+        let mut test_iter = test_data.clone();
+        assert_eq!(test_iter.len(), kvs_gen.len());
+        for kv in kvs_gen {
+            let ts = kv.key.decode_ts().unwrap();
+            let key = kv.key.truncate_ts().unwrap().raw().unwrap();
+            let value = kv.value.as_slice();
+            test_iter.retain(|&s| !(&s.0[..] == key.as_slice() && &s.1[..] == value && s.2 == ts));
+        }
+        assert_eq!(test_iter.len(), 0);
+
+        // Test MVCC Lock
+        let test_data_lock = vec![(b"kv", LockType::Put, b"v", 5),
+                                  (b"kx", LockType::Lock, b"x", 10),
+                                  (b"kz", LockType::Delete, b"y", 15)];
+        let keys: Vec<_> = test_data_lock.iter()
+            .map(|data| {
+                let encoded = encode_bytes(&data.0[..]);
+                keys::data_key(encoded.as_slice())
+            })
+            .collect();
+        let lock_value: Vec<_> = test_data_lock.iter()
+            .map(|data| Lock::new(data.1, data.2.to_vec(), data.3).to_bytes())
+            .collect();
+        let kvs = keys.iter().zip(lock_value.iter());
+        let lock_cf = db.cf_handle(CF_LOCK).unwrap();
+        for (k, v) in kvs {
+            db.put_cf(lock_cf, k.as_slice(), v.as_slice()).unwrap();
+        }
+        fn assert_iter(kvs_gen: &[MvccKv<Lock>], test_data: (&[u8; 2], LockType, &[u8; 1], u64)) {
+            assert_eq!(kvs_gen.len(), 1);
+            let kv = &kvs_gen[0];
+            let lock = &kv.value;
+            let key = kv.key.raw().unwrap();
+            assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
+                    &test_data.2[..] == &lock.primary[..] &&
+                    test_data.3 == lock.ts);
+        }
+        assert_iter(&gen_mvcc_iter(&db, "kv", CF_LOCK).unwrap(),
+                    test_data_lock[0]);
+        assert_iter(&gen_mvcc_iter(&db, "kx", CF_LOCK).unwrap(),
+                    test_data_lock[1]);
+        assert_iter(&gen_mvcc_iter(&db, "kz", CF_LOCK).unwrap(),
+                    test_data_lock[2]);
+
+        // Test MVCC Write
+        let test_data_write = vec![(PREFIX, WriteType::Delete, 5, 10),
+                                   (PREFIX, WriteType::Lock, 15, 20),
+                                   (PREFIX, WriteType::Put, 25, 30),
+                                   (PREFIX, WriteType::Rollback, 35, 40)];
+        let keys: Vec<_> = test_data_write.iter()
+            .map(|data| {
+                let encoded = encode_bytes(&data.0[..]);
+                let mut d = keys::data_key(encoded.as_slice());
+                let _ = d.encode_u64_desc(data.3);
+                d
+            })
+            .collect();
+        let write_value: Vec<_> = test_data_write.iter()
+            .map(|data| Write::new(data.1, data.2).to_bytes())
+            .collect();
+        let kvs = keys.iter().zip(write_value.iter());
+        let write_cf = db.cf_handle(CF_WRITE).unwrap();
+        for (k, v) in kvs {
+            db.put_cf(write_cf, k.as_slice(), v.as_slice()).unwrap();
+        }
+        let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", CF_WRITE).unwrap();
+        let mut test_iter = test_data_write.clone();
+        assert_eq!(test_iter.len(), kvs_gen.len());
+        for kv in kvs_gen {
+            let write = &kv.value;
+            let ts = kv.key.decode_ts().unwrap();
+            let key = kv.key.truncate_ts().unwrap().raw().unwrap();
+            test_iter.retain(|&s| {
+                !(&s.0[..] == key.as_slice() && s.1 == write.write_type && s.2 == write.start_ts &&
+                  s.3 == ts)
+            });
+        }
+        assert_eq!(test_iter.len(), 0);
+    }
 }

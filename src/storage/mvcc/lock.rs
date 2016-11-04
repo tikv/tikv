@@ -17,7 +17,7 @@ use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 use super::{Error, Result};
 
-#[derive(Debug,Clone,Copy)]
+#[derive(Debug,Clone,Copy,PartialEq)]
 pub enum LockType {
     Put,
     Delete,
