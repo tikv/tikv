@@ -44,8 +44,8 @@ use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_LOCK};
-use super::worker::{region_check, RegionCheckRunner, region_merge, MergeRunner, RegionTask,
-                    RegionRunner, CompactTask, CompactRunner, PdRunner, PdTask};
+use super::worker::{region_check, RegionCheckRunner, RegionTask, RegionRunner, CompactTask,
+                    CompactRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
@@ -55,7 +55,6 @@ use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
-use super::client::Client;
 use super::metrics::*;
 
 type Key = Vec<u8>;
@@ -190,7 +189,7 @@ impl RaftMetrics {
     }
 }
 
-pub struct Store<T: Transport, C: PdClient + 'static, S: Client + 'static> {
+pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
@@ -204,7 +203,6 @@ pub struct Store<T: Transport, C: PdClient + 'static, S: Client + 'static> {
     region_ranges_to_shutdown: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
     region_check_worker: Worker<region_check::Task>,
-    merge_worker: Worker<region_merge::Task>,
     region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
@@ -216,15 +214,12 @@ pub struct Store<T: Transport, C: PdClient + 'static, S: Client + 'static> {
 
     snap_mgr: SnapManager,
 
-    tikv_client: S,
-
     raft_metrics: RaftMetrics,
 }
 
-pub fn create_event_loop<T, C, S>(cfg: &Config) -> Result<EventLoop<Store<T, C, S>>>
+pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     where T: Transport,
-          C: PdClient,
-          S: Client
+          C: PdClient
 {
     // We use base raft tick as the event loop timer tick.
     let mut builder = EventLoopBuilder::new();
@@ -236,16 +231,15 @@ pub fn create_event_loop<T, C, S>(cfg: &Config) -> Result<EventLoop<Store<T, C, 
 }
 
 #[allow(too_many_arguments)]
-impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
+impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn new(sender: Sender<Msg>,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
                trans: T,
                pd_client: Arc<C>,
-               mgr: SnapManager,
-               tikv_client: S)
-               -> Result<Store<T, C, S>> {
+               mgr: SnapManager)
+               -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
@@ -260,7 +254,6 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             region_check_worker: Worker::new("split check worker"),
-            merge_worker: Worker::new("merge worker"),
             region_worker: Worker::new("snapshot worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
@@ -271,7 +264,6 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
-            tikv_client: tikv_client,
             raft_metrics: RaftMetrics::default(),
         };
         try!(s.init());
@@ -310,8 +302,7 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
                        self.store_id());
                 return Ok(true);
             }
-            let merge_scheduler = self.merge_worker.scheduler();
-            let mut peer = try!(Peer::create(self, region, merge_scheduler));
+            let mut peer = try!(Peer::create(self, region));
 
             if local_state.get_state() == PeerState::Applying {
                 applying_count += 1;
@@ -383,13 +374,6 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
                                                          self.cfg.region_merge_size);
         box_try!(self.region_check_worker.start(region_check_runner));
 
-        let merge_runner = MergeRunner::new(self.merge_worker.scheduler(),
-                                            self.tikv_client.clone(),
-                                            self.pd_client.clone(),
-                                            self.sendch.clone());
-
-        box_try!(self.merge_worker.start(merge_runner));
-
         let runner = RegionRunner::new(self.engine.clone(),
                                        self.get_sendch(),
                                        self.snap_mgr.clone(),
@@ -446,6 +430,7 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let t = Instant::now();
         let mut region_to_be_destroyed = vec![];
+        let mut region_to_retry_merge = vec![];
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
@@ -500,8 +485,15 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
                     }
                 }
 
-                peer.maybe_retry_region_merge(self.cfg.retry_region_merge_duration);
+                if let Some((from_region, into_region)) =
+                       peer.maybe_retry_region_merge(self.cfg.retry_region_merge_duration) {
+                    region_to_retry_merge.push((from_region, into_region));
+                }
             }
+        }
+
+        for (from_region, into_region) in region_to_retry_merge {
+            self.on_ready_merge_region(from_region, into_region);
         }
 
         // do perform the peer destroy
@@ -549,8 +541,7 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
         }
 
         if !has_peer {
-            let merge_scheduler = self.merge_worker.scheduler();
-            let peer = try!(Peer::replicate(self, region_id, target.get_id(), merge_scheduler));
+            let peer = try!(Peer::replicate(self, region_id, target.get_id()));
             // We don't have start_key of the region, so there is no need to insert into
             // region_ranges
             self.region_peers.insert(region_id, peer);
@@ -916,8 +907,7 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
                 panic!("duplicated region {} for split region", new_region_id);
             }
         }
-        let merge_scheduler = self.merge_worker.scheduler();
-        match Peer::create(self, &right, merge_scheduler) {
+        match Peer::create(self, &right) {
             Err(e) => {
                 // peer information is already written into db, can't recover.
                 // there is probably a bug.
@@ -961,8 +951,70 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
         }
     }
 
-    fn on_ready_merge_region(&mut self, _region: metapb::Region) {
-        // TODO anything to do here?
+    fn on_ready_merge_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
+        let from_peer = match self.region_peers.get(&from_region.get_id()) {
+            Some(peer) => peer,
+            None => {
+                panic!("region {:?} has no peer in store {} as from region in region merge",
+                       from_region,
+                       self.store_id());
+            }
+        };
+
+        let request = new_suspend_region_request(from_region, into_region, from_peer.peer.clone());
+        let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
+        if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
+            request: request,
+            callback: cb,
+        }) {
+            error!("store {} failed to send suspend region, err {:?}",
+                   self.store_id(),
+                   e)
+        }
+    }
+
+    fn on_ready_rollback_merge(&mut self,
+                               _from_region: metapb::Region,
+                               into_region: metapb::Region) {
+        let store_id = self.store_id();
+        let into_peer = match self.region_peers.get_mut(&into_region.get_id()) {
+            Some(peer) => peer,
+            None => {
+                panic!("region {:?} has no peer in store {} as into region in rollback merge",
+                       into_region,
+                       store_id);
+            }
+        };
+
+        if let Err(e) = into_peer.rollback_region_merge() {
+            error!("store {} fails to rollback region merge, err {:?}",
+                   store_id,
+                   e)
+        }
+    }
+
+    fn on_ready_suspend_region(&mut self,
+                               from_region: metapb::Region,
+                               into_region: metapb::Region) {
+        let into_peer = match self.region_peers.get(&into_region.get_id()) {
+            Some(peer) => peer,
+            None => {
+                panic!("region {:?} has no peer in store {} as into region in region merge",
+                       into_region,
+                       self.store_id());
+            }
+        };
+
+        let request = new_commit_merge_request(from_region, into_region, into_peer.peer.clone());
+        let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
+        if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
+            request: request,
+            callback: cb,
+        }) {
+            error!("store {} failed to send commit merge, err {:?}",
+                   self.store_id(),
+                   e)
+        }
     }
 
     fn on_ready_commit_merge(&mut self,
@@ -988,9 +1040,23 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
             let report_task = PdTask::ReportMerge {
                 new: new,
                 old: old,
-                to_shutdown: to_shutdown,
+                to_shutdown: to_shutdown.clone(),
             };
-            util::ensure_schedule(self.pd_worker.scheduler(), report_task);
+            if let Err(e) = self.pd_worker.schedule(report_task) {
+                error!("failed to notify pd: {}", e)
+            }
+        }
+
+        let to_shutdown_peer = self.region_peers.get(&to_shutdown.get_id()).unwrap();
+        let request = new_shutdown_region_request(to_shutdown, to_shutdown_peer.peer.clone());
+        let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
+        if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
+            request: request,
+            callback: cb,
+        }) {
+            error!("store {} failed to send suspend region, err {:?}",
+                   self.store_id(),
+                   e)
         }
     }
 
@@ -1071,7 +1137,15 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
                 }
-                ExecResult::MergeRegion { region } => self.on_ready_merge_region(region),
+                ExecResult::MergeRegion { from_region, into_region } => {
+                    self.on_ready_merge_region(from_region, into_region)
+                }
+                ExecResult::RollbackMerge { from_region, into_region } => {
+                    self.on_ready_rollback_merge(from_region, into_region)
+                }
+                ExecResult::SuspendRegion { from_region, into_region } => {
+                    self.on_ready_suspend_region(from_region, into_region)
+                }
                 ExecResult::CommitMerge { new, old, to_shutdown } => {
                     self.on_ready_commit_merge(new, old, to_shutdown)
                 }
@@ -1657,12 +1731,10 @@ impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
 }
 
 
-fn register_timer<T: Transport, C: PdClient, S: Client>(event_loop: &mut EventLoop<Store<T,
-                                                                                         C,
-                                                                                         S>>,
-                                                        tick: Tick,
-                                                        delay: u64)
-                                                        -> Result<mio::Timeout> {
+fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
+                                             tick: Tick,
+                                             delay: u64)
+                                             -> Result<mio::Timeout> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
     event_loop.timeout(tick, Duration::from_millis(delay))
@@ -1685,7 +1757,58 @@ fn new_compact_log_request(region_id: u64,
     request
 }
 
-impl<T: Transport, C: PdClient, S: Client> mio::Handler for Store<T, C, S> {
+fn new_suspend_region_request(from_region: metapb::Region,
+                              into_region: metapb::Region,
+                              from_peer: metapb::Peer)
+                              -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
+    request.mut_header().set_region_id(from_region.get_id());
+    request.mut_header().set_region_epoch(from_region.get_region_epoch().clone());
+    request.mut_header().set_peer(from_peer);
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::SuspendRegion);
+    admin.mut_suspend_region().set_from_region(from_region);
+    admin.mut_suspend_region().set_into_region(into_region);
+    request.set_admin_request(admin);
+    request
+}
+
+fn new_commit_merge_request(from_region: metapb::Region,
+                            into_region: metapb::Region,
+                            into_peer: metapb::Peer)
+                            -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
+    request.mut_header().set_region_id(into_region.get_id());
+    request.mut_header().set_region_epoch(into_region.get_region_epoch().clone());
+    request.mut_header().set_peer(into_peer);
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::CommitMerge);
+    admin.mut_commit_merge().set_from_region(from_region);
+    request.set_admin_request(admin);
+    request
+}
+
+fn new_shutdown_region_request(from_region: metapb::Region,
+                               from_peer: metapb::Peer)
+                               -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
+    request.mut_header().set_region_id(from_region.get_id());
+    request.mut_header().set_region_epoch(from_region.get_region_epoch().clone());
+    request.mut_header().set_peer(from_peer);
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::ShutdownRegion);
+    admin.mut_shutdown_region().set_region(from_region);
+    request.set_admin_request(admin);
+    request
+}
+
+impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Timeout = Tick;
     type Message = Msg;
 
@@ -1773,7 +1896,7 @@ impl<T: Transport, C: PdClient, S: Client> mio::Handler for Store<T, C, S> {
     }
 }
 
-impl<T: Transport, C: PdClient, S: Client> Store<T, C, S> {
+impl<T: Transport, C: PdClient> Store<T, C> {
     /// load the target peer of request as mutable borrow.
     fn mut_target_peer(&mut self, request: &RaftCmdRequest) -> Result<&mut Peer> {
         let region_id = request.get_header().get_region_id();

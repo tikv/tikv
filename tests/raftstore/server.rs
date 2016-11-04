@@ -23,7 +23,7 @@ use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, Server, ServerTransport, create_event_loop, Msg, bind, TikvRpcWorker};
+use tikv::server::{self, Server, ServerTransport, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
@@ -45,7 +45,7 @@ type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
 pub struct ServerCluster {
     routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
     senders: HashMap<u64, SendCh<Msg>>,
-    handles: HashMap<u64, (TikvRpcWorker, Node<TestPdClient>, thread::JoinHandle<()>)>,
+    handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, SimulateServerTransport>,
@@ -149,7 +149,6 @@ impl Simulator for ServerCluster {
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let sendch = SendCh::new(event_loop.channel());
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let rpc_worker = TikvRpcWorker::new(resolver.scheduler()).unwrap();
         let trans = ServerTransport::new(sendch.clone());
 
         let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
@@ -160,8 +159,7 @@ impl Simulator for ServerCluster {
         node.start(store_event_loop,
                    engine.clone(),
                    simulate_trans.clone(),
-                   snap_mgr.clone(),
-                   rpc_worker.client())
+                   snap_mgr.clone())
             .unwrap();
         let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
         let sim_router = SimulateTransport::new(router);
@@ -197,7 +195,7 @@ impl Simulator for ServerCluster {
             })
             .unwrap();
 
-        self.handles.insert(node_id, (rpc_worker, node, t));
+        self.handles.insert(node_id, (node, t));
         self.senders.insert(node_id, ch);
         self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
@@ -210,7 +208,7 @@ impl Simulator for ServerCluster {
     }
 
     fn stop_node(&mut self, node_id: u64) {
-        let (_rpc_worker, mut node, h) = self.handles.remove(&node_id).unwrap();
+        let (mut node, h) = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
         let addr = self.addrs.get(&node_id).unwrap();
         let _ = self.store_chs.remove(&node_id).unwrap();

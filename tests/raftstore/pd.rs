@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -55,7 +54,7 @@ struct Cluster {
 
     down_peers: HashMap<u64, pdpb::PeerStats>,
 
-    merging_region_ids: HashSet<u64>,
+    merging_region_ids: HashMap<u64, u64>,
     shutdown_region_ids: HashSet<u64>,
     merge_count: usize,
 }
@@ -77,7 +76,7 @@ impl Cluster {
             store_stats: HashMap::new(),
             split_count: 0,
             down_peers: HashMap::new(),
-            merging_region_ids: HashSet::new(),
+            merging_region_ids: HashMap::new(),
             shutdown_region_ids: HashSet::new(),
             merge_count: 0,
         }
@@ -124,17 +123,13 @@ impl Cluster {
             .map(|(_, region)| region.clone())
     }
 
-    fn check_idle_for_region_merge(&self, region_id: u64) -> bool {
-        !self.merging_region_ids.contains(&region_id)
-    }
-
     fn get_idle_neighbour_region(&self, region: &metapb::Region) -> Option<metapb::Region> {
         let end_key = enc_end_key(region);
         if let Some(r) = self.regions
             .range::<Key, Key>(Excluded(&end_key), Unbounded)
             .next()
             .map(|(_, region)| region.clone()) {
-            if self.check_idle_for_region_merge(r.get_id()) {
+            if self.is_merging_region(&r).is_none() {
                 return Some(r);
             }
         }
@@ -143,7 +138,7 @@ impl Cluster {
             .range::<Key, Key>(Unbounded, Included(&start_key))
             .last()
             .map(|(_, region)| region.clone()) {
-            if self.check_idle_for_region_merge(r.get_id()) {
+            if self.is_merging_region(&r).is_none() {
                 return Some(r);
             }
         }
@@ -181,28 +176,17 @@ impl Cluster {
     }
 
     fn add_region_merge(&mut self, into_region: &metapb::Region, from_region: &metapb::Region) {
-        let into_region_id = into_region.get_id();
-        let from_region_id = from_region.get_id();
-        self.merging_region_ids.insert(into_region_id);
-        self.merging_region_ids.insert(from_region_id);
-
-        let mut region_merge = metapb::RegionMerge::new();
-        region_merge.set_state(metapb::MergeState::Prepare);
-        region_merge.set_into_id(into_region_id);
-        region_merge.set_from_id(from_region_id);
-
-        let into_end_key = enc_end_key(into_region);
-        let from_end_key = enc_end_key(from_region);
-        let mut r = self.regions.remove(&into_end_key).unwrap();
-        r.set_region_merge(region_merge.clone());
-        self.regions.insert(into_end_key, r);
-        let mut r = self.regions.remove(&from_end_key).unwrap();
-        r.set_region_merge(region_merge);
-        self.regions.insert(from_end_key, r);
+        self.merging_region_ids.insert(into_region.get_id(), from_region.get_id());
     }
 
-    fn is_merging_region(&self, region: &metapb::Region) -> bool {
-        self.merging_region_ids.contains(&region.get_id())
+    fn is_merging_region(&self, region: &metapb::Region) -> Option<(u64, u64)> {
+        let region_id = region.get_id();
+        match self.merging_region_ids
+            .iter()
+            .find(move |&(&k, &v)| k == region_id || v == region_id) {
+            Some((&k, &v)) => Some((k, v)),
+            None => None,
+        }
     }
 
     fn handle_region_merge_done(&mut self,
@@ -226,57 +210,96 @@ impl Cluster {
 
     fn handle_heartbeat_merge(&mut self,
                               region: metapb::Region,
-                              leader: metapb::Peer)
+                              into_region_id: u64,
+                              from_region_id: u64)
                               -> Result<pdpb::RegionHeartbeatResponse> {
-        // TODO add dada migration if peers of `from_region` don't locate in the
-        // same stores of `into_region`
-
-        let end_key = enc_end_key(&region);
-        let cur_region = self.regions.get(&end_key).cloned().unwrap();
-        let cur_region_merge = cur_region.get_region_merge().clone();
-        let mut resp = pdpb::RegionHeartbeatResponse::new();
-        let region_id = region.get_id();
-        if region_id == cur_region_merge.get_from_id() {
-            return Ok(resp);
+        let (cur_region, _) = try!(self.get_region_by_id(region.get_id()));
+        let version = region.get_region_epoch().get_version();
+        let cur_version = cur_region.get_region_epoch().get_version();
+        if version > cur_version {
+            // There are two possible cases:
+            // 1. region merge is done
+            // 2. region merge is cancelled or rollbacked
+            // In either case, PD should update the corresponding region info and
+            // exit region merge procedure.
+            self.remove_region(&cur_region);
+            self.add_region(&region);
+            self.merging_region_ids.remove(&into_region_id);
         }
-        assert_eq!(region.get_id(), cur_region_merge.get_into_id());
-        assert_eq!(cur_region_merge.get_state(), metapb::MergeState::Prepare);
-        match region.get_region_merge().get_state() {
-            metapb::MergeState::None => {
-                let version = region.get_region_epoch().get_version();
-                let cur_version = cur_region.get_region_epoch().get_version();
-                if version > cur_version {
-                    // region merge is done, remove the merged regions and add new one
-                    let (from_region, _) = self.get_region_by_id(cur_region_merge.get_from_id())
-                        .unwrap();
-                    self.handle_region_merge_done(region, cur_region, from_region);
-                    self.region_leaders.insert(region_id, leader);
+        let mut resp = pdpb::RegionHeartbeatResponse::new();
+        if region.get_id() == from_region_id {
+            // migrate data in `from_region` to `into_region` if neccessary
+            let (into_region, _) = try!(self.get_region_by_id(into_region_id));
+            let mut into_store_ids = HashSet::new();
+            let mut into_store_peers = HashMap::new();
+            for p in into_region.get_peers() {
+                into_store_ids.insert(p.get_store_id());
+                into_store_peers.insert(p.get_store_id(), p.get_id());
+            }
+            let mut from_store_ids = HashSet::new();
+            let mut from_store_peers = HashMap::new();
+            for p in region.get_peers() {
+                from_store_ids.insert(p.get_store_id());
+                from_store_peers.insert(p.get_store_id(), p.get_id());
+            }
+            if from_store_peers.len() <= into_store_peers.len() {
+                let diff = &into_store_ids - &from_store_ids;
+                if diff.is_empty() {
+                    // all peers in line
                     return Ok(resp);
-                } else {
-                    // send region merge command
-                    let mut merge = pdpb::RegionMerge::new();
-                    let (from_region, from_leader) =
-                        self.get_region_by_id(cur_region_merge.get_from_id()).unwrap();
-                    merge.set_from_region(from_region);
-                    if let Some(leader) = from_leader {
-                        merge.set_from_leader(leader);
-                    }
-                    resp.set_region_merge(merge);
+                }
+                let store_id = diff.iter().next().unwrap();
+                let new_peer_id = self.alloc_id().unwrap();
+                let to_add = new_peer(*store_id, new_peer_id);
+                // add a peer
+                let mut change_peer = pdpb::ChangePeer::new();
+                change_peer.set_change_type(eraftpb::ConfChangeType::AddNode);
+                change_peer.set_peer(to_add);
+                resp.set_change_peer(change_peer);
+                Ok(resp)
+            } else {
+                let diff = &from_store_ids - &into_store_ids;
+                let store_id = diff.iter().next().unwrap();
+                let peer_id = from_store_peers.get(store_id).unwrap();
+                let to_remove = new_peer(*store_id, *peer_id);
+                // remove a peer
+                let mut change_peer = pdpb::ChangePeer::new();
+                change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode);
+                change_peer.set_peer(to_remove);
+                resp.set_change_peer(change_peer);
+                Ok(resp)
+            }
+        } else {
+            let from_region = match self.get_region_by_id(from_region_id) {
+                Ok((r, _)) => r,
+                Err(e) => return Err(e),
+            };
+            // check whether the data migration is finished
+            let mut into_store_ids = HashSet::new();
+            let mut into_store_peers = HashMap::new();
+            for p in region.get_peers() {
+                into_store_ids.insert(p.get_store_id());
+                into_store_peers.insert(p.get_store_id(), p.get_id());
+            }
+            let mut from_store_ids = HashSet::new();
+            let mut from_store_peers = HashMap::new();
+            for p in from_region.get_peers() {
+                from_store_ids.insert(p.get_store_id());
+                from_store_peers.insert(p.get_store_id(), p.get_id());
+            }
+            if from_store_peers.len() == into_store_peers.len() {
+                let diff = &into_store_ids - &from_store_ids;
+                if diff.is_empty() {
+                    // start to merge meta-data and peers
+                    let mut region_merge = pdpb::RegionMerge::new();
+                    region_merge.set_from_region(from_region.clone());
+                    resp.set_region_merge(region_merge);
                     return Ok(resp);
                 }
             }
-            metapb::MergeState::Prepare => {
-                // do nothing here
-            }
-            metapb::MergeState::Merging => {
-                // update region merge state
-                let mut cur_region = self.regions.remove(&end_key).unwrap();
-                cur_region.mut_region_merge().set_state(metapb::MergeState::Merging);
-                self.regions.insert(end_key, cur_region);
-                return Ok(resp);
-            }
+            // wait for the data migration
+            Ok(resp)
         }
-        Ok(resp)
     }
 
     fn handle_heartbeat_version(&mut self, region: metapb::Region) -> Result<()> {
@@ -442,8 +465,8 @@ impl Cluster {
         // update region leader
         let _ = self.region_leaders.insert(region.get_id(), leader.clone());
 
-        if self.is_merging_region(&region) {
-            self.handle_heartbeat_merge(region, leader)
+        if let Some((into_region_id, from_region_id)) = self.is_merging_region(&region) {
+            self.handle_heartbeat_merge(region, into_region_id, from_region_id)
         } else {
             try!(self.handle_heartbeat_version(region.clone()));
             self.handle_heartbeat_conf_ver(region, leader)
@@ -784,18 +807,14 @@ impl PdClient for TestPdClient {
                     -> Result<()> {
         try!(self.check_bootstrap());
 
-        if !(self.cluster.rl().is_merging_region(&old) &&
-             self.cluster.rl().is_merging_region(&to_shutdown)) {
+        if !(self.cluster.rl().is_merging_region(&old).is_some() &&
+             self.cluster.rl().is_merging_region(&to_shutdown).is_some()) {
             // PD is already notified that the region merge is done
             // by previous report merge message or region heartbeat.
             // It just ignores this message.
             return Ok(());
         }
         let (cur_old, _) = try!(self.get_region_by_id(old.get_id()));
-        let cur_old_region_merge = cur_old.get_region_merge();
-        assert_eq!(old.get_id(), cur_old_region_merge.get_into_id());
-        assert_eq!(to_shutdown.get_id(), cur_old_region_merge.get_from_id());
-        assert!(cur_old_region_merge.get_state() != metapb::MergeState::None);
         let cur_old_version = cur_old.get_region_epoch().get_version();
         let new_version = new.get_region_epoch().get_version();
         assert!(new_version > cur_old_version);

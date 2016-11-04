@@ -48,8 +48,7 @@ use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config, bind,
                    create_event_loop, create_raft_storage, Msg};
-use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter, TikvRpcWorker,
-                   SimpleClient};
+use tikv::server::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{MockStoreAddrResolver, PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
@@ -688,7 +687,6 @@ fn build_raftkv
      config: &toml::Value,
      ch: SendCh<Msg>,
      pd_client: Arc<RpcClient>,
-     tikv_client: SimpleClient,
      cfg: &Config)
      -> (Node<RpcClient>, Storage<ServerRaftStoreRouter>, ServerRaftStoreRouter, SnapManager) {
     let trans = ServerTransport::new(ch);
@@ -712,11 +710,7 @@ fn build_raftkv
     let snap_path = snap_path.to_str().unwrap().to_owned();
     let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
 
-    node.start(event_loop,
-               engine.clone(),
-               trans,
-               snap_mgr.clone(),
-               tikv_client)
+    node.start(event_loop, engine.clone(), trans, snap_mgr.clone())
         .unwrap();
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
 
@@ -820,7 +814,6 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                                         |v| v.as_str().map(|s| s.to_owned()));
     let pd_client = Arc::new(RpcClient::new(&pd_endpoints, cfg.cluster_id).unwrap());
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
-    let rpc_worker = TikvRpcWorker::new(resolver.scheduler()).unwrap();
 
     let store_path = get_store_path(matches, config);
     let mut lock_path = Path::new(&store_path).to_path_buf();
@@ -831,12 +824,8 @@ fn run_raft_server(listener: TcpListener, matches: &Matches, config: &toml::Valu
                store_path);
     }
 
-    let (mut node, mut store, raft_router, snap_mgr) = build_raftkv(matches,
-                                                                    config,
-                                                                    ch.clone(),
-                                                                    pd_client,
-                                                                    rpc_worker.client(),
-                                                                    cfg);
+    let (mut node, mut store, raft_router, snap_mgr) =
+        build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
 
     initial_metric(matches, config, Some(node.id()));

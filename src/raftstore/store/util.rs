@@ -12,9 +12,6 @@
 // limitations under the License.
 
 use std::option::Option;
-use std::thread;
-use std::time::Duration;
-use std::fmt::Display;
 
 use uuid::Uuid;
 
@@ -22,7 +19,6 @@ use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raftstore::{Result, Error};
-use util::worker::Scheduler;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     for peer in region.get_peers() {
@@ -89,20 +85,6 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
 pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionEpoch) -> bool {
     epoch.get_version() < check_epoch.get_version() ||
     epoch.get_conf_ver() < check_epoch.get_conf_ver()
-}
-
-const SCHEDULE_RETRY_TIME_MILLIS: u64 = 50;
-
-pub fn ensure_schedule<T: Clone + Display>(scheduler: Scheduler<T>, task: T) {
-    // TODO change a way to ensure this task is delivered
-    loop {
-        if let Err(e) = scheduler.schedule(task.clone()) {
-            error!("failed to schedule task {}, err: {:?}", task, e);
-            thread::sleep(Duration::from_millis(SCHEDULE_RETRY_TIME_MILLIS));
-        } else {
-            return;
-        }
-    }
 }
 
 #[cfg(test)]

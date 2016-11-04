@@ -13,13 +13,11 @@
 
 mod region;
 pub mod region_check;
-pub mod region_merge;
 mod compact;
 mod pd;
 mod metrics;
 
 pub use self::region::{Task as RegionTask, Runner as RegionRunner, MsgSender};
 pub use self::region_check::Runner as RegionCheckRunner;
-pub use self::region_merge::Runner as MergeRunner;
 pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
 pub use self::pd::{Task as PdTask, Runner as PdRunner};
