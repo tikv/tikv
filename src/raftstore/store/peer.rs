@@ -513,11 +513,11 @@ impl Peer {
         let apply_result = match self.mut_store().handle_raft_ready(&ready) {
             Ok(r) => r,
             Err(e) => {
-                // Because we send the messages before handle raft ready when self
-                // is leader so if we don't panic here, the entries in memory may
-                // be committed before next handle raft ready. If next handle raft
-                // ready still failed to write rocksdb, then entries are committed
-                // before it's actually replicated to majority.
+                // Leader has to panic when failed to persist raft entries,
+                // because all the MsgAppend messages have been sent out already.
+                // Suppose there are 2 followers. If any follower sends back a
+                // MsgAppendResponse, the leader will commit the non-persistent
+                // entries.
                 if self.is_leader() {
                     panic!("{} failed to handle raft ready: {:?}", self.tag, e);
                 }
