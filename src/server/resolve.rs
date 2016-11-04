@@ -213,7 +213,7 @@ mod tests {
         fn get_region(&self, _: &[u8]) -> Result<metapb::Region> {
             unimplemented!();
         }
-        fn get_region_by_id(&self, _: u64) -> Result<(metapb::Region, Option<metapb::Peer>)> {
+        fn get_region_by_id(&self, _: u64) -> Result<metapb::Region> {
             unimplemented!();
         }
         fn region_heartbeat(&self,

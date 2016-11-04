@@ -55,10 +55,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"k1", b"v1");
     must_get_equal(&engine_2, b"k2", b"v2");
 
-    let (region, _) = cluster.pd_client
-        .get_region_by_id(1)
-        .unwrap();
-    let epoch = region.get_region_epoch().clone();
+    let epoch = cluster.pd_client.get_region_by_id(1).unwrap().get_region_epoch().clone();
 
     // Conf version must change.
     assert!(epoch.get_conf_ver() > 1);
@@ -250,7 +247,7 @@ fn test_server_pd_conf_change() {
 fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize) {
     let mut replica_count = 0;
     for _ in 0..1000 {
-        let (region, _) = pd_client.get_region_by_id(region_id).unwrap();
+        let region = pd_client.get_region_by_id(region_id).unwrap();
         replica_count = region.get_peers().len();
         if replica_count == c {
             return;
@@ -278,7 +275,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let (region, _) = pd_client.get_region_by_id(region_id).unwrap();
+    let region = pd_client.get_region_by_id(region_id).unwrap();
     let i = stores.iter()
         .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
         .unwrap();
@@ -295,7 +292,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.reset_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 
-    let (region, _) = pd_client.get_region_by_id(region_id).unwrap();
+    let region = pd_client.get_region_by_id(region_id).unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
     pd_client.must_remove_peer(region_id, peer);
     wait_till_reach_count(pd_client.clone(), region_id, 4);
@@ -352,10 +349,11 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     pd_client.set_rule(box move |region, _| new_pd_remove_change_peer(region, new_peer(1, 1)));
 
-    let (region, _) = cluster.pd_client
+    let epoch = cluster.pd_client
         .get_region_by_id(1)
-        .unwrap();
-    let epoch = region.get_region_epoch().clone();
+        .unwrap()
+        .get_region_epoch()
+        .clone();
 
     let engine1 = cluster.get_engine(1);
     let state =
