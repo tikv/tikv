@@ -207,7 +207,7 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
 }
 
 fn get_rocksdb_db_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
-    let mut opts = get_rocksdb_default_cf_option(matches, config);
+    let mut opts = RocksdbOptions::new();
     let rmode = get_integer_value("",
                                   "rocksdb.wal-recovery-mode",
                                   matches,
@@ -256,14 +256,14 @@ fn get_rocksdb_db_option(matches: &Matches, config: &toml::Value) -> RocksdbOpti
                                               |v| v.as_bool());
     if enable_statistics {
         opts.enable_statistics();
+        let stats_dump_period_sec = get_integer_value("",
+                                                      "rocksdb.stats-dump-period-sec",
+                                                      matches,
+                                                      config,
+                                                      Some(600),
+                                                      |v| v.as_integer());
+        opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
-    let stats_dump_period_sec = get_integer_value("",
-                                                  "rocksdb.stats-dump-period-sec",
-                                                  matches,
-                                                  config,
-                                                  Some(600),
-                                                  |v| v.as_integer());
-    opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
 
     opts
 }
@@ -272,10 +272,9 @@ fn get_rocksdb_cf_option(matches: &Matches,
                          config: &toml::Value,
                          cf: &str,
                          block_cache_default: i64,
-                         use_bloom: bool)
+                         use_bloom_filter: bool)
                          -> RocksdbOptions {
     let prefix = String::from("rocksdb.") + cf + ".";
-
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     let block_size = get_integer_value("",
@@ -293,7 +292,7 @@ fn get_rocksdb_cf_option(matches: &Matches,
                                              |v| v.as_integer());
     block_base_opts.set_lru_cache(block_cache_size as usize);
 
-    if use_bloom {
+    if use_bloom_filter {
         let bloom_bits_per_key = get_integer_value("",
                                                    (prefix.clone() + "bloom-filter-bits-per-key")
                                                        .as_str(),
@@ -395,7 +394,6 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                           1024 * 1024 * 1024,
                           true /* bloom filter */)
 }
-
 
 fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     // Don't need set bloom filter for write cf, because we use seek to get the correct
