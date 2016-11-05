@@ -1036,15 +1036,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let peer = self.region_peers.get(&new.get_id()).unwrap();
         if peer.is_leader() {
-            // schedule a task to report to PD that the region merge is done
-            let report_task = PdTask::ReportMerge {
-                new: new,
-                old: old,
-                to_shutdown: to_shutdown.clone(),
-            };
-            if let Err(e) = self.pd_worker.schedule(report_task) {
-                error!("failed to notify pd: {}", e)
-            }
+            // send heartbeat to notify PD that the region merge is done
+            self.heartbeat_pd(peer);
         }
 
         let to_shutdown_peer = self.region_peers.get(&to_shutdown.get_id()).unwrap();

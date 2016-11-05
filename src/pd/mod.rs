@@ -99,11 +99,4 @@ pub trait PdClient: Send + Sync {
 
     // Report pd the split region.
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()>;
-
-    // Report PD the region merged.
-    fn report_merge(&self,
-                    new: metapb::Region,
-                    old: metapb::Region,
-                    to_shutdown: metapb::Region)
-                    -> Result<()>;
 }

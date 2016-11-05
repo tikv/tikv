@@ -235,13 +235,6 @@ mod tests {
         fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
             unimplemented!();
         }
-        fn report_merge(&self,
-                        _: metapb::Region,
-                        _: metapb::Region,
-                        _: metapb::Region)
-                        -> Result<()> {
-            unimplemented!();
-        }
     }
 
     fn new_store(addr: &str, state: metapb::StoreState) -> metapb::Store {

@@ -51,11 +51,6 @@ pub enum Task {
         left: metapb::Region,
         right: metapb::Region,
     },
-    ReportMerge {
-        new: metapb::Region,
-        old: metapb::Region,
-        to_shutdown: metapb::Region,
-    },
     ValidatePeer {
         region: metapb::Region,
         peer: metapb::Peer,
@@ -82,13 +77,6 @@ impl Display for Task {
             Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
             Task::ReportSplit { ref left, ref right } => {
                 write!(f, "report split left {:?}, right {:?}", left, right)
-            }
-            Task::ReportMerge { ref new, ref old, ref to_shutdown } => {
-                write!(f,
-                       "report merge new region {:?}, old region {:?}, to shutdown {:?}",
-                       new,
-                       old,
-                       to_shutdown)
             }
             Task::ValidatePeer { ref region, ref peer } => {
                 write!(f, "validate peer {:?} with region {:?}", peer, region)
@@ -258,19 +246,6 @@ impl<T: PdClient> Runner<T> {
         PD_REQ_COUNTER_VEC.with_label_values(&["report split", "success"]).inc();
     }
 
-    fn handle_report_merge(&self,
-                           new: metapb::Region,
-                           old: metapb::Region,
-                           to_delete: metapb::Region) {
-        PD_REQ_COUNTER_VEC.with_label_values(&["report merge", "all"]).inc();
-
-        if let Err(e) = self.pd_client.report_merge(new, old, to_delete) {
-            error!("report merge failed {:?}", e);
-            return;
-        }
-        PD_REQ_COUNTER_VEC.with_label_values(&["report merge", "success"]).inc();
-    }
-
     // send a raft message to destroy the specified stale peer
     fn send_destroy_peer_message(&self,
                                  local_region: metapb::Region,
@@ -374,9 +349,6 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             }
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
             Task::ReportSplit { left, right } => self.handle_report_split(left, right),
-            Task::ReportMerge { new, old, to_shutdown } => {
-                self.handle_report_merge(new, old, to_shutdown)
-            }
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
         };
     }

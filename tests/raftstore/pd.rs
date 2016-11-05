@@ -182,25 +182,6 @@ impl Cluster {
         }
     }
 
-    fn handle_region_merge_done(&mut self,
-                                new: metapb::Region,
-                                old: metapb::Region,
-                                to_shutdown: metapb::Region) {
-        self.remove_region(&old);
-        self.remove_region(&to_shutdown);
-        self.merging_region_ids.remove(&old.get_id());
-        self.merging_region_ids.remove(&to_shutdown.get_id());
-        // clear down_peers
-        for peer in to_shutdown.get_peers() {
-            self.down_peers.remove(&peer.get_id());
-        }
-        // mark from region as shutdown
-        self.shutdown_region_ids.insert(to_shutdown.get_id());
-        // add a new region after regions are merged
-        self.add_region(&new);
-        self.merge_count += 1;
-    }
-
     fn handle_heartbeat_merge(&mut self,
                               region: metapb::Region,
                               into_region_id: u64,
@@ -210,6 +191,19 @@ impl Cluster {
         let version = region.get_region_epoch().get_version();
         let cur_version = cur_region.get_region_epoch().get_version();
         if version > cur_version {
+            if region.get_id() == into_region_id {
+                // region merge is committed
+                // remove the from region
+                let from_region = try!(self.get_region_by_id(from_region_id));
+                self.remove_region(&from_region);
+                // clear down_peers
+                for peer in from_region.get_peers() {
+                    self.down_peers.remove(&peer.get_id());
+                }
+                // mark from region as shutdown
+                self.shutdown_region_ids.insert(from_region_id);
+                self.merge_count += 1;
+            }
             // There are two possible cases:
             // 1. region merge is done
             // 2. region merge is cancelled or rollbacked
@@ -773,29 +767,6 @@ impl PdClient for TestPdClient {
         // pd just uses this for history show, so here we just count it.
         try!(self.check_bootstrap());
         self.cluster.wl().split_count += 1;
-        Ok(())
-    }
-
-    fn report_merge(&self,
-                    new: metapb::Region,
-                    old: metapb::Region,
-                    to_shutdown: metapb::Region)
-                    -> Result<()> {
-        try!(self.check_bootstrap());
-
-        if !(self.cluster.rl().is_merging_region(&old).is_some() &&
-             self.cluster.rl().is_merging_region(&to_shutdown).is_some()) {
-            // PD is already notified that the region merge is done
-            // by previous report merge message or region heartbeat.
-            // It just ignores this message.
-            return Ok(());
-        }
-        let cur_old = try!(self.get_region_by_id(old.get_id()));
-        let cur_old_version = cur_old.get_region_epoch().get_version();
-        let new_version = new.get_region_epoch().get_version();
-        assert!(new_version > cur_old_version);
-        // TODO check the range of `new` is merged by `old` and `to_shutdown`
-        self.cluster.wl().handle_region_merge_done(new, old, to_shutdown);
         Ok(())
     }
 }
