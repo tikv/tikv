@@ -664,29 +664,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // no exist, check with tombstone key.
         let state_key = keys::region_state_key(region_id);
         if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
-            if local_state.get_state() == PeerState::Tombstone {
-                let region = local_state.get_region();
-                let region_epoch = region.get_region_epoch();
-                // The region in this peer is already destroyed
-                if util::is_epoch_stale(from_epoch, region_epoch) {
-                    info!("[region {}] tombstone peer [epoch: {:?}] \
-                        receive a stale message {:?}", region_id,
-                        region_epoch,
-                          msg,
-                          );
+            assert_eq!(local_state.get_state(), PeerState::Tombstone);
+            let region = local_state.get_region();
+            let region_epoch = region.get_region_epoch();
+            // The region in this peer is already destroyed
+            if util::is_epoch_stale(from_epoch, region_epoch) {
+                info!("[region {}] tombstone peer [epoch: {:?}] \
+                    receive a stale message {:?}", region_id,
+                    region_epoch,
+                        msg,
+                        );
 
-                    let not_exist = util::find_peer(region, from_store_id).is_none();
-                    self.handle_stale_msg(msg, region_epoch, is_vote_msg && not_exist);
+                let not_exist = util::find_peer(region, from_store_id).is_none();
+                self.handle_stale_msg(msg, region_epoch, is_vote_msg && not_exist);
 
-                    return Ok(true);
-                }
+                return Ok(true);
+            }
 
-                if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
-                    return Err(box_err!("tombstone peer [epoch: {:?}] receive an invalid \
-                                         message {:?}, ignore it",
-                                        region_epoch,
-                                        msg));
-                }
+            if from_epoch.get_conf_ver() == region_epoch.get_conf_ver() {
+                return Err(box_err!("tombstone peer [epoch: {:?}] receive an invalid \
+                                        message {:?}, ignore it",
+                                    region_epoch,
+                                    msg));
             }
         }
 
@@ -836,13 +835,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let is_initialized = p.is_initialized();
         if let Err(e) = p.destroy() {
-            // should panic here?
-            error!("[region {}] destroy peer {:?} in store {} err {:?}",
+            // If not panic here, the peer will be recreated in the next restart,
+            // then it will be gc again. But if some overlap region is created
+            // before restarting, the gc action will delete the overlap region's
+            // data too.
+            panic!("[region {}] destroy peer {:?} in store {} err {:?}",
                    region_id,
                    peer,
                    self.store_id(),
                    e);
-            return;
         }
 
         if is_initialized && self.region_ranges.remove(&enc_end_key(p.region())).is_none() {
