@@ -92,7 +92,6 @@ impl SyncStorage {
             .unwrap()
     }
 
-    #[allow(dead_code)]
     pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
         wait_event!(|cb| self.store.async_cleanup(ctx, key, start_ts, cb).unwrap()).unwrap()
     }

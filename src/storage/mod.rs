@@ -25,7 +25,7 @@ pub mod engine;
 pub mod mvcc;
 pub mod txn;
 pub mod config;
-mod types;
+pub mod types;
 mod metrics;
 
 pub use self::config::Config;
@@ -831,6 +831,31 @@ mod tests {
                             b"x".to_vec(),
                             100,
                             expect_too_busy(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_cleanup() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_cleanup(Context::new(), make_key(b"x"), 100, expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       105,
+                       expect_get_none(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();

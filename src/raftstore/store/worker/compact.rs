@@ -13,6 +13,7 @@
 
 use util::worker::Runnable;
 use util::rocksdb;
+use util::escape;
 
 use rocksdb::DB;
 use std::sync::Arc;
@@ -31,8 +32,8 @@ impl Display for Task {
         write!(f,
                "Compact CF[{}], range[{:?}, {:?}]",
                self.cf_name,
-               self.start_key,
-               self.end_key)
+               self.start_key.as_ref().map(|k| escape(&k)),
+               self.end_key.as_ref().map(|k| escape(&k)))
     }
 }
 

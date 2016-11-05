@@ -17,6 +17,19 @@ use protobuf::RepeatedField;
 use super::{Error, Result, RpcClient};
 
 impl super::PdClient for RpcClient {
+    fn get_cluster_id(&self) -> Result<u64> {
+        // PD will not check the cluster ID in the GetPDMembersRequest, so we
+        // can send this request with any cluster ID, then PD will return its
+        // cluster ID in the response header.
+        let get_pd_members = pdpb::GetPDMembersRequest::new();
+        let mut req = self.new_request(pdpb::CommandType::GetPDMembers);
+        req.set_get_pd_members(get_pd_members);
+
+        let mut resp = try!(self.send(&req));
+        try!(check_resp(&resp));
+        Ok(resp.take_header().get_cluster_id())
+    }
+
     fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
         let mut bootstrap = pdpb::BootstrapRequest::new();
         bootstrap.set_store(store);
