@@ -20,6 +20,7 @@ use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{Mutation, Key, KvPair, make_key};
 use tikv::storage::txn::GC_BATCH_SIZE;
+use tikv::storage::config::Config as StorageConfig;
 
 #[derive(Clone)]
 struct AssertionStorage(SyncStorage);
@@ -469,7 +470,9 @@ fn test_txn_store_resolve_lock() {
 
 #[test]
 fn test_txn_store_gc() {
-    let store = new_assertion_storage();
+    let mut cfg = StorageConfig::new();
+    cfg.sched_exec_gc_on_statistics = false;
+    let store = AssertionStorage(SyncStorage::new(&cfg));
     store.put_ok(b"k", b"v1", 5, 10);
     store.put_ok(b"k", b"v2", 15, 20);
     store.gc_ok(30);

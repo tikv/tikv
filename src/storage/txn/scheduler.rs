@@ -31,7 +31,9 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use rand;
 use std::boxed::Box;
+use std::time::Duration;
 use std::fmt::{self, Formatter, Debug};
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
@@ -48,10 +50,13 @@ use super::Result;
 use super::Error;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
+use super::statistics::{RegionsWriteStats, ROLL_INTERVAL_SECS, CHECK_EXPIRED_INTERVAL_SECS, U8_MAX};
 use super::super::metrics::*;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
+pub const WRITE_STATS_BASE: u64 = 64;
+pub const STATS_EXPIRED_SECS: u64 = 7 * 24 * 3600; // 7 * 24 hours
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -62,6 +67,11 @@ pub enum ProcessResult {
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
+}
+
+pub enum Tick {
+    RollStats,
+    CheckExpiredStats,
 }
 
 /// Message types for the scheduler event loop.
@@ -204,6 +214,12 @@ pub struct Scheduler {
     // write concurrency control
     latches: Latches,
 
+    // write statistics
+    write_stats: RegionsWriteStats,
+
+    // probabilistic execute gc command base on write_stats
+    pro_exec_gc: bool,
+
     sched_too_busy_threshold: usize,
 
     // worker pool
@@ -215,8 +231,9 @@ impl Scheduler {
     pub fn new(engine: Box<Engine>,
                schedch: SendCh<Msg>,
                concurrency: usize,
-               worker_pool_size: usize,
-               sched_too_busy_threshold: usize)
+               pro_exec_gc: bool,
+               sched_too_busy_threshold: usize,
+               worker_pool_size: usize)
                -> Scheduler {
         Scheduler {
             engine: engine,
@@ -225,6 +242,8 @@ impl Scheduler {
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_too_busy_threshold: sched_too_busy_threshold,
+            write_stats: RegionsWriteStats::new(),
+            pro_exec_gc: pro_exec_gc,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
         }
@@ -454,6 +473,18 @@ fn process_write_impl(cid: u64,
     Ok(())
 }
 
+fn gc_dice(score: u64, base: u64) -> bool {
+    let score = score / base;
+    let pro: u8 = if score >= U8_MAX {
+        U8_MAX as u8
+    } else {
+        score as u8
+    };
+
+    let x = rand::random::<u8>();
+    pro > x
+}
+
 /// Extracts the context of a command.
 fn extract_ctx(cmd: &Command) -> &Context {
     match *cmd {
@@ -471,6 +502,14 @@ fn extract_ctx(cmd: &Command) -> &Context {
 }
 
 impl Scheduler {
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
+        self.register_roll_stats_tick(event_loop);
+        self.register_check_expired_stats_tick(event_loop);
+
+        try!(event_loop.run(self));
+        Ok(())
+    }
+
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
@@ -552,6 +591,55 @@ impl Scheduler {
         extract_ctx(ctx.cmd.as_ref().unwrap())
     }
 
+    fn statistic(&mut self, cmd: &Command) {
+        if let Command::Prewrite { ref ctx, ref mutations, .. } = *cmd {
+            let region_id = ctx.get_region_id();
+            self.write_stats.incr(region_id, mutations.len() as u64);
+        }
+    }
+
+    fn should_schedule_gc(&mut self, ctx: &Context) -> bool {
+        let region_id = ctx.get_region_id();
+        self.write_stats.update_active(region_id);
+
+        if !self.pro_exec_gc {
+            return true;
+        }
+
+        // We schedule GC command based on the history write of the region. If there are
+        // a lot of writes for a region after previous GC command executed, it is probably
+        // that the region need GC.
+        // We use the following steps to simulate probabilistic execution of GC command.
+        // 1) we generate a number(pro) between [0, 255] based on the history write of the
+        // region, the more data has written the larger the number generated.
+        // 2) and then we generate an random number(x) between [0, 255].
+        // 3) compare the numbers generate in 1) and 2), if pro > x we schedule the GC command.
+
+        let history_write = self.write_stats.get_history(region_id);
+        let res = gc_dice(history_write, WRITE_STATS_BASE);
+        if res {
+            info!("region [{}] schedule GC command", region_id);
+            self.write_stats.clear_history(region_id);
+        }
+
+        res
+    }
+
+    fn should_schedule(&mut self, cmd: &Command) -> bool {
+        match *cmd {
+            Command::Gc { ref ctx, .. } => {
+                SCHED_GC_EXECUTE_COUNTER_VEC.with_label_values(&["received"]).inc();
+                if self.should_schedule_gc(ctx) {
+                    SCHED_GC_EXECUTE_COUNTER_VEC.with_label_values(&["executed"]).inc();
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => true,
+        }
+    }
+
     /// Event handler for new command.
     ///
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
@@ -581,8 +669,18 @@ impl Scheduler {
         if !cmd.readonly() && self.too_busy() {
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
-        } else {
+            return;
+        }
+
+        // Do statistics before schedule command.
+        self.statistic(&cmd);
+
+        // Gc command execute with probability
+        let should_schedule = self.should_schedule(&cmd);
+        if should_schedule {
             self.schedule_command(cmd, callback);
+        } else {
+            execute_callback(callback, ProcessResult::Res);
         }
     }
 
@@ -731,11 +829,48 @@ impl Scheduler {
         info!("receive shutdown command");
         event_loop.shutdown();
     }
+
+    fn register_roll_stats_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop, Tick::RollStats, ROLL_INTERVAL_SECS * 1000) {
+            error!("register roll statistics tick err: {:?}", e);
+        };
+    }
+
+    fn register_check_expired_stats_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::CheckExpiredStats,
+                                       CHECK_EXPIRED_INTERVAL_SECS * 1000) {
+            error!("register check expired statistics tick err: {:?}", e);
+        };
+    }
+
+    fn on_roll_stats_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        // The gc command maybe execute for a region that has no write for a long time, the
+        // probability of execution for this kinds of regions increasing as time passing by.
+        // This is useful for the situation that store crash down and the statistics data lose.
+        self.write_stats.roll_and_up(WRITE_STATS_BASE);
+
+        self.register_roll_stats_tick(event_loop);
+    }
+
+    fn on_check_expired_stats_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        self.write_stats.check_expired(STATS_EXPIRED_SECS);
+
+        self.register_check_expired_stats_tick(event_loop);
+    }
+}
+
+fn register_timer(event_loop: &mut EventLoop<Scheduler>,
+                  tick: Tick,
+                  delay: u64)
+                  -> Result<mio::Timeout> {
+    event_loop.timeout(tick, Duration::from_millis(delay))
+        .map_err(|e| box_err!("register timer err: {:?}", e))
 }
 
 /// Handler of the scheduler event loop.
 impl mio::Handler for Scheduler {
-    type Timeout = ();
+    type Timeout = Tick;
     type Message = Msg;
 
     /// Event handler for message events.
@@ -758,5 +893,50 @@ impl mio::Handler for Scheduler {
         if !event_loop.is_running() {
             // stop work threads if has
         }
+    }
+
+    /// Handler for timeout events
+    fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
+        match timeout {
+            Tick::RollStats => self.on_roll_stats_tick(event_loop),
+            Tick::CheckExpiredStats => self.on_check_expired_stats_tick(event_loop),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gc_dice, WRITE_STATS_BASE};
+
+    fn test_gc_dice_true_count(score: u64, base: u64, total_round: u64) -> u64 {
+        let mut true_count = 0;
+        for _ in 0..total_round {
+            if gc_dice(score, base) {
+                true_count += 1
+            }
+        }
+        true_count
+    }
+
+    #[test]
+    fn test_gc_dice_loop() {
+        let multiple = 4;
+
+        let mut true_count = test_gc_dice_true_count(0, WRITE_STATS_BASE, 256 * multiple);
+        assert_eq!(true_count, 0);
+
+        true_count =
+            test_gc_dice_true_count(10 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256 * multiple);
+        assert_eq!(true_count >= 0 * multiple, true);
+        assert_eq!(true_count <= 20 * multiple, true);
+
+        true_count =
+            test_gc_dice_true_count(150 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256 * multiple);
+        assert_eq!(true_count >= 140 * multiple, true);
+        assert_eq!(true_count <= 160 * multiple, true);
+
+        true_count =
+            test_gc_dice_true_count(300 * WRITE_STATS_BASE, WRITE_STATS_BASE, 256 * multiple);
+        assert_eq!(true_count >= 250 * multiple, true);
     }
 }
