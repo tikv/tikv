@@ -55,7 +55,11 @@ fn main() {
                 .arg(Arg::with_name("index")
                     .short("i")
                     .takes_value(true)
-                    .help("set the raft log index")))
+                    .help("set the raft log index"))
+                .arg(Arg::with_name("key")
+                    .short("k")
+                    .takes_value(true)
+                    .help("set the raw key")))
             .subcommand(SubCommand::with_name("region")
                 .about("print region info")
                 .arg(Arg::with_name("region")
@@ -110,9 +114,15 @@ fn main() {
         dump_raw_value(db, cf_name, key);
     } else if let Some(matches) = matches.subcommand_matches("raft") {
         if let Some(matches) = matches.subcommand_matches("log") {
-            let region = String::from(matches.value_of("region").unwrap());
-            let index = String::from(matches.value_of("index").unwrap());
-            dump_raft_log_entry(db, region, index);
+            let key = match matches.value_of("key") {
+                None => {
+                    let region = String::from(matches.value_of("region").unwrap());
+                    let index = String::from(matches.value_of("index").unwrap());
+                    keys::raft_log_key(region.parse().unwrap(), index.parse().unwrap())
+                }
+                Some(k) => unescape(k),
+            };
+            dump_raft_log_entry(db, &key);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let region = String::from(matches.value_of("region").unwrap());
             dump_region_info(db, region);
@@ -259,18 +269,18 @@ fn dump_raw_value(db: DB, cf: &str, key: String) {
     println!("value: {}", value.map_or("None".to_owned(), |v| escape(&v)));
 }
 
-fn dump_raft_log_entry(db: DB, region_id_str: String, idx_str: String) {
-    let region_id = u64::from_str_radix(&region_id_str, 10).unwrap();
-    let idx = u64::from_str_radix(&idx_str, 10).unwrap();
-
-    let idx_key = keys::raft_log_key(region_id, idx);
-    println!("idx_key: {}", escape(&idx_key));
-    let mut ent: Entry = db.get_msg_cf(CF_RAFT, &idx_key).unwrap().unwrap();
+fn dump_raft_log_entry(db: DB, idx_key: &[u8]) {
+    let (region_id, idx) = keys::decode_raft_log_key(idx_key).unwrap();
+    println!("idx_key: {}", escape(idx_key));
+    println!("region: {}", region_id);
+    println!("log index: {}", idx);
+    let mut ent: Entry = db.get_msg_cf(CF_RAFT, idx_key).unwrap().unwrap();
     let data = ent.take_data();
     println!("entry {:?}", ent);
     let mut msg = RaftCmdRequest::new();
     msg.merge_from_bytes(&data).unwrap();
-    println!("msg {:?}", msg);
+    println!("msg len: {}", data.len());
+    println!("{:?}", msg);
 }
 
 fn dump_region_info(db: DB, region_id_str: String) {
@@ -307,7 +317,8 @@ fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: 
                  &to,
                  true,
                  &mut |k, v| {
-                     println!("key: {}, value: {}", escape(k), escape(v));
+                     println!("key: {}, value len: {}", escape(k), v.len());
+                     println!("{}", escape(v));
                      cnt += 1;
                      Ok(cnt < limit)
                  })
