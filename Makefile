@@ -28,9 +28,9 @@ run:
 	cargo run --features "${ENABLE_FEATURES}"
 
 release:
-	cargo build --release --bin tikv-server --features "${ENABLE_FEATURES}"
+	cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p bin 
-	cp -f ./target/release/tikv-server ./bin
+	cp -f ./target/release/tikv-ctl ./target/release/tikv-server ./bin
 
 static_release:
 	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 make release
