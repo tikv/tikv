@@ -1330,7 +1330,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
-    fn store_heartbeat_pd(&self) {
+    fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
         let disk_stat = match get_disk_stat(self.engine.path()) {
             Ok(disk_stat) => disk_stat,
@@ -1392,9 +1392,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as f64);
 
-        let apply_snapshot_count = self.region_peers.values_mut().filter(|peer| {
-            r.check_applying_snap()
-        }).count();
+        let mut apply_snapshot_count = 0;
+        for peer in self.region_peers.values_mut() {
+            if peer.mut_store().check_applying_snap() {
+                apply_snapshot_count += 1;
+            }
+        }
 
         stats.set_applying_snap_count(apply_snapshot_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["applying"])
