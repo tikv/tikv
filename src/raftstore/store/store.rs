@@ -1392,6 +1392,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as f64);
 
+        let apply_snapshot_count = self.region_peers.values_mut().filter(|peer| {
+            r.check_applying_snap()
+        }).count();
+
+        stats.set_applying_snap_count(apply_snapshot_count as u32);
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["applying"])
+            .set(apply_snapshot_count as f64);
+
         stats.set_start_time(self.start_time.sec as u32);
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
