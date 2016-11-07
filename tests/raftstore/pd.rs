@@ -26,6 +26,8 @@ use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
 use super::util::*;
 
+pub const ALLOC_BASE_ID: usize = 1000;
+
 // Rule is just for special test which we want do more accurate control
 // instead of origin max_peer_count check.
 // E.g, for region a, change peers 1,2,3 -> 1,2,4.
@@ -69,7 +71,7 @@ impl Cluster {
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
-            base_id: AtomicUsize::new(1000),
+            base_id: AtomicUsize::new(ALLOC_BASE_ID),
             rule: None,
             store_stats: HashMap::new(),
             split_count: 0,
@@ -190,6 +192,7 @@ impl Cluster {
         let cur_region = try!(self.get_region_by_id(region.get_id()));
         let version = region.get_region_epoch().get_version();
         let cur_version = cur_region.get_region_epoch().get_version();
+        let mut resp = pdpb::RegionHeartbeatResponse::new();
         if version > cur_version {
             if region.get_id() == into_region_id {
                 // region merge is committed
@@ -212,8 +215,13 @@ impl Cluster {
             self.remove_region(&cur_region);
             self.add_region(&region);
             self.merging_region_ids.remove(&into_region_id);
+            return Ok(resp);
         }
-        let mut resp = pdpb::RegionHeartbeatResponse::new();
+
+        // update region info in PD
+        self.remove_region(&cur_region);
+        self.add_region(&region);
+
         if region.get_id() == from_region_id {
             // migrate data in `from_region` to `into_region` if neccessary
             let into_region = try!(self.get_region_by_id(into_region_id));
