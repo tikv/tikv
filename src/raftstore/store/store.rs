@@ -493,7 +493,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         for (from_region, into_region) in region_to_retry_merge {
-            self.on_ready_merge_region(from_region, into_region);
+            self.retry_merge_region(from_region, into_region);
         }
 
         // do perform the peer destroy
@@ -948,6 +948,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 self.region_peers.insert(new_region_id, new_peer);
             }
+        }
+    }
+
+    fn retry_merge_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
+        let into_peer = match self.region_peers.get(&into_region.get_id()) {
+            Some(peer) => peer,
+            None => {
+                panic!("region {:?} has no peer in store {} as into region in region merge",
+                       into_region,
+                       self.store_id());
+            }
+        };
+
+        let request = new_region_merge_request(from_region, into_region, into_peer.peer.clone());
+        let cb = Box::new(move |_: RaftCmdResponse| -> Result<()> { Ok(()) });
+        if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
+            request: request,
+            callback: cb,
+        }) {
+            error!("store {} failed to send region merge, err {:?}",
+                   self.store_id(),
+                   e)
         }
     }
 
@@ -1746,6 +1768,23 @@ fn new_compact_log_request(region_id: u64,
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
+    request.set_admin_request(admin);
+    request
+}
+
+fn new_region_merge_request(from_region: metapb::Region,
+                            into_region: metapb::Region,
+                            into_peer: metapb::Peer)
+                            -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
+    request.mut_header().set_region_id(into_region.get_id());
+    request.mut_header().set_region_epoch(into_region.get_region_epoch().clone());
+    request.mut_header().set_peer(into_peer);
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::Merge);
+    admin.mut_merge().set_from_region(from_region);
     request.set_admin_request(admin);
     request
 }

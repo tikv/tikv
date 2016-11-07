@@ -1389,33 +1389,26 @@ impl Peer {
         let mut resp = AdminResponse::new();
         resp.set_merge(MergeResponse::new());
 
-        if self.merge_state == MergeState::Merging {
-            info!("{} already in region merge state {:?}, ignore region merge request",
-                  self.tag,
-                  self.merge_state);
-            Ok((resp, None))
-        } else {
-            // update peer meta info
-            let state_key = keys::region_state_key(self.region().get_id());
-            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
-                .unwrap();
-            let mut merge_state = RegionMergeState::new();
-            merge_state.set_state(MergeState::Merging);
-            merge_state.set_from_region(merge_req.get_from_region().clone());
-            region_local_state.set_merge_state(merge_state);
-            try!(self.engine.put_msg(&state_key, &region_local_state));
-            self.merge_state = MergeState::Merging;
+        // update peer meta info
+        let state_key = keys::region_state_key(self.region().get_id());
+        let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+            .unwrap();
+        let mut merge_state = RegionMergeState::new();
+        merge_state.set_state(MergeState::Merging);
+        merge_state.set_from_region(merge_req.get_from_region().clone());
+        region_local_state.set_merge_state(merge_state);
+        try!(self.engine.put_msg(&state_key, &region_local_state));
+        self.merge_state = MergeState::Merging;
 
-            self.start_merging_time = Some(Instant::now());
+        self.start_merging_time = Some(Instant::now());
 
-            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "success"]).inc();
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "success"]).inc();
 
-            Ok((resp,
-                Some(ExecResult::MergeRegion {
-                from_region: merge_req.get_from_region().clone(),
-                into_region: self.region().clone(),
-            })))
-        }
+        Ok((resp,
+            Some(ExecResult::MergeRegion {
+            from_region: merge_req.get_from_region().clone(),
+            into_region: self.region().clone(),
+        })))
     }
 
     fn exec_suspend_region(&mut self,

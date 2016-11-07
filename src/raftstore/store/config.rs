@@ -46,9 +46,9 @@ const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
-// If the region merge could not succeed over 60 seconds, the peer in "the into region"
+// If the region merge could not succeed over 3 seconds, the peer in "the into region"
 // (also known as "the control region") will retry the region merge procedure.
-const DEFAULT_RETRY_REGION_MERGE_DURATION_SECS: u64 = 60;
+const DEFAULT_RETRY_REGION_MERGE_DURATION_SECS: u64 = 3;
 
 #[derive(Debug, Clone)]
 pub struct Config {
