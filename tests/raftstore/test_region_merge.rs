@@ -15,6 +15,7 @@ use tikv::pd::PdClient;
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
+use super::server::new_server_cluster;
 
 fn test_simple_region_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -42,5 +43,12 @@ fn test_simple_region_merge<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_node_simple_region_merge() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
+    test_simple_region_merge(&mut cluster);
+}
+
+#[test]
+fn test_server_simple_region_merge() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
     test_simple_region_merge(&mut cluster);
 }
