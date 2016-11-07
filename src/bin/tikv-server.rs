@@ -387,7 +387,7 @@ fn get_rocksdb_cf_option(matches: &Matches,
 }
 
 fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
-    // Default column family use bloom filter.
+    // Default column family uses bloom filter.
     get_rocksdb_cf_option(matches,
                           config,
                           "defaultcf",
