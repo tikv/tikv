@@ -204,6 +204,7 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::metapb::{Region, Peer};
     use std::cmp::Ordering;
 
@@ -284,6 +285,19 @@ mod tests {
                 assert_eq!((region_id, idx_id), decode_raft_log_key(&key).unwrap());
             }
         }
+
+        let mut state_key = raft_state_key(1);
+        // invalid length
+        assert!(decode_raft_log_key(&state_key).is_err());
+
+        state_key.write_u64::<BigEndian>(2).unwrap();
+        // invalid suffix
+        assert!(decode_raft_log_key(&state_key).is_err());
+
+        let mut region_state_key = region_state_key(1);
+        region_state_key.write_u64::<BigEndian>(2).unwrap();
+        // invalid prefix
+        assert!(decode_raft_log_key(&region_state_key).is_err());
     }
 
     #[test]
