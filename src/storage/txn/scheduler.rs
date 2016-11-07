@@ -301,8 +301,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
-        // Gets the lock with timestamp `start_ts`, then sends either a `Commit` command if the
-        // lock has commit timestamp populated or a `Rollback` command otherwise.
+        // Scan the locks with timestamp `start_ts`, then either commit them if the command has
+        // commit timestamp populated or rollback otherwise.
         Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward));
             let res = reader.scan_lock(scan_key.take(),
