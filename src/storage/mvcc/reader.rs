@@ -320,7 +320,7 @@ impl<'a> MvccReader<'a> {
                 locks.push((key.clone(), lock));
                 if let Some(limit) = limit {
                     if locks.len() >= limit {
-                        return Ok((locks, Some(key.append_ts(0))));
+                        return Ok((locks, Some(key)));
                     }
                 }
             }
