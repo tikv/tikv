@@ -35,7 +35,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
-use std::collections::HashSet;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -813,13 +812,11 @@ fn get_server_tags(matches: &Matches, config: &toml::Value) -> Vec<String> {
     });
 
     // Convert tags to lowercase, and remove empty or duplicated tags
-    let mut set = HashSet::new();
-    for t in tags {
-        if !t.is_empty() {
-            set.insert(t.to_lowercase());
-        }
-    }
-    set.into_iter().collect()
+    let mut tags: Vec<String> =
+        tags.iter().map(|x| x.to_lowercase()).filter(|x| !x.is_empty()).collect();
+    tags.sort();
+    tags.dedup();
+    tags
 }
 
 fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
