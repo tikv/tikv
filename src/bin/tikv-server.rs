@@ -951,7 +951,10 @@ fn main() {
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
                 "dsn: raftkv");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
-    opts.optopt("", "tags", "set server tags", "default: \"\"");
+    opts.optopt("",
+                "tags",
+                "set server tags (separated by comma and case insensitive)",
+                "default: \"\"");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {

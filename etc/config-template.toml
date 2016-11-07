@@ -6,6 +6,8 @@
 #    e.g.: 78_000 = "1.3m"
 
 [server]
+# set server tags (case insensitive strings). for example: tags = ["us", "ssd"]
+tags = []
 # set listening address.
 addr = "127.0.0.1:20160"
 # if not set, use addr instead. set advertise listening address for client communication.
