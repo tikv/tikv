@@ -295,27 +295,38 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn scan_lock<F>(&mut self, filter: F, limit: Option<usize>) -> Result<Vec<(Key, Lock)>>
+    #[allow(type_complexity)]
+    pub fn scan_lock<F>(&mut self,
+                        start: Option<Key>,
+                        filter: F,
+                        limit: Option<usize>)
+                        -> Result<(Vec<(Key, Lock)>, Option<Key>)>
         where F: Fn(&Lock) -> bool
     {
         try!(self.create_lock_cursor());
         let mut cursor = self.lock_cursor.as_mut().unwrap();
-        cursor.seek_to_first();
+        let ok = match start {
+            Some(ref x) => try!(cursor.seek(x)),
+            None => cursor.seek_to_first(),
+        };
+        if !ok {
+            return Ok((vec![], None));
+        }
         let mut locks = vec![];
         while cursor.valid() {
             let key = Key::from_encoded(cursor.key().to_vec());
             let lock = try!(Lock::parse(cursor.value()));
             if filter(&lock) {
-                locks.push((key, lock));
+                locks.push((key.clone(), lock));
                 if let Some(limit) = limit {
                     if locks.len() >= limit {
-                        break;
+                        return Ok((locks, Some(key.append_ts(0))));
                     }
                 }
             }
             cursor.next();
         }
-        Ok(locks)
+        Ok((locks, None))
     }
 
     pub fn scan_keys(&mut self,

@@ -116,6 +116,7 @@ pub enum Command {
         ctx: Context,
         start_ts: u64,
         commit_ts: Option<u64>,
+        scan_key: Option<Key>,
         keys: Vec<Key>,
     },
     Gc {
@@ -473,6 +474,7 @@ impl Storage {
             ctx: ctx,
             start_ts: start_ts,
             commit_ts: commit_ts,
+            scan_key: None,
             keys: vec![],
         };
         let tag = cmd.tag();
