@@ -170,7 +170,7 @@ pub fn validate_addrs(addrs: &[&str]) -> Result<(), ConfigError> {
                 // Port range from 1 to 65535.
                 let port: u32 = try!(addr[(idx + 1)..]
                     .parse()
-                    .map_err(|_| ConfigError::PDList(format!("invalid addr: {}", addr))));
+                    .map_err(|_| new_err(addr)));
                 if port > 65535 || port == 0 {
                     return Err(new_err(addr));
                 }
