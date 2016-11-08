@@ -206,6 +206,8 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
                          &push_job);
 }
 
+const SOMAXCONN: u64 = 32768;
+
 fn check_system_config(matches: &Matches, config: &toml::Value) {
     // Panic when the maximum number of open file descriptors less than opts.max_open_files.
     let max_open_files = get_integer_value("",
@@ -214,9 +216,14 @@ fn check_system_config(matches: &Matches, config: &toml::Value) {
                                            config,
                                            Some(40960),
                                            |v| v.as_integer());
-    util::config::check_max_open_fds(max_open_files as u64).unwrap();
+    if let Err(e) = util::config::check_max_open_fds(max_open_files as u64) {
+        panic!("{:?}", e);
+    }
 
-    // TODO: net.core.somaxcon
+    if let Err(e) = util::config::check_net_max_conn(SOMAXCONN) {
+        panic!("{:?}", e);
+    }
+    // TODO: swap
 }
 
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
@@ -933,10 +940,16 @@ fn main() {
         None => toml::Value::Integer(0),
     };
 
+
     initial_log(&matches, &config);
 
     // Print version information.
     util::print_tikv_info();
+
+    panic_hook::set_exit_hook();
+
+    // Before any set up, check system configuration.
+    check_system_config(&matches, &config);
 
     let addr = get_string_value("A",
                                 "server.addr",
@@ -946,10 +959,6 @@ fn main() {
                                 |v| v.as_str().map(|s| s.to_owned()));
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
-    panic_hook::set_exit_hook();
-
-    // Before any set up, check system configuration.
-    check_system_config(&matches, &config);
 
     let pd_endpoints = get_string_value("pd",
                                         "pd.endpoints",

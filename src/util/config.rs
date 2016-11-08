@@ -123,8 +123,10 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    use libc;
+
     let fd_limit = unsafe {
-        let mut fd_limit = mem::zeroed();
+        let mut fd_limit = ::std::mem::zeroed();
         if 0 != libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit) {
             return Err(ConfigError::Limits("check_max_open_fds failed".to_owned()));
         }
@@ -134,10 +136,10 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
 
     if fd_limit.rlim_cur < expect {
         return Err(ConfigError::Limits(format!("the maximum number of open file descriptors is \
-                                                too small, expect greater or equals to {}, got \
+                                                too small, got {}, expect greater or equal to \
                                                 {}",
-                                               expect,
-                                               fd_limit.rlim_cur)));
+                                               fd_limit.rlim_cur,
+                                               expect)));
     }
 
     Ok(())
@@ -145,6 +147,37 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
 
 #[cfg(not(unix))]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    Ok(())
+}
+
+
+#[cfg(target_os = "linux")]
+pub fn check_net_max_conn(expect: u64) -> Result<(), ConfigError> {
+    use std::fs;
+    use std::io::Read;
+
+    const SOMAXCONN_PATH: &'static str = "/proc/sys/net/core/somaxconn";
+    let mut buffer = String::new();
+    if let Err(e) = fs::File::open(SOMAXCONN_PATH).and_then(|mut f| f.read_to_string(&mut buffer)) {
+        return Err(ConfigError::Limits(format!("check_net_max_conn failed {}", e)));
+    }
+
+    match buffer.trim_matches('\n').parse::<u64>() {
+        Err(e) => Err(ConfigError::Limits(format!("check_net_max_conn failed {}", e))),
+
+        Ok(max) if max < expect => {
+            Err(ConfigError::Limits(format!("net.core.somaxconn is too small, got {}, \
+                                            expect greater or equal to {}",
+                                            max,
+                                            expect)))
+        }
+
+        _ => Ok(()),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn check_net_max_conn(_: u64) -> Result<(), ConfigError> {
     Ok(())
 }
 
