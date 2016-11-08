@@ -865,6 +865,8 @@ impl Peer {
     fn handle_raft_commit_entries(&mut self,
                                   committed_entries: &[eraftpb::Entry])
                                   -> Result<Vec<ExecResult>> {
+        // We can't apply committed entries when this peer is still applying snapshot.
+        assert!(!self.is_applying());
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -875,6 +877,14 @@ impl Peer {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
+            }
+
+            let expect_index = self.get_store().applied_index() + 1;
+            if expect_index != entry.get_index() {
+                panic!("{} expect index {}, but got {}",
+                       self.tag,
+                       expect_index,
+                       entry.get_index());
             }
 
             let res = try!(match entry.get_entry_type() {
