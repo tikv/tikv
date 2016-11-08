@@ -24,7 +24,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, ConnData};
 use super::conn::Conn;
-use super::{Error, Result, OnResponse, Config};
+use super::{Result, OnResponse, Config};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
@@ -389,13 +389,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn resolve_store(&mut self, store_id: u64, data: ConnData) {
         let ch = self.sendch.clone();
         let cb = box move |r| {
-            let sock_addr = match r {
-                Ok(addr) => Ok(addr),
-                Err(e) => Err(Error::from(e)),
-            };
             if let Err(e) = ch.send(Msg::ResolveResult {
                 store_id: store_id,
-                sock_addr: sock_addr,
+                sock_addr: r,
                 data: data,
             }) {
                 error!("send store sock msg err {:?}", e);
