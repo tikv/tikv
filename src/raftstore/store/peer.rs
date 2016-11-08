@@ -529,7 +529,22 @@ impl Peer {
             try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
-        let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+        // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
+        // In some cases, there will be some pending committed entries when applying a
+        // snapshot. If we call `handle_raft_commit_entries` directly, these updates
+        // will be written to disk. Because we apply snapshot asynchronously, so these
+        // updates will soon be removed. But the soft state of raft is still be updated
+        // in memory. Hence when handle ready next time, these updates won't be included
+        // in `ready.committed_entries` again, which will lead to inconsistency.
+        let exec_results = if self.is_applying() {
+            if let Some(ref mut hs) = ready.hs {
+                // Snapshot's metadata has been applied.
+                hs.set_commit(self.get_store().truncated_index());
+            }
+            vec![]
+        } else {
+            try!(self.handle_raft_commit_entries(&ready.committed_entries))
+        };
 
         slow_log!(t,
                   "{} handle ready, entries {}, committed entries {}, messages \
