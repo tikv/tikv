@@ -812,8 +812,15 @@ fn get_server_tags(matches: &Matches, config: &toml::Value) -> Vec<String> {
     });
 
     // Convert tags to lowercase, and remove empty or duplicated tags
-    let mut tags: Vec<String> =
-        tags.iter().map(|x| x.to_lowercase()).filter(|x| !x.is_empty()).collect();
+    let mut tags: Vec<String> = tags.iter()
+        .filter_map(|x| {
+            if x.is_empty() {
+                None
+            } else {
+                Some(x.to_lowercase())
+            }
+        })
+        .collect();
     tags.sort();
     tags.dedup();
     tags
