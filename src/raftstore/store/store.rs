@@ -478,14 +478,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
 
                 if let Some((from_region, into_region)) =
-                       peer.maybe_retry_region_merge(self.cfg.retry_region_merge_duration) {
+                       peer.maybe_region_merge_timeout(self.cfg.region_merge_retry_duration) {
                     region_to_retry_merge.push((from_region, into_region));
                 }
             }
         }
 
+        // retry region merge on timeout
         for (from_region, into_region) in region_to_retry_merge {
-            self.retry_merge_region(from_region, into_region);
+            // validate region epoch on retry
+            self.validate_region_epoch(from_region.clone(), into_region.clone());
+            // retry to suspend `from_region`
+            self.on_ready_merge_region(from_region, into_region);
         }
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
@@ -972,23 +976,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn retry_merge_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
-        let into_peer = match self.region_peers.get(&into_region.get_id()) {
-            Some(peer) => peer,
-            None => {
-                panic!("region {:?} has no peer in store {} as into region in region merge",
-                       into_region,
-                       self.store_id());
-            }
+    fn validate_region_epoch(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
+        info!("{} detects region merge {:?} pending for a long time. To check the epoch of the \
+               from region {:?} with PD",
+              self.tag,
+              into_region,
+              from_region);
+        let task = PdTask::ValidateMergeRegion {
+            from_region: from_region,
+            into_region_id: into_region.get_id(),
         };
-
-        let request = new_region_merge_request(from_region, into_region, into_peer.peer.clone());
-        if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
-            request: request,
-            callback: Box::new(|_| {}),
-        }) {
-            error!("store {} failed to send region merge, err {:?}",
-                   self.store_id(),
+        if let Err(e) = self.pd_worker.schedule(task) {
+            error!("{} failed to schedule validate merge region task: {}",
+                   self.tag,
                    e)
         }
     }
@@ -1012,16 +1012,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // If no peer in `self.region_peers` for `from_region`, there could be:
-        // 1. PD didn't migrate data and peers of two region together
-        //    before it started this region merge
-        // 2. Region merge is done, this merge request is a retry.
-        // 3. Region merge is cancelled due to some conflict, and the peer for `from_region`
+        // 1. Region merge is done, this merge request is a retry.
+        // 2. Region merge is cancelled due to some conflict, and the peer for `from_region`
         //    has been moved to another store.
         // Anyway the merge state of peer in `into_region` would be rollbacked.
         let into_peer = self.region_peers.get_mut(&into_region.get_id()).unwrap();
         if let Err(e) = into_peer.rollback_region_merge() {
-            error!("store {} fails to rollback region merge, err {:?}",
-                   store_id,
+            error!("{} fails to rollback region merge for region {:?}, err {:?}",
+                   self.tag,
+                   into_region,
                    e)
         }
     }
@@ -1136,8 +1135,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("store {} destroy region {:?} on shutdown region command",
               self.store_id(),
               region);
-        // Destroy the specified peer from this store.
-        self.destroy_peer(region.get_id(), peer);
+        if self.region_peers.contains_key(&region.get_id()) {
+            // Destroy the specified peer from this store.
+            self.destroy_peer(region.get_id(), peer);
+        }
     }
 
     fn report_split_pd(&self, left: &Peer, right: &Peer) {
@@ -1527,6 +1528,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn on_rollback_region_merge(&mut self, into_region_id: u64) {
+        if let Some(into_peer) = self.region_peers.get_mut(&into_region_id) {
+            if let Err(e) = into_peer.rollback_region_merge() {
+                error!("{} fails to rollback region merge for region id {}, err {:?}",
+                       self.tag,
+                       into_region_id,
+                       e);
+            }
+        }
+    }
+
     fn heartbeat_pd(&self, peer: &Peer) {
         let task = PdTask::Heartbeat {
             region: peer.region().clone(),
@@ -1864,23 +1876,6 @@ fn new_compact_log_request(region_id: u64,
     request
 }
 
-fn new_region_merge_request(from_region: metapb::Region,
-                            into_region: metapb::Region,
-                            into_peer: metapb::Peer)
-                            -> RaftCmdRequest {
-    let mut request = RaftCmdRequest::new();
-    request.mut_header().set_region_id(into_region.get_id());
-    request.mut_header().set_region_epoch(into_region.get_region_epoch().clone());
-    request.mut_header().set_peer(into_peer);
-    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-    let mut admin = AdminRequest::new();
-    admin.set_cmd_type(AdminCmdType::Merge);
-    admin.mut_merge().set_from_region(from_region);
-    request.set_admin_request(admin);
-    request
-}
-
 fn new_suspend_region_request(from_region: metapb::Region,
                               into_region: metapb::Region,
                               from_peer: metapb::Peer)
@@ -1957,6 +1952,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::MergeCheckResult { region_id, epoch } => {
                 info!("[region {}] merge check complete.", region_id);
                 self.on_merge_check_result(region_id, epoch);
+            }
+            Msg::RollbackRegionMerge { into_region_id } => {
+                self.on_rollback_region_merge(into_region_id);
             }
             Msg::ReportSnapshot { region_id, to_peer_id, status } => {
                 self.on_report_snapshot(region_id, to_peer_id, status);

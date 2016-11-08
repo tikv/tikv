@@ -53,6 +53,8 @@ pub enum Msg {
 
     MergeCheckResult { region_id: u64, epoch: RegionEpoch },
 
+    RollbackRegionMerge { into_region_id: u64 },
+
     ReportSnapshot {
         region_id: u64,
         to_peer_id: u64,
@@ -79,6 +81,11 @@ impl fmt::Debug for Msg {
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
             Msg::MergeCheckResult { .. } => write!(fmt, "Merge Check Result"),
+            Msg::RollbackRegionMerge { ref into_region_id } => {
+                write!(fmt,
+                       "Rollback region merge for region id {:?}",
+                       into_region_id)
+            }
             Msg::ReportSnapshot { ref region_id, ref to_peer_id, ref status } => {
                 write!(fmt,
                        "Send snapshot to {} for region {} {:?}",

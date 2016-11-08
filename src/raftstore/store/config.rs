@@ -48,9 +48,7 @@ const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
-// If the region merge could not succeed over 3 seconds, the peer in "the into region"
-// (also known as "the control region") will retry the region merge procedure.
-const DEFAULT_RETRY_REGION_MERGE_DURATION_SECS: u64 = 3;
+const DEFAULT_REGION_MERGE_RETRY_DURATION_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -111,10 +109,12 @@ pub struct Config {
 
     pub snap_apply_batch_size: usize,
 
-    /// If the region merge could not succeed over the time of `retry_region_merge_duration`,
-    /// (probably due to admin command lost), the peer in "the into region" (also known as
-    /// "the control region") will retry the region merge procedure.
-    pub retry_region_merge_duration: Duration,
+    /// If the region merge could not succeed over the time specified in
+    /// `region_merge_retry_duration` (probably due to admin command lost),
+    /// the peer in "the into region" (also known as "the control region") will
+    /// try to validate the epoch of "the from region" and retry the region merge procedure.
+    /// If that epoch has changed, region merge will be rollbacked.
+    pub region_merge_retry_duration: Duration,
 }
 
 impl Default for Config {
@@ -146,8 +146,8 @@ impl Default for Config {
             max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
-            retry_region_merge_duration:
-                Duration::from_secs(DEFAULT_RETRY_REGION_MERGE_DURATION_SECS),
+            region_merge_retry_duration:
+                Duration::from_secs(DEFAULT_REGION_MERGE_RETRY_DURATION_SECS),
         }
     }
 }

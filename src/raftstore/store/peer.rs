@@ -304,7 +304,7 @@ impl Peer {
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             merge_state: merge_state,
-            start_merging_time: None,
+            start_merging_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
         };
@@ -515,6 +515,7 @@ impl Peer {
 
     pub fn rollback_region_merge(&mut self) -> Result<()> {
         if self.merge_state == MergeState::Merging {
+            info!("{} rollback region merge", self.tag);
             let state_key = keys::region_state_key(self.region().get_id());
             let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
                 .unwrap();
@@ -532,13 +533,15 @@ impl Peer {
         Ok(())
     }
 
-    pub fn maybe_retry_region_merge(&mut self,
-                                    d: Duration)
-                                    -> Option<(metapb::Region, metapb::Region)> {
-        if self.is_leader() {
+    pub fn maybe_region_merge_timeout(&mut self,
+                                      d: Duration)
+                                      -> Option<(metapb::Region, metapb::Region)> {
+        if self.merge_state == MergeState::Merging {
             if let Some(t) = self.start_merging_time {
-                if t.elapsed() >= d && self.merge_state == MergeState::Merging {
+                if t.elapsed() >= d {
+                    // Reset `start_merging_time` on retry region merge.
                     self.start_merging_time = Some(Instant::now());
+                    // Read `from_region` from local region merge state.
                     let state_key = keys::region_state_key(self.region().get_id());
                     let region_local_state =
                         self.engine.get_msg::<RegionLocalState>(&state_key).unwrap().unwrap();
@@ -628,7 +631,12 @@ impl Peer {
                    req: RaftCmdRequest,
                    mut err_resp: RaftCmdResponse)
                    -> bool {
-        // Reject data read/write requests from client.
+        // TODO
+        // When in `MergeState::Suspended` state, reject
+        // 1. data read/write requests from client.
+        // 2. region split, region merge, member change command
+        // When in `MergeState::Merging` state, reject
+        // 1. region split, region merge, member change command
         if self.merge_state == MergeState::Suspended && req.get_requests().len() != 0 {
             debug!("{} suspended region rejects data read/write requests",
                    self.tag);
@@ -1471,6 +1479,8 @@ impl Peer {
         let mut resp = AdminResponse::new();
         resp.set_merge(MergeResponse::new());
 
+        // TODO handling a new region merge command (merge, merge conflict)
+
         if self.merge_state != MergeState::Merging {
             // update peer meta info
             let state_key = keys::region_state_key(self.region().get_id());
@@ -1512,8 +1522,7 @@ impl Peer {
         {
             let from_epoch = suspend_region.get_from_region().get_region_epoch();
             let latest_epoch = self.region().get_region_epoch();
-            if from_epoch.get_version() < latest_epoch.get_version() ||
-               from_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
+            if util::is_epoch_stale(from_epoch, latest_epoch) {
                 return Ok((resp,
                            Some(ExecResult::RollbackMerge {
                     from_region: suspend_region.get_from_region().clone(),
