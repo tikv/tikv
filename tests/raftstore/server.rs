@@ -41,9 +41,10 @@ use super::util::sleep_ms;
 use super::transport_simulate::*;
 
 type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
+pub type SimulateRaftStoreRouter = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 
 pub struct ServerCluster {
-    routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
+    pub routers: HashMap<u64, SimulateRaftStoreRouter>,
     senders: HashMap<u64, SendCh<Msg>>,
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
@@ -147,7 +148,7 @@ impl Simulator for ServerCluster {
 
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop(&cfg).unwrap();
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
         let trans = ServerTransport::new(sendch.clone());
 

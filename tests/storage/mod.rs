@@ -14,3 +14,4 @@
 mod test_raftkv;
 pub mod sync_storage;
 mod test_storage;
+mod test_raft_storage;

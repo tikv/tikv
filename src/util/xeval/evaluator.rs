@@ -101,6 +101,12 @@ impl Evaluator {
             ExprType::In => self.eval_in(ctx, expr),
             ExprType::Plus => self.eval_arith(ctx, expr, Datum::checked_add),
             ExprType::Div => self.eval_arith(ctx, expr, Datum::checked_div),
+            ExprType::Minus => self.eval_arith(ctx, expr, Datum::checked_minus),
+            ExprType::Mul => self.eval_arith(ctx, expr, Datum::checked_mul),
+            ExprType::IntDiv => self.eval_arith(ctx, expr, Datum::checked_int_div),
+            ExprType::Mod => self.eval_arith(ctx, expr, Datum::checked_rem),
+            ExprType::Case => self.eval_case_when(ctx, expr),
+            ExprType::Coalesce => self.eval_coalesce(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -299,6 +305,31 @@ impl Evaluator {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
         eval_arith(left, right, f)
     }
+
+    fn eval_case_when(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        for chunk in expr.get_children().chunks(2) {
+            let res = try!(self.eval(ctx, &chunk[0]));
+            if chunk.len() == 1 {
+                // else statement
+                return Ok(res);
+            }
+            if !try!(res.into_bool()).unwrap_or(false) {
+                continue;
+            }
+            return self.eval(ctx, &chunk[1]).map_err(From::from);
+        }
+        Ok(Datum::Null)
+    }
+
+    fn eval_coalesce(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        for child in expr.get_children() {
+            match try!(self.eval(ctx, child)) {
+                Datum::Null => {}
+                res => return Ok(res),
+            }
+        }
+        Ok(Datum::Null)
+    }
 }
 
 #[inline]
@@ -401,14 +432,27 @@ mod test {
     }
 
     fn bin_expr(left: Datum, right: Datum, tp: ExprType) -> Expr {
-        bin_expr_r(datum_expr(left), datum_expr(right), tp)
+        build_expr(vec![left, right], tp)
     }
 
-    fn bin_expr_r(left: Expr, right: Expr, tp: ExprType) -> Expr {
+    fn build_expr(children: Vec<Datum>, tp: ExprType) -> Expr {
+        let children_expr = children.into_iter().map(datum_expr).collect();
+        build_expr_r(children_expr, tp)
+    }
+
+    fn build_expr_r(children_expr: Vec<Expr>, tp: ExprType) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(tp);
-        expr.set_children(RepeatedField::from_vec(vec![left, right]));
+        expr.set_children(RepeatedField::from_vec(children_expr));
         expr
+    }
+
+    fn case_when(datums: Vec<Datum>) -> Expr {
+        build_expr(datums, ExprType::Case)
+    }
+
+    fn coalesce(datums: Vec<Datum>) -> Expr {
+        build_expr(datums, ExprType::Coalesce)
     }
 
     fn not_expr(value: Datum) -> Expr {
@@ -436,17 +480,14 @@ mod test {
 
                 let mut xevaluator = Evaluator::default();
                 xevaluator.row.insert(1, Datum::I64(100));
-                for (expr, result) in cases {
+                for (expr, exp) in cases {
                     let res = xevaluator.eval(&Default::default(), &expr);
                     if res.is_err() {
                         panic!("failed to eval {:?}: {:?}", expr, res);
                     }
                     let res = res.unwrap();
-                    if res != result {
-                        panic!("failed to eval {:?} expect {:?}, got {:?}",
-                            expr,
-                            result,
-                            res);
+                    if res != exp {
+                        panic!("failed to eval {:?} expect {:?}, got {:?}", expr, exp, res);
                     }
                 }
             }
@@ -515,8 +556,8 @@ mod test {
         (bin_expr(Datum::I64(1), Datum::Null, ExprType::Or), Datum::I64(1)),
         (bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::Null),
         (bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
-        (bin_expr_r(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
-            bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ), ExprType::And), Datum::I64(1)),
+        (build_expr_r(vec![bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
+            bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ)], ExprType::And), Datum::I64(1)),
         (not_expr(Datum::I64(1)), Datum::I64(0)),
         (not_expr(Datum::I64(0)), Datum::I64(1)),
         (not_expr(Datum::Null), Datum::Null),
@@ -593,6 +634,159 @@ mod test {
          ExprType::Div), Datum::Dec("0.008326394671107410".parse().unwrap())),
         (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
          ExprType::Div), Datum::Dec("9.984025559105431309".parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_minus,
+               vec![
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Minus), Datum::I64(0)),
+        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Minus), Datum::U64(0)),
+        (bin_expr(Datum::U64(1), Datum::I64(-1), ExprType::Minus), Datum::U64(2)),
+        (bin_expr(Datum::U64(1), Datum::U64(1), ExprType::Minus), Datum::U64(0)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Minus), Datum::F64(0.0)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Minus), Datum::F64(2.0)),
+        (bin_expr(Datum::Null, Datum::Null, ExprType::Minus), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Minus), Datum::Null),
+        (bin_expr(Datum::U64(1), Datum::I64(i64::min_value()), ExprType::Minus),
+         Datum::U64(i64::max_value() as u64 + 2)),
+        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Minus), Datum::Null),
+        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Minus), Datum::F64(3.0)),
+        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Minus), Datum::F64(1.0)),
+        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Minus),
+         Datum::F64(1.7)),
+        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Minus), Datum::F64(-240198.0)),
+        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Minus),
+         Datum::Dec("4.3".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Minus), Datum::Dec("-238200".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+         ExprType::Minus), Datum::Dec("1799.680000".parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_mul,
+               vec![
+		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Mul), Datum::U64(1)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Mul), Datum::F64(1f64)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Mul), Datum::F64(-1f64)),
+        (bin_expr(Datum::Null, Datum::Null, ExprType::Mul), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Mul), Datum::Null),
+        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Mul), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::I64(1), ExprType::Mul), Datum::I64((-1).into())),
+        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::Mul), Datum::F64(-2.0)),
+        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::Mul), Datum::F64(2.0)),
+        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Mul),
+         Datum::F64(0.6)),
+        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Mul), Datum::F64(480400.0)),
+        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Mul),
+         Datum::Dec("-3.3".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Mul), Datum::Dec("480400000".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+         ExprType::Mul), Datum::Dec("400640".parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_int_div,
+               vec![
+		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::IntDiv), Datum::U64(1)),
+        (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::IntDiv), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::IntDiv), Datum::I64(-1)),
+        (bin_expr(Datum::I64(1), Datum::Bytes(b"0".to_vec()), ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::Null, Datum::Null, ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::IntDiv), Datum::Null),
+        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64 + 2),
+         ExprType::IntDiv), Datum::U64(0)),
+        (bin_expr(Datum::F64(2.0), Datum::I64(-1), ExprType::IntDiv), Datum::I64(-2)),
+        (bin_expr(Datum::F64(2.0), Datum::U64(1), ExprType::IntDiv), Datum::I64(2)),
+        (bin_expr(Datum::I64(2), Datum::Dec("0.3".parse().unwrap()), ExprType::IntDiv),
+         Datum::I64(6)),
+        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::IntDiv), Datum::I64(0)),
+        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::IntDiv),
+         Datum::I64(-3)),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::IntDiv), Datum::I64(0)),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+         ExprType::IntDiv), Datum::I64(9)),
+    ]);
+
+    test_eval!(test_eval_rem,
+               vec![
+        (bin_expr(Datum::I64(3), Datum::I64(1), ExprType::Mod), Datum::I64(0)),
+		(bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::I64(3), Datum::U64(2), ExprType::Mod), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::I64(3), Datum::Bytes(b"2".to_vec()), ExprType::Mod), Datum::F64(1.0)),
+        (bin_expr(Datum::I64(3), Datum::Bytes(b"-2".to_vec()), ExprType::Mod), Datum::F64(1.0)),
+        (bin_expr(Datum::Null, Datum::Null, ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::Null, ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::Null, Datum::I64(-1), ExprType::Mod), Datum::Null),
+        (bin_expr(Datum::I64(-1), Datum::U64(2), ExprType::Mod), Datum::I64((-1).into())),
+        (bin_expr(Datum::I64(i64::min_value()), Datum::U64(i64::max_value() as u64),
+         ExprType::Mod), Datum::I64(-1)),
+        (bin_expr(Datum::U64(i64::max_value() as u64), Datum::I64(i64::min_value()),
+         ExprType::Mod), Datum::U64(i64::max_value() as u64)),
+        (bin_expr(Datum::F64(3.2), Datum::I64(2), ExprType::Mod), Datum::F64(1.2000000000000002)),
+        (bin_expr(Datum::F64(-3.2), Datum::I64(2), ExprType::Mod), Datum::F64(-1.2000000000000002)),
+        (bin_expr(Datum::F64(2.0), Datum::Dec("0.3".parse().unwrap()), ExprType::Mod),
+         Datum::F64(0.20000000000000007)),
+        (bin_expr(Datum::F64(2.0), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Mod), Datum::F64(2.0)),
+        (bin_expr(Datum::Dec("3.3".parse().unwrap()), Datum::I64(-1), ExprType::Mod),
+         Datum::Dec("0.3".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"1 00:02", 0).unwrap()),
+         ExprType::Mod), Datum::Dec("2000".parse().unwrap())),
+        (bin_expr(Datum::I64(2000), Datum::Dur(Duration::parse(b"00:02:00.321", 2).unwrap()),
+         ExprType::Mod), Datum::Dec("197.12".parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_case_when,
+               vec![
+        (case_when(vec![
+            Datum::I64(0), b"case1".as_ref().into(),
+            Datum::I64(1), b"case2".as_ref().into(),
+            Datum::I64(1), b"case3".as_ref().into()
+        ]), b"case2".as_ref().into()),
+        (case_when(vec![
+            Datum::I64(0), b"case1".as_ref().into(),
+            Datum::I64(0), b"case2".as_ref().into(),
+            Datum::I64(0), b"case3".as_ref().into(),
+            b"else".as_ref().into()
+        ]), b"else".as_ref().into()),
+        (case_when(vec![
+            Datum::I64(0), b"case1".as_ref().into(),
+            Datum::I64(0), b"case2".as_ref().into(),
+            Datum::I64(0), b"case3".as_ref().into()
+        ]), Datum::Null),
+        (build_expr_r(vec![
+            case_when(vec![
+                Datum::I64(0), Datum::I64(0),
+                Datum::I64(1), Datum::I64(1)
+            ]), datum_expr(b"nested case when".as_ref().into()),
+            datum_expr(Datum::I64(0)), datum_expr(b"case1".as_ref().into()),
+            datum_expr(Datum::I64(1)), datum_expr(b"case2".as_ref().into()),
+            datum_expr(Datum::I64(1)), datum_expr(b"case3".as_ref().into()),
+        ], ExprType::Case), b"nested case when".as_ref().into()),
+        (case_when(vec![
+            Datum::Null, b"case1".as_ref().into(),
+            Datum::I64(0), b"case2".as_ref().into(),
+            Datum::I64(1), b"case3".as_ref().into()
+        ]), b"case3".as_ref().into()),
+    ]);
+
+    test_eval!(test_eval_coalesce,
+               vec![
+        (coalesce(vec![Datum::Null, Datum::Null, Datum::Null]), Datum::Null),
+        (coalesce(vec![Datum::Null, b"not-null".as_ref().into(), Datum::Null]),
+         b"not-null".as_ref().into()),
+        (coalesce(vec![Datum::Null, b"not-null".as_ref().into(),
+         b"not-null-2".as_ref().into(), Datum::Null]), b"not-null".as_ref().into()),
     ]);
 
     fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {

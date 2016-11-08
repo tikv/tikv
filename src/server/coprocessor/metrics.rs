@@ -18,13 +18,6 @@ lazy_static! {
         register_histogram_vec!(
             "tikv_coprocessor_request_duration_seconds",
             "Bucketed histogram of coprocessor handle request duration",
-            &["number"]
-        ).unwrap();
-
-    pub static ref COPR_SELECT_HISTOGRAM_VEC: HistogramVec =
-        register_histogram_vec!(
-            "tikv_coprocessor_select_duration_seconds",
-            "Bucketed histogram of coprocessor handle select duration",
-            &["number"]
+            &["type", "req"]
         ).unwrap();
 }

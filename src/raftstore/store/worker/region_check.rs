@@ -118,6 +118,7 @@ impl Runner {
 
         let res = engine.scan(&start_key,
                               &end_key,
+                              false,
                               &mut |k, v| {
             size += k.len() as u64;
             size += v.len() as u64;
@@ -167,6 +168,7 @@ impl Runner {
         // Scan the engine and get the totol size of the region.
         let _ = engine.scan(&start_key,
                             &end_key,
+                            false,
                             &mut |k, v| {
                                 size += k.len() as u64;
                                 size += v.len() as u64;

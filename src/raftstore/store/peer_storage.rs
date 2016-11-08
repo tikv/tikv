@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::{self, Arc};
-use std::sync::atomic::{AtomicUsize, Ordering, AtomicBool};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
 use std::error;
 use std::time::Instant;
@@ -43,14 +43,21 @@ pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
 
+pub const JOB_STATUS_PENDING: usize = 0;
+pub const JOB_STATUS_RUNNING: usize = 1;
+pub const JOB_STATUS_CANCELLING: usize = 2;
+pub const JOB_STATUS_CANCELLED: usize = 3;
+pub const JOB_STATUS_FINISHED: usize = 4;
+pub const JOB_STATUS_FAILED: usize = 5;
+
 pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SnapState {
     Relax,
     Generating,
     Snap(Snapshot),
-    Applying(Arc<AtomicBool>),
+    Applying(Arc<AtomicUsize>),
     ApplyAborted,
     Failed,
 }
@@ -277,6 +284,7 @@ impl PeerStorage {
         try!(self.engine.scan_cf(CF_RAFT,
                                  &start_key,
                                  &end_key,
+                                 true, // fill_cache
                                  &mut |_, value| {
             let mut entry = Entry::new();
             try!(entry.merge_from_bytes(value));
@@ -545,6 +553,7 @@ impl PeerStorage {
                                       keys::region_meta_prefix(region_id + 1));
         try!(self.engine.scan(&meta_start,
                               &meta_end,
+                              false,
                               &mut |key, _| {
                                   try!(wb.delete(key));
                                   meta_count += 1;
@@ -557,6 +566,7 @@ impl PeerStorage {
         try!(self.engine.scan_cf(CF_RAFT,
                                  &raft_start,
                                  &raft_end,
+                                 false,
                                  &mut |key, _| {
                                      try!(wb.delete_cf(handle, key));
                                      raft_count += 1;
@@ -605,33 +615,71 @@ impl PeerStorage {
     #[inline]
     pub fn is_applying(&self) -> bool {
         match *self.snap_state.borrow() {
-            SnapState::Applying(_) |
-            SnapState::ApplyAborted => true,
+            SnapState::Applying(_) => true,
             _ => false,
         }
     }
 
     /// Check if the storage is applying a snapshot.
     #[inline]
-    pub fn is_applying_snap(&self) -> bool {
-        match *self.snap_state.borrow() {
-            SnapState::Applying(_) => true,
-            _ => false,
-        }
+    pub fn check_applying_snap(&mut self) -> bool {
+        let new_state = match *self.snap_state.borrow() {
+            SnapState::Applying(ref status) => {
+                let s = status.load(Ordering::Relaxed);
+                if s == JOB_STATUS_FINISHED {
+                    SnapState::Relax
+                } else if s == JOB_STATUS_CANCELLED {
+                    SnapState::ApplyAborted
+                } else if s == JOB_STATUS_FAILED {
+                    // TODO: cleanup region and treat it as tombstone.
+                    panic!("{} applying snapshot failed", self.tag);
+                } else {
+                    return true;
+                }
+            }
+            _ => return false,
+        };
+        *self.snap_state.borrow_mut() = new_state;
+        false
     }
 
     #[inline]
     pub fn is_canceling_snap(&self) -> bool {
         match *self.snap_state.borrow() {
-            SnapState::Applying(ref abort) => abort.load(Ordering::Relaxed),
+            SnapState::Applying(ref status) => {
+                status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING
+            }
             _ => false,
         }
     }
 
-    pub fn cancel_applying_snap(&mut self) {
-        if let SnapState::Applying(ref abort) = *self.snap_state.borrow() {
-            abort.store(true, Ordering::Relaxed);
+    /// Cancel applying snapshot, return true if the job can be considered not be run again.
+    pub fn cancel_applying_snap(&mut self) -> bool {
+        let is_cancelled = match *self.snap_state.borrow() {
+            SnapState::Applying(ref status) => {
+                if status.compare_and_swap(JOB_STATUS_PENDING,
+                                           JOB_STATUS_CANCELLING,
+                                           Ordering::SeqCst) ==
+                   JOB_STATUS_PENDING {
+                    true
+                } else if status.compare_and_swap(JOB_STATUS_RUNNING,
+                                                  JOB_STATUS_CANCELLING,
+                                                  Ordering::SeqCst) ==
+                          JOB_STATUS_RUNNING {
+                    return false;
+                } else {
+                    false
+                }
+            }
+            _ => return false,
+        };
+        if is_cancelled {
+            *self.snap_state.borrow_mut() = SnapState::ApplyAborted;
+            return true;
         }
+        // now status can only be JOB_STATUS_CANCELLING, JOB_STATUS_CANCELLED,
+        // JOB_STATUS_FAILED and JOB_STATUS_FINISHED.
+        !self.check_applying_snap()
     }
 
     #[inline]
@@ -646,6 +694,17 @@ impl PeerStorage {
 
     pub fn get_region_id(&self) -> u64 {
         self.region.get_id()
+    }
+
+    pub fn schedule_applying_snapshot(&mut self) {
+        let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
+        self.set_snap_state(SnapState::Applying(status.clone()));
+        let task = RegionTask::Apply {
+            region_id: self.get_region_id(),
+            status: status,
+        };
+        // TODO: gracefully remove region instead.
+        self.region_sched.schedule(task).expect("snap apply job should not fail");
     }
 
     pub fn handle_raft_ready(&mut self, ready: &Ready) -> Result<Option<ApplySnapResult>> {
@@ -685,9 +744,6 @@ impl PeerStorage {
         self.last_term = ctx.last_term;
         // If we apply snapshot ok, we should update some infos like applied index too.
         if let Some(res) = apply_snap_res {
-            let abort = Arc::new(AtomicBool::new(false));
-            self.set_snap_state(SnapState::Applying(abort.clone()));
-
             // cleanup data before scheduling apply task
             if self.is_initialized() {
                 if let Err(e) = self.clear_extra_data(&res.region) {
@@ -701,12 +757,8 @@ impl PeerStorage {
                 }
             }
 
-            let task = RegionTask::Apply {
-                region_id: region_id,
-                abort: abort,
-            };
-            // TODO: gracefully remove region instead.
-            self.region_sched.schedule(task).expect("snap apply job should not fail");
+            self.schedule_applying_snapshot();
+
             self.region = res.region.clone();
             return Ok(Some(res));
         }
@@ -728,6 +780,7 @@ fn build_snap_file(f: &mut SnapFile,
         try!(snap.scan_cf(cf,
                           &begin_key,
                           &end_key,
+                          false,
                           &mut |key, value| {
             snap_size += key.len();
             snap_size += value.len();
@@ -890,7 +943,9 @@ impl Storage for PeerStorage {
 #[cfg(test)]
 mod test {
     use std::sync::*;
+    use std::sync::atomic::*;
     use std::sync::mpsc::*;
+    use std::cell::RefCell;
     use std::io;
     use std::fs::File;
     use kvproto::eraftpb::{Entry, ConfState};
@@ -899,7 +954,7 @@ mod test {
     use tempdir::*;
     use protobuf;
     use raftstore;
-    use raftstore::store::*;
+    use raftstore::store::{Msg, bootstrap, new_snap_mgr, SnapKey};
     use raftstore::store::worker::{RegionRunner, MsgSender};
     use util::codec::number::NumberEncoder;
     use raftstore::store::worker::RegionTask;
@@ -909,7 +964,7 @@ mod test {
     use storage::{CF_DEFAULT, CF_RAFT};
     use kvproto::eraftpb::HardState;
 
-    use super::InvokeContext;
+    use super::*;
 
     impl MsgSender for Sender<Msg> {
         fn send(&self, msg: Msg) -> raftstore::Result<()> {
@@ -1197,5 +1252,85 @@ mod test {
         assert_eq!(ctx.apply_state.get_truncated_state().get_index(), 6);
         assert_eq!(ctx.apply_state.get_truncated_state().get_term(), 6);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
+    }
+
+    #[test]
+    fn test_canceling_snapshot() {
+        let td = TempDir::new("tikv-store-test").unwrap();
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut s = new_storage(sched, &td);
+
+        // PENDING can be canceled directly.
+        s.snap_state =
+            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING))));
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
+
+        // RUNNING can't be canceled directly.
+        s.snap_state =
+            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING))));
+        assert!(!s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(),
+                   SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLING))));
+        // CANCEL can't be canceled again.
+        assert!(!s.cancel_applying_snap());
+
+        s.snap_state =
+            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLED))));
+        // canceled snapshot can be cancel directly.
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
+
+        s.snap_state =
+            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_FINISHED))));
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
+
+        s.snap_state =
+            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_FAILED))));
+        let res = recover_safe!(|| s.cancel_applying_snap());
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_try_finish_snapshot() {
+        let td = TempDir::new("tikv-store-test").unwrap();
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut s = new_storage(sched, &td);
+
+        // PENDING can be finished.
+        let mut snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING)));
+        s.snap_state = RefCell::new(snap_state.clone());
+        assert!(s.check_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), snap_state);
+
+        // RUNNING can't be finished.
+        snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)));
+        s.snap_state = RefCell::new(snap_state.clone());
+        assert!(s.check_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), snap_state);
+
+        snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_CANCELLED)));
+        s.snap_state = RefCell::new(snap_state);
+        assert!(!s.check_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
+        // ApplyAborted is not applying snapshot.
+        assert!(!s.check_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
+
+        s.snap_state =
+            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_FINISHED))));
+        assert!(!s.check_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
+        // Relax is not applying snapshot.
+        assert!(!s.check_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
+
+        s.snap_state =
+            RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_FAILED))));
+        let res = recover_safe!(|| s.check_applying_snap());
+        assert!(res.is_err());
     }
 }

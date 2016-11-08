@@ -433,12 +433,12 @@ impl Datum {
 
     /// Keep compatible with TiDB's `ComputePlus` function.
     pub fn checked_add(self, d: Datum) -> Result<Datum> {
-        let res: Datum = match (self, d) {
-            (Datum::I64(l), Datum::I64(r)) => l.checked_add(r).into(),
-            (Datum::I64(l), Datum::U64(r)) |
-            (Datum::U64(r), Datum::I64(l)) => checked_add_i64(r, l).into(),
-            (Datum::U64(l), Datum::U64(r)) => l.checked_add(r).into(),
-            (Datum::F64(l), Datum::F64(r)) => {
+        let res: Datum = match (&self, &d) {
+            (&Datum::I64(l), &Datum::I64(r)) => l.checked_add(r).into(),
+            (&Datum::I64(l), &Datum::U64(r)) |
+            (&Datum::U64(r), &Datum::I64(l)) => checked_add_i64(r, l).into(),
+            (&Datum::U64(l), &Datum::U64(r)) => l.checked_add(r).into(),
+            (&Datum::F64(l), &Datum::F64(r)) => {
                 let res = l + r;
                 if !res.is_finite() {
                     Datum::Null
@@ -446,16 +446,158 @@ impl Datum {
                     Datum::F64(res)
                 }
             }
-            (Datum::Dec(l), Datum::Dec(r)) => {
+            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
                 let dec = try!((l + r).into_result());
                 return Ok(Datum::Dec(dec));
             }
             (l, r) => return Err(invalid_type!("{:?} and {:?} can't be add together.", l, r)),
         };
         if let Datum::Null = res {
-            return Err(box_err!("overflow"));
+            return Err(box_err!("{:?} + {:?} overflow", self, d));
         }
         Ok(res)
+    }
+
+    /// `checked_minus` computes the result of `self - d`.
+    pub fn checked_minus(self, d: Datum) -> Result<Datum> {
+        let res = match (&self, &d) {
+            (&Datum::I64(l), &Datum::I64(r)) => l.checked_sub(r).into(),
+            (&Datum::I64(l), &Datum::U64(r)) => {
+                if l < 0 {
+                    Datum::Null
+                } else {
+                    (l as u64).checked_sub(r).into()
+                }
+            }
+            (&Datum::U64(l), &Datum::I64(r)) => {
+                if r < 0 {
+                    l.checked_add(opp_neg!(r)).into()
+                } else {
+                    l.checked_sub(r as u64).into()
+                }
+            }
+            (&Datum::U64(l), &Datum::U64(r)) => l.checked_sub(r).into(),
+            (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l - r)),
+            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => {
+                let dec = try!((l - r).into_result());
+                return Ok(Datum::Dec(dec));
+            }
+            (l, r) => return Err(invalid_type!("{:?} can't minus {:?}", l, r)),
+        };
+        if let Datum::Null = res {
+            return Err(box_err!("{:?} - {:?} overflow", self, d));
+        }
+        Ok(res)
+    }
+
+    // `checked_mul` computes the result of a * b.
+    pub fn checked_mul(self, d: Datum) -> Result<Datum> {
+        let res = match (&self, &d) {
+            (&Datum::I64(l), &Datum::I64(r)) => l.checked_mul(r).into(),
+            (&Datum::I64(l), &Datum::U64(r)) |
+            (&Datum::U64(r), &Datum::I64(l)) => {
+                if l < 0 {
+                    return Err(box_err!("{} * {} overflow.", l, r));
+                }
+                r.checked_mul(l as u64).into()
+            }
+            (&Datum::U64(l), &Datum::U64(r)) => l.checked_mul(r).into(),
+            (&Datum::F64(l), &Datum::F64(r)) => return Ok(Datum::F64(l * r)),
+            (&Datum::Dec(ref l), &Datum::Dec(ref r)) => return Ok(Datum::Dec((l * r).unwrap())),
+            (l, r) => return Err(invalid_type!("{:?} can't multiply {:?}", l, r)),
+        };
+
+        if let Datum::Null = res {
+            return Err(box_err!("{} * {} overflow", self, d));
+        }
+        Ok(res)
+    }
+
+    // `checked_rem` computes the result of a mod b.
+    pub fn checked_rem(self, d: Datum) -> Result<Datum> {
+        match d {
+            Datum::I64(0) | Datum::U64(0) | Datum::F64(0f64) => return Ok(Datum::Null),
+            _ => {}
+        }
+        match (self, d) {
+            (Datum::I64(l), Datum::I64(r)) => Ok(Datum::I64(l % r)),
+            (Datum::I64(l), Datum::U64(r)) => {
+                if l < 0 {
+                    Ok(Datum::I64(-((opp_neg!(l) % r) as i64)))
+                } else {
+                    Ok(Datum::I64((l as u64 % r) as i64))
+                }
+            }
+            (Datum::U64(l), Datum::I64(r)) => {
+                if r < 0 {
+                    Ok(Datum::U64(l % opp_neg!(r)))
+                } else {
+                    Ok(Datum::U64(l % r as u64))
+                }
+            }
+            (Datum::U64(l), Datum::U64(r)) => Ok(Datum::U64(l % r)),
+            (Datum::F64(l), Datum::F64(r)) => Ok(Datum::F64(l % r)),
+            (Datum::Dec(l), Datum::Dec(r)) => {
+                match l % r {
+                    None => Ok(Datum::Null),
+                    Some(res) => {
+                        let d = try!(res.into_result());
+                        Ok(Datum::Dec(d))
+                    }
+                }
+            }
+            (l, r) => Err(invalid_type!("{:?} can't mod {:?}", l, r)),
+        }
+    }
+
+    // `checked_int_div` computes the result of a / b, both a and b are integer.
+    pub fn checked_int_div(self, d: Datum) -> Result<Datum> {
+        match d {
+            Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
+            _ => {}
+        }
+        match (self, d) {
+            (Datum::I64(l), Datum::I64(r)) => {
+                match l.checked_div(r) {
+                    None => Err(box_err!("{} intdiv {} overflow", l, r)),
+                    Some(res) => Ok(Datum::I64(res)),
+                }
+            }
+            (Datum::I64(l), Datum::U64(r)) => {
+                if l < 0 {
+                    if opp_neg!(l) >= r {
+                        Err(box_err!("{} intdiv {} overflow", l, r))
+                    } else {
+                        Ok(Datum::U64(0))
+                    }
+                } else {
+                    Ok(Datum::U64(l as u64 / r))
+                }
+            }
+            (Datum::U64(l), Datum::I64(r)) => {
+                if r < 0 {
+                    if l != 0 && opp_neg!(r) <= l {
+                        Err(box_err!("{} intdiv {} overflow", l, r))
+                    } else {
+                        Ok(Datum::U64(0))
+                    }
+                } else {
+                    Ok(Datum::U64(l / r as u64))
+                }
+            }
+            (Datum::U64(l), Datum::U64(r)) => Ok(Datum::U64(l / r)),
+            (l, r) => {
+                let a = try!(l.into_dec());
+                let b = try!(r.into_dec());
+                match a / b {
+                    None => Ok(Datum::Null),
+                    Some(res) => {
+                        let i = res.unwrap().as_i64().unwrap();
+                        Ok(Datum::I64(i))
+                    }
+                }
+            }
+        }
     }
 }
 

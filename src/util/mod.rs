@@ -43,6 +43,7 @@ pub mod sockopt;
 pub mod transport;
 pub mod time_monitor;
 pub mod file_log;
+pub mod metrics;
 
 pub use self::fs::{DiskStat, get_disk_stat};
 pub use log::LogLevelFilter;
@@ -386,7 +387,7 @@ impl<L, R> Either<L, R> {
 }
 
 /// `build_info` returns a tuple of Strings that contains build utc time and commit hash.
-fn build_info() -> (String, String) {
+pub fn build_info() -> (String, String) {
     let raw = include_str!(concat!(env!("OUT_DIR"), "/build-info.txt"));
     let mut parts = raw.split('\n');
 
@@ -396,7 +397,7 @@ fn build_info() -> (String, String) {
 /// `print_tikv_info` prints the tikv version information to the standard output.
 pub fn print_tikv_info() {
     let (hash, date) = build_info();
-    info!("Welcome to the TiKV.");
+    info!("Welcome to TiKV.");
     info!("Version:");
     info!("Git Commit Hash: {}", hash);
     info!("UTC Build Time:  {}", date);

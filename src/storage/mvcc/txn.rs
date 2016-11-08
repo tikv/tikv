@@ -18,6 +18,7 @@ use super::reader::MvccReader;
 use super::lock::{LockType, Lock};
 use super::write::{WriteType, Write};
 use super::{Error, Result};
+use super::metrics::*;
 
 pub struct MvccTxn<'a> {
     reader: MvccReader<'a>,
@@ -95,7 +96,7 @@ impl<'a> MvccTxn<'a> {
                     Some(_) => Ok(()),
                     // Rollbacked by concurrent transaction.
                     None => {
-                        warn!("txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
+                        info!("txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
                               key,
                               self.start_ts,
                               commit_ts);
@@ -120,7 +121,7 @@ impl<'a> MvccTxn<'a> {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
                     // Already committed by concurrent transaction.
                     Some(ts) => {
-                        warn!("txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
+                        info!("txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
                               key,
                               self.start_ts,
                               ts);
@@ -141,6 +142,8 @@ impl<'a> MvccTxn<'a> {
     pub fn gc(&mut self, key: &Key, safe_point: u64) -> Result<()> {
         let mut remove_older = false;
         let mut ts: u64 = u64::max_value();
+        let mut versions = 0;
+        let mut delete_versions = 0;
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
             if !remove_older {
                 if commit <= safe_point {
@@ -156,7 +159,8 @@ impl<'a> MvccTxn<'a> {
                     // Rollback or Lock.
                     match write.write_type {
                         WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
-                            self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)))
+                            self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                            delete_versions += 1;
                         }
                         WriteType::Put => {}
                     }
@@ -166,8 +170,14 @@ impl<'a> MvccTxn<'a> {
                 if write.write_type == WriteType::Put {
                     self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(write.start_ts)));
                 }
+                delete_versions += 1;
             }
             ts = commit - 1;
+            versions += 1;
+        }
+        MVCC_VERSIONS_HISTOGRAM.observe(versions as f64);
+        if delete_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(delete_versions as f64);
         }
         Ok(())
     }
@@ -180,11 +190,11 @@ mod tests {
     use super::super::MvccReader;
     use super::super::write::{Write, WriteType};
     use storage::{make_key, Mutation, ALL_CFS, CF_WRITE, ScanMode};
-    use storage::engine::{self, Engine, Dsn, TEMP_DIR};
+    use storage::engine::{self, Engine, TEMP_DIR};
 
     #[test]
     fn test_mvcc_txn_read() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         must_get_none(engine.as_ref(), b"x", 1);
 
@@ -208,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_prewrite() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         // Key is locked.
@@ -239,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_commit_ok() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         must_prewrite_put(engine.as_ref(), b"x", b"x10", b"x", 10);
         must_prewrite_lock(engine.as_ref(), b"y", b"x", 10);
         must_prewrite_delete(engine.as_ref(), b"z", b"x", 10);
@@ -260,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_commit_err() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         // Not prewrite yet
         must_commit_err(engine.as_ref(), b"x", 1, 2);
@@ -274,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_rollback(engine.as_ref(), b"x", 5);
@@ -290,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback_err() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_commit(engine.as_ref(), b"x", 5, 10);
@@ -300,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_commit(engine.as_ref(), b"x", 5, 10);
@@ -357,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_write() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
         must_prewrite_put(engine.as_ref(), b"x", b"x5", b"x", 5);
         must_seek_write_none(engine.as_ref(), b"x", 5);
@@ -400,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_scan_keys() {
-        let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
         must_prewrite_put(engine.as_ref(), b"a", b"a", b"a", 1);
         must_commit(engine.as_ref(), b"a", 1, 10);
         must_prewrite_lock(engine.as_ref(), b"c", b"c", 1);

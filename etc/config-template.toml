@@ -10,8 +10,6 @@
 addr = "127.0.0.1:20160"
 # if not set, use addr instead. set advertise listening address for client communication.
 advertise-addr = ""
-# set which dsn to use, warning: default is rocksdb without persistent.
-dsn = "rocksdb"
 # set the path to rocksdb directory.
 store = "/tmp/tikv/store"
 # log level: trace, debug, info, warn, error, off.
@@ -44,10 +42,10 @@ notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
 messages-per-tick = 4096
 
-# Region heartbeat tick interval (ms) for reporting to pd. 
-pd-heartbeat-tick-interval = "5000ms"
-# Store heartbeat tick interval (ms) for reporting to pd.
-pd-store-heartbeat-tick-interval = "10000ms"
+# Region heartbeat tick interval for reporting to pd. 
+pd-heartbeat-tick-interval = "60s"
+# Store heartbeat tick interval for reporting to pd.
+pd-store-heartbeat-tick-interval = "10s"
 
 # When the region's size exceeds region-max-size, we will split the region 
 # into two which the left region's size will be region-split-size or a little 
@@ -61,10 +59,6 @@ region-split-check-diff = "8MB"
 # When a peer hasn't been active for max-peer-down-duration,
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
-
-[raft]
-# set cluster id, must greater than 0.
-cluster-id = 1
 
 [pd]
 # pd endpoints 
@@ -100,6 +94,16 @@ max-background-compactions = 6
 
 # Control maximum total data size for base level (level 1).
 max-bytes-for-level-base = "64MB"
+
+# Number of open files that can be used by the DB.  You may need to
+# increase this if your database has a large working set. Value -1 means
+# files opened are always kept open. You can estimate number of files based
+# on target_file_size_base and target_file_size_multiplier for level-based
+# compaction.
+# If max-open-files = -1, RocksDB will prefetch index and filter blocks into
+# block cache at startup, so if your database has a large working set, it will
+# take several minutes to open the db.
+max-open-files = 40960
 
 # Target file size for compaction.
 target-file-size-base = "16MB"
@@ -175,7 +179,7 @@ scheduler-notify-capacity = 10240
 # maximum number of messages can be processed in one tick
 scheduler-messages-per-tick = 1024
 
-scheduler-concurrency = 1024
+scheduler-concurrency = 10240
 
 # scheduler's worker pool size
 scheduler-worker-pool-size = 4

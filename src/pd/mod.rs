@@ -34,6 +34,9 @@ pub const INVALID_ID: u64 = 0;
 // creating the PdClient is enough and the PdClient will use this cluster id
 // all the time.
 pub trait PdClient: Send + Sync {
+    // Return the cluster ID.
+    fn get_cluster_id(&self) -> Result<u64>;
+
     // Create the cluster with cluster ID, node, stores and first region.
     // If the cluster is already bootstrapped, return ClusterBootstrapped error.
     // When a node starts, if it finds nothing in the node and
@@ -79,7 +82,7 @@ pub trait PdClient: Send + Sync {
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
 
     // Get region by region id.
-    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region>;
+    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>>;
 
     // Leader for a region will use this to heartbeat Pd.
     fn region_heartbeat(&self,

@@ -41,7 +41,7 @@ pub use self::errors::{Result, Error};
 pub use self::server::{Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
-pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver, MockStoreAddrResolver};
+pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver};
 
 pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
 

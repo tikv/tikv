@@ -31,6 +31,7 @@ fn test_raftkv(read_quorum: bool) {
     near_seek(&ctx, storage.as_ref());
     cf(&ctx, storage.as_ref());
     empty_write(&ctx, storage.as_ref());
+    wrong_context(&ctx, storage.as_ref());
     // TODO: test multiple node
 }
 
@@ -136,7 +137,15 @@ fn assert_none_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8]) {
 
 fn assert_seek(ctx: &Context, engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot.iter(None, ScanMode::Mixed).unwrap();
+    let mut iter = snapshot.iter(None, false, ScanMode::Mixed).unwrap();
+    iter.seek(&make_key(key)).unwrap();
+    assert_eq!((iter.key(), iter.value()),
+               (&*bytes::encode_bytes(pair.0), pair.1));
+}
+
+fn assert_seek_cf(ctx: &Context, engine: &Engine, cf: CfName, key: &[u8], pair: (&[u8], &[u8])) {
+    let snapshot = engine.snapshot(ctx).unwrap();
+    let mut iter = snapshot.iter_cf(cf, None, false, ScanMode::Mixed).unwrap();
     iter.seek(&make_key(key)).unwrap();
     assert_eq!((iter.key(), iter.value()),
                (&*bytes::encode_bytes(pair.0), pair.1));
@@ -187,7 +196,7 @@ fn seek(ctx: &Context, engine: &Engine) {
     assert_seek(ctx, engine, b"y", (b"z", b"2"));
     assert_seek(ctx, engine, b"x\x00", (b"z", b"2"));
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut iter = snapshot.iter(None, ScanMode::Mixed).unwrap();
+    let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
     assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
     must_delete(ctx, engine, b"x");
     must_delete(ctx, engine, b"z");
@@ -197,7 +206,7 @@ fn near_seek(ctx: &Context, engine: &Engine) {
     must_put(ctx, engine, b"x", b"1");
     must_put(ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx).unwrap();
-    let mut cursor = snapshot.iter(None, ScanMode::Mixed).unwrap();
+    let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
     assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
     assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
@@ -213,10 +222,18 @@ fn cf(ctx: &Context, engine: &Engine) {
     assert_none_cf(ctx, engine, "cf", b"key");
     must_put_cf(ctx, engine, "cf", b"key", b"value");
     assert_has_cf(ctx, engine, "cf", b"key", b"value");
+    assert_seek_cf(ctx, engine, "cf", b"k", (b"key", b"value"));
     must_delete_cf(ctx, engine, "cf", b"key");
     assert_none_cf(ctx, engine, "cf", b"key");
 }
 
 fn empty_write(ctx: &Context, engine: &Engine) {
     engine.write(ctx, vec![]).unwrap();
+}
+
+fn wrong_context(ctx: &Context, engine: &Engine) {
+    let region_id = ctx.get_region_id();
+    let mut ctx = ctx.to_owned();
+    ctx.set_region_id(region_id + 1);
+    assert!(engine.write(&ctx, vec![]).is_err());
 }

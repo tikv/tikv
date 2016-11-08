@@ -31,13 +31,13 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              MergeState, RegionMergeState, RegionLocalState};
 use kvproto::pdpb::PeerStats;
-use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
-use storage::CF_RAFT;
+use storage::{CF_LOCK, CF_RAFT};
 use super::store::{Store, RaftReadyMetrics, RaftMessageMetrics, RaftMetrics};
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
@@ -55,13 +55,27 @@ const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 pub enum StaleState {
     Valid,
     ToValidate,
-    Stale,
 }
 
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
-    pub cb: Callback,
+    pub cb: Option<Callback>,
+}
+
+impl PendingCmd {
+    #[inline]
+    fn call(&mut self, resp: RaftCmdResponse) {
+        self.cb.take().unwrap().call_box((resp,));
+    }
+}
+
+impl Drop for PendingCmd {
+    fn drop(&mut self) {
+        if self.cb.is_some() {
+            panic!("callback of {} is leak.", self.uuid);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -161,7 +175,7 @@ impl PendingCmdQueue {
 }
 
 /// Call the callback of `cmd` that the region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     let region_not_found = Error::RegionNotFound(region_id);
     let mut resp = cmd_resp::new_error(region_not_found);
     cmd_resp::bind_uuid(&mut resp, cmd.uuid);
@@ -169,9 +183,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, cmd: PendingCmd) {
            region_id,
            peer_id,
            cmd.uuid);
-    if let Err(e) = cmd.cb.call_box((resp,)) {
-        error!("failed to notify {}: {:?}", cmd.uuid, e);
-    }
+    cmd.call(resp);
 }
 
 pub struct Peer {
@@ -189,6 +201,8 @@ pub struct Peer {
     coprocessor_host: CoprocessorHost,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
+    /// delete keys' count since last reset.
+    pub delete_keys_hint: u64,
 
     leader_missing_time: Option<Instant>,
 
@@ -196,6 +210,8 @@ pub struct Peer {
     start_merging_time: Option<Instant>,
 
     pub tag: String,
+
+    pub last_compacted_idx: u64,
 }
 
 impl Peer {
@@ -284,11 +300,13 @@ impl Peer {
             peer_heartbeats: HashMap::new(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
+            delete_keys_hint: 0,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             merge_state: merge_state,
             start_merging_time: None,
             tag: tag,
+            last_compacted_idx: 0,
         };
 
         peer.load_all_coprocessors();
@@ -304,6 +322,18 @@ impl Peer {
     pub fn destroy(&mut self) -> Result<()> {
         let t = Instant::now();
 
+        let region = self.get_store().get_region().clone();
+        info!("{} begin to destroy", self.tag);
+
+        // If pending_remove, meta was destroyed when applying removal.
+        if !self.pending_remove {
+            // First set Tombstone state explicitly, and clear raft meta.
+            let wb = WriteBatch::new();
+            try!(self.get_store().clear_meta(&wb));
+            try!(write_peer_state(&wb, &region, PeerState::Tombstone));
+            try!(self.engine.write(wb));
+        }
+
         // TODO: figure out a way to unit test this.
         let peer_id = self.peer_id();
         for cmd in self.pending_cmds.normals.drain(..) {
@@ -313,18 +343,12 @@ impl Peer {
             notify_region_removed(self.region_id, peer_id, cmd);
         }
 
-        let region = self.get_store().get_region().clone();
-        info!("{} begin to destroy", self.tag);
-
-        // First set Tombstone state explicitly, and clear raft meta.
-        // If we meet panic when deleting data and raft log, the dirty data
-        // will be cleared by Compaction Filter later or a newer snapshot applying.
-        let wb = WriteBatch::new();
-        try!(self.get_store().clear_meta(&wb));
-        try!(write_peer_state(&wb, &region, PeerState::Tombstone));
-        try!(self.engine.write(wb));
         if self.get_store().is_initialized() {
-            try!(self.get_store().clear_data());
+            // If we meet panic when deleting data and raft log, the dirty data
+            // will be cleared by a newer snapshot applying or restart.
+            if let Err(e) = self.get_store().clear_data() {
+                error!("{} failed to schedule clear data task: {:?}", self.tag, e);
+            }
         }
         self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
@@ -394,12 +418,9 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T>(&mut self,
-               trans: &T,
-               msgs: &[eraftpb::Message],
-               metrics: &mut RaftMessageMetrics)
-               -> Result<()>
-        where T: Transport
+    fn send<T, I>(&mut self, trans: &T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
+        where T: Transport,
+              I: Iterator<Item = eraftpb::Message>
     {
         for msg in msgs {
             match msg.get_msg_type() {
@@ -487,11 +508,7 @@ impl Peer {
             // Resets the `leader_missing_time` to avoid sending the same tasks to
             // PD worker continuously during the leader missing timeout.
             self.leader_missing_time = None;
-            if self.is_initialized() {
-                return StaleState::ToValidate;
-            } else {
-                return StaleState::Stale;
-            }
+            return StaleState::ToValidate;
         }
         StaleState::Valid
     }
@@ -534,6 +551,15 @@ impl Peer {
                                            trans: &T,
                                            metrics: &mut RaftMetrics)
                                            -> Result<Option<ReadyResult>> {
+        if self.mut_store().check_applying_snap() {
+            // If we continue to handle all the messages, it may cause too many messages because
+            // leader will send all the remaining messages to this follower, which can lead
+            // to full message queue under high load.
+            debug!("{} still applying snapshot, skip further handling.",
+                   self.tag);
+            return Ok(None);
+        }
+
         if !self.raft_group.has_ready() {
             return Ok(None);
         }
@@ -541,19 +567,6 @@ impl Peer {
         debug!("{} handle raft ready", self.tag);
 
         let mut ready = self.raft_group.ready();
-        let is_applying = self.get_store().is_applying_snap();
-        if is_applying {
-            if !raft::is_empty_snap(&ready.snapshot) {
-                if !self.get_store().is_canceling_snap() {
-                    warn!("receiving a new snap {:?} when applying the old one, try to abort.",
-                          ready.snapshot);
-                    self.mut_store().cancel_applying_snap();
-                }
-                return Ok(None);
-            }
-            // skip apply
-            ready.committed_entries = vec![];
-        }
 
         let t = SlowTimer::new();
 
@@ -562,13 +575,26 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1
         if self.is_leader() {
-            try!(self.send(trans, &ready.messages, &mut metrics.message));
+            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
-        let apply_result = try!(self.mut_store().handle_raft_ready(&ready));
+        let apply_result = match self.mut_store().handle_raft_ready(&ready) {
+            Ok(r) => r,
+            Err(e) => {
+                // Leader has to panic when failed to persist raft entries,
+                // because all the MsgAppend messages have been sent out already.
+                // Suppose there are 2 followers. If any follower sends back a
+                // MsgAppendResponse, the leader will commit the non-persistent
+                // entries.
+                if self.is_leader() {
+                    panic!("{} failed to handle raft ready: {:?}", self.tag, e);
+                }
+                return Err(e);
+            }
+        };
 
         if !self.is_leader() {
-            try!(self.send(trans, &ready.messages, &mut metrics.message));
+            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
@@ -583,11 +609,6 @@ impl Peer {
                   apply_result.is_some(),
                   ready.hs.is_some());
 
-        if is_applying {
-            // remove hard state so raft won't change the apply index.
-            ready.hs.take();
-        }
-
         self.raft_group.advance(ready);
         Ok(Some(ReadyResult {
             apply_snap_result: apply_result,
@@ -595,23 +616,27 @@ impl Peer {
         }))
     }
 
+    /// Propose a request.
+    ///
+    /// Return true means the request has been proposed successfully.
     pub fn propose(&mut self,
-                   cmd: PendingCmd,
+                   mut cmd: PendingCmd,
                    req: RaftCmdRequest,
                    mut err_resp: RaftCmdResponse)
-                   -> Result<()> {
-
+                   -> bool {
         // Reject data read/write requests from client.
         if self.merge_state == MergeState::Suspended && req.get_requests().len() != 0 {
             debug!("{} suspended region rejects data read/write requests",
                    self.tag);
             cmd_resp::bind_error(&mut err_resp, box_err!("region suspended"));
-            return cmd.cb.call_box((err_resp,));
+            cmd.call(err_resp);
+            return false;
         }
 
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
-            return cmd.cb.call_box((err_resp,));
+            cmd.call(err_resp);
+            return false;
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
@@ -623,13 +648,7 @@ impl Peer {
 
             // for read-only, if we don't care stale read, we can
             // execute these commands immediately in leader.
-            let engine = self.engine.clone();
-            let mut ctx = ExecContext {
-                snap: Snapshot::new(engine),
-                apply_state: self.get_store().apply_state.clone(),
-                wb: WriteBatch::new(),
-                req: &req,
-            };
+            let mut ctx = ExecContext::new(self, 0, 0, &req);
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
                 error!("{} execute raft command err: {:?}", self.tag, e);
                 (cmd_resp::new_error(e), None)
@@ -637,7 +656,8 @@ impl Peer {
 
             cmd_resp::bind_uuid(&mut resp, cmd.uuid);
             cmd_resp::bind_term(&mut resp, self.term());
-            return cmd.cb.call_box((resp,));
+            cmd.call(resp);
+            return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
@@ -652,10 +672,16 @@ impl Peer {
 
             // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            return cmd.cb.call_box((make_transfer_leader_response(),));
+            cmd.call(make_transfer_leader_response());
+            return false;
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
-                return Err(box_err!("there is a pending conf change, try later"));
+                info!("{} there is a pending conf change, try later", self.tag);
+                cmd_resp::bind_error(&mut err_resp,
+                                     box_err!("{} there is a pending conf change, try later",
+                                              self.tag));
+                cmd.call(err_resp);
+                return false;
             }
             if let Some(cmd) = self.pending_cmds.take_conf_change() {
                 // if it loses leadership before conf change is replicated, there may be
@@ -667,18 +693,20 @@ impl Peer {
 
             if let Err(e) = self.propose_conf_change(req) {
                 cmd_resp::bind_error(&mut err_resp, e);
-                return cmd.cb.call_box((err_resp,));
+                cmd.call(err_resp);
+                return false;
             }
 
             self.pending_cmds.set_conf_change(cmd);
         } else if let Err(e) = self.propose_normal(req) {
             cmd_resp::bind_error(&mut err_resp, e);
-            return cmd.cb.call_box((err_resp,));
+            cmd.call(err_resp);
+            return false;
         } else {
             self.pending_cmds.append_normal(cmd);
         }
 
-        Ok(())
+        true
     }
 
     fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
@@ -706,17 +734,12 @@ impl Peer {
     ///
     /// Please note that, `NotLeader` here doesn't mean that currently this
     /// peer is not leader.
-    fn notify_not_leader(&self, cmd: PendingCmd) {
+    fn notify_not_leader(&self, mut cmd: PendingCmd) {
         let leader = self.get_peer_from_cache(self.leader_id());
         let not_leader = Error::NotLeader(self.region_id, leader);
         let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
-        warn!("{} command {} is stale, skip", self.tag, cmd.uuid);
-        if let Err(e) = cmd.cb.call_box((resp,)) {
-            error!("{} failed to clean stale callback of {}: {:?}",
-                   self.tag,
-                   cmd.uuid,
-                   e);
-        }
+        info!("{} command {} is stale, skip", self.tag, cmd.uuid);
+        cmd.call(resp);
     }
 
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
@@ -842,11 +865,9 @@ impl Peer {
         None
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: &eraftpb::Message, trans: &T) -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
-        // TODO: can we use move instead?
-        send_msg.set_message(msg.clone());
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         let mut unreachable = false;
@@ -882,6 +903,25 @@ impl Peer {
         send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
 
+        // There could be two cases:
+        // 1. Target peer already exists but has not established communication with leader yet
+        // 2. Target peer is added newly due to member change or region split, but it's not
+        //    created yet
+        // For both cases the region start key and end key are attached in RequestVote and
+        // Heartbeat message for the store of that peer to check whether to create a new peer
+        // when receiving these messages, or just to wait for a pending region split to perform
+        // later.
+        if self.get_store().is_initialized() &&
+           (msg_type == MessageType::MsgRequestVote ||
+            // the peer has not been known to this leader, it may exist or not.
+            (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)) {
+            let region = self.region();
+            send_msg.set_start_key(region.get_start_key().to_vec());
+            send_msg.set_end_key(region.get_end_key().to_vec());
+        }
+
+        send_msg.set_message(msg);
+
         if let Err(e) = trans.send(send_msg) {
             warn!("{} failed to send msg to {} in store {}, err: {:?}",
                   self.tag,
@@ -913,6 +953,11 @@ impl Peer {
         let mut results = vec![];
         let committed_count = committed_entries.len();
         for entry in committed_entries {
+            if self.pending_remove {
+                // This peer is about to be destroyed, skip everything.
+                break;
+            }
+
             let res = try!(match entry.get_entry_type() {
                 eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
                 eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
@@ -946,18 +991,16 @@ impl Peer {
             try!(self.engine.write(wb));
             self.mut_store().apply_state = state;
             self.mut_store().applied_index_term = term;
+            assert!(term > 0);
+            while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
+                // apprently, all the callbacks whose term is less than entry's term are stale.
+                self.notify_not_leader(cmd);
+            }
             return Ok(None);
         }
 
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data));
-        // no need to return error here.
-        self.process_raft_cmd(index, term, cmd).or_else(|e| {
-            error!("{} process raft command at index {} err: {:?}",
-                   self.tag,
-                   index,
-                   e);
-            Ok(None)
-        })
+        Ok(self.process_raft_cmd(index, term, cmd))
     }
 
     fn handle_raft_entry_conf_change(&mut self,
@@ -965,41 +1008,32 @@ impl Peer {
                                      -> Result<Option<ExecResult>> {
         let index = entry.get_index();
         let term = entry.get_term();
-        let mut conf_change =
-            try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
+        let conf_change = try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
         let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
-        let res = match self.process_raft_cmd(index, term, cmd) {
-            a @ Ok(Some(_)) => a,
-            e => {
-                error!("{} process raft command at index {} err: {:?}",
-                       self.tag,
-                       index,
-                       e);
-                // If failed, tell raft that the config change was aborted.
-                conf_change = eraftpb::ConfChange::new();
-                Ok(None)
-            }
+        let (res, cc) = match self.process_raft_cmd(index, term, cmd) {
+            res @ Some(_) => (res, conf_change),
+            // If failed, tell raft that the config change was aborted.
+            None => (None, eraftpb::ConfChange::new()),
         };
+        self.raft_group.apply_conf_change(cc);
 
-        self.raft_group.apply_conf_change(conf_change);
-
-        res
+        Ok(res)
     }
 
     fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
         if get_change_peer_cmd(cmd).is_some() {
-            if let Some(cmd) = self.pending_cmds.take_conf_change() {
+            if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some(cmd.cb);
+                    return Some(cmd.cb.take().unwrap());
                 } else {
                     self.notify_not_leader(cmd);
                 }
             }
             return None;
         }
-        while let Some(head) = self.pending_cmds.pop_normal(term) {
+        while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some(head.cb);
+                return Some(head.cb.take().unwrap());
             }
             // because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
@@ -1013,18 +1047,16 @@ impl Peer {
                         index: u64,
                         term: u64,
                         cmd: RaftCmdRequest)
-                        -> Result<Option<ExecResult>> {
+                        -> Option<ExecResult> {
         if index == 0 {
-            return Err(box_err!("processing raft command needs a none zero index"));
+            panic!("{} processing raft command needs a none zero index",
+                   self.tag);
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
-        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd).unwrap_or_else(|e| {
-            error!("{} apply raft command err {:?}", self.tag, e);
-            (cmd_resp::new_error(e), None)
-        });
+        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
         timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
@@ -1033,7 +1065,7 @@ impl Peer {
                index);
 
         if cb.is_none() {
-            return Ok(exec_result);
+            return exec_result;
         }
 
         let cb = cb.unwrap();
@@ -1043,86 +1075,99 @@ impl Peer {
         // Bind uuid here.
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term());
-        if let Err(e) = cb.call_box((resp,)) {
-            error!("{} callback err {:?}", self.tag, e);
-        }
+        cb.call_box((resp,));
 
-        Ok(exec_result)
+        exec_result
     }
 
     pub fn term(&self) -> u64 {
         self.raft_group.raft.term
     }
 
+    // apply operation can fail as following situation:
+    //   1. encouter an error that will occur on all store, it can continue
+    // applying next entry safely, like stale epoch for example;
+    //   2. encouter an error that may not occur on all store, in this case
+    // we should try to apply the entry again or panic. Considering that this
+    // usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(&mut self,
                       index: u64,
                       term: u64,
                       req: &RaftCmdRequest)
-                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        if self.pending_remove {
-            let region_not_found = Error::RegionNotFound(self.region_id);
-            let mut resp = cmd_resp::new_error(region_not_found);
-            if let Some(uuid) = util::get_uuid_from_req(req) {
-                cmd_resp::bind_uuid(&mut resp, uuid);
-            }
-            return Ok((resp, None));
-        }
+                      -> (RaftCmdResponse, Option<ExecResult>) {
+        // if pending remove, apply should be aborted already.
+        assert!(!self.pending_remove);
 
         let last_applied_index = self.get_store().applied_index();
         if last_applied_index >= index {
-            return Err(box_err!("applied index moved backwards, {} >= {}",
-                                last_applied_index,
-                                index));
+            // How can it happen?
+            panic!("{} applied index moved backwards, {} >= {}",
+                   self.tag,
+                   last_applied_index,
+                   index);
         }
 
-        let engine = self.engine.clone();
-        let mut ctx = ExecContext {
-            snap: Snapshot::new(engine),
-            apply_state: self.get_store().apply_state.clone(),
-            wb: WriteBatch::new(),
-            req: req,
-        };
-        let (mut resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+        let mut ctx = ExecContext::new(self, index, term, req);
+        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             error!("{} execute raft command err: {:?}", self.tag, e);
             (cmd_resp::new_error(e), None)
         });
 
         ctx.apply_state.set_applied_index(index);
-        ctx.save(self.region_id).expect("save state must not fail");
+        if !self.pending_remove {
+            ctx.save(self.region_id)
+                .unwrap_or_else(|e| panic!("{} failed to save apply context: {:?}", self.tag, e));
+        }
 
         // Commit write and change storage fields atomically.
+        self.mut_store()
+            .engine
+            .write(ctx.wb)
+            .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
+
         let mut storage = self.mut_store();
-        match storage.engine.write(ctx.wb) {
-            Ok(_) => {
-                storage.apply_state = ctx.apply_state;
-                storage.applied_index_term = term;
+        storage.apply_state = ctx.apply_state;
+        storage.applied_index_term = term;
 
-                if let Some(ref exec_result) = exec_result {
-                    match *exec_result {
-                        ExecResult::ChangePeer { ref region, .. } => {
-                            storage.region = region.clone();
-                        }
-                        ExecResult::CompactLog { .. } |
-                        ExecResult::MergeRegion { .. } |
-                        ExecResult::RollbackMerge { .. } |
-                        ExecResult::SuspendRegion { .. } |
-                        ExecResult::ShutdownRegion { .. } => {}
-                        ExecResult::SplitRegion { ref left, .. } => {
-                            storage.region = left.clone();
-                        }
-                        ExecResult::CommitMerge { ref new, .. } => {
-                            storage.region = new.clone();
-                        }
-                    }
-                };
+        if let Some(ref exec_result) = exec_result {
+            match *exec_result {
+                ExecResult::ChangePeer { ref region, .. } => {
+                    storage.region = region.clone();
+                }
+                ExecResult::CompactLog { .. } |
+                ExecResult::MergeRegion { .. } |
+                ExecResult::RollbackMerge { .. } |
+                ExecResult::SuspendRegion { .. } |
+                ExecResult::ShutdownRegion { .. } => {}
+                ExecResult::SplitRegion { ref left, .. } => {
+                    storage.region = left.clone();
+                }
+                ExecResult::CommitMerge { ref new, .. } => {
+                    storage.region = new.clone();
+                }
             }
-            Err(e) => {
-                error!("{} commit batch failed err {:?}", storage.tag, e);
-                resp = cmd_resp::message_error(e);
-            }
-        };
+        }
 
-        Ok((resp, exec_result))
+        (resp, exec_result)
+    }
+
+    /// Clear all the pending commands.
+    ///
+    /// Please note that all the pending callbacks will be lost.
+    /// Should not do this when dropping a peer in case of possible leak.
+    pub fn clear_pending_commands(&mut self) {
+        if !self.pending_cmds.normals.is_empty() {
+            info!("{} clear {} commands",
+                  self.tag,
+                  self.pending_cmds.normals.len());
+            while let Some(mut cmd) = self.pending_cmds.normals.pop_front() {
+                cmd.cb.take();
+            }
+        }
+        if let Some(mut cmd) = self.pending_cmds.conf_change.take() {
+            info!("{} clear pending conf change", self.tag);
+            cmd.cb.take();
+        }
     }
 }
 
@@ -1155,9 +1200,22 @@ struct ExecContext<'a> {
     pub apply_state: RaftApplyState,
     pub wb: WriteBatch,
     pub req: &'a RaftCmdRequest,
+    pub index: u64,
+    pub term: u64,
 }
 
 impl<'a> ExecContext<'a> {
+    fn new<'b>(peer: &'b Peer, index: u64, term: u64, req: &'a RaftCmdRequest) -> ExecContext<'a> {
+        ExecContext {
+            snap: Snapshot::new(peer.engine.clone()),
+            apply_state: peer.get_store().apply_state.clone(),
+            wb: WriteBatch::new(),
+            req: req,
+            index: index,
+            term: term,
+        }
+    }
+
     fn save(&self, region_id: u64) -> Result<()> {
         let raft_cf = try!(self.snap.cf_handle(CF_RAFT));
         try!(self.wb.put_msg_cf(raft_cf,
@@ -1169,6 +1227,7 @@ impl<'a> ExecContext<'a> {
 
 // Here we implement all commands.
 impl Peer {
+    // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(&mut self,
                      ctx: &mut ExecContext)
                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
@@ -1186,7 +1245,11 @@ impl Peer {
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
-        info!("{} execute admin command {:?}", self.tag, request);
+        info!("{} execute admin command {:?} at [term: {}, index: {}]",
+              self.tag,
+              request,
+              ctx.term,
+              ctx.index);
 
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
@@ -1216,7 +1279,7 @@ impl Peer {
         let change_type = request.get_change_type();
         let mut region = self.region().clone();
 
-        warn!("{} exec ConfChange {:?}, epoch: {:?}",
+        info!("{} exec ConfChange {:?}, epoch: {:?}",
               self.tag,
               util::conf_change_type_str(&change_type),
               region.get_region_epoch());
@@ -1235,10 +1298,10 @@ impl Peer {
                     error!("{} can't add duplicated peer {:?} to region {:?}",
                            self.tag,
                            peer,
-                           region);
+                           self.region());
                     return Err(box_err!("can't add duplicated peer {:?} to region {:?}",
                                         peer,
-                                        region));
+                                        self.region()));
                 }
                 // TODO: Do we allow adding peer in same node?
 
@@ -1249,7 +1312,7 @@ impl Peer {
 
                 PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["add_peer", "success"]).inc();
 
-                warn!("{} add peer {:?} to region {:?}",
+                info!("{} add peer {:?} to region {:?}",
                       self.tag,
                       peer,
                       self.region());
@@ -1261,8 +1324,10 @@ impl Peer {
                     error!("{} remove missing peer {:?} from region {:?}",
                            self.tag,
                            peer,
-                           region);
-                    return Err(box_err!("remove missing peer {:?} from region {:?}", peer, region));
+                           self.region());
+                    return Err(box_err!("remove missing peer {:?} from region {:?}",
+                                        peer,
+                                        self.region()));
                 }
 
                 if self.peer_id() == peer.get_id() {
@@ -1278,16 +1343,22 @@ impl Peer {
 
                 PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["remove_peer", "success"]).inc();
 
-                warn!("{} remove {} from region:{:?}",
+                info!("{} remove {} from region:{:?}",
                       self.tag,
                       peer.get_id(),
                       self.region());
             }
         }
 
-        let mut state = RegionLocalState::new();
-        state.set_region(region.clone());
-        try!(ctx.wb.put_msg(&keys::region_state_key(region.get_id()), &state));
+        if self.pending_remove {
+            self.get_store()
+                .clear_meta(&ctx.wb)
+                .and_then(|_| write_peer_state(&ctx.wb, &region, PeerState::Tombstone))
+                .unwrap_or_else(|e| panic!("{} failed to remove self: {:?}", self.tag, e));
+        } else {
+            write_peer_state(&ctx.wb, &region, PeerState::Normal)
+                .unwrap_or_else(|e| panic!("{} failed to update region state: {:?}", self.tag, e));
+        }
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -1355,15 +1426,22 @@ impl Peer {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        try!(write_peer_state(&ctx.wb, &region, PeerState::Normal));
-        try!(write_peer_state(&ctx.wb, &new_region, PeerState::Normal));
-        try!(write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()));
+        write_peer_state(&ctx.wb, &region, PeerState::Normal)
+            .and_then(|_| write_peer_state(&ctx.wb, &new_region, PeerState::Normal))
+            .and_then(|_| write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()))
+            .unwrap_or_else(|e| {
+                panic!("{} failed to save split region {:?}: {:?}",
+                       self.tag,
+                       new_region,
+                       e)
+            });
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());
         resp.mut_split().set_right(new_region.clone());
 
         self.size_diff_hint = 0;
+        self.delete_keys_hint = 0;
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 
@@ -1559,6 +1637,7 @@ impl Peer {
             return Ok((resp, None));
         }
 
+        // compact failure is safe to be omitted, no need to assert.
         try!(self.get_store().compact(&mut ctx.apply_state, compact_index));
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
@@ -1606,9 +1685,18 @@ impl Peer {
         let mut resp = Response::new();
         let res = if req.get_get().has_cf() {
             let cf = req.get_get().get_cf();
-            try!(ctx.snap.get_value_cf(cf, &keys::data_key(key)))
+            // TODO: check whether cf exists or not.
+            ctx.snap.get_value_cf(cf, &keys::data_key(key)).unwrap_or_else(|e| {
+                panic!("{} failed to get {} with cf {}: {:?}",
+                       self.tag,
+                       escape(key),
+                       cf,
+                       e)
+            })
         } else {
-            try!(ctx.snap.get_value(&keys::data_key(key)))
+            ctx.snap
+                .get_value(&keys::data_key(key))
+                .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", self.tag, escape(key), e))
         };
         if let Some(res) = res {
             resp.mut_get().set_value(res.to_vec());
@@ -1633,10 +1721,25 @@ impl Peer {
         self.size_diff_hint += value.len() as u64;
         if req.get_put().has_cf() {
             let cf = req.get_put().get_cf();
-            let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
-            try!(ctx.wb.put_cf(handle, &key, value));
+            // TODO: check whether cf exists or not.
+            rocksdb::get_cf_handle(&self.engine, cf)
+                .and_then(|handle| ctx.wb.put_cf(handle, &key, value))
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to write ({}, {}) to cf {}: {:?}",
+                           self.tag,
+                           escape(&key),
+                           escape(value),
+                           cf,
+                           e)
+                });
         } else {
-            try!(ctx.wb.put(&key, value));
+            ctx.wb.put(&key, value).unwrap_or_else(|e| {
+                panic!("{} failed to write ({}, {}): {:?}",
+                       self.tag,
+                       escape(&key),
+                       escape(value),
+                       e);
+            });
         }
         Ok(resp)
     }
@@ -1656,10 +1759,21 @@ impl Peer {
         let resp = Response::new();
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();
-            let handle = try!(rocksdb::get_cf_handle(&self.engine, cf));
-            try!(ctx.wb.delete_cf(handle, &key));
+            // TODO: check whether cf exists or not.
+            rocksdb::get_cf_handle(&self.engine, cf)
+                .and_then(|handle| ctx.wb.delete_cf(handle, &key))
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                });
+            // lock cf is compact periodically.
+            if cf != CF_LOCK {
+                self.delete_keys_hint += 1;
+            }
         } else {
-            try!(ctx.wb.delete(&key));
+            ctx.wb.delete(&key).unwrap_or_else(|e| {
+                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+            });
+            self.delete_keys_hint += 1;
         }
 
         Ok(resp)

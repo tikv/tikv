@@ -110,7 +110,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  EventSet::readable(),
                                  PollOpt::edge()));
 
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel(), "raft-server");
         let store_handler = StoreHandler::new(storage);
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
@@ -143,6 +143,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
+
+        info!("TiKV is ready to serve");
 
         try!(event_loop.run(self));
         Ok(())
@@ -286,7 +288,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             resp_msg.set_cmd_resp(resp);
 
             on_resp.call_box((resp_msg,));
-            Ok(())
         };
 
         try!(self.raft_router.send_command(msg, cb));
@@ -406,7 +407,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn report_unreachable(&self, data: ConnData) {
-        if data.msg.has_raft() {
+        if !data.msg.has_raft() {
             return;
         }
 
@@ -641,8 +642,10 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
 #[cfg(test)]
 mod tests {
     use std::thread;
+    use std::sync::Arc;
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use mio::tcp::TcpListener;
 
@@ -653,6 +656,7 @@ mod tests {
     use pd::Result;
     use storage::Storage;
     use kvproto::msgpb::{Message, MessageType};
+    use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::{self, Msg as StoreMsg};
     use raft::SnapshotStatus;
@@ -671,6 +675,16 @@ mod tests {
     #[derive(Clone)]
     struct TestRaftStoreRouter {
         tx: Sender<usize>,
+        report_unreachable_count: Arc<AtomicUsize>,
+    }
+
+    impl TestRaftStoreRouter {
+        fn new(tx: Sender<usize>) -> TestRaftStoreRouter {
+            TestRaftStoreRouter {
+                tx: tx,
+                report_unreachable_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
@@ -689,7 +703,9 @@ mod tests {
         }
 
         fn report_unreachable(&self, _: u64, _: u64) -> RaftStoreResult<()> {
-            unimplemented!();
+            let count = self.report_unreachable_count.clone();
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -703,9 +719,13 @@ mod tests {
         let cfg = Config::new();
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let mut storage = Storage::new(&cfg.storage).unwrap();
+
         let (tx, rx) = mpsc::channel();
-        let router = TestRaftStoreRouter { tx: tx };
+        let router = TestRaftStoreRouter::new(tx);
+        let report_unreachable_count = router.report_unreachable_count.clone();
+
         storage.start(&cfg.storage, router.clone()).unwrap();
+
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
@@ -714,6 +734,15 @@ mod tests {
                                      resolver,
                                      store::new_snap_mgr("", None))
             .unwrap();
+
+        for i in 0..10 {
+            let mut msg = Message::new();
+            if i % 2 == 1 {
+                msg.set_raft(RaftMessage::new());
+            }
+            server.report_unreachable(ConnData::new(0, msg));
+            assert_eq!(report_unreachable_count.load(Ordering::SeqCst), (i + 1) / 2);
+        }
 
         let ch = server.get_sendch();
         let h = thread::spawn(move || {

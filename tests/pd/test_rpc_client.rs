@@ -25,7 +25,9 @@ fn test_rpc_client() {
         Err(_) => return,
     };
 
-    let client = RpcClient::new(&endpoints, 0).unwrap();
+    let client = RpcClient::new(&endpoints).unwrap();
+    assert!(client.cluster_id != 0);
+    assert_eq!(client.cluster_id, client.get_cluster_id().unwrap());
 
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
@@ -49,12 +51,12 @@ fn test_rpc_client() {
     let tmp_store = client.get_store(store_id).unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
-    let tmp_region = client.get_region_by_id(region_id).unwrap();
+    let tmp_region = client.get_region_by_id(region_id).unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let client = RpcClient::new(&endpoints, 0).unwrap();
+        let client = RpcClient::new(&endpoints).unwrap();
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;

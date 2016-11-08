@@ -15,6 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use std::boxed::FnBox;
 use std::ops::Deref;
 use std::fs;
 
@@ -142,6 +143,13 @@ impl NodeCluster {
     }
 }
 
+impl NodeCluster {
+    #[allow(dead_code)]
+    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<Msg, ServerRaftStoreRouter> {
+        self.trans.rl().routers.get(&node_id).cloned().unwrap()
+    }
+}
+
 impl Simulator for NodeCluster {
     fn run_node(&mut self, node_id: u64, cfg: ServerConfig, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
@@ -205,14 +213,9 @@ impl Simulator for NodeCluster {
         }
 
         let router = self.trans.rl().routers.get(&node_id).cloned().unwrap();
-        wait_event!(|cb: Box<Fn(RaftCmdResponse) + 'static + Send>| {
-            router.send_command(request,
-                              box move |resp| {
-                                  cb(resp);
-                                  Ok(())
-                              })
-                .unwrap()
-        },
+        wait_event!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
+                        router.send_command(request, cb).unwrap()
+                    },
                     timeout)
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }

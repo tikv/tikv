@@ -66,9 +66,11 @@ impl<T: RaftStoreRouter> SyncStorage<T> {
                 ctx: Context,
                 key: Key,
                 limit: usize,
+                key_only: bool,
                 start_ts: u64)
                 -> Result<Vec<Result<KvPair>>> {
-        wait_event!(|cb| self.store.async_scan(ctx, key, limit, start_ts, cb).unwrap()).unwrap()
+        wait_event!(|cb| self.store.async_scan(ctx, key, limit, key_only, start_ts, cb).unwrap())
+            .unwrap()
     }
 
     pub fn prewrite(&self,
@@ -91,7 +93,6 @@ impl<T: RaftStoreRouter> SyncStorage<T> {
             .unwrap()
     }
 
-    #[allow(dead_code)]
     pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
         wait_event!(|cb| self.store.async_cleanup(ctx, key, start_ts, cb).unwrap()).unwrap()
     }

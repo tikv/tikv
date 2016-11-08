@@ -14,6 +14,9 @@ use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use raftstore::store::Msg;
 use util::transport::SendCh;
+use util::HandyRwLock;
+
+const TMP_FILE_SUFFIX: &'static str = ".tmp";
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SnapKey {
@@ -68,13 +71,18 @@ const SNAP_REV_PREFIX: &'static str = "rev";
 pub struct SnapFile {
     file: PathBuf,
     digest: Digest,
+    size_track: Arc<RwLock<u64>>,
     // File is the file obj represent the tmpfile, string is the actual path to
     // tmpfile.
     tmp_file: Option<(File, String)>,
 }
 
 impl SnapFile {
-    fn new<T: Into<PathBuf>>(snap_dir: T, is_sending: bool, key: &SnapKey) -> io::Result<SnapFile> {
+    fn new<T: Into<PathBuf>>(snap_dir: T,
+                             size_track: Arc<RwLock<u64>>,
+                             is_sending: bool,
+                             key: &SnapKey)
+                             -> io::Result<SnapFile> {
         let mut file_path = snap_dir.into();
         if !file_path.exists() {
             try!(fs::create_dir_all(file_path.as_path()));
@@ -90,6 +98,7 @@ impl SnapFile {
         let mut f = SnapFile {
             file: file_path,
             digest: Digest::new(crc32::IEEE),
+            size_track: size_track,
             tmp_file: None,
         };
         try!(f.init());
@@ -101,7 +110,7 @@ impl SnapFile {
             return Ok(());
         }
 
-        let tmp_path = format!("{}.tmp", self.path().display());
+        let tmp_path = format!("{}{}", self.path().display(), TMP_FILE_SUFFIX);
         let tmp_f = try!(OpenOptions::new().write(true).create_new(true).open(&tmp_path));
         self.tmp_file = Some((tmp_f, tmp_path));
         Ok(())
@@ -152,7 +161,14 @@ impl SnapFile {
 
     pub fn try_delete(&self) -> io::Result<()> {
         debug!("deleting {}", self.path().display());
-        fs::remove_file(self.path())
+        if !self.exists() {
+            return Ok(());
+        }
+        let size = try!(self.meta()).len();
+        try!(fs::remove_file(self.path()));
+        let mut size_track = self.size_track.wl();
+        *size_track = size_track.saturating_sub(size);
+        Ok(())
     }
 
     /// Use the content in temporary files replace the target file.
@@ -163,7 +179,10 @@ impl SnapFile {
         if let Some((mut f, path)) = self.tmp_file.take() {
             try!(f.write_u32::<BigEndian>(self.digest.sum32()));
             try!(f.flush());
+            let file_len = try!(fs::metadata(&path)).len();
+            let mut size_track = self.size_track.wl();
             try!(fs::rename(path, self.file.as_path()));
+            *size_track = size_track.saturating_add(file_len);
         }
         Ok(())
     }
@@ -222,6 +241,7 @@ pub struct SnapManagerCore {
     base: String,
     registry: HashMap<SnapKey, Vec<SnapEntry>>,
     ch: Option<SendCh<Msg>>,
+    snap_size: Arc<RwLock<u64>>,
 }
 
 impl SnapManagerCore {
@@ -230,6 +250,7 @@ impl SnapManagerCore {
             base: path.into(),
             registry: map![],
             ch: ch,
+            snap_size: Arc::new(RwLock::new(0)),
         }
     }
 
@@ -242,6 +263,19 @@ impl SnapManagerCore {
         if !path.is_dir() {
             return Err(io::Error::new(ErrorKind::Other,
                                       format!("{} should be a directory", path.display())));
+        }
+        let mut size = self.snap_size.wl();
+        for f in try!(fs::read_dir(path)) {
+            let p = try!(f);
+            if try!(p.file_type()).is_file() {
+                if let Some(s) = p.file_name().to_str() {
+                    if s.ends_with(TMP_FILE_SUFFIX) {
+                        try!(fs::remove_file(p.path()));
+                    } else {
+                        *size += try!(p.metadata()).len();
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -291,7 +325,14 @@ impl SnapManagerCore {
 
     #[inline]
     pub fn get_snap_file(&self, key: &SnapKey, is_sending: bool) -> io::Result<SnapFile> {
-        SnapFile::new(&self.base, is_sending, key)
+        SnapFile::new(&self.base, self.snap_size.clone(), is_sending, key)
+    }
+
+    /// Get the approximate size of snap file exists in snap directory.
+    ///
+    /// Return value is not garanteed to be accurate.
+    pub fn get_total_snap_size(&self) -> u64 {
+        *self.snap_size.rl()
     }
 
     pub fn register(&mut self, key: SnapKey, entry: SnapEntry) {
@@ -370,4 +411,101 @@ pub type SnapManager = Arc<RwLock<SnapManagerCore>>;
 
 pub fn new_snap_mgr<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
     Arc::new(RwLock::new(SnapManagerCore::new(path, ch)))
+}
+
+#[cfg(test)]
+mod test {
+    use std::path::Path;
+    use std::fs::File;
+    use std::io::Write;
+    use std::sync::*;
+
+    use tempdir::TempDir;
+
+    use util::HandyRwLock;
+    use super::*;
+
+    #[test]
+    fn test_snap_mgr() {
+        let path = TempDir::new("test-snap-mgr").unwrap();
+
+        // `mgr` should create the specified directory when it does not exist.
+        let path1 = path.path().to_str().unwrap().to_owned() + "/snap1";
+        let p = Path::new(&path1);
+        assert!(!p.exists());
+        let mut mgr = new_snap_mgr(path1.clone(), None);
+        mgr.wl().init().unwrap();
+        assert!(p.exists());
+
+        // if target is a file, an error should be returned.
+        let path2 = path.path().to_str().unwrap().to_owned() + "/snap2";
+        File::create(&path2).unwrap();
+        mgr = new_snap_mgr(path2, None);
+        assert!(mgr.wl().init().is_err());
+
+        // if temporary files exist, they should be deleted.
+        let path3 = path.path().to_str().unwrap().to_owned() + "/snap3";
+        let key1 = SnapKey::new(1, 1, 1);
+        let size_track = Arc::new(RwLock::new(0));
+        let f1 = SnapFile::new(&path3, size_track.clone(), true, &key1).unwrap();
+        let f2 = SnapFile::new(&path3, size_track.clone(), false, &key1).unwrap();
+        let key2 = SnapKey::new(2, 1, 1);
+        let mut f3 = SnapFile::new(&path3, size_track.clone(), true, &key2).unwrap();
+        f3.save().unwrap();
+        let mut f4 = SnapFile::new(&path3, size_track.clone(), false, &key2).unwrap();
+        f4.save().unwrap();
+        assert!(!f1.exists());
+        assert!(!f2.exists());
+        assert!(f3.exists());
+        assert!(f4.exists());
+        assert!(Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
+        assert!(Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
+        mgr = new_snap_mgr(path3, None);
+        mgr.wl().init().unwrap();
+        assert!(!Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
+        assert!(!Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
+        assert!(f3.exists());
+        assert!(f4.exists());
+    }
+
+    #[test]
+    fn test_snap_size() {
+        let path = TempDir::new("test-snap-mgr").unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let mut mgr = new_snap_mgr(path_str, None);
+        mgr.wl().init().unwrap();
+        assert_eq!(mgr.rl().get_total_snap_size(), 0);
+
+        let key1 = SnapKey::new(1, 1, 1);
+        let test_data = b"test_data";
+        let exp_len = test_data.len() as u64 + 4; // 4 is the crc32 sum's len
+        let size_track = Arc::new(RwLock::new(0));
+        let mut f1 = SnapFile::new(path_str, size_track.clone(), true, &key1).unwrap();
+        let mut f2 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
+        f1.write_all(test_data).unwrap();
+        f2.write_all(test_data).unwrap();
+        let key2 = SnapKey::new(2, 1, 1);
+        let mut f3 = SnapFile::new(path_str, size_track.clone(), true, &key2).unwrap();
+        f3.write_all(test_data).unwrap();
+        f3.save().unwrap();
+        let mut f4 = SnapFile::new(path_str, size_track.clone(), false, &key2).unwrap();
+        f4.write_all(test_data).unwrap();
+        f4.save().unwrap();
+
+        mgr = new_snap_mgr(path_str, None);
+        mgr.wl().init().unwrap();
+        // temporary file should not be count in snap size.
+        assert_eq!(mgr.rl().get_total_snap_size(), exp_len * 2);
+
+        mgr.rl().get_snap_file(&key2, true).unwrap().delete();
+        assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
+        mgr.rl().get_snap_file(&key2, false).unwrap().delete();
+        assert_eq!(mgr.rl().get_total_snap_size(), 0);
+
+        let mut f4 = mgr.rl().get_snap_file(&key2, true).unwrap();
+        f4.write_all(test_data).unwrap();
+        assert_eq!(mgr.rl().get_total_snap_size(), 0);
+        f4.save().unwrap();
+        assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
+    }
 }

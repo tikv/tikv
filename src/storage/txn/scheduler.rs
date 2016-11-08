@@ -155,6 +155,7 @@ pub struct RunningCtx {
     lock: Lock,
     callback: Option<StorageCb>,
     tag: &'static str,
+    latch_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
 }
 
@@ -168,6 +169,7 @@ impl RunningCtx {
             lock: lock,
             callback: Some(cb),
             tag: tag,
+            latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer()),
             _timer: SCHED_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer(),
         }
     }
@@ -203,6 +205,8 @@ pub struct Scheduler<T: RaftStoreRouter> {
     // write concurrency control
     latches: Latches,
 
+    sched_too_busy_threshold: usize,
+
     // worker pool
     worker_pool: ThreadPool,
 
@@ -215,6 +219,7 @@ impl<T: RaftStoreRouter> Scheduler<T> {
                schedch: SendCh<Msg>,
                concurrency: usize,
                worker_pool_size: usize,
+               sched_too_busy_threshold: usize,
                raft_router: T)
                -> Scheduler<T> {
         Scheduler {
@@ -223,6 +228,7 @@ impl<T: RaftStoreRouter> Scheduler<T> {
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
+            sched_too_busy_threshold: sched_too_busy_threshold,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
             raft_router: raft_router,
@@ -269,9 +275,9 @@ fn process_read<T: RaftStoreRouter>(cid: u64,
             }
         }
         // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
-        Command::Scan { ref start_key, limit, start_ts, .. } => {
+        Command::Scan { ref start_key, limit, key_only, start_ts, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
-            let res = snap_store.scanner(ScanMode::Forward)
+            let res = snap_store.scanner(ScanMode::Forward, key_only)
                 .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
                 .and_then(|mut results| {
                     Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
@@ -571,23 +577,35 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
 
     /// Event handler for new command.
     ///
-    /// This method will try to acquire all the necessary latches. If successful, initiates a get
-    /// snapshot for furthur processing; otherwise, adds the command to the waiting queue(s), it
-    /// will be handled later in `wakeup_cmd` when its turn comes.
+    /// This method will try to acquire all the necessary latches. If all the necessary latches are
+    /// acquired,  the method initiates a get snapshot operation for furthur processing; otherwise,
+    /// the method adds the command to the waiting queue(s).   The command will be handled later in
+    /// `lock_and_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
     /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
-    fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
+    fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
         let lock = self.gen_lock(&cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
+        self.lock_and_get_snapshot(cid);
+    }
 
-        if self.acquire_lock(cid) {
-            self.get_snapshot(cid);
+    fn too_busy(&self) -> bool {
+        self.cmd_ctxs.len() >= self.sched_too_busy_threshold
+    }
+
+    fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
+        // write flow control
+        if !cmd.readonly() && self.too_busy() {
+            execute_callback(callback,
+                             ProcessResult::Failed { err: StorageError::SchedTooBusy });
+        } else {
+            self.schedule_command(cmd, callback);
         }
     }
 
@@ -595,9 +613,13 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
     ///
     /// Returns true if successful; returns false otherwise.
     fn acquire_lock(&mut self, cid: u64) -> bool {
-        let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
+        let mut ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
-        self.latches.acquire(&mut ctx.lock, cid)
+        let ok = self.latches.acquire(&mut ctx.lock, cid);
+        if ok {
+            ctx.latch_timer.take();
+        }
+        ok
     }
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
@@ -615,6 +637,8 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
         };
 
         if let Err(e) = self.engine.async_snapshot(self.extract_context(cid), cb) {
+            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
+                .inc();
             self.finish_with_err(cid, Error::from(e));
         }
     }
@@ -624,11 +648,17 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
     /// Delivers the command along with the snapshot to a worker thread to execute.
     fn on_snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
         debug!("receive snapshot finish msg for cid={}", cid);
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_finish"])
-            .inc();
         match snapshot {
-            Ok(snapshot) => self.process_by_worker(cid, snapshot),
-            Err(e) => self.finish_with_err(cid, Error::from(e)),
+            Ok(snapshot) => {
+                SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
+                    .inc();
+                self.process_by_worker(cid, snapshot);
+            }
+            Err(e) => {
+                SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
+                    .inc();
+                self.finish_with_err(cid, Error::from(e));
+            }
         }
     }
 
@@ -643,7 +673,7 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
         let cb = ctx.callback.take().unwrap();
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[ctx.tag, "next_cmd"]).inc();
-            self.on_receive_new_cmd(cmd, cb);
+            self.schedule_command(cmd, cb);
         } else {
             execute_callback(cb, pr);
         }
@@ -657,13 +687,9 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
     /// error to the callback, and releases the latches.
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
-
-        let mut ctx = self.remove_ctx(cid);
-        let cb = ctx.callback.take().unwrap();
-        let pr = ProcessResult::Failed { err: StorageError::from(e) };
-        execute_callback(cb, pr);
-
-        self.release_lock(&ctx.lock, cid);
+        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"])
+            .inc();
+        self.finish_with_err(cid, e);
     }
 
     /// Event handler for the success of write prepare.
@@ -681,11 +707,9 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
         }
         let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
         if let Err(e) = self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb) {
-            let mut ctx = self.remove_ctx(cid);
-            let cb = ctx.callback.take().unwrap();
-            execute_callback(cb, ProcessResult::Failed { err: StorageError::from(e) });
-
-            self.release_lock(&ctx.lock, cid);
+            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
+                .inc();
+            self.finish_with_err(cid, Error::from(e));
         }
     }
 
@@ -701,7 +725,7 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
         };
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[ctx.tag, "next_cmd"]).inc();
-            self.on_receive_new_cmd(cmd, cb);
+            self.schedule_command(cmd, cb);
         } else {
             execute_callback(cb, pr);
         }
@@ -713,12 +737,13 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
     fn release_lock(&mut self, lock: &Lock, cid: u64) {
         let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
-            self.wakeup_cmd(wcid);
+            self.lock_and_get_snapshot(wcid);
         }
     }
 
-    /// Wakes up the next command for execution.
-    fn wakeup_cmd(&mut self, cid: u64) {
+    /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
+    /// the method initiates a get snapshot operation for furthur processing.
+    fn lock_and_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);
         }

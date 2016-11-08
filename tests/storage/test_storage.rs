@@ -95,12 +95,28 @@ impl<T: RaftStoreRouter + 'static> AssertionStorage<T> {
                ts: u64,
                expect: Vec<Option<(&[u8], &[u8])>>) {
         let key_address = make_key(start_key);
-        let result = self.0.scan(Context::new(), key_address, limit, ts).unwrap();
+        let result = self.0.scan(Context::new(), key_address, limit, false, ts).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter()
             .map(Result::ok)
             .collect();
         let expect: Vec<Option<KvPair>> = expect.into_iter()
             .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    fn scan_key_only_ok(&self,
+                        start_key: &[u8],
+                        limit: usize,
+                        ts: u64,
+                        expect: Vec<Option<&[u8]>>) {
+        let key_address = make_key(start_key);
+        let result = self.0.scan(Context::new(), key_address, limit, true, ts).unwrap();
+        let result: Vec<Option<KvPair>> = result.into_iter()
+            .map(Result::ok)
+            .collect();
+        let expect: Vec<Option<KvPair>> = expect.into_iter()
+            .map(|x| x.map(|k| (k.to_vec(), vec![])))
             .collect();
         assert_eq!(result, expect);
     }
@@ -130,6 +146,14 @@ impl<T: RaftStoreRouter + 'static> AssertionStorage<T> {
     fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
         self.0.commit(Context::new(), keys, start_ts, commit_ts).unwrap();
+    }
+
+    fn cleanup_ok(&self, key: &[u8], start_ts: u64) {
+        self.0.cleanup(Context::new(), make_key(key), start_ts).unwrap();
+    }
+
+    fn cleanup_err(&self, key: &[u8], start_ts: u64) {
+        assert!(self.0.cleanup(Context::new(), make_key(key), start_ts).is_err());
     }
 
     fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64) {
@@ -194,6 +218,7 @@ fn test_txn_store_cleanup_rollback() {
                       5);
     store.get_err(b"secondary", 10);
     store.rollback_ok(vec![b"primary"], 5);
+    store.cleanup_ok(b"primary", 5);
 }
 
 #[test]
@@ -207,6 +232,7 @@ fn test_txn_store_cleanup_commit() {
     store.get_err(b"secondary", 8);
     store.get_err(b"secondary", 12);
     store.commit_ok(vec![b"primary"], 5, 10);
+    store.cleanup_err(b"primary", 5);
     store.rollback_err(vec![b"primary"], 5);
 }
 
@@ -388,6 +414,15 @@ fn test_txn_store_scan() {
     check_v20();
     check_v30();
     check_v40();
+}
+
+#[test]
+fn test_txn_store_scan_key_only() {
+    let store = new_assertion_storage();
+    store.put_ok(b"A", b"A", 5, 10);
+    store.put_ok(b"B", b"B", 5, 10);
+    store.put_ok(b"C", b"C", 5, 10);
+    store.scan_key_only_ok(b"AA", 2, 10, vec![Some(b"B"), Some(b"C")]);
 }
 
 fn lock(key: &[u8], primary: &[u8], ts: u64) -> LockInfo {

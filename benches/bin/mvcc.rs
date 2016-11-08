@@ -65,6 +65,7 @@ fn bench_tombstone_scan() -> BenchSamples {
         assert!(store.scan(Context::new(),
                            Key::from_raw(&k),
                            1,
+                           false,
                            ts_generator.next().unwrap())
                      .unwrap()
                      .is_empty())

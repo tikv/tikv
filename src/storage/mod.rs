@@ -26,11 +26,11 @@ pub mod engine;
 pub mod mvcc;
 pub mod txn;
 pub mod config;
-mod types;
+pub mod types;
 mod metrics;
 
 pub use self::config::Config;
-pub use self::engine::{Engine, Snapshot, Dsn, TEMP_DIR, new_engine, Modify, Cursor,
+pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cursor,
                        Error as EngineError, ScanMode};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
@@ -87,6 +87,7 @@ pub enum Command {
         ctx: Context,
         start_key: Key,
         limit: usize,
+        key_only: bool,
         start_ts: u64,
     },
     Prewrite {
@@ -244,7 +245,7 @@ impl<T: RaftStoreRouter> Storage<T> {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage<T>> {
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
-        let sendch = SendCh::new(event_loop.channel());
+        let sendch = SendCh::new(event_loop.channel(), "kv-storage");
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
@@ -258,7 +259,7 @@ impl<T: RaftStoreRouter> Storage<T> {
     }
 
     pub fn new(config: &Config) -> Result<Storage<T>> {
-        let engine = try!(engine::new_engine(Dsn::RocksDBPath(&config.path), ALL_CFS));
+        let engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
@@ -273,12 +274,14 @@ impl<T: RaftStoreRouter> Storage<T> {
         let mut el = handle.event_loop.take().unwrap();
         let sched_concurrency = config.sched_concurrency;
         let sched_worker_pool_size = config.sched_worker_pool_size;
+        let sched_too_busy_threshold = config.sched_too_busy_threshold;
         let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
             let mut sched = Scheduler::new(engine,
                                            ch,
                                            sched_concurrency,
                                            sched_worker_pool_size,
+                                           sched_too_busy_threshold,
                                            router);
             if let Err(e) = el.run(&mut sched) {
                 panic!("scheduler run err:{:?}", e);
@@ -357,6 +360,7 @@ impl<T: RaftStoreRouter> Storage<T> {
                       ctx: Context,
                       start_key: Key,
                       limit: usize,
+                      key_only: bool,
                       start_ts: u64,
                       callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
@@ -364,6 +368,7 @@ impl<T: RaftStoreRouter> Storage<T> {
             ctx: ctx,
             start_key: start_key,
             limit: limit,
+            key_only: key_only,
             start_ts: start_ts,
         };
         let tag = cmd.tag();
@@ -526,6 +531,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        SchedTooBusy {
+            description("scheduler is too busy")
+        }
     }
 }
 
@@ -572,6 +580,17 @@ mod tests {
     fn expect_fail<T>(done: Sender<i32>) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             assert!(x.is_err());
+            done.send(1).unwrap();
+        })
+    }
+
+    fn expect_too_busy<T>(done: Sender<i32>) -> Callback<T> {
+        Box::new(move |x: Result<T>| {
+            assert!(x.is_err());
+            match x {
+                Err(Error::SchedTooBusy) => {}
+                _ => panic!("expect too busy"),
+            }
             done.send(1).unwrap();
         })
     }
@@ -645,7 +664,7 @@ mod tests {
     fn test_put_with_err() {
         let config = Config::new();
         // New engine lack of some column families.
-        let engine = engine::new_engine(Dsn::RocksDBPath(&config.path), &["default"]).unwrap();
+        let engine = engine::new_local_engine(&config.path, &["default"]).unwrap();
         let mut storage = Storage::from_engine(engine, &config).unwrap();
         storage.start(&config, MockRaftStoreRouter).unwrap();
         let (tx, rx) = channel();
@@ -690,6 +709,7 @@ mod tests {
         storage.async_scan(Context::new(),
                         make_key(b"\x00"),
                         1000,
+                        false,
                         5,
                         expect_scan(tx.clone(),
                                     vec![
@@ -791,6 +811,54 @@ mod tests {
                             b"x".to_vec(),
                             105,
                             expect_fail(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_sched_too_busy() {
+        let mut config = Config::new();
+        config.sched_too_busy_threshold = 0;
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config, MockRaftStoreRouter).unwrap();
+        let (tx, rx) = channel();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       100,
+                       expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            expect_too_busy(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_cleanup() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config, MockRaftStoreRouter).unwrap();
+        let (tx, rx) = channel();
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_cleanup(Context::new(), make_key(b"x"), 100, expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       105,
+                       expect_get_none(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();

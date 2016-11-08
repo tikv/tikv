@@ -11,26 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod util;
-pub mod cluster;
-pub mod node;
-pub mod server;
-pub mod pd;
-pub mod transport_simulate;
+use prometheus::CounterVec;
 
-mod test_single;
-mod test_multi;
-mod test_conf_change;
-mod test_compact_log;
-mod test_compact_lock_cf;
-mod test_compact_after_delete;
-mod test_split_region;
-mod test_region_merge;
-mod test_status_command;
-mod test_tombstone;
-mod test_transport;
-mod test_transfer_leader;
-mod test_stats;
-mod test_snap;
-mod test_down_peers;
-mod test_stale_peer;
+lazy_static! {
+    pub static ref CHANNEL_FULL_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_channel_full_total",
+            "Total number of channel full errors.",
+            &["type"]
+        ).unwrap();
+}

@@ -4,7 +4,7 @@ use tikv::server::transport::{RaftStoreRouter, MockRaftStoreRouter};
 use kvproto::kvrpcpb::Context;
 use tikv::util::codec::{table, Datum, datum};
 use tikv::util::codec::number::*;
-use tikv::storage::{Dsn, Mutation, Key, ALL_CFS};
+use tikv::storage::{Mutation, Key, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::event::Event;
 use tikv::util::worker::Worker;
@@ -519,7 +519,7 @@ impl ProductTable {
 fn init_with_data(tbl: &ProductTable,
                   vals: &[(i64, Option<&str>, i64)])
                   -> (Store<MockRaftStoreRouter>, Worker<EndPointTask>) {
-    let engine = engine::new_engine(Dsn::RocksDBPath(TEMP_DIR), ALL_CFS).unwrap();
+    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
     let mut store = Store::new(engine, MockRaftStoreRouter);
 
     store.begin();

@@ -145,13 +145,8 @@ impl Cluster {
         None
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
-        let key = match self.region_id_keys.get(&region_id) {
-            Some(key) => key,
-            None => return Err(Error::Other(box_err!("region {} not found", region_id))),
-        };
-
-        Ok(self.regions.get(key).cloned().unwrap())
+    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
+        Ok(self.region_id_keys.get(&region_id).and_then(|k| self.regions.get(k).cloned()))
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -189,7 +184,7 @@ impl Cluster {
                               into_region_id: u64,
                               from_region_id: u64)
                               -> Result<pdpb::RegionHeartbeatResponse> {
-        let cur_region = try!(self.get_region_by_id(region.get_id()));
+        let cur_region = try!(self.get_region_by_id(region.get_id())).unwrap();
         let version = region.get_region_epoch().get_version();
         let cur_version = cur_region.get_region_epoch().get_version();
         let mut resp = pdpb::RegionHeartbeatResponse::new();
@@ -197,7 +192,7 @@ impl Cluster {
             if region.get_id() == into_region_id {
                 // region merge is committed
                 // remove the from region
-                let from_region = try!(self.get_region_by_id(from_region_id));
+                let from_region = try!(self.get_region_by_id(from_region_id)).unwrap();
                 self.remove_region(&from_region);
                 // clear down_peers
                 for peer in from_region.get_peers() {
@@ -224,7 +219,7 @@ impl Cluster {
 
         if region.get_id() == from_region_id {
             // migrate data in `from_region` to `into_region` if neccessary
-            let into_region = try!(self.get_region_by_id(into_region_id));
+            let into_region = try!(self.get_region_by_id(into_region_id)).unwrap();
             let mut into_store_ids = HashSet::new();
             let mut into_store_peers = HashMap::new();
             for p in into_region.get_peers() {
@@ -265,9 +260,9 @@ impl Cluster {
                 Ok(resp)
             }
         } else {
-            let from_region = match self.get_region_by_id(from_region_id) {
-                Ok(r) => r,
-                Err(e) => return Err(e),
+            let from_region = match try!(self.get_region_by_id(from_region_id)) {
+                Some(r) => r,
+                None => return Ok(resp),
             };
             // check whether the data migration is finished
             let mut into_store_ids = HashSet::new();
@@ -354,7 +349,8 @@ impl Cluster {
         let conf_ver = region.get_region_epoch().get_conf_ver();
         let end_key = enc_end_key(&region);
 
-        let cur_region = self.get_region_by_id(region.get_id()).unwrap();
+        // it can pass handle_heartbeat_version means it must exist.
+        let cur_region = self.get_region_by_id(region.get_id()).unwrap().unwrap();
 
         let cur_conf_ver = cur_region.get_region_epoch().get_conf_ver();
         try!(check_stale_region(&cur_region, &region));
@@ -545,7 +541,10 @@ impl TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
 
-            let region = self.get_region_by_id(region_id).unwrap();
+            let region = match self.get_region_by_id(region_id).unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
 
             if let Some(p) = find_peer(&region, peer.get_store_id()) {
                 if p.get_id() == peer.get_id() {
@@ -563,7 +562,10 @@ impl TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
 
-            let region = self.get_region_by_id(region_id).unwrap();
+            let region = match self.get_region_by_id(region_id).unwrap() {
+                Some(region) => region,
+                None => continue,
+            };
 
             if find_peer(&region, peer.get_store_id()).is_none() {
                 return;
@@ -666,6 +668,10 @@ impl TestPdClient {
 }
 
 impl PdClient for TestPdClient {
+    fn get_cluster_id(&self) -> Result<u64> {
+        Ok(self.cluster_id)
+    }
+
     fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
         if self.is_cluster_bootstrapped().unwrap() {
             return Err(Error::ClusterBootstrapped(self.cluster_id));
@@ -706,7 +712,7 @@ impl PdClient for TestPdClient {
         Err(box_err!("no region contains key {:?}", escape(key)))
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<metapb::Region> {
+    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
         try!(self.check_bootstrap());
         self.cluster.rl().get_region_by_id(region_id)
     }
@@ -730,7 +736,7 @@ impl PdClient for TestPdClient {
         try!(self.check_bootstrap());
 
         // Must ConfVer and Version be same?
-        let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap();
+        let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap().unwrap();
         try!(check_stale_region(&cur_region, &region));
 
         let mut resp = pdpb::AskSplitResponse::new();

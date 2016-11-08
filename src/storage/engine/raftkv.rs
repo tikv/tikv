@@ -138,7 +138,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         try!(self.router.send_command(req,
                                       box move |resp| {
                                           cb(on_result(resp, l, &uuid, db).map_err(Error::into));
-                                          Ok(())
                                       }));
         Ok(())
     }
@@ -278,18 +277,21 @@ impl Snapshot for RegionSnapshot {
     #[allow(needless_lifetimes)]
     fn iter<'b>(&'b self,
                 upper_bound: Option<&[u8]>,
+                fill_cache: bool,
                 mode: ScanMode)
                 -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound), mode))
+        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound, fill_cache), mode))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self,
                    cf: CfName,
                    upper_bound: Option<&[u8]>,
+                   fill_cache: bool,
                    mode: ScanMode)
                    -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound)), mode))
+        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound, fill_cache)),
+                       mode))
     }
 }
 
