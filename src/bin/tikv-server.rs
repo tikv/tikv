@@ -206,6 +206,19 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
                          &push_job);
 }
 
+fn check_system_config(matches: &Matches, config: &toml::Value) {
+    // Panic when the maximum number of open file descriptors less than opts.max_open_files.
+    let max_open_files = get_integer_value("",
+                                           "rocksdb.max-open-files",
+                                           matches,
+                                           config,
+                                           Some(40960),
+                                           |v| v.as_integer());
+    util::config::check_max_open_fds(max_open_files as u64).unwrap();
+
+    // TODO: net.core.somaxcon
+}
+
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     let mut opts = get_rocksdb_default_cf_option(matches, config);
     let rmode = get_integer_value("",
@@ -934,6 +947,9 @@ fn main() {
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
     panic_hook::set_exit_hook();
+
+    // Before any set up, check system configuration.
+    check_system_config(&matches, &config);
 
     let pd_endpoints = get_string_value("pd",
                                         "pd.endpoints",
