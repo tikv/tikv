@@ -521,7 +521,11 @@ impl Peer {
             let mut merge_state = RegionMergeState::new();
             merge_state.set_state(MergeState::NoMerge);
             region_local_state.set_merge_state(merge_state);
-            try!(self.engine.put_msg(&state_key, &region_local_state));
+            if let Err(e) = self.engine.put_msg(&state_key, &region_local_state) {
+                panic!("{} failed to persist rollbacked region merge state to db, err {:?}",
+                       self.tag,
+                       e);
+            }
             self.merge_state = MergeState::NoMerge;
             self.start_merging_time = None;
         }
