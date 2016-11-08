@@ -171,8 +171,7 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone())
-            .unwrap();
+        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone()).unwrap();
         assert!(node_id == 0 || node_id == node.id());
         debug!("node_id: {} tmp: {:?}",
                node_id,
@@ -221,7 +220,7 @@ impl Simulator for NodeCluster {
     }
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
-        Channel::send(&self.trans, msg)
+        self.trans.send(msg)
     }
 
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {

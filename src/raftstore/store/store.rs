@@ -351,7 +351,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             try!(delete_all_in_range(&self.engine, &last_start_key, &start_key));
             last_start_key = keys::enc_end_key(region);
         }
-        // `region_ranges_to_shutdown` should be empty on initialization. Skip it here.
 
         try!(delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
 
@@ -928,6 +927,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("duplicated region {} for split region", new_region_id);
             }
         }
+
         match Peer::create(self, &right) {
             Err(e) => {
                 // peer information is already written into db, can't recover.

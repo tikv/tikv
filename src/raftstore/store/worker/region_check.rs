@@ -109,11 +109,11 @@ impl Runner {
                           start_key: Vec<u8>,
                           end_key: Vec<u8>,
                           engine: Arc<DB>) {
-        CHECK_SPLIT_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
+        REGION_CHECK_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
 
         let mut size = 0;
         let mut split_key = vec![];
-        let histogram = CHECK_SPLIT_HISTOGRAM.with_label_values(&["split"]);
+        let histogram = REGION_CHECK_HISTOGRAM.with_label_values(&["split"]);
         let timer = histogram.start_timer();
 
         let res = engine.scan(&start_key,
@@ -140,7 +140,7 @@ impl Runner {
                    size,
                    self.region_max_size);
 
-            CHECK_SPLIT_COUNTER_VEC.with_label_values(&["split", "ignore"]).inc();
+            REGION_CHECK_COUNTER_VEC.with_label_values(&["split", "ignore"]).inc();
             return;
         }
         let res = self.ch.try_send(new_split_check_result(region_id, epoch, split_key));
@@ -150,7 +150,7 @@ impl Runner {
                   e);
         }
 
-        CHECK_SPLIT_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
+        REGION_CHECK_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
     }
 
     fn handle_check_merge(&self,
@@ -159,10 +159,10 @@ impl Runner {
                           start_key: Vec<u8>,
                           end_key: Vec<u8>,
                           engine: Arc<DB>) {
-        CHECK_SPLIT_COUNTER_VEC.with_label_values(&["merge", "all"]).inc();
+        REGION_CHECK_COUNTER_VEC.with_label_values(&["merge", "all"]).inc();
 
         let mut size = 0;
-        let histogram = CHECK_SPLIT_HISTOGRAM.with_label_values(&["merge"]);
+        let histogram = REGION_CHECK_HISTOGRAM.with_label_values(&["merge"]);
         let timer = histogram.start_timer();
 
         // Scan the engine and get the totol size of the region.
@@ -182,7 +182,7 @@ impl Runner {
                    region_id,
                    size,
                    self.merge_size);
-            CHECK_SPLIT_COUNTER_VEC.with_label_values(&["merge", "ignore"]).inc();
+            REGION_CHECK_COUNTER_VEC.with_label_values(&["merge", "ignore"]).inc();
             return;
         }
 
@@ -192,7 +192,7 @@ impl Runner {
                   region_id,
                   e)
         }
-        CHECK_SPLIT_COUNTER_VEC.with_label_values(&["merge", "success"]).inc()
+        REGION_CHECK_COUNTER_VEC.with_label_values(&["merge", "success"]).inc()
     }
 }
 

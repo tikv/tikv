@@ -650,10 +650,9 @@ mod tests {
     use mio::tcp::TcpListener;
 
     use super::*;
-    use super::super::{Msg, ConnData, Config};
+    use super::super::{Msg, ConnData, Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
-    use pd::Result;
     use storage::Storage;
     use kvproto::msgpb::{Message, MessageType};
     use kvproto::raft_serverpb::RaftMessage;
