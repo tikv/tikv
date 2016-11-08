@@ -89,6 +89,12 @@ pub enum ExecResult {
         left: metapb::Region,
         right: metapb::Region,
     },
+    ComputeHash {
+        region: metapb::Region,
+        index: u64,
+        snap: Snapshot,
+    },
+    VerifyHash { index: u64, hash: Vec<u8> },
 }
 
 // When we apply commands in handing ready, we should also need a way to
@@ -725,7 +731,9 @@ impl Peer {
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
-                AdminCmdType::InvalidAdmin => {}
+                AdminCmdType::InvalidAdmin |
+                AdminCmdType::ComputeHash |
+                AdminCmdType::VerifyHash => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
                 AdminCmdType::TransferLeader => {
@@ -1053,7 +1061,9 @@ impl Peer {
                 ExecResult::ChangePeer { ref region, .. } => {
                     storage.region = region.clone();
                 }
-                ExecResult::CompactLog { .. } => {}
+                ExecResult::CompactLog { .. } |
+                ExecResult::ComputeHash { .. } |
+                ExecResult::VerifyHash { .. } => {}
                 ExecResult::SplitRegion { ref left, .. } => {
                     storage.region = left.clone();
                 }
@@ -1168,6 +1178,8 @@ impl Peer {
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
+            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
+            AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
@@ -1385,6 +1397,34 @@ impl Peer {
 
         Ok((resp,
             Some(ExecResult::CompactLog { state: ctx.apply_state.get_truncated_state().clone() })))
+    }
+
+    fn exec_compute_hash(&self,
+                         ctx: &ExecContext,
+                         _: &AdminRequest)
+                         -> Result<(AdminResponse, Option<ExecResult>)> {
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::ComputeHash {
+            region: self.region().clone(),
+            index: ctx.index,
+            snap: Snapshot::new(self.engine.clone()),
+        })))
+    }
+
+    fn exec_verify_hash(&self,
+                        _: &ExecContext,
+                        req: &AdminRequest)
+                        -> Result<(AdminResponse, Option<ExecResult>)> {
+        let verify_req = req.get_verify_hash();
+        let index = verify_req.get_index();
+        let hash = verify_req.get_hash().to_vec();
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::VerifyHash {
+            index: index,
+            hash: hash,
+        })))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {

@@ -57,6 +57,7 @@ extern crate prometheus;
 #[macro_use]
 extern crate lazy_static;
 extern crate backtrace;
+extern crate sha1;
 
 #[macro_use]
 pub mod util;

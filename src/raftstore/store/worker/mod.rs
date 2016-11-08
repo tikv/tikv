@@ -11,15 +11,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+use raftstore::store::msg::Msg;
+use raftstore;
+use util::transport::SendCh;
+use std::sync::mpsc::Sender;
+
+pub trait MsgSender {
+    fn send(&self, msg: Msg) -> raftstore::Result<()>;
+    // same as send, but with retry.
+    fn try_send(&self, msg: Msg) -> raftstore::Result<()>;
+}
+
+impl MsgSender for SendCh<Msg> {
+    fn send(&self, msg: Msg) -> raftstore::Result<()> {
+        SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
+    }
+
+    fn try_send(&self, msg: Msg) -> raftstore::Result<()> {
+        SendCh::try_send(self, msg).map_err(|e| box_err!("{:?}", e))
+    }
+}
+
+impl MsgSender for Sender<Msg> {
+    fn send(&self, msg: Msg) -> raftstore::Result<()> {
+        Sender::send(self, msg).unwrap();
+        Ok(())
+    }
+
+    fn try_send(&self, msg: Msg) -> raftstore::Result<()> {
+        Sender::send(self, msg).unwrap();
+        Ok(())
+    }
+}
+
 mod region;
-mod split_check;
+mod scan;
 mod compact;
 mod raftlog_gc;
 mod pd;
 mod metrics;
 
-pub use self::region::{Task as RegionTask, Runner as RegionRunner, MsgSender};
-pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
+pub use self::region::{Task as RegionTask, Runner as RegionRunner};
+pub use self::scan::{Task as ScanTask, Runner as ScanRunner};
 pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
 pub use self::raftlog_gc::{Task as RaftlogGcTask, Runner as RaftlogGcRunner};
 pub use self::pd::{Task as PdTask, Runner as PdRunner};
