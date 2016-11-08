@@ -1389,16 +1389,18 @@ impl Peer {
         let mut resp = AdminResponse::new();
         resp.set_merge(MergeResponse::new());
 
-        // update peer meta info
-        let state_key = keys::region_state_key(self.region().get_id());
-        let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
-            .unwrap();
-        let mut merge_state = RegionMergeState::new();
-        merge_state.set_state(MergeState::Merging);
-        merge_state.set_from_region(merge_req.get_from_region().clone());
-        region_local_state.set_merge_state(merge_state);
-        try!(self.engine.put_msg(&state_key, &region_local_state));
-        self.merge_state = MergeState::Merging;
+        if self.merge_state != MergeState::Merging {
+            // update peer meta info
+            let state_key = keys::region_state_key(self.region().get_id());
+            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+                .unwrap();
+            let mut merge_state = RegionMergeState::new();
+            merge_state.set_state(MergeState::Merging);
+            merge_state.set_from_region(merge_req.get_from_region().clone());
+            region_local_state.set_merge_state(merge_state);
+            try!(self.engine.put_msg(&state_key, &region_local_state));
+            self.merge_state = MergeState::Merging;
+        }
 
         self.start_merging_time = Some(Instant::now());
 
@@ -1447,15 +1449,14 @@ impl Peer {
             region_local_state.set_merge_state(merge_state);
             try!(self.engine.put_msg(&state_key, &region_local_state));
             self.merge_state = MergeState::Suspended;
-
-            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["suspend", "success"]).inc();
-            return Ok((resp,
-                       Some(ExecResult::SuspendRegion {
-                from_region: suspend_region.get_from_region().clone(),
-                into_region: suspend_region.get_into_region().clone(),
-            })));
         }
-        Ok((resp, None))
+
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["suspend", "success"]).inc();
+        Ok((resp,
+            Some(ExecResult::SuspendRegion {
+            from_region: suspend_region.get_from_region().clone(),
+            into_region: suspend_region.get_into_region().clone(),
+        })))
     }
 
     fn exec_commit_merge(&mut self,
@@ -1467,40 +1468,40 @@ impl Peer {
         let commit_merge = req.get_commit_merge();
         let resp = AdminResponse::new();
 
-        // write it to peer local state and update peer mete info
         if self.merge_state != MergeState::Merging {
+            // Just ignore this command since it's a retry of previous region merge command.
             info!("{} not in region merge Merging state, ignore commit region {:?}",
                   self.tag,
                   commit_merge);
             Ok((resp, None))
         } else {
-            // update region meta info
             let state_key = keys::region_state_key(self.region().get_id());
             let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
                 .unwrap();
             let mut merge_state = RegionMergeState::new();
+            // Update region's merge state
             merge_state.set_state(MergeState::NoMerge);
             region_local_state.set_merge_state(merge_state);
-            // merge region range
+            // Merge region range
             let to_shutdown = commit_merge.get_from_region().clone();
             let old_region = self.region().clone();
             let mut new_region = old_region.clone();
-            // the ranges in r1, r2 should be adjacent
+            // The ranges in r1, r2 should be adjacent.
             // TODO add checking for that relationship
             if to_shutdown.get_start_key() < old_region.get_start_key() {
-                // the range of r1 is ahead of the range of r2
+                // The range of r1 is ahead of the range of r2
                 new_region.set_start_key(to_shutdown.get_start_key().to_vec());
                 new_region.set_end_key(old_region.get_end_key().to_vec());
             } else {
-                // the range of r2 is ahead of the range of r1
+                // The range of r2 is ahead of the range of r1
                 new_region.set_start_key(old_region.get_start_key().to_vec());
                 new_region.set_end_key(to_shutdown.get_end_key().to_vec());
             }
-            // update region epoch version
+            // Update region epoch version.
             let region_version = old_region.get_region_epoch().get_version() + 1;
             new_region.mut_region_epoch().set_version(region_version);
             region_local_state.set_region(new_region.clone());
-            // persist peer local state
+            // Persist peer local state
             try!(self.engine.put_msg(&state_key, &region_local_state));
             self.merge_state = MergeState::NoMerge;
             self.start_merging_time = None;
