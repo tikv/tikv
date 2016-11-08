@@ -25,7 +25,7 @@ use std::{str, u64};
 use clap::{Arg, App, SubCommand};
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState};
+use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState, PeerState};
 use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
@@ -65,7 +65,11 @@ fn main() {
                 .arg(Arg::with_name("region")
                     .short("r")
                     .takes_value(true)
-                    .help("set the region id"))))
+                    .help("set the region id, if not specified, print all regions."))
+                .arg(Arg::with_name("skip-tombstone")
+                    .short("s")
+                    .takes_value(false)
+                    .help("skip tombstone region."))))
         .subcommand(SubCommand::with_name("scan")
             .about("print the range db range")
             .arg(Arg::with_name("from")
@@ -124,8 +128,13 @@ fn main() {
             };
             dump_raft_log_entry(db, &key);
         } else if let Some(matches) = matches.subcommand_matches("region") {
-            let region = String::from(matches.value_of("region").unwrap());
-            dump_region_info(db, region);
+            let skip_tombstone = matches.is_present("skip-tombstone");
+            match matches.value_of("region") {
+                Some(id) => {
+                    dump_region_info(&db, String::from(id).parse().unwrap(), skip_tombstone)
+                }
+                None => dump_all_region_info(db, skip_tombstone),
+            }
         } else {
             panic!("Currently only support raft log entry and scan.")
         }
@@ -135,7 +144,7 @@ fn main() {
         let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
         let cf_name = matches.value_of("cf").unwrap_or("default");
         if let Some(ref to) = to {
-            if to > &from {
+            if to <= &from {
                 panic!("The region's start pos must greater than the end pos.")
             }
         }
@@ -283,12 +292,14 @@ fn dump_raft_log_entry(db: DB, idx_key: &[u8]) {
     println!("{:?}", msg);
 }
 
-fn dump_region_info(db: DB, region_id_str: String) {
-    let region_id = u64::from_str_radix(&region_id_str, 10).unwrap();
-
+fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     let region_state_key = keys::region_state_key(region_id);
-    println!("region state key: {}", escape(&region_state_key));
     let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
+    if skip_tombstone &&
+       region_state.as_ref().map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+        return;
+    }
+    println!("region state key: {}", escape(&region_state_key));
     println!("region state: {:?}", region_state);
 
     let raft_state_key = keys::raft_state_key(region_id);
@@ -300,6 +311,23 @@ fn dump_region_info(db: DB, region_id_str: String) {
     println!("apply state key: {}", escape(&apply_state_key));
     let apply_state: Option<RaftApplyState> = db.get_msg_cf(CF_RAFT, &apply_state_key).unwrap();
     println!("apply state: {:?}", apply_state);
+}
+
+fn dump_all_region_info(db: DB, skip_tombstone: bool) {
+    let start_key = keys::REGION_META_MIN_KEY;
+    let end_key = keys::REGION_META_MAX_KEY;
+    db.scan(start_key,
+              end_key,
+              false,
+              &mut |key, _| {
+            let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
+            dump_region_info(&db, region_id, skip_tombstone);
+            Ok(true)
+        })
+        .unwrap();
 }
 
 fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: &str) {
