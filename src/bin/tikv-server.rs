@@ -941,6 +941,15 @@ fn main() {
                                         &config,
                                         None,
                                         |v| v.as_str().map(|s| s.to_owned()));
+
+    let addrs: Vec<&str> = pd_endpoints.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if let Err(e) = util::config::validate_addrs(addrs.as_slice()) {
+        panic!("{:?}", e);
+    }
+
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
     let cluster_id = pd_client.cluster_id;
 
