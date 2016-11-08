@@ -133,17 +133,32 @@ pub fn validate_addrs(addrs: &[&str]) -> Result<(), ConfigError> {
 
     for addr in addrs {
         if let (Err(_), Err(_)) = (SocketAddrV4::from_str(addr), SocketAddrV6::from_str(addr)) {
-            let mut colons = 0;
-            for c in addr.chars() {
-                match c as u8 {
-                    b':' => {
-                        colons += 1;
-                    }
+            let parts: Vec<&str> = addr.split(':')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
 
+            // 2 for ["Host", "Port"]
+            if parts.len() != 2 {
+                return Err(new_err(addr));
+            }
+
+            // Check Port.
+            let port: u16 = try!(parts[1]
+                .parse()
+                .map_err(|_| new_err(addr)));
+            // Port = 0 is invalid.
+            if port == 0 {
+                return Err(new_err(addr));
+            }
+
+            // Check Host.
+            for c in parts[0].chars() {
+                match c as u8 {
                     // No scheme, path, query and fragment.
                     //
                     // gen-delims = ":" / "/" / "?" / "#" / "[" / "]" / "@"
-                    b'/' | b'?' | b'=' | b'#' |
+                    b':' | b'/' | b'?' | b'=' | b'#' |
 
                     // Other reserved characters.
                     //
@@ -153,26 +168,6 @@ pub fn validate_addrs(addrs: &[&str]) -> Result<(), ConfigError> {
                     b'[' | b']' | b'@' => return Err(new_err(addr)),
 
                     _ => (),
-                }
-            }
-
-            // Check port.
-            if colons != 1 {
-                return Err(new_err(addr));
-            }
-
-            if let Some(idx) = addr.find(':') {
-                // Leading or trailing colons are invalid.
-                if idx == 0 || idx == addr.len() - 1 {
-                    return Err(new_err(addr));
-                }
-
-                // Port range from 1 to 65535.
-                let port: u32 = try!(addr[(idx + 1)..]
-                    .parse()
-                    .map_err(|_| new_err(addr)));
-                if port > 65535 || port == 0 {
-                    return Err(new_err(addr));
                 }
             }
         }
