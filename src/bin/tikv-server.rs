@@ -206,8 +206,6 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
                          &push_job);
 }
 
-const SOMAXCONN: u64 = 32768;
-
 fn check_system_config(matches: &Matches, config: &toml::Value) {
     // Panic when the maximum number of open file descriptors less than opts.max_open_files.
     let max_open_files = get_integer_value("",
@@ -220,8 +218,8 @@ fn check_system_config(matches: &Matches, config: &toml::Value) {
         panic!("{:?}", e);
     }
 
-    if let Err(e) = util::config::check_net_max_conn(SOMAXCONN) {
-        panic!("{:?}", e);
+    if let Err(e) = util::config::check_kernel_params() {
+        warn!("{:?}", e);
     }
     // TODO: swap
 }

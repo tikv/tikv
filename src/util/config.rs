@@ -150,34 +150,81 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
     Ok(())
 }
 
-
+/// `check_kernel_params` checks kernel parameters, following are checked so far:
+///   - `net.core.somaxconn` should be greater or equak to 32768.
+///   - `net.ipv4.tcp_syncookies` should be 0
+///   - `vm.swappiness` shoud be 0
+///
+/// Note that: It only works **Linux** platform.
 #[cfg(target_os = "linux")]
-pub fn check_net_max_conn(expect: u64) -> Result<(), ConfigError> {
+pub fn check_kernel_params() -> Result<(), ConfigError> {
     use std::fs;
     use std::io::Read;
 
+    // Check net.core.somaxconn.
     const SOMAXCONN_PATH: &'static str = "/proc/sys/net/core/somaxconn";
+    const SOMAXCONN_SUGGEST: u64 = 32768;
+
+    // Check net.ipv4.tcp_syncookies.
+    const TCP_SYNCOOKIES_PATH: &'static str = "/proc/sys/net/ipv4/tcp_syncookies";
+    const TCP_SYNCOOKIES_SUGGEST: &'static str = "0";
+
+    // Check vm.swappiness.
+    const SWAP_PATH: &'static str = "/proc/sys/vm/swappiness";
+    const SWAP_SUGGEST: &'static str = "0";
+
+    let params: Vec<(&str, Box<Fn(&str) -> Result<(), ConfigError>>)> = vec![
+        (SOMAXCONN_PATH,
+        box |s| {
+            match s.parse::<u64>() {
+                Err(e) => Err(ConfigError::Limits(format!("check_kernel_params failed {}", e))),
+                Ok(max) if max < SOMAXCONN_SUGGEST => {
+                    Err(ConfigError::Limits(format!("net.core.somaxconn is too small, got {}, \
+                                                    expect greater or equal to {}",
+                                                    max,
+                                                    SOMAXCONN_SUGGEST)))
+                }
+                _ => Ok(()),
+            }
+        }),
+        (TCP_SYNCOOKIES_PATH,
+        box |s| {
+            if s != TCP_SYNCOOKIES_SUGGEST {
+                return Err(ConfigError::Limits(format!("net.ipv4.tcp_syncookies expect to be {}, \
+                                                        got {}",
+                                                        TCP_SYNCOOKIES_SUGGEST,
+                                                        s)));
+            }
+            Ok(())
+        }),
+
+        (SWAP_PATH,
+        box |s| {
+            if s != SWAP_SUGGEST {
+                return Err(ConfigError::Limits(format!("vm.swappiness expect to be {}, got {}",
+                                                        SWAP_SUGGEST,
+                                                        s)));
+            }
+            Ok(())
+        }),
+    ];
+
     let mut buffer = String::new();
-    if let Err(e) = fs::File::open(SOMAXCONN_PATH).and_then(|mut f| f.read_to_string(&mut buffer)) {
-        return Err(ConfigError::Limits(format!("check_net_max_conn failed {}", e)));
-    }
-
-    match buffer.trim_matches('\n').parse::<u64>() {
-        Err(e) => Err(ConfigError::Limits(format!("check_net_max_conn failed {}", e))),
-
-        Ok(max) if max < expect => {
-            Err(ConfigError::Limits(format!("net.core.somaxconn is too small, got {}, \
-                                            expect greater or equal to {}",
-                                            max,
-                                            expect)))
+    for (param_path, checker) in params {
+        if let Err(e) = fs::File::open(param_path).and_then(|mut f| f.read_to_string(&mut buffer)) {
+            return Err(ConfigError::Limits(format!("check_kernel_params failed {}", e)));
         }
 
-        _ => Ok(()),
+        try!(checker(buffer.trim_matches('\n')));
+
+        buffer.clear()
     }
+
+    Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn check_net_max_conn(_: u64) -> Result<(), ConfigError> {
+pub fn check_kernel_params() -> Result<(), ConfigError> {
     Ok(())
 }
 
