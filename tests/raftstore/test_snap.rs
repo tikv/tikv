@@ -348,15 +348,15 @@ fn test_node_stale_snap() {
 }
 
 /// Pause Snap and wait till first append message arrives.
-pub struct SnapshotApendFilter {
+pub struct SnapshotAppendFilter {
     stale: AtomicBool,
     pending_msg: Mutex<Vec<Msg>>,
     notifier: Mutex<Sender<()>>,
 }
 
-impl SnapshotApendFilter {
-    pub fn new(notifier: Sender<()>) -> SnapshotApendFilter {
-        SnapshotApendFilter {
+impl SnapshotAppendFilter {
+    pub fn new(notifier: Sender<()>) -> SnapshotAppendFilter {
+        SnapshotAppendFilter {
             stale: AtomicBool::new(false),
             pending_msg: Mutex::new(vec![]),
             notifier: Mutex::new(notifier),
@@ -364,7 +364,7 @@ impl SnapshotApendFilter {
     }
 }
 
-impl Filter<Msg> for SnapshotApendFilter {
+impl Filter<Msg> for SnapshotAppendFilter {
     fn before(&self, msgs: &mut Vec<Msg>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
             return Ok(());
@@ -411,14 +411,14 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let (tx, rx) = mpsc::channel();
-    cluster.sim.wl().add_recv_filter(4, box SnapshotApendFilter::new(tx));
+    cluster.sim.wl().add_recv_filter(4, box SnapshotAppendFilter::new(tx));
     pd_client.add_peer(r1, new_peer(4, 4));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
-    let engine1 = cluster.get_engine(4);
-    must_get_equal(&engine1, b"k1", b"v1");
-    must_get_equal(&engine1, b"k2", b"v2");
+    let engine4 = cluster.get_engine(4);
+    must_get_equal(&engine4, b"k1", b"v1");
+    must_get_equal(&engine4, b"k2", b"v2");
 }
 
 #[test]
