@@ -15,7 +15,6 @@ use tikv::raftstore::store::*;
 use tikv::util::HandyRwLock;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result};
-use rocksdb::Writable;
 use kvproto::eraftpb::MessageType;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 

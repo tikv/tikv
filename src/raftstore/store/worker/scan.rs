@@ -334,7 +334,7 @@ mod test {
         }
 
         {
-            let checksum = runner.checksum.get(&region.get_id()).unwrap().clone();
+            let checksum = runner.checksum.get(&region.get_id()).unwrap();
             assert_eq!(checksum.0, 10);
             assert_eq!(checksum.1.bytes(), digest.bytes());
         }
