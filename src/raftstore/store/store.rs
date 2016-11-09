@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::option::Option;
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{HashMap, HashSet, BTreeMap, BinaryHeap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
@@ -25,7 +25,6 @@ use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use uuid::Uuid;
-use rand::{self, Rng};
 use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
@@ -61,7 +60,7 @@ use super::metrics::*;
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
-const DEFAULT_CONSISTENCY_CHECK_PERCENT: u8 = 20;
+const DEFAULT_CONSISTENCY_CHECK_PERCENT: f64 = 0.2;
 
 /// The buffered metrics counters for raft ready handling.
 #[derive(Debug, Default, Clone)]
@@ -1006,8 +1005,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.region_ranges.insert(enc_end_key(&region), region.get_id());
     }
 
-    fn on_ready_compute_hash(&self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
         let region_id = region.get_id();
+        self.region_peers.get_mut(&region_id).unwrap().last_consistency_check_time = Instant::now();
         let task = ScanTask::compute_hash(region, index, snap);
         info!("[region {}] schedule {}", region_id, task);
         if let Err(e) = self.scan_worker.schedule(task) {
@@ -1286,16 +1286,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_consistency_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         // To avoid frequent scan, we only check some of the regions very tick.
-        let mut rng = rand::thread_rng();
-
+        let leader_count = self.region_peers.values().filter(|p| p.is_leader()).count() as f64;
+        let capacity = cmp::max((leader_count * DEFAULT_CONSISTENCY_CHECK_PERCENT) as usize,
+                                1);
+        let mut pending_peers = BinaryHeap::with_capacity(capacity);
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
             }
-
-            if rng.gen_range(0, 100) > DEFAULT_CONSISTENCY_CHECK_PERCENT {
-                continue;
+            // heap is max-heap, so use opposite number to get max elapsed time.
+            let wait_secs = -(peer.last_consistency_check_time.elapsed().as_secs() as i64);
+            if pending_peers.len() == capacity {
+                *pending_peers.peek_mut().unwrap() = (wait_secs, region_id);
+            } else {
+                pending_peers.push((wait_secs, region_id));
             }
+        }
+
+        for (_, region_id) in pending_peers {
+            let peer = self.region_peers.get(&region_id).unwrap();
 
             info!("{} scheduling consistent check", peer.tag);
             let msg = Msg::RaftCmd {

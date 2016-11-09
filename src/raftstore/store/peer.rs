@@ -188,6 +188,8 @@ pub struct Peer {
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
 
+    pub last_consistency_check_time: Instant,
+
     leader_missing_time: Option<Instant>,
 
     pub tag: String,
@@ -279,6 +281,7 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
+            last_consistency_check_time: Instant::now(),
         };
 
         peer.load_all_coprocessors();
