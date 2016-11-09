@@ -1042,15 +1042,6 @@ impl Peer {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
-        let last_applied_index = self.get_store().applied_index();
-        if last_applied_index >= index {
-            // How can it happen?
-            panic!("{} applied index moved backwards, {} >= {}",
-                   self.tag,
-                   last_applied_index,
-                   index);
-        }
-
         let mut ctx = ExecContext::new(self, index, term, req);
         let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             error!("{} execute raft command err: {:?}", self.tag, e);
