@@ -18,7 +18,7 @@ mod latch;
 use std::error;
 use std::io::Error as IoError;
 
-pub use self::scheduler::{Scheduler, Msg, GC_BATCH_SIZE};
+pub use self::scheduler::{Scheduler, Msg, GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::store::SnapshotStore;
 
 quick_error! {
