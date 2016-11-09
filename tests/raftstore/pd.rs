@@ -758,14 +758,11 @@ impl PdClient for TestPdClient {
         match neighbour {
             Some(into_region) => {
                 self.cluster.wl().add_region_merge(&into_region, &region);
-                resp.set_ok(true);
                 resp.set_into_region(into_region);
+                Ok(resp)
             }
-            None => {
-                resp.set_ok(false);
-            }
+            None => Err(Error::Other(box_err!("no proper neighbour region to merge"))),
         }
-        Ok(resp)
     }
 
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {

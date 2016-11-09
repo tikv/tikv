@@ -158,15 +158,11 @@ impl<T: PdClient> Runner<T> {
 
         match self.pd_client.ask_merge(region.clone()) {
             Ok(resp) => {
-                if resp.get_ok() {
-                    info!("[region {}] PD permits ask merge request. Later this region will be \
-                           merged into region {:?}",
-                          region.get_id(),
-                          resp.get_into_region());
-                    PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "success"]).inc();
-                } else {
-                    info!("[region {}] PD rejects ask merge request", region.get_id());
-                }
+                info!("[region {}] PD permits ask merge request. Later this region will be \
+                       merged into region {:?}",
+                      region.get_id(),
+                      resp.get_into_region());
+                PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "success"]).inc();
             }
             Err(e) => {
                 debug!("[region {}] failed to ask merge, error: {:?}",
