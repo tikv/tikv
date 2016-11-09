@@ -43,11 +43,6 @@ use super::util::*;
 /// and it would check with pd to confirm whether it's still a member of the cluster.
 /// If not, it should destroy itself as a stale peer which is removed out already.
 fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
-    // Use a value of 3 seconds as max time here just for test.
-    // In production environment, the value of max_leader_missing_duration
-    // should be configured far beyond the election timeout.
-    let max_leader_missing_duration = Duration::from_secs(3);
-    cluster.cfg.raft_store.max_leader_missing_duration = max_leader_missing_duration;
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_rule();
@@ -80,7 +75,8 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // destroy itself earlier than this test case expects.
 
     // Wait for max_leader_missing_duration to time out.
-    thread::sleep(max_leader_missing_duration);
+
+    thread::sleep(cluster.cfg.raft_store.max_leader_missing_duration);
     // Sleep one more second to make sure there is enough time for the peer to be destroyed.
     thread::sleep(Duration::from_secs(1));
 
@@ -124,11 +120,6 @@ fn test_server_stale_peer_out_of_region() {
 /// and it's an initialized peer without any data. It would destroy itself as
 /// as stale peer directly and should not impact other region data on the same store.
 fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
-    // Use a value of 3 seconds as max time here just for test.
-    // In production environment, the value of max_leader_missing_duration
-    // should be configured far beyond the election timeout.
-    let max_leader_missing_duration = Duration::from_secs(3);
-    cluster.cfg.raft_store.max_leader_missing_duration = max_leader_missing_duration;
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_rule();
@@ -162,7 +153,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_remove_peer(new_region_id, new_peer(3, 4));
 
     // Wait for max_leader_missing_duration to time out.
-    thread::sleep(max_leader_missing_duration);
+    thread::sleep(cluster.cfg.raft_store.max_leader_missing_duration);
     // Sleep one more second to make sure there is enough time for the peer to be destroyed.
     thread::sleep(Duration::from_secs(1));
 

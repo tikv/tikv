@@ -19,7 +19,7 @@ use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{Mutation, Key, KvPair, make_key};
-use tikv::storage::txn::GC_BATCH_SIZE;
+use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 
 #[derive(Clone)]
 struct AssertionStorage(SyncStorage);
@@ -465,6 +465,34 @@ fn test_txn_store_resolve_lock() {
     store.get_ok(b"p2", 20, b"v10");
     store.get_ok(b"s2", 30, b"v10");
     store.scan_lock_ok(30, vec![]);
+}
+
+fn test_txn_store_resolve_lock_batch(n: usize) {
+    let store = new_assertion_storage();
+    for i in 0..n {
+        let key = format!("k{}", i);
+        store.prewrite_ok(vec![Mutation::Put((make_key(&key.as_bytes()), b"v".to_vec()))],
+                          b"k1",
+                          5);
+    }
+    store.resolve_lock_ok(5, Some(10));
+    for i in 0..n {
+        let key = format!("k{}", i);
+        store.get_ok(key.as_bytes(), 30, b"v");
+        store.get_none(key.as_bytes(), 8);
+    }
+}
+
+#[test]
+fn test_txn_store_resolve_lock2() {
+    for &i in &[0,
+                1,
+                RESOLVE_LOCK_BATCH_SIZE - 1,
+                RESOLVE_LOCK_BATCH_SIZE,
+                RESOLVE_LOCK_BATCH_SIZE + 1,
+                RESOLVE_LOCK_BATCH_SIZE * 2] {
+        test_txn_store_resolve_lock_batch(i);
+    }
 }
 
 #[test]
