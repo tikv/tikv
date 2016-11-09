@@ -14,6 +14,7 @@
 use std::str::FromStr;
 use std::net::{SocketAddrV4, SocketAddrV6};
 
+use url;
 use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {
@@ -124,52 +125,38 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
     }
 }
 
-/// `validate_addrs` validates a list of addresses. Addresses are formed like "Host:Port".
-/// More details about **Host** and **Port** can be found in RFC3986 section 3.2.2 and 3.2.3.
-pub fn validate_addrs(addrs: &[&str]) -> Result<(), ConfigError> {
-    fn new_err(addr: &str) -> ConfigError {
-        ConfigError::PDList(format!("invalid addr: {}", addr))
-    }
-
+/// `check_addrs` validates a list of addresses. Addresses are formed like "Host:Port".
+/// More details about **Host** and **Port** can be found in WHATWG URL Standard.
+pub fn check_addrs(addrs: &[&str]) -> Result<(), ConfigError> {
     for addr in addrs {
-        if let (Err(_), Err(_)) = (SocketAddrV4::from_str(addr), SocketAddrV6::from_str(addr)) {
-            let parts: Vec<&str> = addr.split(':')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect();
+        // Try to validate "IPv4:Port" and "[IPv6]:Port".
+        let v4 = SocketAddrV4::from_str(addr);
+        let v6 = SocketAddrV6::from_str(addr);
+        if v4.is_ok() || v6.is_ok() {
+            continue;
+        }
 
-            // 2 for ["Host", "Port"]
-            if parts.len() != 2 {
-                return Err(new_err(addr));
-            }
+        let parts: Vec<&str> = addr.split(':')
+            .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
+            .collect();
 
-            // Check Port.
-            let port: u16 = try!(parts[1]
-                .parse()
-                .map_err(|_| new_err(addr)));
-            // Port = 0 is invalid.
-            if port == 0 {
-                return Err(new_err(addr));
-            }
+        // ["Host", "Port"]
+        if parts.len() != 2 {
+            return Err(ConfigError::PDList(format!("invalid addr: {}", addr)));
+        }
 
-            // Check Host.
-            for c in parts[0].chars() {
-                match c as u8 {
-                    // No scheme, path, query and fragment.
-                    //
-                    // gen-delims = ":" / "/" / "?" / "#" / "[" / "]" / "@"
-                    b':' | b'/' | b'?' | b'=' | b'#' |
+        // Check Port.
+        let port: u16 = try!(parts[1]
+            .parse()
+            .map_err(|_| ConfigError::PDList(format!("invalid addr: {}", addr))));
+        // Port = 0 is invalid.
+        if port == 0 {
+            return Err(ConfigError::PDList(format!("invalid addr: {}", addr)));
+        }
 
-                    // Other reserved characters.
-                    //
-                    // sub-delims = "!" / "$" / "&" / "'" / "(" / ")"
-                    //              / "*" / "+" / "," / ";" / "="
-                    b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' |
-                    b'[' | b']' | b'@' => return Err(new_err(addr)),
-
-                    _ => (),
-                }
-            }
+        // Check Host.
+        if let Err(e) = url::Host::parse(parts[0]) {
+            return Err(ConfigError::PDList(format!("{:?}", e)));
         }
     }
 
@@ -251,7 +238,7 @@ mod test {
     }
 
     #[test]
-    fn test_validate_addrs() {
+    fn test_check_addrs() {
         let table = vec![
             (vec!["127.0.0.1:8080",], true),
             (vec!["[::1]:8080",], true),
@@ -288,7 +275,7 @@ mod test {
         ];
 
         for (addrs, is_ok) in table {
-            assert_eq!(validate_addrs(&addrs).is_ok(), is_ok);
+            assert_eq!(check_addrs(&addrs).is_ok(), is_ok);
         }
     }
 }

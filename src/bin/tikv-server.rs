@@ -946,7 +946,7 @@ fn main() {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    if let Err(e) = util::config::validate_addrs(addrs.as_slice()) {
+    if let Err(e) = util::config::check_addrs(addrs.as_slice()) {
         panic!("{:?}", e);
     }
 
