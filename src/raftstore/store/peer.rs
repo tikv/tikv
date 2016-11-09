@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
-use time::{self, Timespec};
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message, RepeatedField};
@@ -191,7 +190,7 @@ pub struct Peer {
     pub last_compacted_idx: u64,
 
     // follower readonly query
-    pending_readonly_queries: HashMap<Uuid, (PendingCmd, RaftCmdRequest, Timespec)>,
+    pending_readonly_queries: HashMap<Uuid, (PendingCmd, RaftCmdRequest, Instant)>,
     ready_read_states: VecDeque<ReadState>,
 }
 
@@ -498,6 +497,28 @@ impl Peer {
         StaleState::Valid
     }
 
+    pub fn check_stall_readonly_query(&mut self, now: Instant, timeout: Duration) {
+        let mut expired = vec![];
+        {
+            for (k, v) in &self.pending_readonly_queries {
+                // v = (cmd, req, start_time)
+                let duration = now.duration_since(v.2);
+                if duration > timeout {
+                    expired.push(*k);
+                }
+            }
+        }
+
+        for uuid in expired {
+            warn!("follower read timeout for command {}", uuid);
+            let (mut cmd, _, _) = self.pending_readonly_queries.remove(&uuid).unwrap();
+            let mut resp = cmd_resp::new_error(box_err!("follower read timeout"));
+            cmd_resp::bind_uuid(&mut resp, cmd.uuid);
+            cmd_resp::bind_term(&mut resp, self.term());
+            cmd.call(resp);
+        }
+    }
+
     pub fn handle_raft_ready<T: Transport>(&mut self,
                                            trans: &T,
                                            metrics: &mut RaftMetrics)
@@ -660,9 +681,8 @@ impl Peer {
             return false;
         } else if readonly_query && self.raft_group.raft.state == StateRole::Follower {
             // follower readonly query
-            let now = time::get_time();
             let uuid = cmd.uuid;
-            self.pending_readonly_queries.insert(uuid, (cmd, req, now));
+            self.pending_readonly_queries.insert(uuid, (cmd, req, Instant::now()));
             if let Err(e) = self.send_read_index(uuid.as_bytes()) {
                 error!("{} send read index failed, err: {}", self.tag, e);
                 let (mut cmd, _, _) = self.pending_readonly_queries.remove(&uuid).unwrap();
@@ -672,6 +692,7 @@ impl Peer {
                 cmd.call(resp);
                 return false;
             }
+            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["follower_read"]).inc();
             return true;
         } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
