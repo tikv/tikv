@@ -82,6 +82,7 @@ pub fn new_store_cfg() -> Config {
         raft_log_gc_threshold: 1,
         pd_heartbeat_tick_interval: 20,
         region_check_size_diff: 10000,
+        region_merge_retry_duration: Duration::from_millis(50),
         ..Config::default()
     }
 }

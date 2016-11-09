@@ -486,6 +486,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // retry region merge on timeout
         for (from_region, into_region) in region_to_retry_merge {
+            info!("{} retry region merge from region {:?} into region {:?}",
+                  self.tag,
+                  from_region,
+                  into_region);
             // validate region epoch on retry
             self.validate_region_epoch(from_region.clone(), into_region.clone());
             // retry to suspend `from_region`
@@ -994,22 +998,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_merge_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
-        let store_id = self.store_id();
+        info!("{} handle merge region result from region {:?}, into region {:?}",
+              self.tag,
+              from_region,
+              into_region);
+
         if let Some(from_peer) = self.region_peers.get(&from_region.get_id()) {
             // Send suspend command to `from_region`.
-            let request = new_suspend_region_request(from_region,
+            let request = new_suspend_region_request(from_region.clone(),
                                                      into_region.clone(),
                                                      from_peer.peer.clone());
             if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
                 callback: Box::new(|_| {}),
             }) {
-                error!("store {} failed to send suspend region, err {:?}",
-                       store_id,
+                error!("{} failed to send suspend from region {:?} into region {:?}, err {:?}",
+                       self.tag,
+                       from_region,
+                       into_region,
                        e)
             }
             return;
         }
+
+        warn!("{} has no peer for from region {:?}, rollback region merge for into region {:?}",
+              self.tag,
+              from_region,
+              into_region);
 
         // If no peer in `self.region_peers` for `from_region`, there could be:
         // 1. Region merge is done, this merge request is a retry.
@@ -1018,7 +1033,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Anyway the merge state of peer in `into_region` would be rollbacked.
         let into_peer = self.region_peers.get_mut(&into_region.get_id()).unwrap();
         if let Err(e) = into_peer.rollback_region_merge() {
-            error!("{} fails to rollback region merge for region {:?}, err {:?}",
+            error!("{} fails to rollback region merge into region {:?}, err {:?}",
                    self.tag,
                    into_region,
                    e)
@@ -1026,9 +1041,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_rollback_merge(&mut self,
-                               _from_region: metapb::Region,
+                               from_region: metapb::Region,
                                into_region: metapb::Region) {
-        let store_id = self.store_id();
+        info!("{} rollback region merge from region {:?} into region {:?}",
+              self.tag,
+              from_region,
+              into_region);
+
         let into_peer = match self.region_peers.get_mut(&into_region.get_id()) {
             Some(peer) => peer,
             None => {
@@ -1041,16 +1060,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // In either case, the peers in regions are not in region merge state any more.
                 // And they could be moved to different stores, so `into_peer` is not
                 // in the same store as `from_peer`.
-                warn!("store {} has no peer for region {:?} when region merge rollbacks",
-                      store_id,
+                warn!("{} has no peer for region {:?} when region merge rollbacks",
+                      self.tag,
                       into_region);
                 return;
             }
         };
 
         if let Err(e) = into_peer.rollback_region_merge() {
-            error!("store {} fails to rollback region merge, err {:?}",
-                   store_id,
+            error!("{} fails to rollback region merge from region {:?} into region {:?}, err {:?}",
+                   self.tag,
+                   from_region,
+                   into_region,
                    e)
         }
     }
@@ -1058,6 +1079,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_suspend_region(&mut self,
                                from_region: metapb::Region,
                                into_region: metapb::Region) {
+
+        info!("{} handle suspend region result from region {:?} into region {:?}",
+              self.tag,
+              from_region,
+              into_region);
+
         let into_peer = match self.region_peers.get(&into_region.get_id()) {
             Some(peer) => peer,
             None => {
@@ -1068,20 +1095,26 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Those peers in regions are not in region merge state any more.
                 // And they could be moved to different stores, so `into_peer` is not
                 // in the same store as `from_peer`.
-                warn!("store {} has no peer for region {:?} when handling suspend region result",
-                      self.store_id(),
-                      into_region);
+                warn!("{} has no peer for into region {:?} when handling the result of \
+                       suspending form region {:?}",
+                      self.tag,
+                      into_region,
+                      from_region);
                 return;
             }
         };
 
-        let request = new_commit_merge_request(from_region, into_region, into_peer.peer.clone());
+        let request = new_commit_merge_request(from_region.clone(),
+                                               into_region.clone(),
+                                               into_peer.peer.clone());
         if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
             request: request,
             callback: Box::new(|_| {}),
         }) {
-            error!("store {} failed to send commit merge, err {:?}",
-                   self.store_id(),
+            error!("{} failed to send commit merge into region {:?}, from region {:?}, err {:?}",
+                   self.tag,
+                   into_region,
+                   from_region,
                    e)
         }
     }
@@ -1091,9 +1124,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              old: metapb::Region,
                              to_shutdown: metapb::Region) {
 
+        info!("{} handle commit merge result from region {:?} into region {:?} new region {:?}",
+              self.tag,
+              to_shutdown,
+              old,
+              new);
+
         if self.region_ranges.remove(&enc_end_key(&old)).is_none() {
-            panic!("store {} has no into region {:?} when committing region merge",
-                   self.store_id(),
+            panic!("{} has no into region {:?} when committing region merge",
+                   self.tag,
                    old);
         }
         self.region_ranges.insert(enc_end_key(&new), new.get_id());
@@ -1105,8 +1144,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Those peers in regions are not in region merge state any more.
             // And they could be moved to different stores, so `from_peer` is not
             // in the same store as `into_peer`.
-            warn!("store {} has no from region {:?} when committing region merge",
-                  self.store_id(),
+            warn!("{} has no region {:?} to shutdown when committing region merge",
+                  self.tag,
                   to_shutdown);
         } else {
             // Move the range of the `to_shutdown` region to `region_ranges_to_shutdown`.
@@ -1132,8 +1171,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_shutdown_region(&mut self, region: metapb::Region, peer: metapb::Peer) {
-        info!("store {} destroy region {:?} on shutdown region command",
-              self.store_id(),
+        info!("{} destroy region {:?} on shutdown region command",
+              self.tag,
               region);
         if self.region_peers.contains_key(&region.get_id()) {
             // Destroy the specified peer from this store.
