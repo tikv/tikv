@@ -207,7 +207,6 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
 }
 
 fn check_system_config(matches: &Matches, config: &toml::Value) {
-    // Panic when the maximum number of open file descriptors less than opts.max_open_files.
     let max_open_files = get_integer_value("",
                                            "rocksdb.max-open-files",
                                            matches,
@@ -215,7 +214,7 @@ fn check_system_config(matches: &Matches, config: &toml::Value) {
                                            Some(40960),
                                            |v| v.as_integer());
     if let Err(e) = util::config::check_max_open_fds(max_open_files as u64) {
-        panic!("{:?}", e);
+        panic!("check rocksdb max open files err {:?}", e)
     }
 
     if let Err(e) = util::config::check_kernel_params() {
@@ -937,7 +936,6 @@ fn main() {
         None => toml::Value::Integer(0),
     };
 
-
     initial_log(&matches, &config);
 
     // Print version information.
@@ -945,7 +943,7 @@ fn main() {
 
     panic_hook::set_exit_hook();
 
-    // Before any set up, check system configuration.
+    // Before any startup, check system configuration.
     check_system_config(&matches, &config);
 
     let addr = get_string_value("A",

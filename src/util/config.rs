@@ -155,7 +155,7 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
 ///   - `net.ipv4.tcp_syncookies` should be 0
 ///   - `vm.swappiness` shoud be 0
 ///
-/// Note that: It only works **Linux** platform.
+/// Note that: It works on **Linux** only.
 #[cfg(target_os = "linux")]
 pub fn check_kernel_params() -> Result<(), ConfigError> {
     use std::fs;
@@ -198,7 +198,6 @@ pub fn check_kernel_params() -> Result<(), ConfigError> {
             }
             Ok(())
         }),
-
         (SWAP_PATH,
         box |s| {
             if s != SWAP_SUGGEST {
