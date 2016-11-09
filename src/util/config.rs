@@ -191,10 +191,10 @@ pub fn check_kernel_params() -> Result<(), ConfigError> {
         (TCP_SYNCOOKIES_PATH,
         box |s| {
             if s != TCP_SYNCOOKIES_SUGGEST {
-                return Err(ConfigError::Limits(format!("net.ipv4.tcp_syncookies expect to be {}, \
-                                                        got {}",
-                                                        TCP_SYNCOOKIES_SUGGEST,
-                                                        s)));
+                return Err(ConfigError::Limits(format!("net.ipv4.tcp_syncookies, got {}, expect \
+                                                        to be {}",
+                                                        s,
+                                                        TCP_SYNCOOKIES_SUGGEST)));
             }
             Ok(())
         }),
@@ -202,9 +202,9 @@ pub fn check_kernel_params() -> Result<(), ConfigError> {
         (SWAP_PATH,
         box |s| {
             if s != SWAP_SUGGEST {
-                return Err(ConfigError::Limits(format!("vm.swappiness expect to be {}, got {}",
-                                                        SWAP_SUGGEST,
-                                                        s)));
+                return Err(ConfigError::Limits(format!("vm.swappiness got {}, expect to be {}",
+                                                        s,
+                                                        SWAP_SUGGEST)));
             }
             Ok(())
         }),

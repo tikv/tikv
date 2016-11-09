@@ -221,7 +221,6 @@ fn check_system_config(matches: &Matches, config: &toml::Value) {
     if let Err(e) = util::config::check_kernel_params() {
         warn!("{:?}", e);
     }
-    // TODO: swap
 }
 
 fn get_rocksdb_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
