@@ -173,7 +173,8 @@ pub fn check_kernel_params() -> Result<(), ConfigError> {
     const SWAP_PATH: &'static str = "/proc/sys/vm/swappiness";
     const SWAP_SUGGEST: &'static str = "0";
 
-    let params: Vec<(&str, Box<Fn(&str) -> Result<(), ConfigError>>)> = vec![
+    type Checker = Fn(&str) -> Result<(), ConfigError>;
+    let params: Vec<(&str, Box<Checker>)> = vec![
         (SOMAXCONN_PATH,
         box |s| {
             match s.parse::<u64>() {
