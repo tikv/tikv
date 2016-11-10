@@ -43,6 +43,7 @@ const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
+const DEFAULT_CALIBRATE_TICK_WITH_CLOCKTIME: bool = true;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -99,6 +100,13 @@ pub struct Config {
     pub max_leader_missing_duration: Duration,
 
     pub snap_apply_batch_size: usize,
+
+    /// It uses ticks as software clock in Raft implementation.
+    /// The system load and process/thread scheduling will impact the ticks.
+    /// If `calibrate_tick_with_clocktime` is set to `true`, the system's monotonic raw clocktime
+    /// would be used to calibrate the ticks, in order to improve the preciseness of leader lease,
+    /// which is important for doing lease reads in Raft leader.
+    pub calibrate_tick_with_clocktime: bool,
 }
 
 impl Default for Config {
@@ -129,6 +137,7 @@ impl Default for Config {
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
+            calibrate_tick_with_clocktime: DEFAULT_CALIBRATE_TICK_WITH_CLOCKTIME,
         }
     }
 }

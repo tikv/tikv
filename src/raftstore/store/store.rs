@@ -445,17 +445,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ct = clocktime::now_monotonic_raw_clocktime();
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.get_store().is_applying() {
-                // Calculate the real tick number with clocktime.
-                // Since the system load or process/thread scheduling may impact
-                // the event system, the ticks on eventloop callbacks could be slower than
-                // it should be. It will calculate the precise tick number when calibrating
-                // the ticks using the system's monotonic raw clocktime.
-                let tick_number = calculate_tick_with_clocktime(self.tick_time,
-                                                                ct,
-                                                                self.cfg.raft_base_tick_interval,
-                                                                peer.is_leader());
-                // And run `tick()` as many as `tick_number` indicates.
-                for _ in 0..tick_number {
+                if self.cfg.calibrate_tick_with_clocktime {
+                    // Calculate the real tick number with clocktime.
+                    // Since the system load or process/thread scheduling may impact
+                    // the event system, the ticks on eventloop callbacks could be slower than
+                    // it should be. It will calculate the precise tick number when calibrating
+                    // the ticks using the system's monotonic raw clocktime.
+                    let tick_number = calculate_tick_with_clocktime(self.tick_time,
+                                                                    ct,
+                                                                    self.cfg
+                                                                        .raft_base_tick_interval,
+                                                                    peer.is_leader());
+                    // And run `tick()` as many as `tick_number` indicates.
+                    for _ in 0..tick_number {
+                        peer.raft_group.tick();
+                    }
+                } else {
                     peer.raft_group.tick();
                 }
 
