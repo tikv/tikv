@@ -119,7 +119,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.sim.wl().add_recv_filter(3, box DropSnapshotFilter::new(tx));
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     cluster.must_put(b"k2", b"v2");
 
@@ -139,12 +139,22 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put(b"k2", b"v2");
     }
 
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let mut tried_cnt = 0;
+    loop {
+        let snap_index = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        if snap_index != first_snap_idx {
+            break;
+        }
+        tried_cnt += 0;
+        if tried_cnt == 100 {
+            panic!("can't get any snap after {}", first_snap_idx);
+        }
+    }
 
     let snap_dir = cluster.get_snap_dir(3);
     // it must have more than 2 snaps.
     let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
-    assert!(snapfiles.len() > 2);
+    assert!(snapfiles.len() >= 2);
 
     cluster.sim.wl().clear_recv_filters(3);
     debug!("filters cleared.");

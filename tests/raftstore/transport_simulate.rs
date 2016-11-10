@@ -413,11 +413,11 @@ impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
 }
 
 pub struct DropSnapshotFilter {
-    notifier: Mutex<Sender<()>>,
+    notifier: Mutex<Sender<u64>>,
 }
 
 impl DropSnapshotFilter {
-    pub fn new(ch: Sender<()>) -> DropSnapshotFilter {
+    pub fn new(ch: Sender<u64>) -> DropSnapshotFilter {
         DropSnapshotFilter { notifier: Mutex::new(ch) }
     }
 }
@@ -431,7 +431,8 @@ impl Filter<StoreMsg> for DropSnapshotFilter {
                     if msg.get_message().get_msg_type() != MessageType::MsgSnapshot {
                         true
                     } else {
-                        notifier.send(()).unwrap();
+                        notifier.send(msg.get_message().get_snapshot().get_metadata().get_index())
+                            .unwrap();
                         false
                     }
                 }
