@@ -150,82 +150,75 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// `check_kernel_params` checks kernel parameters, following are checked so far:
-///   - `net.core.somaxconn` should be greater or equak to 32768.
-///   - `net.ipv4.tcp_syncookies` should be 0
-///   - `vm.swappiness` shoud be 0
-///
-/// Note that: It works on **Linux** only.
 #[cfg(target_os = "linux")]
-pub fn check_kernel_params() -> Result<(), ConfigError> {
+mod check_kernel {
     use std::fs;
     use std::io::Read;
+    use std::slice::SliceConcatExt;
 
-    // Check net.core.somaxconn.
-    const SOMAXCONN_PATH: &'static str = "/proc/sys/net/core/somaxconn";
-    const SOMAXCONN_SUGGEST: u64 = 32768;
+    use super::ConfigError;
 
-    // Check net.ipv4.tcp_syncookies.
-    const TCP_SYNCOOKIES_PATH: &'static str = "/proc/sys/net/ipv4/tcp_syncookies";
-    const TCP_SYNCOOKIES_SUGGEST: &'static str = "0";
+    type Checker = Fn(i64, i64) -> bool;
 
-    // Check vm.swappiness.
-    const SWAP_PATH: &'static str = "/proc/sys/vm/swappiness";
-    const SWAP_SUGGEST: &'static str = "0";
+    pub fn check_kernel_params(param_path: &str,
+                               expect: i64,
+                               checker: Box<Checker>)
+                               -> Result<(), ConfigError> {
+        let mut buffer = String::new();
+        try!(fs::File::open(param_path)
+            .and_then(|mut f| f.read_to_string(&mut buffer))
+            .map_err(|e| ConfigError::Limits(format!("check_kernel_params failed {}", e))));
 
-    type Checker = Fn(&str) -> Result<(), ConfigError>;
-    let params: Vec<(&str, Box<Checker>)> = vec![
-        (SOMAXCONN_PATH,
-        box |s| {
-            match s.parse::<u64>() {
-                Err(e) => Err(ConfigError::Limits(format!("check_kernel_params failed {}", e))),
-                Ok(max) if max < SOMAXCONN_SUGGEST => {
-                    Err(ConfigError::Limits(format!("net.core.somaxconn is too small, got {}, \
-                                                    expect greater or equal to {}",
-                                                    max,
-                                                    SOMAXCONN_SUGGEST)))
-                }
-                _ => Ok(()),
-            }
-        }),
-        (TCP_SYNCOOKIES_PATH,
-        box |s| {
-            if s != TCP_SYNCOOKIES_SUGGEST {
-                return Err(ConfigError::Limits(format!("net.ipv4.tcp_syncookies, got {}, expect \
-                                                        to be {}",
-                                                        s,
-                                                        TCP_SYNCOOKIES_SUGGEST)));
-            }
-            Ok(())
-        }),
-        (SWAP_PATH,
-        box |s| {
-            if s != SWAP_SUGGEST {
-                return Err(ConfigError::Limits(format!("vm.swappiness got {}, expect to be {}",
-                                                        s,
-                                                        SWAP_SUGGEST)));
-            }
-            Ok(())
-        }),
-    ];
+        let got = try!(buffer.trim_matches('\n')
+            .parse::<i64>()
+            .map_err(|e| ConfigError::Limits(format!("check_kernel_params failed {}", e))));
 
-    let mut buffer = String::new();
-    for (param_path, checker) in params {
-        if let Err(e) = fs::File::open(param_path).and_then(|mut f| f.read_to_string(&mut buffer)) {
-            return Err(ConfigError::Limits(format!("check_kernel_params failed {}", e)));
+        if !checker(got, expect) {
+            // 3: ["", "proc", "sys", ...]
+            let param = param_path.split('/')
+                .skip(3)
+                .map(|s| s.to_owned())
+                .collect::<Vec<String>>()
+                .join(".");
+            return Err(ConfigError::Limits(format!("{} got {}, expect {}", param, got, expect)));
         }
 
-        try!(checker(buffer.trim_matches('\n')));
-
-        buffer.clear()
+        Ok(())
     }
 
-    Ok(())
+    /// `check_kernel_params` checks kernel parameters, following are checked so far:
+    ///   - `net.core.somaxconn` should be greater or equak to 32768.
+    ///   - `net.ipv4.tcp_syncookies` should be 0
+    ///   - `vm.swappiness` shoud be 0
+    ///
+    /// Note that: It works on **Linux** only.
+    pub fn check_kernel() -> Vec<ConfigError> {
+        let params: Vec<(&str, i64, Box<Checker>)> = vec![
+            // Check net.core.somaxconn.
+            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| got >= expect),
+            // Check net.ipv4.tcp_syncookies.
+            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| got == expect),
+            // Check vm.swappiness.
+            ("/proc/sys/vm/swappiness", 0, box |got, expect| got == expect),
+        ];
+
+        let mut errors = Vec::with_capacity(params.len());
+        for (param_path, expect, checker) in params {
+            if let Err(e) = check_kernel_params(param_path, expect, checker) {
+                errors.push(e);
+            }
+        }
+
+        errors
+    }
 }
 
+#[cfg(target_os = "linux")]
+pub use self::check_kernel::check_kernel;
+
 #[cfg(not(target_os = "linux"))]
-pub fn check_kernel_params() -> Result<(), ConfigError> {
-    Ok(())
+pub fn check_kernel() -> Vec<ConfigError> {
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -300,5 +293,23 @@ mod test {
                 parse_rocksdb_wal_recovery_mode(3).unwrap());
 
         assert!(parse_rocksdb_wal_recovery_mode(4).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_check_kernel() {
+        use std::i64;
+
+        // The range of vm.swappiness is from 0 to 100.
+        assert_eq!(super::check_kernel::check_kernel_params("/proc/sys/vm/swappiness",
+                                                            i64::MAX,
+                                                            box |got, expect| got == expect)
+                       .is_ok(),
+                   false);
+        assert_eq!(super::check_kernel::check_kernel_params("/proc/sys/vm/swappiness",
+                                                            i64::MAX,
+                                                            box |got, expect| got < expect)
+                       .is_ok(),
+                   true);
     }
 }

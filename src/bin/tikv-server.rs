@@ -217,7 +217,7 @@ fn check_system_config(matches: &Matches, config: &toml::Value) {
         panic!("check rocksdb max open files err {:?}", e)
     }
 
-    if let Err(e) = util::config::check_kernel_params() {
+    for e in util::config::check_kernel() {
         warn!("{:?}", e);
     }
 }
