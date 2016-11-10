@@ -22,7 +22,7 @@ quick_error! {
     pub enum ConfigError {
         RocksDB
         ReadableNumber
-        PDList(msg: String) {
+        Address(msg: String) {
             description(&msg)
             display("{}", msg)
         }
@@ -125,39 +125,38 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
     }
 }
 
-/// `check_addrs` validates a list of addresses. Addresses are formed like "Host:Port".
+/// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
-pub fn check_addrs(addrs: &[&str]) -> Result<(), ConfigError> {
-    for addr in addrs {
-        // Try to validate "IPv4:Port" and "[IPv6]:Port".
-        let v4 = SocketAddrV4::from_str(addr);
-        let v6 = SocketAddrV6::from_str(addr);
-        if v4.is_ok() || v6.is_ok() {
-            continue;
-        }
+pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
+    // Try to validate "IPv4:Port" and "[IPv6]:Port".
+    if SocketAddrV4::from_str(addr).is_ok() {
+        return Ok(());
+    }
+    if SocketAddrV6::from_str(addr).is_ok() {
+        return Ok(());
+    }
 
-        let parts: Vec<&str> = addr.split(':')
+    let parts: Vec<&str> = addr.split(':')
             .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
             .collect();
 
-        // ["Host", "Port"]
-        if parts.len() != 2 {
-            return Err(ConfigError::PDList(format!("invalid addr: {}", addr)));
-        }
+    // ["Host", "Port"]
+    if parts.len() != 2 {
+        return Err(ConfigError::Address(format!("invalid addr: {}", addr)));
+    }
 
-        // Check Port.
-        let port: u16 = try!(parts[1]
-            .parse()
-            .map_err(|_| ConfigError::PDList(format!("invalid addr: {}", addr))));
-        // Port = 0 is invalid.
-        if port == 0 {
-            return Err(ConfigError::PDList(format!("invalid addr: {}", addr)));
-        }
+    // Check Port.
+    let port: u16 = try!(parts[1]
+        .parse()
+        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {}", addr))));
+    // Port = 0 is invalid.
+    if port == 0 {
+        return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {}", addr)));
+    }
 
-        // Check Host.
-        if let Err(e) = url::Host::parse(parts[0]) {
-            return Err(ConfigError::PDList(format!("{:?}", e)));
-        }
+    // Check Host.
+    if let Err(e) = url::Host::parse(parts[0]) {
+        return Err(ConfigError::Address(format!("{:?}", e)));
     }
 
     Ok(())
@@ -240,42 +239,42 @@ mod test {
     #[test]
     fn test_check_addrs() {
         let table = vec![
-            (vec!["127.0.0.1:8080",], true),
-            (vec!["[::1]:8080",], true),
-            (vec!["localhost:8080",], true),
-            (vec!["pingcap.com:8080",], true),
-            (vec!["funnydomain:8080",], true),
+            ("127.0.0.1:8080",true),
+            ("[::1]:8080",true),
+            ("localhost:8080",true),
+            ("pingcap.com:8080",true),
+            ("funnydomain:8080",true),
 
-            (vec!["127.0.0.1",], false),
-            (vec!["[::1]",], false),
-            (vec!["localhost",], false),
-            (vec!["pingcap.com",], false),
-            (vec!["funnydomain",], false),
-            (vec!["funnydomain:",], false),
+            ("127.0.0.1",false),
+            ("[::1]",false),
+            ("localhost",false),
+            ("pingcap.com",false),
+            ("funnydomain",false),
+            ("funnydomain:",false),
 
-            (vec!["root@google.com:8080",], false),
-            (vec!["http://google.com:8080",], false),
-            (vec!["google.com:8080/path",], false),
-            (vec!["http://google.com:8080/path",], false),
-            (vec!["http://google.com:8080/path?lang=en",], false),
-            (vec!["http://google.com:8080/path?lang=en#top",], false),
+            ("root@google.com:8080",false),
+            ("http://google.com:8080",false),
+            ("google.com:8080/path",false),
+            ("http://google.com:8080/path",false),
+            ("http://google.com:8080/path?lang=en",false),
+            ("http://google.com:8080/path?lang=en#top",false),
 
-            (vec!["ftp://ftp.is.co.za/rfc/rfc1808.txt",], false),
-            (vec!["http://www.ietf.org/rfc/rfc2396.txt",], false),
-            (vec!["ldap://[2001:db8::7]/c=GB?objectClass?one",], false),
-            (vec!["mailto:John.Doe@example.com",], false),
-            (vec!["news:comp.infosystems.www.servers.unix",], false),
-            (vec!["tel:+1-816-555-1212",], false),
-            (vec!["telnet://192.0.2.16:80/",], false),
-            (vec!["urn:oasis:names:specification:docbook:dtd:xml:4.1.2",], false),
+            ("ftp://ftp.is.co.za/rfc/rfc1808.txt",false),
+            ("http://www.ietf.org/rfc/rfc2396.txt",false),
+            ("ldap://[2001:db8::7]/c=GB?objectClass?one",false),
+            ("mailto:John.Doe@example.com",false),
+            ("news:comp.infosystems.www.servers.unix",false),
+            ("tel:+1-816-555-1212",false),
+            ("telnet://192.0.2.16:80/",false),
+            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2",false),
 
-            (vec![":8080",], false),
-            (vec!["8080",], false),
-            (vec!["8080:",], false),
+            (":8080",false),
+            ("8080",false),
+            ("8080:",false),
         ];
 
-        for (addrs, is_ok) in table {
-            assert_eq!(check_addrs(&addrs).is_ok(), is_ok);
+        for (addr, is_ok) in table {
+            assert_eq!(check_addr(addr).is_ok(), is_ok);
         }
     }
 }
