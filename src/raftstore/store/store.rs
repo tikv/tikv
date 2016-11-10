@@ -60,7 +60,7 @@ use super::metrics::*;
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
-const DEFAULT_CONSISTENCY_CHECK_PERCENT: f64 = 0.2;
+const DEFAULT_CONSISTENCY_CHECK_PERCENT: f64 = 0.1;
 
 /// The buffered metrics counters for raft ready handling.
 #[derive(Debug, Default, Clone)]
@@ -1289,6 +1289,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let leader_count = self.region_peers.values().filter(|p| p.is_leader()).count() as f64;
         let capacity = cmp::max((leader_count * DEFAULT_CONSISTENCY_CHECK_PERCENT) as usize,
                                 1);
+        let capacity = cmp::min(capacity, self.cfg.consistency_check_batch_limit);
         let mut pending_peers = BinaryHeap::with_capacity(capacity);
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {

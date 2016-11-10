@@ -43,7 +43,8 @@ const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
-const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 60 * 60; // 60 min
+const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 60 * 20; // 20 min
+const DEFAULT_CONSISTENCY_CHECK_BATCH_LIMIT: usize = 100;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -103,6 +104,8 @@ pub struct Config {
 
     // Interval (s) to check region whether the data are consistent.
     pub consistency_check_tick_interval: u64,
+    // Max consistency check should be started in one round of check.
+    pub consistency_check_batch_limit: usize,
 }
 
 impl Default for Config {
@@ -134,6 +137,7 @@ impl Default for Config {
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS,
+            consistency_check_batch_limit: DEFAULT_CONSISTENCY_CHECK_BATCH_LIMIT,
         }
     }
 }
