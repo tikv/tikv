@@ -11,6 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::str::FromStr;
+use std::net::{SocketAddrV4, SocketAddrV6};
+
+use url;
 use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {
@@ -19,6 +23,10 @@ quick_error! {
         RocksDB
         ReadableNumber
         Limits(msg: String) {
+            description(&msg)
+            display("{}", msg)
+        }
+        Address(msg: String) {
             description(&msg)
             display("{}", msg)
         }
@@ -224,6 +232,43 @@ pub fn check_kernel() -> Vec<ConfigError> {
     Vec::new()
 }
 
+/// `check_addr` validates an address. Addresses are formed like "Host:Port".
+/// More details about **Host** and **Port** can be found in WHATWG URL Standard.
+pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
+    // Try to validate "IPv4:Port" and "[IPv6]:Port".
+    if SocketAddrV4::from_str(addr).is_ok() {
+        return Ok(());
+    }
+    if SocketAddrV6::from_str(addr).is_ok() {
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = addr.split(':')
+            .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
+            .collect();
+
+    // ["Host", "Port"]
+    if parts.len() != 2 {
+        return Err(ConfigError::Address(format!("invalid addr: {}", addr)));
+    }
+
+    // Check Port.
+    let port: u16 = try!(parts[1]
+        .parse()
+        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {}", addr))));
+    // Port = 0 is invalid.
+    if port == 0 {
+        return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {}", addr)));
+    }
+
+    // Check Host.
+    if let Err(e) = url::Host::parse(parts[0]) {
+        return Err(ConfigError::Address(format!("{:?}", e)));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -314,5 +359,47 @@ mod test {
                                                             box |got, expect| got < expect)
                        .is_ok(),
                    true);
+    }
+
+    #[test]
+    fn test_check_addrs() {
+        let table = vec![
+            ("127.0.0.1:8080",true),
+            ("[::1]:8080",true),
+            ("localhost:8080",true),
+            ("pingcap.com:8080",true),
+            ("funnydomain:8080",true),
+
+            ("127.0.0.1",false),
+            ("[::1]",false),
+            ("localhost",false),
+            ("pingcap.com",false),
+            ("funnydomain",false),
+            ("funnydomain:",false),
+
+            ("root@google.com:8080",false),
+            ("http://google.com:8080",false),
+            ("google.com:8080/path",false),
+            ("http://google.com:8080/path",false),
+            ("http://google.com:8080/path?lang=en",false),
+            ("http://google.com:8080/path?lang=en#top",false),
+
+            ("ftp://ftp.is.co.za/rfc/rfc1808.txt",false),
+            ("http://www.ietf.org/rfc/rfc2396.txt",false),
+            ("ldap://[2001:db8::7]/c=GB?objectClass?one",false),
+            ("mailto:John.Doe@example.com",false),
+            ("news:comp.infosystems.www.servers.unix",false),
+            ("tel:+1-816-555-1212",false),
+            ("telnet://192.0.2.16:80/",false),
+            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2",false),
+
+            (":8080",false),
+            ("8080",false),
+            ("8080:",false),
+        ];
+
+        for (addr, is_ok) in table {
+            assert_eq!(check_addr(addr).is_ok(), is_ok);
+        }
     }
 }
