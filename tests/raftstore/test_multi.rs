@@ -27,6 +27,7 @@ use super::transport_simulate::*;
 use rand;
 use rand::Rng;
 use std::time::Duration;
+use std::thread;
 use std::sync::*;
 use std::sync::atomic::*;
 
@@ -608,4 +609,31 @@ fn test_node_remove_leader_with_uncommitted_log() {
 fn test_server_remove_leader_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 2);
     test_remove_leader_with_uncommitted_log(&mut cluster);
+}
+
+fn test_consistency_check<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    cluster.cfg.raft_store.consistency_check_tick_interval = 1;
+    // We use three peers([1, 2, 3]) for this test.
+    cluster.run();
+
+    for i in 0..300 {
+        cluster.must_put(format!("k{:06}", i).as_bytes(),
+                         format!("k{:06}", i).as_bytes());
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn test_node_consistency_check() {
+    let mut cluster = new_node_cluster(0, 2);
+    test_consistency_check(&mut cluster);
+}
+
+#[test]
+fn test_server_consistency_check() {
+    let mut cluster = new_server_cluster(0, 2);
+    test_consistency_check(&mut cluster);
 }

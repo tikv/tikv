@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::option::Option;
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{HashMap, HashSet, BTreeMap, BinaryHeap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
@@ -44,11 +44,11 @@ use util::transport::SendCh;
 use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
-                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask};
+use super::worker::{ScanRunner, ScanTask, RegionTask, RegionRunner, CompactTask, CompactRunner,
+                    RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
-use super::engine::{Iterable, Peekable, delete_all_in_range};
+use super::engine::{Iterable, Peekable, delete_all_in_range, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState};
 use super::peer_storage::{ApplySnapResult, SnapState};
@@ -60,6 +60,7 @@ use super::metrics::*;
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
+const DEFAULT_CONSISTENCY_CHECK_PERCENT: f64 = 0.1;
 
 /// The buffered metrics counters for raft ready handling.
 #[derive(Debug, Default, Clone)]
@@ -201,7 +202,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
-    split_check_worker: Worker<SplitCheckTask>,
+    scan_worker: Worker<ScanTask>,
     region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
@@ -257,7 +258,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             sendch: sendch,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
-            split_check_worker: Worker::new("split check worker"),
+            scan_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
@@ -369,11 +370,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_store_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
+        self.register_consistency_check_tick(event_loop);
 
-        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
-                                                       self.cfg.region_max_size,
-                                                       self.cfg.region_split_size);
-        box_try!(self.split_check_worker.start(split_check_runner));
+        let scan_runner = ScanRunner::new(self.engine.clone(),
+                                          self.sendch.clone(),
+                                          self.cfg.region_max_size,
+                                          self.cfg.region_split_size);
+        box_try!(self.scan_worker.start(scan_runner));
 
         let runner = RegionRunner::new(self.engine.clone(),
                                        self.get_sendch(),
@@ -1002,6 +1005,56 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.region_ranges.insert(enc_end_key(&region), region.get_id());
     }
 
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+        let region_id = region.get_id();
+        self.region_peers.get_mut(&region_id).unwrap().last_consistency_check_time = Instant::now();
+        let task = ScanTask::compute_hash(region, index, snap);
+        info!("[region {}] schedule {}", region_id, task);
+        if let Err(e) = self.scan_worker.schedule(task) {
+            error!("[region {}] schedule failed: {:?}", region_id, e);
+        }
+    }
+
+    fn on_ready_verify_hash(&self, region_id: u64, index: u64, hash: Vec<u8>) {
+        let task = ScanTask::verify_hash(region_id, index, hash);
+        info!("[region {}] schedule {}", region_id, task);
+        if let Err(e) = self.scan_worker.schedule(task) {
+            error!("[region {}] schedule failed: {:?}", region_id, e);
+        }
+    }
+
+    fn on_hash_computed(&self, region_id: u64, index: u64, hash: Vec<u8>) {
+        let peer = match self.region_peers.get(&region_id) {
+            None => {
+                warn!("receive stale hash [region {}, index {}]", region_id, index);
+                return;
+            }
+            Some(p) => p.peer.clone(),
+        };
+
+        let mut request = RaftCmdRequest::new();
+        request.mut_header().set_region_id(region_id);
+        request.mut_header().set_peer(peer);
+        request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let mut admin = AdminRequest::new();
+        admin.set_cmd_type(AdminCmdType::VerifyHash);
+        admin.mut_verify_hash().set_index(index);
+        admin.mut_verify_hash().set_hash(hash);
+        request.set_admin_request(admin);
+
+        let msg = Msg::RaftCmd {
+            request: request,
+            callback: Box::new(|_| {}),
+        };
+        if let Err(e) = self.sendch.send(msg) {
+            error!("[region {}] failed to schedule verify command for index {}: {:?}",
+                   region_id,
+                   index,
+                   e);
+        }
+    }
+
     fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
         if let Some(apply_result) = ready_result.apply_snap_result {
             self.on_ready_apply_snapshot(apply_result);
@@ -1018,6 +1071,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::CompactLog { state } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
+                }
+                ExecResult::ComputeHash { region, index, snap } => {
+                    self.on_ready_compute_hash(region, index, snap)
+                }
+                ExecResult::VerifyHash { index, hash } => {
+                    self.on_ready_verify_hash(region_id, index, hash)
                 }
             }
         }
@@ -1191,7 +1250,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         // TODO: check whether a gc progress has been started.
-        if self.split_check_worker.is_busy() {
+        if self.scan_worker.is_busy() {
             self.register_split_region_check_tick(event_loop);
             return;
         }
@@ -1207,14 +1266,59 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   peer.tag,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            let task = SplitCheckTask::new(peer.get_store());
-            if let Err(e) = self.split_check_worker.schedule(task) {
+            let task = ScanTask::split_check(peer.get_store());
+            if let Err(e) = self.scan_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
             peer.size_diff_hint = 0;
         }
 
         self.register_split_region_check_tick(event_loop);
+    }
+
+    fn register_consistency_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::ConsistencyCheck,
+                                       self.cfg.consistency_check_tick_interval * 1000) {
+            error!("{} register consistency check tick err: {:?}", self.tag, e);
+        };
+    }
+
+    fn on_consistency_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        // To avoid frequent scan, we only check some of the regions very tick.
+        let leader_count = self.region_peers.values().filter(|p| p.is_leader()).count() as f64;
+        let capacity = cmp::max((leader_count * DEFAULT_CONSISTENCY_CHECK_PERCENT) as usize,
+                                1);
+        let capacity = cmp::min(capacity, self.cfg.consistency_check_batch_limit);
+        let mut pending_peers = BinaryHeap::with_capacity(capacity);
+        for (&region_id, peer) in &mut self.region_peers {
+            if !peer.is_leader() {
+                continue;
+            }
+            // heap is max-heap, so use opposite number to get max elapsed time.
+            let wait_secs = -(peer.last_consistency_check_time.elapsed().as_secs() as i64);
+            if pending_peers.len() == capacity {
+                *pending_peers.peek_mut().unwrap() = (wait_secs, region_id);
+            } else {
+                pending_peers.push((wait_secs, region_id));
+            }
+        }
+
+        for (_, region_id) in pending_peers {
+            let peer = self.region_peers.get(&region_id).unwrap();
+
+            info!("{} scheduling consistent check", peer.tag);
+            let msg = Msg::RaftCmd {
+                request: new_compute_hash_request(region_id, &peer.peer),
+                callback: Box::new(|_| {}),
+            };
+
+            if let Err(e) = self.sendch.send(msg) {
+                error!("{} failed to schedule split check: {:?}", peer.tag, e);
+            }
+        }
+
+        self.register_consistency_check_tick(event_loop);
     }
 
     fn register_compact_check_tick(&self, event_loop: &mut EventLoop<Self>) {
@@ -1592,6 +1696,18 @@ fn new_compact_log_request(region_id: u64,
     request
 }
 
+fn new_compute_hash_request(region_id: u64, peer: &metapb::Peer) -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
+    request.mut_header().set_region_id(region_id);
+    request.mut_header().set_peer(peer.clone());
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::ComputeHash);
+    request.set_admin_request(admin);
+    request
+}
+
 impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Timeout = Tick;
     type Message = Msg;
@@ -1624,6 +1740,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SnapGenRes { region_id, snap } => {
                 self.on_snap_gen_res(region_id, snap);
             }
+            Msg::ComputeHashResult { region_id, index, hash } => {
+                self.on_hash_computed(region_id, index, hash);
+            }
         }
         slow_log!(t, "{} handle {}", self.tag, msg_str);
     }
@@ -1639,14 +1758,14 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
+            Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            for (handle, name) in vec![(self.split_check_worker.stop(),
-                                        self.split_check_worker.name()),
+            for (handle, name) in vec![(self.scan_worker.stop(), self.scan_worker.name()),
                                        (self.region_worker.stop(), self.region_worker.name()),
                                        (self.raftlog_gc_worker.stop(),
                                         self.raftlog_gc_worker.name()),
