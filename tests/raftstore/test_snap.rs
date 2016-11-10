@@ -114,9 +114,12 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    let (tx, rx) = mpsc::channel();
     // drop all the snapshot so we can detect stale snapfile.
-    cluster.sim.wl().add_recv_filter(3, box DropSnapshotFilter);
+    cluster.sim.wl().add_recv_filter(3, box DropSnapshotFilter::new(tx));
     pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     cluster.must_put(b"k2", b"v2");
 
@@ -135,6 +138,8 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put(b"k1", b"v1");
         cluster.must_put(b"k2", b"v2");
     }
+
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     let snap_dir = cluster.get_snap_dir(3);
     // it must have more than 2 snaps.
