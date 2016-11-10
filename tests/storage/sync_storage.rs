@@ -78,7 +78,9 @@ impl SyncStorage {
                     primary: Vec<u8>,
                     start_ts: u64)
                     -> Result<Vec<Result<()>>> {
-        wait_event!(|cb| self.store.async_prewrite(ctx, mutations, primary, start_ts, cb).unwrap())
+        wait_event!(|cb| {
+                self.store.async_prewrite(ctx, mutations, primary, start_ts, 0, cb).unwrap()
+            })
             .unwrap()
     }
 

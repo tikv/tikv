@@ -147,6 +147,7 @@ impl<'a> MvccReader<'a> {
                     key: try!(key.raw()),
                     primary: lock.primary,
                     ts: lock.ts,
+                    ttl: lock.ttl,
                 });
             }
         }
