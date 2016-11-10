@@ -34,6 +34,9 @@ use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
 use super::transport_simulate::*;
 
+pub const DEFAULT_TEST_REGION_ID: u64 = 1;
+pub const DEFAULT_TEST_REGION_VERION: u64 = 1;
+pub const DEFAULT_TEST_REGION_CONF_VER: u64 = 1;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -69,7 +72,10 @@ pub trait Simulator {
 }
 
 pub struct Cluster<T: Simulator> {
+    /// the default config
     pub cfg: ServerConfig,
+    /// the customized config for any specified nodes
+    pub node_configs: HashMap<u64, ServerConfig>,
     leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Arc<DB>>,
@@ -91,6 +97,7 @@ impl<T: Simulator> Cluster<T> {
                -> Cluster<T> {
         let mut c = Cluster {
             cfg: new_server_config(id),
+            node_configs: HashMap::new(),
             leaders: HashMap::new(),
             paths: vec![],
             dbs: vec![],
@@ -108,6 +115,10 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.cluster_id
     }
 
+    pub fn set_node_config(&mut self, id: u64, config: ServerConfig) {
+        let _ = self.node_configs.insert(id, config);
+    }
+
     fn create_engines(&mut self, count: usize, cfs: &[&str]) {
         for _ in 0..count {
             self.paths.push(TempDir::new("test_cluster").unwrap());
@@ -122,8 +133,13 @@ impl<T: Simulator> Cluster<T> {
     pub fn start(&mut self) {
         if self.engines.is_empty() {
             let mut sim = self.sim.wl();
-            for engine in &self.dbs {
-                let node_id = sim.run_node(0, self.cfg.clone(), engine.clone());
+            for (i, engine) in self.dbs.iter().enumerate() {
+                let id = i as u64 + 1;
+                let config = match self.node_configs.get(&id) {
+                    Some(c) => c.clone(),
+                    None => self.cfg.clone(),
+                };
+                let node_id = sim.run_node(0, config, engine.clone());
                 self.engines.insert(node_id, engine.clone());
             }
         } else {
@@ -153,7 +169,11 @@ impl<T: Simulator> Cluster<T> {
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
         let engine = self.engines.get(&node_id).unwrap();
-        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
+        let config = match self.node_configs.get(&node_id) {
+            Some(c) => c.clone(),
+            None => self.cfg.clone(),
+        };
+        self.sim.wl().run_node(node_id, config, engine.clone());
         debug!("node {} started", node_id);
     }
 
@@ -307,17 +327,17 @@ impl<T: Simulator> Cluster<T> {
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.
     fn bootstrap_region(&mut self) -> Result<()> {
-        for (id, engine) in self.dbs.iter().enumerate() {
-            let id = id as u64 + 1;
+        for (i, engine) in self.dbs.iter().enumerate() {
+            let id = i as u64 + 1;
             self.engines.insert(id, engine.clone());
         }
 
         let mut region = metapb::Region::new();
-        region.set_id(1);
+        region.set_id(DEFAULT_TEST_REGION_ID);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(DEFAULT_TEST_REGION_VERION);
+        region.mut_region_epoch().set_conf_ver(DEFAULT_TEST_REGION_CONF_VER);
 
         for (&id, engine) in &self.engines {
             let peer = new_peer(id, id);
