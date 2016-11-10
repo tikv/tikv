@@ -105,8 +105,7 @@ impl RpcClientCore {
         for _ in 0..MAX_PD_SEND_RETRY_COUNT {
             // If no stream, try connect first.
             if self.stream.is_none() {
-                if let Err(e) = self.try_connect() {
-                    warn!("connect pd failed {:?}", e);
+                if let Err(_) = self.try_connect() {
                     // TODO: figure out a better way to do backoff
                     thread::sleep(Duration::from_millis(50));
                     continue;
@@ -153,8 +152,20 @@ impl RpcClient {
             core: Mutex::new(RpcClientCore::new(endpoints)),
             cluster_id: 0,
         };
-        client.cluster_id = try!(client.get_cluster_id());
-        Ok(client)
+
+        for _ in 0..MAX_PD_SEND_RETRY_COUNT {
+            match client.get_cluster_id() {
+                Ok(id) => {
+                    client.cluster_id = id;
+                    return Ok(client);
+                }
+                Err(e) => {
+                    warn!("failed to get cluster id from pd: {:?}", e);
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
+        Err(box_err!("failed to get cluster id from pd"))
     }
 
     pub fn send(&self, req: &Request) -> Result<Response> {
