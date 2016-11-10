@@ -211,6 +211,8 @@ fn check_resp(resp: &pdpb::Response) -> Result<()> {
     // TODO: translate more error types
     if error.has_bootstrapped() {
         Err(Error::ClusterBootstrapped(header.get_cluster_id()))
+    } else if error.has_is_shutdown() {
+        Err(Error::RegionIsShutdown)
     } else {
         Err(box_err!(error.get_message()))
     }
