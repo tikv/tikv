@@ -46,7 +46,7 @@ use util::rocksdb;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask};
-use super::{util, Msg, Tick, SnapManager};
+use super::{util, clocktime, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
 use super::config::Config;
@@ -219,6 +219,10 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     tag: String,
 
     start_time: Timespec,
+
+    /// `tick_time` records the monotonic raw clock time for last tick.
+    /// It's used to calibrate the raft tick with monotonic raw clock time.
+    tick_time: Timespec,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -271,6 +275,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             raft_metrics: RaftMetrics::default(),
             tag: tag,
             start_time: time::get_time(),
+            tick_time: clocktime::now_monotonic_raw_clocktime(),
         };
         try!(s.init());
         Ok(s)
@@ -390,7 +395,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
 
+        // Set tick clock time before running in event loop
+        self.tick_time = clocktime::now_monotonic_raw_clocktime();
+
         try!(event_loop.run(self));
+
         Ok(())
     }
 
@@ -433,9 +442,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let t = Instant::now();
+        let ct = clocktime::now_monotonic_raw_clocktime();
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.get_store().is_applying() {
-                peer.raft_group.tick();
+                // Calculate the real tick number with clocktime.
+                // Since the system load or process/thread scheduling may impact
+                // the event system, the ticks on eventloop callbacks could be slower than
+                // it should be. It will calculate the precise tick number when calibrating
+                // the ticks using the system's monotonic raw clocktime.
+                let tick_number = calculate_tick_with_clocktime(self.tick_time,
+                                                                ct,
+                                                                self.cfg.raft_base_tick_interval,
+                                                                peer.is_leader());
+                // And run `tick()` as many as `tick_number` indicates.
+                for _ in 0..tick_number {
+                    peer.raft_group.tick();
+                }
 
                 // If this peer detects the leader is missing for a long long time,
                 // it should consider itself as a stale peer which is removed from
@@ -480,6 +502,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .unwrap();
 
         self.raft_metrics.flush();
+
+        // Record tick clock time on every ticks.
+        self.tick_time = ct;
 
         self.register_raft_base_tick(event_loop);
     }
@@ -1574,6 +1599,42 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
     // so we can't use `try!` directly.
     event_loop.timeout(tick, Duration::from_millis(delay))
         .map_err(|e| box_err!("register timer err: {:?}", e))
+}
+
+fn calculate_tick_with_clocktime(from: Timespec,
+                                 to: Timespec,
+                                 interval: u64,
+                                 is_leader: bool)
+                                 -> u64 {
+    if to < from {
+        // It's fatal error if the clocktime rollbacks.
+        let from_str = util::format_clocktime(from);
+        let to_str = util::format_clocktime(to);
+        panic!("the monotonic raw clock time rollbacks from {} to {}",
+               from_str,
+               to_str)
+    } else if to == from {
+        // The clocktime doesn't increase during two eventloop dispatches.
+        // Although it's not likely to happen, if it does, count it as one tick.
+        return 1;
+    }
+    let d = (to - from).num_milliseconds() as u64;
+    let res = d / interval;
+    // Calibrate the tick number if the past time is not exactly
+    // a multiple of the configured tick interval
+    if is_leader && (d % interval != 0) {
+        // Always round up the result since it's fine for the raft leadr if the ticks
+        // run faster than the clock.
+        // Faster ticks lead to earlier heartbeat timeout and election timeout.
+        // For raft leader, it avoids reading the stale data when doing lease reads.
+        res + 1
+    } else {
+        // Slower ticks lead to later heartbeat timeout and election timeout.
+        // For raft follower, it means they will not turn to candidates during
+        // last leader's lease. In other words, it is safe for the leader
+        // to do lease reads during the leader's lease.
+        res
+    }
 }
 
 fn new_compact_log_request(region_id: u64,

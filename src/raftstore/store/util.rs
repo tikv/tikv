@@ -13,6 +13,7 @@
 
 use std::option::Option;
 
+use time::{self, Timespec};
 use uuid::Uuid;
 
 use kvproto::metapb;
@@ -85,6 +86,12 @@ pub fn conf_change_type_str(conf_type: &eraftpb::ConfChangeType) -> &'static str
 pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionEpoch) -> bool {
     epoch.get_version() < check_epoch.get_version() ||
     epoch.get_conf_ver() < check_epoch.get_conf_ver()
+}
+
+pub fn format_clocktime(ts: Timespec) -> String {
+    let tm = time::at(ts);
+    let res = time::strftime("%Y-%m-%d %H:%M:%S", &tm).unwrap();
+    res + &format!("{}", tm.tm_nsec)
 }
 
 #[cfg(test)]
