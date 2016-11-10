@@ -11,17 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::str::FromStr;
+use std::net::{SocketAddrV4, SocketAddrV6};
+
+use url;
 use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {
     #[derive(Debug)]
-    pub enum ParseConfigError {
+    pub enum ConfigError {
         RocksDB
         ReadableNumber
+        Address(msg: String) {
+            description(&msg)
+            display("{}", msg)
+        }
     }
 }
 
-pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseConfigError> {
+pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ConfigError> {
     match &*tp.to_lowercase() {
         "no" => Ok(DBCompressionType::DBNo),
         "snappy" => Ok(DBCompressionType::DBSnappy),
@@ -29,12 +37,12 @@ pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseCon
         "bzip2" => Ok(DBCompressionType::DBBz2),
         "lz4" => Ok(DBCompressionType::DBLz4),
         "lz4hc" => Ok(DBCompressionType::DBLz4hc),
-        _ => Err(ParseConfigError::RocksDB),
+        _ => Err(ConfigError::RocksDB),
     }
 }
 
 pub fn parse_rocksdb_per_level_compression(tp: &str)
-                                           -> Result<Vec<DBCompressionType>, ParseConfigError> {
+                                           -> Result<Vec<DBCompressionType>, ConfigError> {
     let mut result: Vec<DBCompressionType> = vec![];
     let v: Vec<&str> = tp.split(':').collect();
     for i in &v {
@@ -45,24 +53,24 @@ pub fn parse_rocksdb_per_level_compression(tp: &str)
             "bzip2" => result.push(DBCompressionType::DBBz2),
             "lz4" => result.push(DBCompressionType::DBLz4),
             "lz4hc" => result.push(DBCompressionType::DBLz4hc),
-            _ => return Err(ParseConfigError::RocksDB),
+            _ => return Err(ConfigError::RocksDB),
         }
     }
 
     Ok(result)
 }
 
-pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ParseConfigError> {
+pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ConfigError> {
     match mode {
         0 => Ok(DBRecoveryMode::TolerateCorruptedTailRecords),
         1 => Ok(DBRecoveryMode::AbsoluteConsistency),
         2 => Ok(DBRecoveryMode::PointInTime),
         3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
-        _ => Err(ParseConfigError::RocksDB),
+        _ => Err(ConfigError::RocksDB),
     }
 }
 
-fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
+fn split_property(property: &str) -> Result<(f64, &str), ConfigError> {
     let mut indx = 0;
     for s in property.chars() {
         match s {
@@ -76,7 +84,7 @@ fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
     }
 
     let (num, unit) = property.split_at(indx);
-    num.parse::<f64>().map(|f| (f, unit)).or(Err(ParseConfigError::ReadableNumber))
+    num.parse::<f64>().map(|f| (f, unit)).or(Err(ConfigError::ReadableNumber))
 }
 
 const UNIT: usize = 1;
@@ -96,7 +104,7 @@ const SECOND: usize = MS * TIME_MAGNITUDE_1;
 const MINTUE: usize = SECOND * TIME_MAGNITUDE_2;
 const HOUR: usize = MINTUE * TIME_MAGNITUDE_2;
 
-pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
+pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
     let (num, unit) = try!(split_property(size));
 
     match &*unit.to_lowercase() {
@@ -113,8 +121,45 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
         "m" => Ok((num * (MINTUE as f64)) as i64),
         "h" => Ok((num * (HOUR as f64)) as i64),
 
-        _ => Err(ParseConfigError::ReadableNumber),
+        _ => Err(ConfigError::ReadableNumber),
     }
+}
+
+/// `check_addr` validates an address. Addresses are formed like "Host:Port".
+/// More details about **Host** and **Port** can be found in WHATWG URL Standard.
+pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
+    // Try to validate "IPv4:Port" and "[IPv6]:Port".
+    if SocketAddrV4::from_str(addr).is_ok() {
+        return Ok(());
+    }
+    if SocketAddrV6::from_str(addr).is_ok() {
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = addr.split(':')
+            .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
+            .collect();
+
+    // ["Host", "Port"]
+    if parts.len() != 2 {
+        return Err(ConfigError::Address(format!("invalid addr: {}", addr)));
+    }
+
+    // Check Port.
+    let port: u16 = try!(parts[1]
+        .parse()
+        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {}", addr))));
+    // Port = 0 is invalid.
+    if port == 0 {
+        return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {}", addr)));
+    }
+
+    // Check Host.
+    if let Err(e) = url::Host::parse(parts[0]) {
+        return Err(ConfigError::Address(format!("{:?}", e)));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -189,5 +234,47 @@ mod test {
                 parse_rocksdb_wal_recovery_mode(3).unwrap());
 
         assert!(parse_rocksdb_wal_recovery_mode(4).is_err());
+    }
+
+    #[test]
+    fn test_check_addrs() {
+        let table = vec![
+            ("127.0.0.1:8080",true),
+            ("[::1]:8080",true),
+            ("localhost:8080",true),
+            ("pingcap.com:8080",true),
+            ("funnydomain:8080",true),
+
+            ("127.0.0.1",false),
+            ("[::1]",false),
+            ("localhost",false),
+            ("pingcap.com",false),
+            ("funnydomain",false),
+            ("funnydomain:",false),
+
+            ("root@google.com:8080",false),
+            ("http://google.com:8080",false),
+            ("google.com:8080/path",false),
+            ("http://google.com:8080/path",false),
+            ("http://google.com:8080/path?lang=en",false),
+            ("http://google.com:8080/path?lang=en#top",false),
+
+            ("ftp://ftp.is.co.za/rfc/rfc1808.txt",false),
+            ("http://www.ietf.org/rfc/rfc2396.txt",false),
+            ("ldap://[2001:db8::7]/c=GB?objectClass?one",false),
+            ("mailto:John.Doe@example.com",false),
+            ("news:comp.infosystems.www.servers.unix",false),
+            ("tel:+1-816-555-1212",false),
+            ("telnet://192.0.2.16:80/",false),
+            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2",false),
+
+            (":8080",false),
+            ("8080",false),
+            ("8080:",false),
+        ];
+
+        for (addr, is_ok) in table {
+            assert_eq!(check_addr(addr).is_ok(), is_ok);
+        }
     }
 }

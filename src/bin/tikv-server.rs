@@ -835,6 +835,13 @@ fn main() {
                                         &config,
                                         None,
                                         |v| v.as_str().map(|s| s.to_owned()));
+
+    for addr in pd_endpoints.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if let Err(e) = util::config::check_addr(addr) {
+            panic!("{:?}", e);
+        }
+    }
+
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
     let cluster_id = pd_client.cluster_id;
 
