@@ -175,7 +175,7 @@ fn main() {
 
 }
 
-pub trait MvccDeserializable {
+pub trait MvccDeserializable: PartialEq {
     fn deserialize(bytes: &[u8]) -> Self;
 }
 
@@ -197,6 +197,7 @@ impl MvccDeserializable for Vec<u8> {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub struct MvccKv<T> {
     key: Key,
     value: T,
@@ -343,6 +344,7 @@ mod tests {
     use tempdir::TempDir;
     use tikv::util::rocksdb::new_engine;
     use tikv::storage::types::Key;
+    use tikv::util::escape;
 
     const PREFIX: &'static [u8] = b"k";
 
@@ -356,7 +358,9 @@ mod tests {
             let key = keys::data_key(Key::from_raw(k).append_ts(ts).encoded().as_slice());
             db.put(key.as_slice(), v).unwrap();
         }
-        let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
+        let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", false, CF_DEFAULT);
+        assert_eq!(kvs_gen,
+                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_DEFAULT));
         let mut test_iter = test_data.clone();
         assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
@@ -394,12 +398,9 @@ mod tests {
                     &test_data.2[..] == &lock.primary[..] &&
                     test_data.3 == lock.ts);
         }
-        assert_iter(&gen_mvcc_iter(&db, "kv", CF_LOCK).unwrap(),
-                    test_data_lock[0]);
-        assert_iter(&gen_mvcc_iter(&db, "kx", CF_LOCK).unwrap(),
-                    test_data_lock[1]);
-        assert_iter(&gen_mvcc_iter(&db, "kz", CF_LOCK).unwrap(),
-                    test_data_lock[2]);
+        assert_iter(&gen_mvcc_iter(&db, "kv", false, CF_LOCK), test_data_lock[0]);
+        assert_iter(&gen_mvcc_iter(&db, "kx", false, CF_LOCK), test_data_lock[1]);
+        assert_iter(&gen_mvcc_iter(&db, "kz", false, CF_LOCK), test_data_lock[2]);
 
         // Test MVCC Write
         let test_data_write = vec![(PREFIX, WriteType::Delete, 5, 10),
@@ -422,7 +423,9 @@ mod tests {
         for (k, v) in kvs {
             db.put_cf(write_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", CF_WRITE).unwrap();
+        let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", false, CF_WRITE);
+        assert_eq!(kvs_gen,
+                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_WRITE));
         let mut test_iter = test_data_write.clone();
         assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
