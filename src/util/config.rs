@@ -22,7 +22,7 @@ quick_error! {
     pub enum ConfigError {
         RocksDB
         ReadableNumber
-        Limits(msg: String) {
+        Limit(msg: String) {
             description(&msg)
             display("{}", msg)
         }
@@ -136,18 +136,18 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
     let fd_limit = unsafe {
         let mut fd_limit = ::std::mem::zeroed();
         if 0 != libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit) {
-            return Err(ConfigError::Limits("check_max_open_fds failed".to_owned()));
+            return Err(ConfigError::Limit("check_max_open_fds failed".to_owned()));
         }
 
         fd_limit
     };
 
     if fd_limit.rlim_cur < expect {
-        return Err(ConfigError::Limits(format!("the maximum number of open file descriptors is \
+        return Err(ConfigError::Limit(format!("the maximum number of open file descriptors is \
                                                 too small, got {}, expect greater or equal to \
                                                 {}",
-                                               fd_limit.rlim_cur,
-                                               expect)));
+                                              fd_limit.rlim_cur,
+                                              expect)));
     }
 
     Ok(())
@@ -175,23 +175,23 @@ mod check_kernel {
         let mut buffer = String::new();
         try!(fs::File::open(param_path)
             .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| ConfigError::Limits(format!("check_kernel_params failed {}", e))));
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
 
         let got = try!(buffer.trim_matches('\n')
             .parse::<i64>()
-            .map_err(|e| ConfigError::Limits(format!("check_kernel_params failed {}", e))));
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
 
         if !checker(got, expect) {
             let mut param = String::new();
 
-            // 3: ["", "proc", "sys", ...]
+            // skip 3, ["", "proc", "sys", ...]
             for path in param_path.split('/').skip(3) {
                 param.push_str(path);
                 param.push('.');
             }
             param.pop();
 
-            return Err(ConfigError::Limits(format!("{} got {}, expect {}", param, got, expect)));
+            return Err(ConfigError::Limit(format!("{} got {}, expect {}", param, got, expect)));
         }
 
         Ok(())
