@@ -13,7 +13,7 @@
 
 
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::sync::{Arc, RwLock, Mutex};
 use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -139,14 +139,13 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put(b"k2", b"v2");
     }
 
-    let mut tried_cnt = 0;
+    let mut timer = Instant::now();
     loop {
         let snap_index = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         if snap_index != first_snap_idx {
             break;
         }
-        tried_cnt += 0;
-        if tried_cnt == 100 {
+        if timer.elapsed() >= Duration::from_secs(5) {
             panic!("can't get any snap after {}", first_snap_idx);
         }
     }
@@ -163,7 +162,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine3, b"k1", b"v1");
     must_get_equal(&engine3, b"k2", b"v2");
 
-    let mut tried_cnt = 0;
+    timer = Instant::now();
     loop {
         let mut snap_files = vec![];
         for i in 1..4 {
@@ -174,10 +173,9 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
         if snap_files.is_empty() {
             return;
         }
-        if tried_cnt > 200 {
+        if timer.elapsed() > Duration::from_secs(10) {
             panic!("snap files is still not empty: {:?}", snap_files);
         }
-        tried_cnt += 1;
         // trigger log compaction.
         cluster.must_put(b"k2", b"v2");
         sleep_ms(20);
