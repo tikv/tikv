@@ -36,6 +36,9 @@ quick_error!{
             description("cluster not bootstrap error")
             display("cluster {} is not bootstrapped", cluster_id)
         }
+        RegionIsShutdown {
+            description("region is merged and shutdown")
+        }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
