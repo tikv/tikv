@@ -43,7 +43,7 @@ const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
-const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 60 * 20; // 20 min
+const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 60 * 60; // 60 min
 
 #[derive(Debug, Clone)]
 pub struct Config {
