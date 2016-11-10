@@ -21,7 +21,6 @@
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(const_fn)]
-#![feature(slice_concat_ext)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![recursion_limit="100"]

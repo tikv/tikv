@@ -154,12 +154,12 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
 mod check_kernel {
     use std::fs;
     use std::io::Read;
-    use std::slice::SliceConcatExt;
 
     use super::ConfigError;
 
     type Checker = Fn(i64, i64) -> bool;
 
+    // pub for tests.
     pub fn check_kernel_params(param_path: &str,
                                expect: i64,
                                checker: Box<Checker>)
@@ -174,12 +174,15 @@ mod check_kernel {
             .map_err(|e| ConfigError::Limits(format!("check_kernel_params failed {}", e))));
 
         if !checker(got, expect) {
+            let mut param = String::new();
+
             // 3: ["", "proc", "sys", ...]
-            let param = param_path.split('/')
-                .skip(3)
-                .map(|s| s.to_owned())
-                .collect::<Vec<String>>()
-                .join(".");
+            for path in param_path.split('/').skip(3) {
+                param.push_str(path);
+                param.push('.');
+            }
+            param.pop();
+
             return Err(ConfigError::Limits(format!("{} got {}, expect {}", param, got, expect)));
         }
 
