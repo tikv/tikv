@@ -103,7 +103,11 @@ fn main() {
             .arg(Arg::with_name("key")
                 .short("key")
                 .takes_value(true)
-                .help("the query key")));
+                .help("the query key"))
+            .arg(Arg::with_name("encoded")
+                .short("e")
+                .takes_value(false)
+                .help("set it when the key is already encoded.")));
     let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
@@ -143,21 +147,22 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let cf_name = matches.value_of("cf").unwrap_or("default");
         let key = matches.value_of("key").unwrap();
+        let key_encoded = matches.is_present("encoded");
         println!("You are searching Key {}: ", key);
         match cf_name {
             CF_DEFAULT => {
-                dump_mvcc_default(&db, key);
+                dump_mvcc_default(&db, key, key_encoded);
             }
             CF_LOCK => {
-                dump_mvcc_lock(&db, key);
+                dump_mvcc_lock(&db, key, key_encoded);
             }
             CF_WRITE => {
-                dump_mvcc_write(&db, key);
+                dump_mvcc_write(&db, key, key_encoded);
             }
             "all" => {
-                dump_mvcc_default(&db, key);
-                dump_mvcc_lock(&db, key);
-                dump_mvcc_write(&db, key);
+                dump_mvcc_default(&db, key, key_encoded);
+                dump_mvcc_lock(&db, key, key_encoded);
+                dump_mvcc_write(&db, key, key_encoded);
             }
             _ => {
                 println!("The cf: {} cannot be dumped", cf_name);
@@ -168,11 +173,6 @@ fn main() {
         let _ = app.print_help();
     }
 
-}
-
-fn gen_key_prefix(key: &str) -> Vec<u8> {
-    let encoded = encode_bytes(unescape(key).as_slice());
-    keys::data_key(encoded.as_slice())
 }
 
 pub trait MvccDeserializable {
@@ -204,13 +204,18 @@ pub struct MvccKv<T> {
 
 pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
                                             key_prefix: &str,
+                                            prefix_encoded: bool,
                                             mvcc_type: CfName)
-                                            -> Option<Vec<MvccKv<T>>> {
-    let prefix = gen_key_prefix(key_prefix);
+                                            -> Vec<MvccKv<T>> {
+    let encoded_prefix = if prefix_encoded {
+        unescape(key_prefix)
+    } else {
+        encode_bytes(unescape(key_prefix).as_slice())
+    };
     let mut iter = db.new_iterator_cf(mvcc_type, None, false).unwrap();
-    iter.seek(prefix.as_slice().into());
+    iter.seek(keys::data_key(&encoded_prefix).as_slice().into());
     if !iter.valid() {
-        None
+        vec![]
     } else {
         let kvs = iter.map(|s| {
             let key = &keys::origin_key(&s.0);
@@ -219,29 +224,29 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
                 value: T::deserialize(&s.1),
             }
         });
-        Some(kvs.take_while(|s| s.key.raw().unwrap().starts_with(key_prefix.as_bytes()))
-            .collect())
+        kvs.take_while(|s| s.key.encoded().starts_with(&encoded_prefix))
+            .collect()
     }
 }
 
 
-fn dump_mvcc_default(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, CF_DEFAULT).unwrap();
+fn dump_mvcc_default(db: &DB, key: &str, encoded: bool) {
+    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, encoded, CF_DEFAULT);
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        println!("Key: {:?}", key);
+        println!("Key: {:?}", escape(key.encoded()));
         println!("Value: {:?}", escape(kv.value.as_slice()));
         println!("Start_ts: {:?}", ts);
         println!("");
     }
 }
 
-fn dump_mvcc_lock(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, CF_LOCK).unwrap();
+fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool) {
+    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, encoded, CF_LOCK);
     for kv in kvs {
         let lock = &kv.value;
-        println!("Key: {:?}", kv.key);
+        println!("Key: {:?}", escape(kv.key.encoded()));
         println!("Primary: {:?}", escape(lock.primary.as_slice()));
         println!("Type: {:?}", lock.lock_type);
         println!("Start_ts: {:?}", lock.ts);
@@ -249,13 +254,13 @@ fn dump_mvcc_lock(db: &DB, key: &str) {
     }
 }
 
-fn dump_mvcc_write(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, CF_WRITE).unwrap();
+fn dump_mvcc_write(db: &DB, key: &str, encoded: bool) {
+    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, encoded, CF_WRITE);
     for kv in kvs {
         let write = &kv.value;
         let commit_ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        println!("Key: {:?}", key);
+        println!("Key: {:?}", escape(key.encoded()));
         println!("Type: {:?}", write.write_type);
         println!("Start_ts: {:?}", write.start_ts);
         println!("Commit_ts: {:?}", commit_ts);
