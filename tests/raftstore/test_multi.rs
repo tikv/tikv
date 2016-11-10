@@ -609,3 +609,35 @@ fn test_server_remove_leader_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 2);
     test_remove_leader_with_uncommitted_log(&mut cluster);
 }
+
+fn test_follower_read<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    // We use three peers([1, 2, 3]) for this test.
+    cluster.run();
+
+    sleep_ms(500);
+
+    let (k0, v0) = (b"k0", b"v0");
+    cluster.must_put(k0, v0);
+
+    // guarantee peer 1 is leader
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // read from follower 2 and 3
+    assert_eq!(cluster.read_from_store(k0, 2).unwrap(), v0);
+    assert_eq!(cluster.read_from_store(k0, 3).unwrap(), v0);
+}
+
+#[test]
+fn test_node_read_from_follower() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_follower_read(&mut cluster);
+}
+
+#[test]
+fn test_server_read_from_follower() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_follower_read(&mut cluster);
+}

@@ -224,6 +224,38 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn call_command_on_store(&mut self,
+                                 store_id: u64,
+                                 mut request: RaftCmdRequest,
+                                 timeout: Duration)
+                                 -> Result<RaftCmdResponse> {
+        let mut retry_cnt = 0;
+        let region_id = request.get_header().get_region_id();
+        loop {
+            let peer = match self.peer_of_region(region_id, store_id) {
+                None => {
+                    return Err(box_err!("can't get peer of region {} for store {}",
+                                        region_id,
+                                        store_id))
+                }
+                Some(p) => p,
+            };
+
+            request.mut_header().set_peer(peer);
+            let resp = match self.call_command(request.clone(), timeout) {
+                e @ Err(_) => return e,
+                Ok(resp) => resp,
+            };
+            if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
+                retry_cnt += 1;
+                warn!("{:?} is no longer leader, let's retry",
+                      request.get_header().get_peer());
+                continue;
+            }
+            return Ok(resp);
+        }
+    }
+
     fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
         let store_ids = match self.store_ids_of_region(region_id) {
             None => return false,
@@ -252,6 +284,20 @@ impl<T: Simulator> Cluster<T> {
         } else {
             None
         }
+    }
+
+    fn peer_of_region(&mut self, region_id: u64, store_id: u64) -> Option<metapb::Peer> {
+        let region_detail = self.region_detail(region_id, 1);
+        if !region_detail.has_region() {
+            return None;
+        }
+        let region = region_detail.get_region();
+        for peer in region.get_peers() {
+            if peer.get_store_id() == store_id {
+                return Some(peer.clone());
+            }
+        }
+        None
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
@@ -411,6 +457,7 @@ impl<T: Simulator> Cluster<T> {
                    key: &[u8],
                    reqs: Vec<Request>,
                    read_quorum: bool,
+                   store_id: Option<u64>,
                    timeout: Duration)
                    -> RaftCmdResponse {
         for _ in 0..20 {
@@ -420,7 +467,10 @@ impl<T: Simulator> Cluster<T> {
                                   region.take_region_epoch(),
                                   reqs.clone(),
                                   read_quorum);
-            let result = self.call_command_on_leader(req, timeout);
+            let result = match store_id {
+                Some(store_id) => self.call_command_on_store(store_id, req, timeout),
+                None => self.call_command_on_leader(req, timeout),
+            };
 
             if let Err(Error::Timeout(_)) = result {
                 warn!("call command timeout, let's retry");
@@ -464,17 +514,26 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, false)
+        self.get_impl(key, false, None)
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(key, true)
+        self.get_impl(key, true, None)
     }
 
-    fn get_impl(&mut self, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
+    pub fn read_from_store(&mut self, key: &[u8], store_id: u64) -> Option<Vec<u8>> {
+        self.get_impl(key, false, Some(store_id))
+    }
+
+    fn get_impl(&mut self,
+                key: &[u8],
+                read_quorum: bool,
+                store_id: Option<u64>)
+                -> Option<Vec<u8>> {
         let mut resp = self.request(key,
                                     vec![new_get_cmd(key)],
                                     read_quorum,
+                                    store_id,
                                     Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -497,6 +556,7 @@ impl<T: Simulator> Cluster<T> {
         let resp = self.request(key,
                                 vec![new_put_cf_cmd(cf, key, value)],
                                 false,
+                                None,
                                 Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
@@ -513,6 +573,7 @@ impl<T: Simulator> Cluster<T> {
         let resp = self.request(key,
                                 vec![new_delete_cmd(cf, key)],
                                 false,
+                                None,
                                 Duration::from_secs(5));
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);
