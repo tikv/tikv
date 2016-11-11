@@ -26,20 +26,19 @@ mod inner {
 
 #[cfg(not(any(target_os = "macos")))]
 mod inner {
+    use std::io;
     use time::Timespec;
     use libc;
 
-    fn now_monotonic_raw_time() -> Timespec {
+    pub fn now_monotonic_raw_clocktime() -> Timespec {
         let mut t = libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,
         };
-        let res = unsafe {
-            libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut t);
-        };
+        let res = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut t) };
         if res == -1 {
-            panic!(io::Error::last_os_error().description());
+            panic!(io::Error::last_os_error());
         }
-        Timespec::new(t.tv_sec, t.tv_nsec)
+        Timespec::new(t.tv_sec, t.tv_nsec as i32)
     }
 }
