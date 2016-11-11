@@ -22,6 +22,10 @@ quick_error! {
     pub enum ConfigError {
         RocksDB
         ReadableNumber
+        Limit(msg: String) {
+            description(&msg)
+            display("{}", msg)
+        }
         Address(msg: String) {
             description(&msg)
             display("{}", msg)
@@ -123,6 +127,113 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
 
         _ => Err(ConfigError::ReadableNumber),
     }
+}
+
+#[cfg(unix)]
+pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    use libc;
+
+    let fd_limit = unsafe {
+        let mut fd_limit = ::std::mem::zeroed();
+        if 0 != libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit) {
+            return Err(ConfigError::Limit("check_max_open_fds failed".to_owned()));
+        }
+
+        fd_limit
+    };
+
+    if fd_limit.rlim_cur < expect {
+        return Err(ConfigError::Limit(format!("the maximum number of open file descriptors is \
+                                                too small, got {}, expect greater or equal to \
+                                                {}",
+                                              fd_limit.rlim_cur,
+                                              expect)));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+mod check_kernel {
+    use std::fs;
+    use std::io::Read;
+
+    use super::ConfigError;
+
+    // pub for tests.
+    pub type Checker = Fn(i64, i64) -> bool;
+
+    // pub for tests.
+    pub fn check_kernel_params(param_path: &str,
+                               expect: i64,
+                               checker: Box<Checker>)
+                               -> Result<(), ConfigError> {
+        let mut buffer = String::new();
+        try!(fs::File::open(param_path)
+            .and_then(|mut f| f.read_to_string(&mut buffer))
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+
+        let got = try!(buffer.trim_matches('\n')
+            .parse::<i64>()
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+
+        let mut param = String::new();
+        // skip 3, ["", "proc", "sys", ...]
+        for path in param_path.split('/').skip(3) {
+            param.push_str(path);
+            param.push('.');
+        }
+        param.pop();
+
+        if !checker(got, expect) {
+            return Err(ConfigError::Limit(format!("kernel parameters {} got {}, expect {}",
+                                                  param,
+                                                  got,
+                                                  expect)));
+        }
+
+        info!("kernel parameters {}: {}", param, got);
+        Ok(())
+    }
+
+    /// `check_kernel_params` checks kernel parameters, following are checked so far:
+    ///   - `net.core.somaxconn` should be greater or equak to 32768.
+    ///   - `net.ipv4.tcp_syncookies` should be 0
+    ///   - `vm.swappiness` shoud be 0
+    ///
+    /// Note that: It works on **Linux** only.
+    pub fn check_kernel() -> Vec<ConfigError> {
+        let params: Vec<(&str, i64, Box<Checker>)> = vec![
+            // Check net.core.somaxconn.
+            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| got >= expect),
+            // Check net.ipv4.tcp_syncookies.
+            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| got == expect),
+            // Check vm.swappiness.
+            ("/proc/sys/vm/swappiness", 0, box |got, expect| got == expect),
+        ];
+
+        let mut errors = Vec::with_capacity(params.len());
+        for (param_path, expect, checker) in params {
+            if let Err(e) = check_kernel_params(param_path, expect, checker) {
+                errors.push(e);
+            }
+        }
+
+        errors
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use self::check_kernel::check_kernel;
+
+#[cfg(not(target_os = "linux"))]
+pub fn check_kernel() -> Vec<ConfigError> {
+    Vec::new()
 }
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
@@ -234,6 +345,24 @@ mod test {
                 parse_rocksdb_wal_recovery_mode(3).unwrap());
 
         assert!(parse_rocksdb_wal_recovery_mode(4).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_check_kernel() {
+        use std::i64;
+        use super::check_kernel::{check_kernel_params, Checker};
+
+        // The range of vm.swappiness is from 0 to 100.
+        let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
+            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got == expect), false),
+
+            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got < expect), true),
+        ];
+
+        for (path, expect, checker, is_ok) in table {
+            assert_eq!(check_kernel_params(path, expect, checker).is_ok(), is_ok);
+        }
     }
 
     #[test]
