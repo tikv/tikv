@@ -165,7 +165,8 @@ mod check_kernel {
 
     use super::ConfigError;
 
-    type Checker = Fn(i64, i64) -> bool;
+    // pub for tests.
+    pub type Checker = Fn(i64, i64) -> bool;
 
     // pub for tests.
     pub fn check_kernel_params(param_path: &str,
@@ -347,18 +348,18 @@ mod test {
     #[test]
     fn test_check_kernel() {
         use std::i64;
+        use super::check_kernel::{check_kernel_params, Checker};
 
         // The range of vm.swappiness is from 0 to 100.
-        assert_eq!(super::check_kernel::check_kernel_params("/proc/sys/vm/swappiness",
-                                                            i64::MAX,
-                                                            box |got, expect| got == expect)
-                       .is_ok(),
-                   false);
-        assert_eq!(super::check_kernel::check_kernel_params("/proc/sys/vm/swappiness",
-                                                            i64::MAX,
-                                                            box |got, expect| got < expect)
-                       .is_ok(),
-                   true);
+        let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
+            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got == expect), false),
+
+            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got < expect), true),
+        ];
+
+        for (path, expect, checker, is_ok) in table {
+            assert_eq!(check_kernel_params(path, expect, checker).is_ok(), is_ok);
+        }
     }
 
     #[test]
