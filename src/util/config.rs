@@ -182,19 +182,22 @@ mod check_kernel {
             .parse::<i64>()
             .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
 
+        let mut param = String::new();
+        // skip 3, ["", "proc", "sys", ...]
+        for path in param_path.split('/').skip(3) {
+            param.push_str(path);
+            param.push('.');
+        }
+        param.pop();
+
         if !checker(got, expect) {
-            let mut param = String::new();
-
-            // skip 3, ["", "proc", "sys", ...]
-            for path in param_path.split('/').skip(3) {
-                param.push_str(path);
-                param.push('.');
-            }
-            param.pop();
-
-            return Err(ConfigError::Limit(format!("{} got {}, expect {}", param, got, expect)));
+            return Err(ConfigError::Limit(format!("kernel parameters {} got {}, expect {}",
+                                                  param,
+                                                  got,
+                                                  expect)));
         }
 
+        info!("kernel parameters {}: {}", param, got);
         Ok(())
     }
 
