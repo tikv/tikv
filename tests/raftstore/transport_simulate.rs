@@ -500,15 +500,15 @@ pub struct RandomLatencyFilter {
 }
 
 impl RandomLatencyFilter {
-    pub fn new(rate: u32) -> RandomLatencyFilter {
+    pub fn new(delay_rate: u32) -> RandomLatencyFilter {
         RandomLatencyFilter {
-            delay_rate: rate,
+            delay_rate: delay_rate,
             delayed_msgs: Mutex::new(vec![]),
         }
     }
 
     fn will_delay(&self, _: &RaftMessage) -> bool {
-        rand::random::<u32>() % 100u32 >= self.delay_rate
+        rand::random::<u32>() % 100u32 <= self.delay_rate
     }
 }
 

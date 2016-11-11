@@ -456,7 +456,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                                     self.cfg
                                                                         .raft_base_tick_interval,
                                                                     peer.is_leader());
-                    // And run `tick()` as many as `tick_number` indicates.
+                    debug!("{} calculate tick number {}", self.tag, tick_number);
+                    // And run `tick()` as many times as `tick_number` indicates.
                     for _ in 0..tick_number {
                         peer.raft_group.tick();
                     }
@@ -1612,7 +1613,7 @@ fn calculate_tick_with_clocktime(from: Timespec,
                                  is_leader: bool)
                                  -> u64 {
     if to < from {
-        // It's fatal error if the clocktime rollbacks.
+        // It's a fatal error if the monotonic raw clocktime rollbacks.
         let from_str = util::format_clocktime(from);
         let to_str = util::format_clocktime(to);
         panic!("the monotonic raw clock time rollbacks from {} to {}",
@@ -1620,7 +1621,7 @@ fn calculate_tick_with_clocktime(from: Timespec,
                to_str)
     } else if to == from {
         // The clocktime doesn't increase during two eventloop dispatches.
-        // Although it's not likely to happen, if it does, count it as one tick.
+        // Although it's not likely to happen, if it does happen, count it as one tick.
         return 1;
     }
     let d = (to - from).num_milliseconds() as u64;
@@ -1629,7 +1630,7 @@ fn calculate_tick_with_clocktime(from: Timespec,
     // a multiple of the configured tick interval
     if is_leader && (d % interval != 0) {
         // Always round up the result since it's fine for the raft leadr if the ticks
-        // run faster than the clock.
+        // run faster than the clocktime.
         // Faster ticks lead to earlier heartbeat timeout and election timeout.
         // For raft leader, it avoids reading the stale data when doing lease reads.
         res + 1
