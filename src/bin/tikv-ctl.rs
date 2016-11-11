@@ -205,10 +205,10 @@ pub struct MvccKv<T> {
 
 pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
                                             key_prefix: &str,
-                                            prefix_encoded: bool,
+                                            prefix_is_encoded: bool,
                                             mvcc_type: CfName)
                                             -> Vec<MvccKv<T>> {
-    let encoded_prefix = if prefix_encoded {
+    let encoded_prefix = if prefix_is_encoded {
         unescape(key_prefix)
     } else {
         encode_bytes(unescape(key_prefix).as_slice())
