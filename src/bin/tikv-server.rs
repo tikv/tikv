@@ -29,6 +29,7 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 
+use std::process;
 use std::{env, thread};
 use std::fs::{self, File};
 use std::path::Path;
@@ -60,6 +61,57 @@ const ROCKSDB_STATS_KEY: &'static str = "rocksdb.stats";
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
     print!("{}", opts.usage(&brief));
+}
+
+fn get_flag_string(matches: &Matches, name: &str) -> Option<String> {
+    if matches.opt_defined(name) {
+        return matches.opt_str(name);
+    }
+    None
+}
+
+fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
+    if matches.opt_defined(name) {
+        return matches.opt_str(name).map(|x| {
+            x.parse::<i64>()
+                .or_else(|_| util::config::parse_readable_int(&x))
+                .unwrap_or_else(|e| {
+                    warn!("parse {} failed: {:?}", name, e);
+                    process::exit(1)
+                })
+        });
+    }
+    None
+}
+
+fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> bool {
+    unimplemented!()
+}
+
+fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) -> String {
+    config.lookup(name)
+        .and_then(|v| v.as_str().map(|s| s.to_owned()))
+        .or_else(|| {
+            info!("{}, use default {:?}", name, default);
+            default
+        })
+        .unwrap_or_else(|| {
+            warn!("please specify {}", name);
+            process::exit(1)
+        })
+}
+
+fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
+    config.lookup(name)
+        .and_then(|v| v.as_integer())
+        .or_else(|| {
+            info!("{}, use default {:?}", name, default);
+            default
+        })
+        .unwrap_or_else(|| {
+            warn!("please specify {}", name);
+            process::exit(1)
+        })
 }
 
 fn get_string_value<F>(short: &str,
@@ -149,18 +201,12 @@ fn get_integer_value<F>(short: &str,
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
-    let level = get_string_value("L",
-                                 "server.log-level",
-                                 matches,
-                                 config,
-                                 Some("info".to_owned()),
-                                 |v| v.as_str().map(|s| s.to_owned()));
-    let log_file_path = get_string_value("f",
-                                         "server.log-file",
-                                         matches,
-                                         config,
-                                         Some("".to_owned()),
-                                         |v| v.as_str().map(|s| s.to_owned()));
+    let level = get_flag_string(matches, "L")
+        .unwrap_or_else(|| get_toml_string(config, "server.log-level", Some("info".to_owned())));
+
+    let log_file_path = get_flag_string(matches, "f")
+        .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
+
     if log_file_path.is_empty() {
         util::init_log(logger::get_level_by_string(&level)).unwrap();
     } else {
@@ -206,13 +252,8 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
                          &push_job);
 }
 
-fn check_system_config(matches: &Matches, config: &toml::Value) {
-    let max_open_files = get_integer_value("",
-                                           "rocksdb.max-open-files",
-                                           matches,
-                                           config,
-                                           Some(40960),
-                                           |v| v.as_integer());
+fn check_system_config(config: &toml::Value) {
+    let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     if let Err(e) = util::config::check_max_open_fds(max_open_files as u64) {
         panic!("check rocksdb max open files err {:?}", e)
     }
@@ -838,7 +879,7 @@ fn main() {
     panic_hook::set_exit_hook();
 
     // Before any startup, check system configuration.
-    check_system_config(&matches, &config);
+    check_system_config(&config);
 
     let addr = get_string_value("A",
                                 "server.addr",
