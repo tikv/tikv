@@ -30,10 +30,16 @@ pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
 /// A collector that handles all the aggregation.
 pub struct AggrCollector {
+    /// Columns that appear in group-by or aggregate expression.
     aggr_cols: Vec<ColumnInfo>,
+    /// Aggregate expressions.
     aggregates: Vec<Expr>,
+    /// Group-by expressions.
     group_by: Vec<ByItem>,
+    /// Collected group-by keys. We need this to keep the keys in
+    /// their show up order.
     gks: Vec<Rc<Vec<u8>>>,
+    /// Aggregate results.
     gk_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
 }
 
@@ -72,6 +78,7 @@ impl Collector for AggrCollector {
                 try!(util::collect_col_in_expr(&mut aggr_cols_map, select_cols, item.get_expr()));
             }
             if !aggr_cols_map.is_empty() {
+                // condition check has handle these cols, no need to iter again.
                 for cond_col in cond_col_map.keys() {
                     aggr_cols_map.remove(cond_col);
                 }
