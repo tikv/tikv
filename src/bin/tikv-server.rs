@@ -204,8 +204,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     opts
 }
 
-fn get_rocksdb_cf_option(matches: &Matches,
-                         config: &toml::Value,
+fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
                          block_cache_default: i64,
                          use_bloom_filter: bool)
@@ -284,23 +283,22 @@ fn get_rocksdb_cf_option(matches: &Matches,
     opts
 }
 
-fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_default_cf_option(config: &toml::Value) -> RocksdbOptions {
     // Default column family uses bloom filter.
-    get_rocksdb_cf_option(matches,
-                          config,
+    get_rocksdb_cf_option(config,
                           "defaultcf",
                           1024 * 1024 * 1024,
                           true /* bloom filter */)
 }
 
-fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
     // Don't need set bloom filter for write cf, because we use seek to get the correct
     // version base on provided timestamp.
-    get_rocksdb_cf_option(matches, config, "writecf", 256 * 1024 * 1024, false)
+    get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, false)
 }
 
-fn get_rocksdb_raftlog_cf_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_cf_option(matches, config, "raftcf", 256 * 1024 * 1024, false)
+fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
+    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false)
 }
 
 fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
@@ -408,8 +406,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     cfg
 }
 
-fn build_raftkv(matches: &Matches,
-                config: &toml::Value,
+fn build_raftkv(config: &toml::Value,
                 ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config)
@@ -417,10 +414,10 @@ fn build_raftkv(matches: &Matches,
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_db_option(config);
-    let cfs_opts = vec![get_rocksdb_default_cf_option(matches, config),
+    let cfs_opts = vec![get_rocksdb_default_cf_option(config),
                         get_rocksdb_lock_cf_option(),
-                        get_rocksdb_write_cf_option(matches, config),
-                        get_rocksdb_raftlog_cf_option(matches, config)];
+                        get_rocksdb_write_cf_option(config),
+                        get_rocksdb_raftlog_cf_option(config)];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine =
@@ -537,7 +534,7 @@ fn run_raft_server(listener: TcpListener,
     }
 
     let (mut node, mut store, raft_router, snap_mgr, engine) =
-        build_raftkv(matches, config, ch.clone(), pd_client, cfg);
+        build_raftkv(config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
 
     initial_metric(config, Some(node.id()));
