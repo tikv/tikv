@@ -33,8 +33,6 @@ pub mod panic_hook;
 pub mod worker;
 pub mod codec;
 pub mod xeval;
-#[macro_use]
-pub mod event;
 pub mod rocksdb;
 pub mod config;
 pub mod fs;
