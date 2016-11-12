@@ -462,6 +462,7 @@ fn test_node_leader_change_with_log_overlap() {
     panic!("callback has not been called after 5s.");
 }
 
+#[allow(dead_code)]
 fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
@@ -530,18 +531,19 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(k).unwrap(), v);
 }
 
-#[test]
-fn test_node_read_leader_with_unapplied_log() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_read_leader_with_unapplied_log(&mut cluster);
-}
+// #[test]
+// fn test_node_read_leader_with_unapplied_log() {
+//    let mut cluster = new_node_cluster(0, 3);
+//    test_read_leader_with_unapplied_log(&mut cluster);
+// }
+//
+// #[test]
+// fn test_server_read_leader_with_unapplied_log() {
+//    let mut cluster = new_server_cluster(0, 3);
+//    test_read_leader_with_unapplied_log(&mut cluster);
+// }
 
-#[test]
-fn test_server_read_leader_with_unapplied_log() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_read_leader_with_unapplied_log(&mut cluster);
-}
-
+#[allow(dead_code)]
 fn get_with_timeout<T: Simulator>(cluster: &mut Cluster<T>,
                                   key: &[u8],
                                   read_quorum: bool,
@@ -619,15 +621,15 @@ fn test_follower_read<T: Simulator>(cluster: &mut Cluster<T>) {
 
     sleep_ms(500);
 
-    let (k0, v0) = (b"k0", b"v0");
-    cluster.must_put(k0, v0);
+    let (k, v) = (b"k0", b"v");
+    cluster.must_put(k, v);
 
     // guarantee peer 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // read from follower 2 and 3
-    assert_eq!(cluster.read_from_store(k0, 2).unwrap(), v0);
-    assert_eq!(cluster.read_from_store(k0, 3).unwrap(), v0);
+    assert_eq!(cluster.read_from_store(k, 2).unwrap(), v);
+    assert_eq!(cluster.read_from_store(k, 3).unwrap(), v);
 }
 
 #[test]

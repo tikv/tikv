@@ -20,11 +20,11 @@ use std::default::Default;
 use std::time::{Instant, Duration};
 
 use rocksdb::{DB, WriteBatch, Writable};
-use protobuf::{self, Message, RepeatedField};
+use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType, MessageType, EntryType};
+use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -49,6 +49,7 @@ use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+const READONLY_QUERY_TIMEOUT_MS: u64 = 5000; // 5 secs
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug)]
@@ -151,12 +152,6 @@ impl PendingCmdQueue {
         self.uuids.insert(cmd.uuid);
         self.conf_change = Some(cmd);
     }
-}
-
-pub enum RequestType {
-    LeaseRead,
-    FollowerRead,
-    Others,
 }
 
 /// Call the callback of `cmd` that the region is removed.
@@ -428,15 +423,15 @@ impl Peer {
         Ok(())
     }
 
-    fn send_read_index(&mut self, ctx: &[u8]) -> Result<()> {
-        let mut m = eraftpb::Message::new();
-        m.set_msg_type(MessageType::MsgReadIndex);
-        let mut e = eraftpb::Entry::new();
-        e.set_entry_type(EntryType::EntryNormal);
-        e.set_data(ctx.to_vec());
-        m.set_entries(RepeatedField::from_vec(vec![e]));
-        try!(self.step(m));
-        Ok(())
+    pub fn is_reqeust_allowed(&self, req: &RaftCmdRequest) -> bool {
+        // Read and write is allowed when the peer is leader, readonly request is allowed
+        // although when peer is follower.
+        if !self.is_leader() &&
+           (!is_readonly_query(req) || self.leader_id() == INVALID_ID || self.is_applying()) {
+            return false;
+        }
+
+        true
     }
 
     pub fn check_peers(&mut self) {
@@ -503,10 +498,10 @@ impl Peer {
         StaleState::Valid
     }
 
-    pub fn check_stall_readonly_query(&mut self, now: Instant, timeout: Duration) {
+    pub fn check_stall_readonly_query(&mut self, now: Instant) {
         let mut expired = vec![];
-        for (k, v) in &self.pending_readonly_queries {
-            // v = (cmd, req, start_time)
+        let timeout = Duration::from_millis(READONLY_QUERY_TIMEOUT_MS);
+        for (k, v /* v = (cmd, req, start_time) */) in &self.pending_readonly_queries {
             let duration = now.duration_since(v.2);
             if duration > timeout {
                 expired.push(*k);
@@ -644,7 +639,7 @@ impl Peer {
                 cmd_resp::bind_term(&mut resp, self.term());
                 cmd.call(resp);
             } else {
-                // command maybe timeout and has removed
+                // command should be timeout and has been removed
                 info!("command [{}] receive read state but command not exist",
                       &uuid)
             }
@@ -668,110 +663,63 @@ impl Peer {
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
         PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        match self.request_type(&req) {
-            RequestType::LeaseRead => {
-                PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
+        let readonly = is_readonly_query(&req);
+        if readonly {
+            let uuid = cmd.uuid;
+            self.pending_readonly_queries.insert(uuid, (cmd, req, Instant::now()));
+            self.raft_group.read_index(uuid.as_bytes().to_vec());
+            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["readindex_read"]).inc();
+            return true;
+        } else if get_transfer_leader_cmd(&req).is_some() {
+            let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
+            let peer = transfer_leader.get_peer();
 
-                // for read-only, if we don't care stale read, we can
-                // execute these commands immediately in leader.
-                let mut ctx = ExecContext::new(self, 0, 0, &req);
-                let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-                    error!("{} execute raft command err: {:?}", self.tag, e);
-                    (cmd_resp::new_error(e), None)
-                });
-
-                cmd_resp::bind_uuid(&mut resp, cmd.uuid);
-                cmd_resp::bind_term(&mut resp, self.term());
-                cmd.call(resp);
-                false
+            if self.is_tranfer_leader_allowed(peer) {
+                self.transfer_leader(peer);
+            } else {
+                info!("{} transfer leader message {:?} ignored directly",
+                      self.tag,
+                      req);
             }
-            RequestType::FollowerRead => {
-                let uuid = cmd.uuid;
-                self.pending_readonly_queries.insert(uuid, (cmd, req, Instant::now()));
-                if let Err(e) = self.send_read_index(uuid.as_bytes()) {
-                    error!("{} send read index failed, err: {}", self.tag, e);
-                    let (mut cmd, _, _) = self.pending_readonly_queries.remove(&uuid).unwrap();
-                    let mut resp = cmd_resp::new_error(e);
-                    cmd_resp::bind_uuid(&mut resp, cmd.uuid);
-                    cmd_resp::bind_term(&mut resp, self.term());
-                    cmd.call(resp);
-                    return false;
-                }
-                PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["follower_read"]).inc();
-                true
+
+            // transfer leader command doesn't need to replicate log and apply, so we
+            // return immediately. Note that this command may fail, we can view it
+            // just as an advice
+            cmd.call(make_transfer_leader_response());
+            return false;
+        } else if get_change_peer_cmd(&req).is_some() {
+            if self.raft_group.raft.pending_conf {
+                info!("{} there is a pending conf change, try later", self.tag);
+                cmd_resp::bind_error(&mut err_resp,
+                                     box_err!("{} there is a pending conf change, try \
+                                               later",
+                                              self.tag));
+                cmd.call(err_resp);
+                return false;
             }
-            RequestType::Others => {
-                if get_transfer_leader_cmd(&req).is_some() {
-                    let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
-                    let peer = transfer_leader.get_peer();
-
-                    if self.is_tranfer_leader_allowed(peer) {
-                        self.transfer_leader(peer);
-                    } else {
-                        info!("{} transfer leader message {:?} ignored directly",
-                              self.tag,
-                              req);
-                    }
-
-                    // transfer leader command doesn't need to replicate log and apply, so we
-                    // return immediately. Note that this command may fail, we can view it
-                    // just as an advice
-                    cmd.call(make_transfer_leader_response());
-                    return false;
-                } else if get_change_peer_cmd(&req).is_some() {
-                    if self.raft_group.raft.pending_conf {
-                        info!("{} there is a pending conf change, try later", self.tag);
-                        cmd_resp::bind_error(&mut err_resp,
-                                             box_err!("{} there is a pending conf change, try \
-                                                       later",
-                                                      self.tag));
-                        cmd.call(err_resp);
-                        return false;
-                    }
-                    if let Some(cmd) = self.pending_cmds.take_conf_change() {
-                        // if it loses leadership before conf change is replicated, there may be
-                        // a stale pending conf change before next conf change is applied. If it
-                        // becomes leader again with the stale pending conf change, will enter
-                        // this block, so we notify leadership may have changed.
-                        self.notify_not_leader(cmd);
-                    }
-
-                    if let Err(e) = self.propose_conf_change(req) {
-                        cmd_resp::bind_error(&mut err_resp, e);
-                        cmd.call(err_resp);
-                        return false;
-                    }
-
-                    self.pending_cmds.set_conf_change(cmd);
-                } else if let Err(e) = self.propose_normal(req) {
-                    cmd_resp::bind_error(&mut err_resp, e);
-                    cmd.call(err_resp);
-                    return false;
-                } else {
-                    self.pending_cmds.append_normal(cmd);
-                }
-                true
+            if let Some(cmd) = self.pending_cmds.take_conf_change() {
+                // if it loses leadership before conf change is replicated, there may be
+                // a stale pending conf change before next conf change is applied. If it
+                // becomes leader again with the stale pending conf change, will enter
+                // this block, so we notify leadership may have changed.
+                self.notify_not_leader(cmd);
             }
-        }
-    }
 
-    fn request_type(&self, req: &RaftCmdRequest) -> RequestType {
-        if !is_readonly_query(req) || (req.has_header() && req.get_header().get_read_quorum()) {
-            return RequestType::Others;
-        }
+            if let Err(e) = self.propose_conf_change(req) {
+                cmd_resp::bind_error(&mut err_resp, e);
+                cmd.call(err_resp);
+                return false;
+            }
 
-        // If applied index's term is differ from current raft's term, leader transfer
-        // must happened, if read locally, we may read old value.
-        if self.raft_group.raft.in_lease() &&
-           self.get_store().applied_index_term == self.raft_group.raft.term {
-            return RequestType::LeaseRead;
+            self.pending_cmds.set_conf_change(cmd);
+        } else if let Err(e) = self.propose_normal(req) {
+            cmd_resp::bind_error(&mut err_resp, e);
+            cmd.call(err_resp);
+            return false;
+        } else {
+            self.pending_cmds.append_normal(cmd);
         }
-
-        if self.raft_group.raft.state == StateRole::Follower && self.leader_id() != INVALID_ID {
-            return RequestType::FollowerRead;
-        }
-
-        RequestType::Others
+        true
     }
 
     /// Call the callback of `cmd` that leadership may have been changed.

@@ -36,8 +36,7 @@ const STORE_CAPACITY: u64 = u64::MAX;
 const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
 const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
-const DEFAULT_CHECK_STALL_RO_QUERY_INTERVAL_MS: u64 = 5 * 1000; // 5 secs
-const DEFAULT_READONLY_QUERY_TIMEOUT_MS: u64 = 10 * 1000; // 10 secs
+const DEFAULT_CHECK_STALL_READONLY_INTERVAL_MS: u64 = 5 * 1000; // 5 secs
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
@@ -88,7 +87,6 @@ pub struct Config {
     pub snap_gc_timeout: u64,
     pub lock_cf_compact_interval_secs: u64,
     pub check_stall_readonly_query_interval: u64,
-    pub readonly_query_timeout_ms: u64,
 
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
@@ -133,8 +131,7 @@ impl Default for Config {
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
-            check_stall_readonly_query_interval: DEFAULT_CHECK_STALL_RO_QUERY_INTERVAL_MS,
-            readonly_query_timeout_ms: DEFAULT_READONLY_QUERY_TIMEOUT_MS,
+            check_stall_readonly_query_interval: DEFAULT_CHECK_STALL_READONLY_INTERVAL_MS,
         }
     }
 }

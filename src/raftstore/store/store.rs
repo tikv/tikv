@@ -32,7 +32,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
 use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer, duration_to_nanos};
-use pd::{PdClient, INVALID_ID};
+use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
@@ -50,7 +50,7 @@ use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, is_readonly_query};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState};
 use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -1094,9 +1094,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(peer) => peer,
             None => return Err(Error::RegionNotFound(region_id)),
         };
-        // Request is allowed when it is readonly query although peer is not leader.
-        if !peer.is_leader() &&
-           (!is_readonly_query(msg) || peer.leader_id() == INVALID_ID || peer.is_applying()) {
+
+        if !peer.is_reqeust_allowed(msg) {
             return Err(Error::NotLeader(region_id, peer.get_peer_from_cache(peer.leader_id())));
         }
         if peer.peer_id() != peer_id {
@@ -1252,9 +1251,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_check_stall_readonly_query(&mut self, event_loop: &mut EventLoop<Self>) {
         let now = Instant::now();
-        let timeout = Duration::from_millis(self.cfg.readonly_query_timeout_ms);
         for (_, peer) in &mut self.region_peers {
-            peer.check_stall_readonly_query(now, timeout);
+            peer.check_stall_readonly_query(now);
         }
         self.register_check_stall_readonly_query_tick(event_loop);
     }
