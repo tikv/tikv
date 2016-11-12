@@ -494,166 +494,76 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
-    cfg.notify_capacity = get_integer_value("",
-                                            "server.notify-capacity",
-                                            matches,
-                                            config,
-                                            Some(40960),
-                                            |v| v.as_integer()) as usize;
+    cfg.notify_capacity = get_toml_int(config, "server.notify-capacity", Some(40960)) as usize;
+
     cfg.end_point_concurrency =
-        get_integer_value("",
-                          "server.end-point-concurrency",
-                          matches,
-                          config,
-                          Some(8),
-                          |v| v.as_integer()) as usize;
-    cfg.messages_per_tick =
-        get_integer_value("",
-                          "server.messages-per-tick",
-                          matches,
-                          config,
-                          Some(4096),
-                          |v| v.as_integer()) as usize;
-    let capacity = get_integer_value("capacity",
-                                     "server.capacity",
-                                     matches,
-                                     config,
-                                     Some(0),
-                                     |v| v.as_integer());
+        get_toml_int(config, "server.end-point-concurrency", Some(8)) as usize;
+    cfg.messages_per_tick = get_toml_int(config, "server.messages-per-tick", Some(4096)) as usize;
+    let capacity = get_flag_int(matches, "capacity")
+        .unwrap_or_else(|| get_toml_int(config, "server.capacity", Some(0)));
     assert!(capacity >= 0);
+
     if capacity > 0 {
         cfg.raft_store.capacity = capacity as u64;
     }
 
     // Set advertise address for outer node and client use.
     // If no advertise listening address set, use the associated listening address.
-    cfg.advertise_addr = get_string_value("advertise-addr",
-                                          "server.advertise-addr",
-                                          matches,
-                                          config,
-                                          Some(addr.to_owned()),
-                                          |v| v.as_str().map(|s| s.to_owned()));
+    cfg.advertise_addr = get_flag_string(matches, "advertise-addr")
+        .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.to_owned())));
+
     cfg.send_buffer_size =
-        get_integer_value("",
-                          "server.send-buffer-size",
-                          matches,
-                          config,
-                          Some(128 * 1024),
-                          |v| v.as_integer()) as usize;
+        get_toml_int(config, "server.send-buffer-size", Some(128 * 1024)) as usize;
     cfg.recv_buffer_size =
-        get_integer_value("",
-                          "server.recv-buffer-size",
-                          matches,
-                          config,
-                          Some(128 * 1024),
-                          |v| v.as_integer()) as usize;
+        get_toml_int(config, "server.recv-buffer-size", Some(128 * 1024)) as usize;
 
     cfg.raft_store.notify_capacity =
-        get_integer_value("",
-                          "raftstore.notify-capacity",
-                          matches,
-                          config,
-                          Some(40960),
-                          |v| v.as_integer()) as usize;
+        get_toml_int(config, "raftstore.notify-capacity", Some(40960)) as usize;
     cfg.raft_store.messages_per_tick =
-        get_integer_value("",
-                          "raftstore.messages-per-tick",
-                          matches,
-                          config,
-                          Some(4096),
-                          |v| v.as_integer()) as usize;
+        get_toml_int(config, "raftstore.messages-per-tick", Some(4096)) as usize;
     cfg.raft_store.region_split_size =
-        get_integer_value("",
-                          "raftstore.region-split-size",
-                          matches,
-                          config,
-                          Some(64 * 1024 * 1024),
-                          |v| v.as_integer()) as u64;
+        get_toml_int(config,
+                     "raftstore.region-split-size",
+                     Some(64 * 1024 * 1024)) as u64;
     cfg.raft_store.region_max_size =
-        get_integer_value("",
-                          "raftstore.region-max-size",
-                          matches,
-                          config,
-                          Some(80 * 1024 * 1024),
-                          |v| v.as_integer()) as u64;
+        get_toml_int(config, "raftstore.region-max-size", Some(80 * 1024 * 1024)) as u64;
 
     cfg.raft_store.region_check_size_diff =
-        get_integer_value("",
-                          "raftstore.region-split-check-diff",
-                          matches,
-                          config,
-                          Some(8 * 1024 * 1024),
-                          |v| v.as_integer()) as u64;
+        get_toml_int(config,
+                     "raftstore.region-split-check-diff",
+                     Some(8 * 1024 * 1024)) as u64;
 
     cfg.raft_store.region_compact_check_tick_interval =
-        get_integer_value("",
-                          "raftstore.region-compact-check-tick-interval",
-                          matches,
-                          config,
-                          Some(300_000),
-                          |v| v.as_integer()) as u64;
+        get_toml_int(config,
+                     "raftstore.region-compact-check-tick-interval",
+                     Some(300_000)) as u64;
 
     cfg.raft_store.region_compact_delete_keys_count =
-        get_integer_value("",
-                          "raftstore.region-compact-delete-keys-count",
-                          matches,
-                          config,
-                          Some(200_000),
-                          |v| v.as_integer()) as u64;
+        get_toml_int(config,
+                     "raftstore.region-compact-delete-keys-count",
+                     Some(200_000)) as u64;
 
     let max_peer_down_millis =
-        get_integer_value("",
-                          "raftstore.max-peer-down-duration",
-                          matches,
-                          config,
-                          Some(300_000),
-                          |v| v.as_integer()) as u64;
+        get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
     cfg.raft_store.max_peer_down_duration = Duration::from_millis(max_peer_down_millis);
 
     cfg.raft_store.pd_heartbeat_tick_interval =
-        get_integer_value("",
-                          "raftstore.pd-heartbeat-tick-interval",
-                          matches,
-                          config,
-                          Some(60_000),
-                          |v| v.as_integer()) as u64;
+        get_toml_int(config, "raftstore.pd-heartbeat-tick-interval", Some(60_000)) as u64;
 
     cfg.raft_store.pd_store_heartbeat_tick_interval =
-        get_integer_value("",
-                          "raftstore.pd-store-heartbeat-tick-interval",
-                          matches,
-                          config,
-                          Some(10_000),
-                          |v| v.as_integer()) as u64;
+        get_toml_int(config,
+                     "raftstore.pd-store-heartbeat-tick-interval",
+                     Some(10_000)) as u64;
 
     cfg.storage.sched_notify_capacity =
-        get_integer_value("",
-                          "storage.scheduler-notify-capacity",
-                          matches,
-                          config,
-                          Some(10240),
-                          |v| v.as_integer()) as usize;
+        get_toml_int(config, "storage.scheduler-notify-capacity", Some(10240)) as usize;
     cfg.storage.sched_msg_per_tick =
-        get_integer_value("",
-                          "storage.scheduler-messages-per-tick",
-                          matches,
-                          config,
-                          Some(1024),
-                          |v| v.as_integer()) as usize;
+        get_toml_int(config, "storage.scheduler-messages-per-tick", Some(1024)) as usize;
     cfg.storage.sched_concurrency =
-        get_integer_value("",
-                          "storage.scheduler-concurrency",
-                          matches,
-                          config,
-                          Some(10240),
-                          |v| v.as_integer()) as usize;
+        get_toml_int(config, "storage.scheduler-concurrency", Some(10240)) as usize;
     cfg.storage.sched_worker_pool_size =
-        get_integer_value("",
-                          "storage.scheduler-worker-pool-size",
-                          matches,
-                          config,
-                          Some(4),
-                          |v| v.as_integer()) as usize;
+        get_toml_int(config, "storage.scheduler-worker-pool-size", Some(4)) as usize;
+
     cfg
 }
 
@@ -881,22 +791,16 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    let addr = get_string_value("A",
-                                "server.addr",
-                                &matches,
-                                &config,
-                                Some(DEFAULT_LISTENING_ADDR.to_owned()),
-                                |v| v.as_str().map(|s| s.to_owned()));
+    let addr = get_flag_string(&matches, "A").unwrap_or_else(|| {
+        get_toml_string(&config,
+                        "server.addr",
+                        Some(DEFAULT_LISTENING_ADDR.to_owned()))
+    });
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 
-    let pd_endpoints = get_string_value("pd",
-                                        "pd.endpoints",
-                                        &matches,
-                                        &config,
-                                        None,
-                                        |v| v.as_str().map(|s| s.to_owned()));
-
+    let pd_endpoints = get_flag_string(&matches, "pd")
+        .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
     for addr in pd_endpoints.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
         if let Err(e) = util::config::check_addr(addr) {
             panic!("{:?}", e);
