@@ -123,68 +123,6 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
         })
 }
 
-fn get_string_value<F>(short: &str,
-                       long: &str,
-                       matches: &Matches,
-                       config: &toml::Value,
-                       default: Option<String>,
-                       f: F)
-                       -> String
-    where F: Fn(&toml::Value) -> Option<String>
-{
-    // avoid panic if short is not defined.
-    let s = if matches.opt_defined(short) {
-        matches.opt_str(short)
-    } else {
-        None
-    };
-
-    s.or_else(|| {
-            config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("{}, use default {:?}", long, default);
-                default
-            })
-        })
-        .expect(&format!("please specify {}", long))
-}
-
-fn get_integer_value<F>(short: &str,
-                        long: &str,
-                        matches: &Matches,
-                        config: &toml::Value,
-                        default: Option<i64>,
-                        f: F)
-                        -> i64
-    where F: Fn(&toml::Value) -> Option<i64>
-{
-    let mut i = None;
-    // avoid panic if short is not defined.
-    if matches.opt_defined(short) {
-        i = matches.opt_str(short).map(|x| {
-            x.parse::<i64>()
-                .or_else(|_| util::config::parse_readable_int(&x))
-                .unwrap()
-        });
-    };
-
-    i.or_else(|| {
-            config.lookup(long)
-                .and_then(|v| {
-                    if let toml::Value::String(ref s) = *v {
-                        Some(util::config::parse_readable_int(s)
-                            .expect(&format!("malformed {}", long)))
-                    } else {
-                        f(v)
-                    }
-                })
-                .or_else(|| {
-                    info!("{}, use default {:?}", long, default);
-                    default
-                })
-        })
-        .expect(&format!("please specify {}", long))
-}
-
 fn initial_log(matches: &Matches, config: &toml::Value) {
     let level = get_flag_string(matches, "L")
         .unwrap_or_else(|| get_toml_string(config, "server.log-level", Some("info".to_owned())));
@@ -275,110 +213,72 @@ fn get_rocksdb_cf_option(matches: &Matches,
     let prefix = String::from("rocksdb.") + cf + ".";
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
-    let block_size = get_integer_value("",
-                                       (prefix.clone() + "block-size").as_str(),
-                                       matches,
-                                       config,
-                                       Some(16 * 1024),
-                                       |v| v.as_integer());
+    let block_size = get_toml_int(config,
+                                  (prefix.clone() + "block-size").as_str(),
+                                  Some(16 * 1024));
     block_base_opts.set_block_size(block_size as usize);
-    let block_cache_size = get_integer_value("",
-                                             (prefix.clone() + "block-cache-size").as_str(),
-                                             matches,
-                                             config,
-                                             Some(block_cache_default),
-                                             |v| v.as_integer());
+    let block_cache_size = get_toml_int(config,
+                                        (prefix.clone() + "block-cache-size").as_str(),
+                                        Some(block_cache_default));
     block_base_opts.set_lru_cache(block_cache_size as usize);
 
     if use_bloom_filter {
-        let bloom_bits_per_key = get_integer_value("",
-                                                   (prefix.clone() + "bloom-filter-bits-per-key")
-                                                       .as_str(),
-                                                   matches,
-                                                   config,
-                                                   Some(10),
-                                                   |v| v.as_integer());
-        let block_based_filter =
-            config.lookup((prefix.clone() + "block-based-bloom-filter").as_str())
-                .unwrap_or(&toml::Value::Boolean(false))
-                .as_bool()
-                .unwrap_or(false);
+        let bloom_bits_per_key = get_toml_int(config,
+                                              (prefix.clone() + "bloom-filter-bits-per-key")
+                                                  .as_str(),
+                                              Some(10));
+        let block_based_filter = get_toml_boolean(config,
+                                                  (prefix.clone() + "block-based-bloom-filter")
+                                                      .as_str(),
+                                                  Some(false));
         block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
     }
     opts.set_block_based_table_factory(&block_base_opts);
 
-    let cpl = get_string_value("",
-                               (prefix.clone() + "compression-per-level").as_str(),
-                               matches,
-                               config,
-                               Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()),
-                               |v| v.as_str().map(|s| s.to_owned()));
+    let cpl = get_toml_string(config,
+                              (prefix.clone() + "compression-per-level").as_str(),
+                              Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()));
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
 
-    let write_buffer_size = get_integer_value("",
-                                              (prefix.clone() + "write-buffer-size").as_str(),
-                                              matches,
-                                              config,
-                                              Some(64 * 1024 * 1024),
-                                              |v| v.as_integer());
+    let write_buffer_size = get_toml_int(config,
+                                         (prefix.clone() + "write-buffer-size").as_str(),
+                                         Some(64 * 1024 * 1024));
     opts.set_write_buffer_size(write_buffer_size as u64);
 
-    let max_write_buffer_number = {
-        get_integer_value("",
-                          (prefix.clone() + "max-write-buffer-number").as_str(),
-                          matches,
-                          config,
-                          Some(5),
-                          |v| v.as_integer())
-    };
+    let max_write_buffer_number = get_toml_int(config,
+                                               (prefix.clone() + "max-write-buffer-number")
+                                                   .as_str(),
+                                               Some(5));
     opts.set_max_write_buffer_number(max_write_buffer_number as i32);
 
-    let min_write_buffer_number_to_merge = {
-        get_integer_value("",
-                          (prefix.clone() + "min-write-buffer-number-to-merge").as_str(),
-                          matches,
-                          config,
-                          Some(1),
-                          |v| v.as_integer())
-    };
+    let min_write_buffer_number_to_merge =
+        get_toml_int(config,
+                     (prefix.clone() + "min-write-buffer-number-to-merge").as_str(),
+                     Some(1));
     opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
 
-    let max_bytes_for_level_base = get_integer_value("",
-                                                     (prefix.clone() + "max-bytes-for-level-base")
-                                                         .as_str(),
-                                                     matches,
-                                                     config,
-                                                     Some(64 * 1024 * 1024),
-                                                     |v| v.as_integer());
+    let max_bytes_for_level_base = get_toml_int(config,
+                                                (prefix.clone() + "max-bytes-for-level-base")
+                                                    .as_str(),
+                                                Some(64 * 1024 * 1024));
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
 
-    let target_file_size_base = get_integer_value("",
-                                                  (prefix.clone() + "target-file-size-base")
-                                                      .as_str(),
-                                                  matches,
-                                                  config,
-                                                  Some(16 * 1024 * 1024),
-                                                  |v| v.as_integer());
+    let target_file_size_base = get_toml_int(config,
+                                             (prefix.clone() + "target-file-size-base").as_str(),
+                                             Some(16 * 1024 * 1024));
     opts.set_target_file_size_base(target_file_size_base as u64);
 
-    let level_zero_slowdown_writes_trigger = {
-        get_integer_value("",
-                          (prefix.clone() + "level0-slowdown-writes-trigger").as_str(),
-                          matches,
-                          config,
-                          Some(12),
-                          |v| v.as_integer())
-    };
+    let level_zero_slowdown_writes_trigger =
+        get_toml_int(config,
+                     (prefix.clone() + "level0-slowdown-writes-trigger").as_str(),
+                     Some(12));
     opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
 
     let level_zero_stop_writes_trigger =
-        get_integer_value("",
-                          (prefix.clone() + "level0-stop-writes-trigger").as_str(),
-                          matches,
-                          config,
-                          Some(16),
-                          |v| v.as_integer());
+        get_toml_int(config,
+                     (prefix.clone() + "level0-stop-writes-trigger").as_str(),
+                     Some(16));
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
     opts
@@ -546,12 +446,8 @@ fn build_raftkv(matches: &Matches,
 }
 
 fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
-    let path = get_string_value("s",
-                                "server.store",
-                                matches,
-                                config,
-                                Some(TEMP_DIR.to_owned()),
-                                |v| v.as_str().map(|s| s.to_owned()));
+    let path = get_flag_string(matches, "s")
+        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
     if path == TEMP_DIR {
         return path;
     }
