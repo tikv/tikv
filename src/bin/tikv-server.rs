@@ -65,14 +65,17 @@ fn print_usage(program: &str, opts: Options) {
 
 fn get_flag_string(matches: &Matches, name: &str) -> Option<String> {
     if matches.opt_defined(name) {
-        return matches.opt_str(name);
+        let s = matches.opt_str(name);
+        info!("flag {}: {:?}", name, s);
+
+        return s;
     }
     None
 }
 
 fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
     if matches.opt_defined(name) {
-        return matches.opt_str(name).map(|x| {
+        let i = matches.opt_str(name).map(|x| {
             x.parse::<i64>()
                 .or_else(|_| util::config::parse_readable_int(&x))
                 .unwrap_or_else(|e| {
@@ -80,12 +83,15 @@ fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
                     process::exit(1)
                 })
         });
+        info!("flag {}: {:?}", name, i);
+
+        return i;
     }
     None
 }
 
 fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> bool {
-    config.lookup(name)
+    let b = config.lookup(name)
         .and_then(|v| v.as_bool())
         .or_else(|| {
             info!("{}, use default {:?}", name, default);
@@ -94,11 +100,14 @@ fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> 
         .unwrap_or_else(|| {
             warn!("please specify {}", name);
             process::exit(1)
-        })
+        });
+    info!("toml value {}: {:?}", name, b);
+
+    b
 }
 
 fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) -> String {
-    config.lookup(name)
+    let s = config.lookup(name)
         .and_then(|v| v.as_str().map(|s| s.to_owned()))
         .or_else(|| {
             info!("{}, use default {:?}", name, default);
@@ -107,11 +116,14 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
         .unwrap_or_else(|| {
             warn!("please specify {}", name);
             process::exit(1)
-        })
+        });
+    info!("toml value {}: {:?}", name, s);
+
+    s
 }
 
 fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
-    config.lookup(name)
+    let i = config.lookup(name)
         .and_then(|v| v.as_integer())
         .or_else(|| {
             info!("{}, use default {:?}", name, default);
@@ -120,7 +132,10 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
         .unwrap_or_else(|| {
             warn!("please specify {}", name);
             process::exit(1)
-        })
+        });
+    info!("toml value {} : {}", name, i);
+
+    i
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
