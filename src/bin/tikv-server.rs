@@ -85,7 +85,16 @@ fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
 }
 
 fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> bool {
-    unimplemented!()
+    config.lookup(name)
+        .and_then(|v| v.as_bool())
+        .or_else(|| {
+            info!("{}, use default {:?}", name, default);
+            default
+        })
+        .unwrap_or_else(|| {
+            warn!("please specify {}", name);
+            process::exit(1)
+        })
 }
 
 fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) -> String {
@@ -131,30 +140,6 @@ fn get_string_value<F>(short: &str,
     };
 
     s.or_else(|| {
-            config.lookup(long).and_then(|v| f(v)).or_else(|| {
-                info!("{}, use default {:?}", long, default);
-                default
-            })
-        })
-        .expect(&format!("please specify {}", long))
-}
-
-fn get_boolean_value<F>(short: &str,
-                        long: &str,
-                        matches: &Matches,
-                        config: &toml::Value,
-                        default: Option<bool>,
-                        f: F)
-                        -> bool
-    where F: Fn(&toml::Value) -> Option<bool>
-{
-    let b = if matches.opt_defined(short) {
-        matches.opt_str(short).map(|x| x.parse::<bool>().unwrap())
-    } else {
-        None
-    };
-
-    b.or_else(|| {
             config.lookup(long).and_then(|v| f(v)).or_else(|| {
                 info!("{}, use default {:?}", long, default);
                 default
@@ -214,33 +199,18 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     }
 }
 
-fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>) {
-    let push_interval = get_integer_value("",
-                                          "metric.interval",
-                                          matches,
-                                          config,
-                                          Some(0),
-                                          |v| v.as_integer());
+fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
+    let push_interval = get_toml_int(config, "metric.interval", Some(0));
     if push_interval == 0 {
         return;
     }
 
-    let push_address = get_string_value("",
-                                        "metric.address",
-                                        matches,
-                                        config,
-                                        None,
-                                        |v| v.as_str().map(|s| s.to_owned()));
+    let push_address = get_toml_string(config, "metric.address", Some("".to_owned()));
     if push_address.is_empty() {
         return;
     }
 
-    let mut push_job = get_string_value("",
-                                        "metric.job",
-                                        matches,
-                                        config,
-                                        None,
-                                        |v| v.as_str().map(|s| s.to_owned()));
+    let mut push_job = get_toml_string(config, "metric.job", Some("tikv".to_owned()));
     if let Some(id) = node_id {
         push_job.push_str(&format!("_{}", id));
     }
@@ -263,62 +233,33 @@ fn check_system_config(config: &toml::Value) {
     }
 }
 
-fn get_rocksdb_db_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
-    let rmode = get_integer_value("",
-                                  "rocksdb.wal-recovery-mode",
-                                  matches,
-                                  config,
-                                  Some(2),
-                                  |v| v.as_integer());
+    let rmode = get_toml_int(config, "rocksdb.wal-recovery-mode", Some(2));
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
-    let max_background_compactions = get_integer_value("",
-                                                       "rocksdb.max-background-compactions",
-                                                       matches,
-                                                       config,
-                                                       Some(6),
-                                                       |v| v.as_integer());
+    let max_background_compactions =
+        get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
     opts.set_max_background_compactions(max_background_compactions as i32);
     opts.set_max_background_flushes(2);
 
-    let max_manifest_file_size = get_integer_value("",
-                                                   "rocksdb.max-manifest-file-size",
-                                                   matches,
-                                                   config,
-                                                   Some(20 * 1024 * 1024),
-                                                   |v| v.as_integer());
+    let max_manifest_file_size = get_toml_int(config,
+                                              "rocksdb.max-manifest-file-size",
+                                              Some(20 * 1024 * 1024));
     opts.set_max_manifest_file_size(max_manifest_file_size as u64);
 
-    let create_if_missing = config.lookup("rocksdb.create-if-missing")
-        .unwrap_or(&toml::Value::Boolean(true))
-        .as_bool()
-        .unwrap_or(true);
+    let create_if_missing = get_toml_boolean(config, "rocksdb.create-if-missing", Some(true));
     opts.create_if_missing(create_if_missing);
 
-    let max_open_files = get_integer_value("",
-                                           "rocksdb.max-open-files",
-                                           matches,
-                                           config,
-                                           Some(40960),
-                                           |v| v.as_integer());
+    let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     opts.set_max_open_files(max_open_files as i32);
 
-    let enable_statistics = get_boolean_value("",
-                                              "rocksdb.enable-statistics",
-                                              matches,
-                                              config,
-                                              Some(false),
-                                              |v| v.as_bool());
+    let enable_statistics = get_toml_boolean(config, "rocksdb.enable-statistics", Some(false));
     if enable_statistics {
         opts.enable_statistics();
-        let stats_dump_period_sec = get_integer_value("",
-                                                      "rocksdb.stats-dump-period-sec",
-                                                      matches,
-                                                      config,
-                                                      Some(600),
-                                                      |v| v.as_integer());
+        let stats_dump_period_sec =
+            get_toml_int(config, "rocksdb.stats-dump-period-sec", Some(600));
         opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
 
@@ -575,7 +516,7 @@ fn build_raftkv(matches: &Matches,
                 -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
-    let opts = get_rocksdb_db_option(matches, config);
+    let opts = get_rocksdb_db_option(config);
     let cfs_opts = vec![get_rocksdb_default_cf_option(matches, config),
                         get_rocksdb_lock_cf_option(),
                         get_rocksdb_write_cf_option(matches, config),
@@ -703,7 +644,7 @@ fn run_raft_server(listener: TcpListener,
         build_raftkv(matches, config, ch.clone(), pd_client, cfg);
     info!("tikv server config: {:?}", cfg);
 
-    initial_metric(matches, config, Some(node.id()));
+    initial_metric(config, Some(node.id()));
 
     info!("start storage");
     if let Err(e) = store.start(&cfg.storage) {
