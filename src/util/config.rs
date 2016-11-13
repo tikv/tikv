@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::str::FromStr;
+use std::mem;
 use std::net::{SocketAddrV4, SocketAddrV6};
 
 use url;
@@ -133,24 +134,31 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
     use libc;
 
-    let fd_limit = unsafe {
-        let mut fd_limit = ::std::mem::zeroed();
-        if 0 != libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit) {
+    unsafe {
+        let mut fd_limit = mem::zeroed();
+        let mut err = libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit);
+        if err != 0 {
             return Err(ConfigError::Limit("check_max_open_fds failed".to_owned()));
         }
+        if fd_limit.rlim_cur >= expect {
+            return Ok(());
+        }
 
-        fd_limit
-    };
-
-    if fd_limit.rlim_cur < expect {
-        return Err(ConfigError::Limit(format!("the maximum number of open file descriptors is \
-                                                too small, got {}, expect greater or equal to \
-                                                {}",
-                                              fd_limit.rlim_cur,
-                                              expect)));
+        let prev_limit = fd_limit.rlim_cur;
+        fd_limit.rlim_cur = expect;
+        if fd_limit.rlim_max < expect {
+            // If the process is not started by privileged user, this will fail.
+            fd_limit.rlim_max = expect;
+        }
+        err = libc::setrlimit(libc::RLIMIT_NOFILE, &fd_limit);
+        if err == 0 {
+            return Ok(());
+        }
+        Err(ConfigError::Limit(format!("the maximum number of open file descriptors is too \
+                                        small, got {}, expect greater or equal to {}",
+                                       prev_limit,
+                                       expect)))
     }
-
-    Ok(())
 }
 
 #[cfg(not(unix))]
