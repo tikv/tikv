@@ -67,7 +67,7 @@ prepare_brew:
 prepare_osx: ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_brew prepare_rust
 
 test_linux test_osx:
-	ulimit -n 2000 && ./travis-build/test.sh
+	./travis-build/test.sh
 
 cover_linux:
 	export LOG_LEVEL=DEBUG && \
