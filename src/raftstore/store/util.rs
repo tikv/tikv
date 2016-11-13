@@ -142,8 +142,9 @@ mod tests {
     #[test]
     fn test_format_clocktime() {
         let s = String::from("+0800 2016-11-10 15:01:37");
-        let ts = time::strptime(&s, "%z %Y-%m-%d %H:%M:%S").unwrap().to_timespec();
-        let expect = s + " 0";
+        let tm = time::strptime(&s, "%z %Y-%m-%d %H:%M:%S").unwrap();
+        let ts = tm.to_timespec();
+        let expect = time::strftime("%z %Y-%m-%d %H:%M:%S", &tm).unwrap() + " 0";
         assert_eq!(expect, format_clocktime(ts));
     }
 }

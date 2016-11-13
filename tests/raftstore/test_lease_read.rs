@@ -61,6 +61,8 @@ fn test_lease_read<T: Simulator>(cluster: &mut Cluster<T>, calibrate_tick: bool)
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
+    cluster.cfg.raft_store.raft_base_tick_interval = 20;
+
     if !calibrate_tick {
         // Disable calibrating tick with clocktime.
         cluster.cfg.raft_store.calibrate_tick_with_clocktime = false;
@@ -109,7 +111,7 @@ fn test_lease_read<T: Simulator>(cluster: &mut Cluster<T>, calibrate_tick: bool)
             }
         };
         if start_time.elapsed() >= timeout {
-            panic!("failed to elect leader in time");
+            panic!("failed to elect new leader in time");
         }
     }
 
