@@ -98,7 +98,7 @@ fn test_lease_read<T: Simulator>(cluster: &mut Cluster<T>, calibrate_tick: bool)
         thread::sleep(election_timeout * 2);
     }
     let leader_store_id;
-    let timeout = Duration::from_secs(3);
+    let timeout = Duration::from_secs(5);
     let start_time = Instant::now();
     loop {
         cluster.reset_leader_of_region(region_id);
