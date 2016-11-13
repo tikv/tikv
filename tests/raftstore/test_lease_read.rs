@@ -99,16 +99,18 @@ fn test_lease_read<T: Simulator>(cluster: &mut Cluster<T>, calibrate_tick: bool)
     } else {
         thread::sleep(election_timeout * 2);
     }
+
+    // Remove `slow_peer` from the other peers for the test codes to get new leader easily.
+    // It's not part of the logic for this test case.
+    pd_client.must_remove_peer(region_id, slow_peer.clone());
+
     let leader_store_id;
     let timeout = Duration::from_secs(5);
     let start_time = Instant::now();
     loop {
-        cluster.reset_leader_of_region(region_id);
         if let Some(p) = cluster.leader_of_region(region_id) {
-            if p != slow_peer {
-                leader_store_id = p.get_store_id();
-                break;
-            }
+            leader_store_id = p.get_store_id();
+            break;
         };
         if start_time.elapsed() >= timeout {
             panic!("failed to elect new leader in time");
