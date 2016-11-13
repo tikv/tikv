@@ -35,7 +35,7 @@ impl<'a> fmt::Debug for MvccTxn<'a> {
 impl<'a> MvccTxn<'a> {
     pub fn new(snapshot: &'a Snapshot, start_ts: u64, mode: Option<ScanMode>) -> MvccTxn<'a> {
         MvccTxn {
-            /* Todo: use session variable to indicate fill cache or not */
+            // Todo: use session variable to indicate fill cache or not
             reader: MvccReader::new(snapshot, mode, true /* fill_cache */),
             start_ts: start_ts,
             writes: vec![],
