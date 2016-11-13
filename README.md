@@ -47,7 +47,7 @@ If you want to dive into TiDB, see [development build guide](https://github.com/
 
 ### Next steps
 
-+ Read the [clustering doc](https://github.com/pingcap/docs/blob/master/op-guide/binary-deployment.md#multi-nodes-deployment) on how to run the TiDB project.
++ Read the [deployment doc](https://github.com/pingcap/docs/blob/master/op-guide/binary-deployment.md#multi-nodes-deployment) on how to run the TiDB project.
 + Learn the [configuration explanations](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
 + Use [Docker](https://github.com/pingcap/docs/blob/master/op-guide/docker.md) to run the TiDB project.
 
