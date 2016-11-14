@@ -55,6 +55,7 @@ impl LockType {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub struct Lock {
     pub lock_type: LockType,
     pub primary: Vec<u8>,

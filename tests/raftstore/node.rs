@@ -212,10 +212,10 @@ impl Simulator for NodeCluster {
         }
 
         let router = self.trans.rl().routers.get(&node_id).cloned().unwrap();
-        wait_event!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                        router.send_command(request, cb).unwrap()
-                    },
-                    timeout)
+        wait_op!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
+                     router.send_command(request, cb).unwrap()
+                 },
+                 timeout)
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 

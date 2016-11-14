@@ -686,6 +686,9 @@ impl Peer {
         // TODO: validate request for unexpected changes.
         try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
+
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+
         try!(self.raft_group.propose(data));
         Ok(())
     }
@@ -720,6 +723,9 @@ impl Peer {
         PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change"]).inc();
 
         let data = try!(cmd.write_to_bytes());
+
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
 
         let mut cc = eraftpb::ConfChange::new();

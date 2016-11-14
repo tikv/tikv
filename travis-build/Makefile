@@ -53,7 +53,7 @@ ${LOCAL_DIR}/bin/pd-server:
 	cp bin/pd-server ${LOCAL_DIR}/bin/pd-server
 
 prepare_rust:
-	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=2016-10-06 --prefix=~/rust --disable-sudo --channel=nightly
+	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=${RUSTC_DATE} --prefix=~/rust --disable-sudo --channel=nightly
 
 prepare-rustfmt: | prepare_rust
 	cargo install rustfmt || exit 0
@@ -67,7 +67,7 @@ prepare_brew:
 prepare_osx: ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_brew prepare_rust
 
 test_linux test_osx:
-	ulimit -n 2000 && ./travis-build/test.sh
+	./travis-build/test.sh
 
 cover_linux:
 	export LOG_LEVEL=DEBUG && \

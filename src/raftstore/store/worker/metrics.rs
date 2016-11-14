@@ -59,8 +59,7 @@ lazy_static! {
     pub static ref CHECK_SPILT_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_check_split_duration_seconds",
-            "Bucketed histogram of raftstore split check duration",
-            labels!{"type" => "cost",}
+            "Bucketed histogram of raftstore split check duration"
         ).unwrap();
 
     pub static ref COMPACT_RANGE_CF: HistogramVec =

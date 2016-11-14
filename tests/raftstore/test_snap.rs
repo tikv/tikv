@@ -13,7 +13,7 @@
 
 
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::sync::{Arc, RwLock, Mutex};
 use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -114,9 +114,12 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    let (tx, rx) = mpsc::channel();
     // drop all the snapshot so we can detect stale snapfile.
-    cluster.sim.wl().add_recv_filter(3, box DropSnapshotFilter);
+    cluster.sim.wl().add_recv_filter(3, box DropSnapshotFilter::new(tx));
     pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     cluster.must_put(b"k2", b"v2");
 
@@ -136,10 +139,21 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put(b"k2", b"v2");
     }
 
+    let mut now = Instant::now();
+    loop {
+        let snap_index = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        if snap_index != first_snap_idx {
+            break;
+        }
+        if now.elapsed() >= Duration::from_secs(5) {
+            panic!("can't get any snap after {}", first_snap_idx);
+        }
+    }
+
     let snap_dir = cluster.get_snap_dir(3);
     // it must have more than 2 snaps.
     let snapfiles: Vec<_> = fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()).collect();
-    assert!(snapfiles.len() > 2);
+    assert!(snapfiles.len() >= 2);
 
     cluster.sim.wl().clear_recv_filters(3);
     debug!("filters cleared.");
@@ -148,7 +162,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine3, b"k1", b"v1");
     must_get_equal(&engine3, b"k2", b"v2");
 
-    let mut tried_cnt = 0;
+    now = Instant::now();
     loop {
         let mut snap_files = vec![];
         for i in 1..4 {
@@ -159,10 +173,9 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
         if snap_files.is_empty() {
             return;
         }
-        if tried_cnt > 200 {
+        if now.elapsed() > Duration::from_secs(10) {
             panic!("snap files is still not empty: {:?}", snap_files);
         }
-        tried_cnt += 1;
         // trigger log compaction.
         cluster.must_put(b"k2", b"v2");
         sleep_ms(20);

@@ -206,6 +206,22 @@ fn initial_metric(matches: &Matches, config: &toml::Value, node_id: Option<u64>)
                          &push_job);
 }
 
+fn check_system_config(matches: &Matches, config: &toml::Value) {
+    let max_open_files = get_integer_value("",
+                                           "rocksdb.max-open-files",
+                                           matches,
+                                           config,
+                                           Some(40960),
+                                           |v| v.as_integer());
+    if let Err(e) = util::config::check_max_open_fds(max_open_files as u64) {
+        panic!("check rocksdb max open files err {:?}", e)
+    }
+
+    for e in util::config::check_kernel() {
+        warn!("{:?}", e);
+    }
+}
+
 fn get_rocksdb_db_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let rmode = get_integer_value("",
@@ -819,6 +835,11 @@ fn main() {
     // Print version information.
     util::print_tikv_info();
 
+    panic_hook::set_exit_hook();
+
+    // Before any startup, check system configuration.
+    check_system_config(&matches, &config);
+
     let addr = get_string_value("A",
                                 "server.addr",
                                 &matches,
@@ -827,7 +848,6 @@ fn main() {
                                 |v| v.as_str().map(|s| s.to_owned()));
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
-    panic_hook::set_exit_hook();
 
     let pd_endpoints = get_string_value("pd",
                                         "pd.endpoints",
@@ -835,6 +855,13 @@ fn main() {
                                         &config,
                                         None,
                                         |v| v.as_str().map(|s| s.to_owned()));
+
+    for addr in pd_endpoints.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if let Err(e) = util::config::check_addr(addr) {
+            panic!("{:?}", e);
+        }
+    }
+
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
     let cluster_id = pd_client.cluster_id;
 
