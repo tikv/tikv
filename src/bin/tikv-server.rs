@@ -63,9 +63,14 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
+fn exit(code: i32, msg: String) -> ! {
+    warn!("{}", msg);
+    process::exit(code)
+}
+
 fn get_flag_string(matches: &Matches, name: &str) -> Option<String> {
     let s = matches.opt_str(name);
-    debug!("flag {}: {:?}", name, s);
+    info!("flag {}: {:?}", name, s);
 
     s
 }
@@ -74,12 +79,9 @@ fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
     let i = matches.opt_str(name).map(|x| {
         x.parse::<i64>()
             .or_else(|_| util::config::parse_readable_int(&x))
-            .unwrap_or_else(|e| {
-                warn!("parse {} failed: {:?}", name, e);
-                process::exit(1)
-            })
+            .unwrap_or_else(|e| exit(1, format!("parse {} failed: {:?}", name, e)))
     });
-    debug!("flag {}: {:?}", name, i);
+    info!("flag {}: {:?}", name, i);
 
     i
 }
@@ -91,16 +93,10 @@ fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> 
                 info!("{} use default {:?}", name, default);
                 default
             }
-            _ => {
-                warn!("{} boolean is excepted", name);
-                process::exit(1)
-            }
+            _ => exit(1, format!("{} boolean is excepted", name)),
         }
-        .unwrap_or_else(|| {
-            warn!("please specify {}", name);
-            process::exit(1)
-        });
-    debug!("toml value {}: {:?}", name, b);
+        .unwrap_or_else(|| exit(1, format!("please specify {}", name)));
+    info!("toml value {}: {:?}", name, b);
 
     b
 }
@@ -112,16 +108,10 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
                 info!("{} use default {:?}", name, default);
                 default
             }
-            _ => {
-                warn!("{} string is excepted", name);
-                process::exit(1)
-            }
+            _ => exit(1, format!("{} string is excepted", name)),
         }
-        .unwrap_or_else(|| {
-            warn!("please specify {}", name);
-            process::exit(1)
-        });
-    debug!("toml value {}: {:?}", name, s);
+        .unwrap_or_else(|| exit(1, format!("please specify {}", name)));
+    info!("toml value {}: {:?}", name, s);
 
     s
 }
@@ -141,16 +131,10 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
                 info!("{} use default {:?}", name, default);
                 default
             }
-            _ => {
-                warn!("{} int or readable int is excepted", name);
-                process::exit(1)
-            }
+            _ => exit(1, format!("{} int or readable int is excepted", name)),
         }
-        .unwrap_or_else(|| {
-            warn!("please specify {}", name);
-            process::exit(1)
-        });
-    debug!("toml value {} : {}", name, i);
+        .unwrap_or_else(|| exit(1, format!("please specify {}", name)));
+    info!("toml value {} : {}", name, i);
 
     i
 }
