@@ -57,7 +57,7 @@ pub trait RaftStoreRouter: Send + Clone {
         })
     }
 
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
+    fn report_unreachable(&self, region_id: u64, to_peer_id: u64, _: u64) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::ReportUnreachable {
             region_id: region_id,
             to_peer_id: to_peer_id,
@@ -132,8 +132,13 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         })
     }
 
-    fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        RAFT_STORE_MSG_COUNTER.with_label_values(&["unreachable"]).inc();
+    fn report_unreachable(&self,
+                          region_id: u64,
+                          to_peer_id: u64,
+                          to_store_id: u64)
+                          -> RaftStoreResult<()> {
+        let store = to_store_id.to_string();
+        RAFT_STORE_MSG_COUNTER.with_label_values(&["unreachable", &*store]).inc();
         self.try_send(StoreMsg::ReportUnreachable {
             region_id: region_id,
             to_peer_id: to_peer_id,

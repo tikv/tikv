@@ -409,8 +409,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
         let region_id = data.msg.get_raft().get_region_id();
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
+        let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
 
-        if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id) {
+        if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id, to_store_id) {
             error!("report peer {} unreachable for region {} failed {:?}",
                    to_peer_id,
                    region_id,
@@ -697,7 +698,7 @@ mod tests {
             unimplemented!();
         }
 
-        fn report_unreachable(&self, _: u64, _: u64) -> RaftStoreResult<()> {
+        fn report_unreachable(&self, _: u64, _: u64, _: u64) -> RaftStoreResult<()> {
             let count = self.report_unreachable_count.clone();
             count.fetch_add(1, Ordering::SeqCst);
             Ok(())
