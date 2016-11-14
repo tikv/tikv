@@ -20,6 +20,8 @@ use super::write::{WriteType, Write};
 use super::{Error, Result};
 use super::metrics::*;
 
+pub const MAX_TXN_WRITE_SIZE: usize = 512 * 1024;
+
 pub struct MvccTxn<'a> {
     reader: MvccReader<'a>,
     start_ts: u64,
@@ -177,6 +179,9 @@ impl<'a> MvccTxn<'a> {
         let mut versions = 0;
         let mut delete_versions = 0;
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
+            if self.write_size >= MAX_TXN_WRITE_SIZE {
+                break;
+            }
             if !remove_older {
                 if commit <= safe_point {
                     // Set `remove_older` after we find the latest value.

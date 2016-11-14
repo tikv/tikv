@@ -38,7 +38,7 @@ use prometheus::HistogramTimer;
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode};
 use kvproto::kvrpcpb::{Context, LockInfo};
-use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError};
+use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair};
 use std::collections::HashMap;
 use mio::{self, EventLoop};
@@ -421,17 +421,16 @@ fn process_write_impl(cid: u64,
             (pr, txn.modifies())
         }
         Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, ref keys } => {
+            let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(snapshot, start_ts, None);
-            match commit_ts {
-                Some(ts) => {
-                    for k in keys {
-                        try!(txn.commit(&k, ts));
-                    }
+            for k in keys {
+                match commit_ts {
+                    Some(ts) => try!(txn.commit(&k, ts)),
+                    None => try!(txn.rollback(&k)),
                 }
-                None => {
-                    for k in keys {
-                        try!(txn.rollback(&k));
-                    }
+                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
+                    scan_key = Some(k.to_owned());
+                    break;
                 }
             }
             if scan_key.is_none() {
@@ -450,9 +449,14 @@ fn process_write_impl(cid: u64,
             }
         }
         Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
+            let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(snapshot, 0, Some(ScanMode::Mixed));
             for k in keys {
                 try!(txn.gc(k, safe_point));
+                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
+                    scan_key = Some(k.to_owned());
+                    break;
+                }
             }
             if scan_key.is_none() {
                 (ProcessResult::Res, txn.modifies())
