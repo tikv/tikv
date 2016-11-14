@@ -53,7 +53,7 @@ ${LOCAL_DIR}/bin/pd-server:
 	cp bin/pd-server ${LOCAL_DIR}/bin/pd-server
 
 prepare_rust:
-	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=2016-10-06 --prefix=~/rust --disable-sudo --channel=nightly
+	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=${RUSTC_DATE} --prefix=~/rust --disable-sudo --channel=nightly
 
 prepare-rustfmt: | prepare_rust
 	cargo install rustfmt || exit 0
