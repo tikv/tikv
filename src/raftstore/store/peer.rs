@@ -423,11 +423,29 @@ impl Peer {
         Ok(())
     }
 
-    pub fn is_reqeust_allowed(&self, req: &RaftCmdRequest) -> bool {
+    pub fn is_request_allowed(&self, req: &RaftCmdRequest) -> bool {
         // Read and write is allowed when the peer is leader, readonly request is allowed
         // although when peer is follower.
         if !self.is_leader() &&
-           (!is_readonly_query(req) || self.leader_id() == INVALID_ID || self.is_applying()) {
+           (!self.is_readonly_query(req) || self.leader_id() == INVALID_ID || self.is_applying()) {
+            return false;
+        }
+
+        true
+    }
+
+    pub fn is_readonly_query(&self, req: &RaftCmdRequest) -> bool {
+        if req.get_requests().len() == 0 {
+            return false;
+        }
+
+        for cmd_req in req.get_requests() {
+            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
+                return false;
+            }
+        }
+
+        if self.get_store().applied_index_term != self.raft_group.raft.term {
             return false;
         }
 
@@ -509,7 +527,7 @@ impl Peer {
         }
 
         for uuid in expired {
-            warn!("follower read timeout for command {}", uuid);
+            warn!("{} read timeout for command {}", self.tag, uuid);
             let (mut cmd, _, _) = self.pending_readonly_queries.remove(&uuid).unwrap();
             let mut resp =
                 cmd_resp::new_error(Error::NotLeader(self.region_id,
@@ -615,17 +633,14 @@ impl Peer {
             return;
         }
 
-        let mut pos = 0;
         let applied_idx = self.get_store().apply_state.get_applied_index();
-        for rs in &self.ready_read_states {
-            if rs.index <= applied_idx {
-                pos += 1;
-            } else {
+        while !self.ready_read_states.is_empty() {
+            let rs = self.ready_read_states.pop_front().unwrap();
+            if rs.index > applied_idx {
+                self.ready_read_states.push_front(rs);
                 break;
             }
-        }
-        for _ in 0..pos {
-            let rs = self.ready_read_states.pop_front().unwrap();
+
             let uuid = Uuid::from_bytes(&rs.request_ctx).unwrap();
             if let Some((mut cmd, req, _)) = self.pending_readonly_queries
                 .remove(&uuid) {
@@ -640,7 +655,8 @@ impl Peer {
                 cmd.call(resp);
             } else {
                 // command should be timeout and has been removed
-                info!("command [{}] receive read state but command not exist",
+                info!("{} command [{}] receive read state but command not exist",
+                      self.tag,
                       &uuid)
             }
         }
@@ -663,12 +679,12 @@ impl Peer {
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
         PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let readonly = is_readonly_query(&req);
+        let readonly = self.is_readonly_query(&req);
         if readonly {
             let uuid = cmd.uuid;
             self.pending_readonly_queries.insert(uuid, (cmd, req, Instant::now()));
             self.raft_group.read_index(uuid.as_bytes().to_vec());
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["readindex_read"]).inc();
+            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["read_index_read"]).inc();
             return true;
         } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
@@ -1151,20 +1167,6 @@ impl Peer {
             cmd.cb.take();
         }
     }
-}
-
-pub fn is_readonly_query(req: &RaftCmdRequest) -> bool {
-    if req.get_requests().len() == 0 {
-        return false;
-    }
-
-    for cmd_req in req.get_requests() {
-        if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
-            return false;
-        }
-    }
-
-    true
 }
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {

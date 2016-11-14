@@ -1095,7 +1095,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             None => return Err(Error::RegionNotFound(region_id)),
         };
 
-        if !peer.is_reqeust_allowed(msg) {
+        if !peer.is_request_allowed(msg) {
             return Err(Error::NotLeader(region_id, peer.get_peer_from_cache(peer.leader_id())));
         }
         if peer.peer_id() != peer_id {
