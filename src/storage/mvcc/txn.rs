@@ -465,6 +465,29 @@ mod tests {
         must_scan_keys(engine.as_ref(), Some(b"c"), 1, vec![b"c"], Some(b"c"));
     }
 
+    #[test]
+    fn test_write_size() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), 10, None);
+        let key = make_key(b"key");
+        assert_eq!(txn.write_size, 0);
+
+        assert!(txn.get(&key).unwrap().is_none());
+        assert_eq!(txn.write_size, 0);
+
+        txn.prewrite(Mutation::Put((key.clone(), b"value".to_vec())), b"pk").unwrap();
+        assert!(txn.write_size() > 0);
+        engine.write(&ctx, txn.modifies()).unwrap();
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), 10, None);
+        txn.commit(&key, 15).unwrap();
+        assert!(txn.write_size() > 0);
+        engine.write(&ctx, txn.modifies()).unwrap();
+    }
+
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
