@@ -24,6 +24,7 @@ pub struct MvccTxn<'a> {
     reader: MvccReader<'a>,
     start_ts: u64,
     writes: Vec<Modify>,
+    write_size: usize,
 }
 
 impl<'a> fmt::Debug for MvccTxn<'a> {
@@ -39,6 +40,7 @@ impl<'a> MvccTxn<'a> {
             reader: MvccReader::new(snapshot, mode, true /* fill_cache */),
             start_ts: start_ts,
             writes: vec![],
+            write_size: 0,
         }
     }
 
@@ -46,13 +48,43 @@ impl<'a> MvccTxn<'a> {
         self.writes
     }
 
+    pub fn write_size(&self) -> usize {
+        self.write_size
+    }
+
     fn lock_key(&mut self, key: Key, lock_type: LockType, primary: Vec<u8>) {
-        let lock = Lock::new(lock_type, primary, self.start_ts);
-        self.writes.push(Modify::Put(CF_LOCK, key, lock.to_bytes()));
+        let lock = Lock::new(lock_type, primary, self.start_ts).to_bytes();
+        self.write_size += CF_LOCK.len() + key.encoded().len() + lock.len();
+        self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
 
     fn unlock_key(&mut self, key: Key) {
+        self.write_size += CF_LOCK.len() + key.encoded().len();
         self.writes.push(Modify::Delete(CF_LOCK, key));
+    }
+
+    fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
+        let key = key.append_ts(ts);
+        self.write_size += key.encoded().len() + value.len();
+        self.writes.push(Modify::Put(CF_DEFAULT, key, value));
+    }
+
+    fn delete_value(&mut self, key: &Key, ts: u64) {
+        let key = key.append_ts(ts);
+        self.write_size += key.encoded().len();
+        self.writes.push(Modify::Delete(CF_DEFAULT, key));
+    }
+
+    fn put_write(&mut self, key: &Key, ts: u64, value: Value) {
+        let key = key.append_ts(ts);
+        self.write_size += CF_WRITE.len() + key.encoded().len() + value.len();
+        self.writes.push(Modify::Put(CF_WRITE, key, value));
+    }
+
+    fn delete_write(&mut self, key: &Key, ts: u64) {
+        let key = key.append_ts(ts);
+        self.write_size += CF_WRITE.len() + key.encoded().len();
+        self.writes.push(Modify::Delete(CF_WRITE, key));
     }
 
     pub fn get(&mut self, key: &Key) -> Result<Option<Value>> {
@@ -82,8 +114,8 @@ impl<'a> MvccTxn<'a> {
                       primary.to_vec());
 
         if let Mutation::Put((_, ref value)) = mutation {
-            let value_key = key.append_ts(self.start_ts);
-            self.writes.push(Modify::Put(CF_DEFAULT, value_key, value.clone()));
+            let ts = self.start_ts;
+            self.put_value(key, ts, value.clone());
         }
         Ok(())
     }
@@ -107,7 +139,7 @@ impl<'a> MvccTxn<'a> {
             }
         };
         let write = Write::new(WriteType::from_lock_type(lock_type), self.start_ts);
-        self.writes.push(Modify::Put(CF_WRITE, key.append_ts(commit_ts), write.to_bytes()));
+        self.put_write(key, commit_ts, write.to_bytes());
         self.unlock_key(key.clone());
         Ok(())
     }
@@ -115,8 +147,7 @@ impl<'a> MvccTxn<'a> {
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
         match try!(self.reader.load_lock(key)) {
             Some(ref lock) if lock.ts == self.start_ts => {
-                let data_key = key.append_ts(lock.ts);
-                self.writes.push(Modify::Delete(CF_DEFAULT, data_key));
+                self.delete_value(key, lock.ts);
             }
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
@@ -133,9 +164,9 @@ impl<'a> MvccTxn<'a> {
                 };
             }
         }
-        self.writes.push(Modify::Put(CF_WRITE,
-                                     key.append_ts(self.start_ts),
-                                     Write::new(WriteType::Rollback, self.start_ts).to_bytes()));
+        let write = Write::new(WriteType::Rollback, self.start_ts);
+        let ts = self.start_ts;
+        self.put_write(key, ts, write.to_bytes());
         self.unlock_key(key.clone());
         Ok(())
     }
@@ -160,16 +191,16 @@ impl<'a> MvccTxn<'a> {
                     // Rollback or Lock.
                     match write.write_type {
                         WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
-                            self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                            self.delete_write(key, commit);
                             delete_versions += 1;
                         }
                         WriteType::Put => {}
                     }
                 }
             } else {
-                self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                self.delete_write(key, commit);
                 if write.write_type == WriteType::Put {
-                    self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(write.start_ts)));
+                    self.delete_value(key, write.start_ts);
                 }
                 delete_versions += 1;
             }
