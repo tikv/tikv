@@ -25,7 +25,7 @@ use kvproto::pdpb;
 use util::worker::Runnable;
 use util::escape;
 use util::transport::SendCh;
-use pd::PdClient;
+use pd::{Error, PdClient};
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
 
@@ -309,6 +309,14 @@ impl<T: PdClient> Runner<T> {
             Ok(None) => {
                 // split region has not yet report to pd.
                 // TODO: handle merge
+            }
+            Err(Error::RegionIsShutdown) => {
+                // The region for this peer is shutdown. This peer needs to be destroyed.
+                info!("[region {}] is shutdown. Peer {:?} is about to be destroyed",
+                      local_region.get_id(),
+                      peer);
+                PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region shutdown"]).inc();
+                self.send_destroy_peer_message(local_region.clone(), peer, local_region);
             }
             Err(e) => error!("get region failed {:?}", e),
         }
