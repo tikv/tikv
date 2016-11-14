@@ -12,6 +12,8 @@
 // limitations under the License.
 
 #![crate_type = "lib"]
+#![allow(stable_features)]
+#![feature(mpsc_recv_timeout)]
 #![feature(test)]
 #![feature(optin_builtin_traits)]
 #![feature(btree_range, collections_bound)]
@@ -57,6 +59,7 @@ extern crate prometheus;
 #[macro_use]
 extern crate lazy_static;
 extern crate backtrace;
+extern crate url;
 
 #[macro_use]
 pub mod util;

@@ -175,3 +175,30 @@ macro_rules! opp_neg {
         (-$r as u64)
     };
 }
+
+/// `wait_op!` waits for async operation. It returns `Option<Res>`
+/// after the expression get executed.
+#[macro_export]
+macro_rules! wait_op {
+    ($expr:expr) => {
+        wait_op!(IMPL $expr, None)
+    };
+    ($expr:expr, $timeout:expr) => {
+        wait_op!(IMPL $expr, Some($timeout))
+    };
+    (IMPL $expr:expr, $timeout:expr) => {
+        {
+            use std::sync::mpsc;
+            let (tx, rx) = mpsc::channel();
+            let cb = box move |res| {
+                 // we don't care error actually.
+                let _ = tx.send(res);
+            };
+            $expr(cb);
+            match $timeout {
+                None => rx.recv().ok(),
+                Some(timeout) => rx.recv_timeout(timeout).ok()
+            }
+        }
+    }
+}

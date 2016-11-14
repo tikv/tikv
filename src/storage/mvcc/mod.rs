@@ -44,7 +44,11 @@ quick_error! {
         }
         KeyIsLocked {key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64} {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {}-{}@{} ttl {}", escape(key), escape(primary), ts, ttl)
+            display("key is locked (backoff or cleanup) {}-{}@{} ttl {}",
+                        escape(key),
+                        escape(primary),
+                        ts,
+                        ttl)
         }
         BadFormatLock {description("bad format lock data")}
         BadFormatWrite {description("bad format write data")}

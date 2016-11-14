@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(stable_features)]
+#![feature(mpsc_recv_timeout)]
 #![feature(plugin)]
 #![feature(test)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
@@ -37,8 +39,6 @@ extern crate time;
 extern crate rustc_serialize;
 extern crate test;
 
-use std::env;
-
 mod test_raft;
 mod test_raft_snap;
 mod test_raft_paper;
@@ -50,11 +50,22 @@ mod storage;
 mod util;
 mod pd;
 
+use std::env;
+
 #[test]
-fn _travis_setup() {
+fn _0_travis_setup() {
     // Set up travis test fail case log.
     // The prefix "_" here is to guarantee running this case first.
     if env::var("TRAVIS").is_ok() && env::var("LOG_FILE").is_ok() {
         self::util::init_log();
+    }
+}
+
+#[test]
+fn _1_check_system_requirement() {
+    if let Err(e) = tikv::util::config::check_max_open_fds(2000) {
+        panic!("To run test, please make sure the maximum number of open file descriptors not \
+                less than 2000: {:?}",
+               e);
     }
 }
