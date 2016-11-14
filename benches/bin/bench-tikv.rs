@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(stable_features)]
+#![feature(mpsc_recv_timeout)]
 #![feature(plugin)]
 #![feature(test)]
 #![feature(fnbox)]
