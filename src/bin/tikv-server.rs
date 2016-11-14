@@ -64,30 +64,24 @@ fn print_usage(program: &str, opts: Options) {
 }
 
 fn get_flag_string(matches: &Matches, name: &str) -> Option<String> {
-    if matches.opt_defined(name) {
-        let s = matches.opt_str(name);
-        info!("flag {}: {:?}", name, s);
+    let s = matches.opt_str(name);
+    info!("flag {}: {:?}", name, s);
 
-        return s;
-    }
-    None
+    s
 }
 
 fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
-    if matches.opt_defined(name) {
-        let i = matches.opt_str(name).map(|x| {
-            x.parse::<i64>()
-                .or_else(|_| util::config::parse_readable_int(&x))
-                .unwrap_or_else(|e| {
-                    warn!("parse {} failed: {:?}", name, e);
-                    process::exit(1)
-                })
-        });
-        info!("flag {}: {:?}", name, i);
+    let i = matches.opt_str(name).map(|x| {
+        x.parse::<i64>()
+            .or_else(|_| util::config::parse_readable_int(&x))
+            .unwrap_or_else(|e| {
+                warn!("parse {} failed: {:?}", name, e);
+                process::exit(1)
+            })
+    });
+    info!("flag {}: {:?}", name, i);
 
-        return i;
-    }
-    None
+    i
 }
 
 fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> bool {
@@ -123,16 +117,21 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
 }
 
 fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
-    let i = config.lookup(name)
-        .and_then(|v| v.as_integer())
-        .or_else(|| {
-            info!("{}, use default {:?}", name, default);
-            default
-        })
+    let i = match config.lookup(name) {
+            Some(&toml::Value::Integer(i)) => Some(i),
+            Some(&toml::Value::String(ref s)) => {
+                util::config::parse_readable_int(s).ok().or_else(|| {
+                    info!("{}, use default {:?}", name, default);
+                    default
+                })
+            }
+            _ => None,
+        }
         .unwrap_or_else(|| {
-            warn!("please specify {}", name);
+            warn!("{} not found or parse failed", name);
             process::exit(1)
         });
+
     info!("toml value {} : {}", name, i);
 
     i
