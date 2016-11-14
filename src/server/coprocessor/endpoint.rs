@@ -13,15 +13,12 @@
 
 use std::usize;
 use std::collections::{HashMap, HashSet};
-use std::collections::hash_map::Entry;
 use std::time::Instant;
 use std::boxed::FnBox;
-use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
 
-use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
+use tipb::select::{self, SelectRequest, SelectResponse, Chunk};
 use tipb::schema::ColumnInfo;
-use tipb::expression::{Expr, ExprType};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use threadpool::ThreadPool;
@@ -30,26 +27,23 @@ use storage::{Engine, SnapshotStore};
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use storage::{engine, Snapshot, Key, ScanMode};
-use util::codec::table::TableDecoder;
-use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
-use util::codec::{Datum, table, datum, mysql};
-use util::xeval::{Evaluator, EvalContext};
+use util::codec::table;
 use util::{escape, duration_to_ms, Either};
+use util::xeval::Evaluator;
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
-use super::{Error, Result};
-use super::aggregate::{self, AggrFunc};
+use super::{Error, Result, Collector};
+use super::aggregate::AggrCollector;
+use super::collector::DefaultCollector;
 use super::metrics::*;
+use super::util;
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
-pub const BATCH_ROW_COUNT: usize = 64;
 
 const DEFAULT_ERROR_CODE: i32 = 1;
-
-pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
 pub struct Host {
     engine: Box<Engine>,
@@ -226,15 +220,14 @@ impl TiDbEndPoint {
 
     pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
-        let mut ctx = try!(SelectContext::new(sel, snap));
         let mut range = req.take_ranges().into_vec();
-        let desc = ctx.core.sel.get_order_by().first().map_or(false, |o| o.get_desc());
+        let desc = sel.get_order_by().first().map_or(false, |o| o.get_desc());
         debug!("scanning range: {:?}", range);
         if desc {
             range.reverse();
         }
-        let limit = if ctx.core.sel.has_limit() {
-            ctx.core.sel.get_limit() as usize
+        let limit = if sel.has_limit() {
+            sel.get_limit() as usize
         } else {
             usize::MAX
         };
@@ -243,10 +236,12 @@ impl TiDbEndPoint {
             COPR_REQ_HISTOGRAM_VEC.with_label_values(&["select", get_req_type_str(req.get_tp())]);
         let select_timer = select_histogram.start_timer();
 
-        let res = if req.get_tp() == REQ_TYPE_SELECT {
-            ctx.get_rows_from_sel(range, limit, desc)
+        let res = if !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty() {
+            let mut ctx: SelectContext<AggrCollector> = try!(SelectContext::new(sel, snap));
+            ctx.get_rows(req.get_tp(), range, limit, desc)
         } else {
-            ctx.get_rows_from_idx(range, limit, desc)
+            let mut ctx: SelectContext<DefaultCollector> = try!(SelectContext::new(sel, snap));
+            ctx.get_rows(req.get_tp(), range, limit, desc)
         };
 
         select_timer.observe_duration();
@@ -254,7 +249,7 @@ impl TiDbEndPoint {
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
         match res {
-            Ok(()) => sel_resp.set_chunks(RepeatedField::from_vec(ctx.core.chunks)),
+            Ok(chunks) => sel_resp.set_chunks(RepeatedField::from_vec(chunks)),
             Err(e) => {
                 if let Error::Other(_) = e {
                     // should we handle locked here too?
@@ -281,101 +276,19 @@ fn to_pb_error(err: &Error) -> select::Error {
     e
 }
 
-fn prefix_next(key: &[u8]) -> Vec<u8> {
-    let mut nk = key.to_vec();
-    if nk.is_empty() {
-        nk.push(0);
-        return nk;
-    }
-    let mut i = nk.len() - 1;
-    loop {
-        if nk[i] == 255 {
-            nk[i] = 0;
-        } else {
-            nk[i] += 1;
-            return nk;
-        }
-        if i == 0 {
-            nk = key.to_vec();
-            nk.push(0);
-            return nk;
-        }
-        i -= 1;
-    }
-}
-
-/// `is_point` checks if the key range represents a point.
-fn is_point(range: &KeyRange) -> bool {
-    range.get_end() == &*prefix_next(range.get_start())
-}
-
-#[inline]
-fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
-    if mysql::has_unsigned_flag(col.get_flag() as u64) {
-        // PK column is unsigned
-        Datum::U64(h as u64)
-    } else {
-        Datum::I64(h)
-    }
-}
-
-#[inline]
-fn inflate_with_col<'a, T>(eval: &mut Evaluator,
-                           ctx: &EvalContext,
-                           values: &HashMap<i64, &[u8]>,
-                           cols: T,
-                           h: i64)
-                           -> Result<()>
-    where T: IntoIterator<Item = &'a ColumnInfo>
-{
-    for col in cols {
-        let col_id = col.get_column_id();
-        if let Entry::Vacant(e) = eval.row.entry(col_id) {
-            if col.get_pk_handle() {
-                let v = get_pk(col, h);
-                e.insert(v);
-            } else {
-                let value = match values.get(&col_id) {
-                    None if mysql::has_not_null_flag(col.get_flag() as u64) => {
-                        return Err(box_err!("column {} of {} is missing", col_id, h));
-                    }
-                    None => Datum::Null,
-                    Some(bs) => box_try!(bs.clone().decode_col_value(ctx, col)),
-                };
-                e.insert(value);
-            }
-        }
-    }
-    Ok(())
-}
-
-#[inline]
-fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
-    if chunks.last().map_or(true, |chunk| chunk.get_rows_meta().len() >= BATCH_ROW_COUNT) {
-        let chunk = Chunk::new();
-        chunks.push(chunk);
-    }
-    chunks.last_mut().unwrap()
-}
-
-pub struct SelectContextCore {
-    ctx: EvalContext,
+struct SelectContextCore<C: Collector> {
     sel: SelectRequest,
-    eval: Evaluator,
     cols: Either<HashSet<i64>, Vec<i64>>,
     cond_cols: Vec<ColumnInfo>,
-    aggr: bool,
-    aggr_cols: Vec<ColumnInfo>,
-    gks: Vec<Rc<Vec<u8>>>,
-    gk_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
-    chunks: Vec<Chunk>,
+    eval: Evaluator,
+    collector: C,
 }
 
-impl SelectContextCore {
-    fn new(mut sel: SelectRequest) -> Result<SelectContextCore> {
-        let cond_cols;
-        let mut aggr_cols = vec![];
+impl<C: Collector> SelectContextCore<C> {
+    fn new(mut sel: SelectRequest) -> Result<SelectContextCore<C>> {
+        let collector = try!(C::create(&sel));
 
+        let cond_cols;
         {
             let select_cols = if sel.has_table_info() {
                 sel.get_table_info().get_columns()
@@ -383,20 +296,7 @@ impl SelectContextCore {
                 sel.get_index_info().get_columns()
             };
             let mut cond_col_map = HashMap::new();
-            try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
-            let mut aggr_cols_map = HashMap::new();
-            for aggr in sel.get_aggregates() {
-                try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, aggr));
-            }
-            for item in sel.get_group_by() {
-                try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, item.get_expr()));
-            }
-            if !aggr_cols_map.is_empty() {
-                for cond_col in cond_col_map.keys() {
-                    aggr_cols_map.remove(cond_col);
-                }
-                aggr_cols = aggr_cols_map.drain().map(|(_, v)| v).collect();
-            }
+            try!(util::collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
             cond_cols = cond_col_map.drain().map(|(_, v)| v).collect();
         }
 
@@ -416,16 +316,11 @@ impl SelectContextCore {
         };
 
         Ok(SelectContextCore {
-            ctx: box_try!(EvalContext::new(&sel)),
-            aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
-            aggr_cols: aggr_cols,
+            eval: box_try!(Evaluator::new(&sel)),
+            collector: collector,
             sel: sel,
-            eval: Default::default(),
             cols: cols,
             cond_cols: cond_cols,
-            gks: vec![],
-            gk_aggrs: map![],
-            chunks: vec![],
         })
     }
 
@@ -436,165 +331,52 @@ impl SelectContextCore {
         if try!(self.should_skip(h, &row_data)) {
             return Ok(0);
         }
-
-        if self.aggr {
-            try!(self.aggregate(h, &row_data));
-            Ok(0)
-        } else {
-            try!(self.get_row(h, row_data));
-            Ok(1)
-        }
+        self.collector.collect(&mut self.eval, h, &row_data)
     }
 
     fn should_skip(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<bool> {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
-        try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.cond_cols, h));
-        let res = box_try!(self.eval.eval(&self.ctx, self.sel.get_field_where()));
+        try!(util::inflate_with_col(&mut self.eval, values, &self.cond_cols, h));
+        let res = box_try!(self.eval.eval(self.sel.get_field_where()));
         let b = box_try!(res.into_bool());
         Ok(b.map_or(true, |v| !v))
     }
-
-    fn get_row(&mut self, h: i64, values: HashMap<i64, &[u8]>) -> Result<()> {
-        let chunk = get_chunk(&mut self.chunks);
-        let mut meta = RowMeta::new();
-        meta.set_handle(h);
-        let cols = if self.sel.has_table_info() {
-            self.sel.get_table_info().get_columns()
-        } else {
-            self.sel.get_index_info().get_columns()
-        };
-        let last_len = chunk.get_rows_data().len();
-        for col in cols {
-            let col_id = col.get_column_id();
-            if let Some(v) = values.get(&col_id) {
-                chunk.mut_rows_data().extend_from_slice(v);
-                continue;
-            }
-            if col.get_pk_handle() {
-                box_try!(datum::encode_to(chunk.mut_rows_data(), &[get_pk(col, h)], false));
-            } else if mysql::has_not_null_flag(col.get_flag() as u64) {
-                return Err(box_err!("column {} of {} is missing", col_id, h));
-            } else {
-                box_try!(datum::encode_to(chunk.mut_rows_data(), &[Datum::Null], false));
-            }
-        }
-        meta.set_length((chunk.get_rows_data().len() - last_len) as i64);
-        chunk.mut_rows_meta().push(meta);
-        Ok(())
-    }
-
-    fn get_group_key(&mut self) -> Result<Vec<u8>> {
-        let items = self.sel.get_group_by();
-        if items.is_empty() {
-            return Ok(SINGLE_GROUP.to_vec());
-        }
-        let mut vals = Vec::with_capacity(items.len());
-        for item in items {
-            let v = box_try!(self.eval.eval(&self.ctx, item.get_expr()));
-            vals.push(v);
-        }
-        let res = box_try!(datum::encode_value(&vals));
-        Ok(res)
-    }
-
-    fn aggregate(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<()> {
-        try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.aggr_cols, h));
-        let gk = Rc::new(try!(self.get_group_key()));
-        let aggr_exprs = self.sel.get_aggregates();
-        match self.gk_aggrs.entry(gk.clone()) {
-            Entry::Occupied(e) => {
-                let funcs = e.into_mut();
-                for (expr, func) in aggr_exprs.iter().zip(funcs) {
-                    // TODO: cache args
-                    let args = box_try!(self.eval.batch_eval(&self.ctx, expr.get_children()));
-                    try!(func.update(&self.ctx, args));
-                }
-            }
-            Entry::Vacant(e) => {
-                let mut aggrs = Vec::with_capacity(aggr_exprs.len());
-                for expr in aggr_exprs {
-                    let mut aggr = try!(aggregate::build_aggr_func(expr));
-                    let args = box_try!(self.eval.batch_eval(&self.ctx, expr.get_children()));
-                    try!(aggr.update(&self.ctx, args));
-                    aggrs.push(aggr);
-                }
-                self.gks.push(gk);
-                e.insert(aggrs);
-            }
-        }
-        Ok(())
-    }
-
-    /// Convert aggregate partial result to rows.
-    /// Data layout example:
-    /// SQL: select count(c1), sum(c2), avg(c3) from t;
-    /// Aggs: count(c1), sum(c2), avg(c3)
-    /// Rows: groupKey1, count1, value2, count3, value3
-    ///       groupKey2, count1, value2, count3, value3
-    fn aggr_rows(&mut self) -> Result<()> {
-        self.chunks = Vec::with_capacity((self.gk_aggrs.len() + BATCH_ROW_COUNT - 1) /
-                                         BATCH_ROW_COUNT);
-        // Each aggregate partial result will be converted to two datum.
-        let mut row_data = Vec::with_capacity(1 + 2 * self.sel.get_aggregates().len());
-        for gk in self.gks.drain(..) {
-            let aggrs = self.gk_aggrs.remove(&gk).unwrap();
-
-            let chunk = get_chunk(&mut self.chunks);
-            // The first column is group key.
-            row_data.push(Datum::Bytes(Rc::try_unwrap(gk).unwrap()));
-            for mut aggr in aggrs {
-                try!(aggr.calc(&mut row_data));
-            }
-            let last_len = chunk.get_rows_data().len();
-            box_try!(datum::encode_to(chunk.mut_rows_data(), &row_data, false));
-            let mut meta = RowMeta::new();
-            meta.set_length((chunk.get_rows_data().len() - last_len) as i64);
-            chunk.mut_rows_meta().push(meta);
-            row_data.clear();
-        }
-        Ok(())
-    }
-}
-
-fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
-                       col_meta: &[ColumnInfo],
-                       expr: &Expr)
-                       -> Result<()> {
-    if expr.get_tp() == ExprType::ColumnRef {
-        let i = box_try!(expr.get_val().decode_i64());
-        if let Entry::Vacant(e) = cols.entry(i) {
-            for c in col_meta {
-                if c.get_column_id() == i {
-                    e.insert(c.clone());
-                    return Ok(());
-                }
-            }
-            return Err(box_err!("column meta of {} is missing", i));
-        }
-    }
-    for c in expr.get_children() {
-        try!(collect_col_in_expr(cols, col_meta, c));
-    }
-    Ok(())
 }
 
 
-pub struct SelectContext<'a> {
+struct SelectContext<'a, C: Collector> {
     snap: SnapshotStore<'a>,
-    core: SelectContextCore,
+    core: SelectContextCore<C>,
 }
 
-impl<'a> SelectContext<'a> {
-    fn new(sel: SelectRequest, snap: SnapshotStore<'a>) -> Result<SelectContext<'a>> {
+impl<'a, C: Collector> SelectContext<'a, C> {
+    fn new(sel: SelectRequest, snap: SnapshotStore<'a>) -> Result<SelectContext<'a, C>> {
         Ok(SelectContext {
             core: try!(SelectContextCore::new(sel)),
             snap: snap,
         })
     }
 
-    fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
+    fn get_rows(&mut self,
+                tp: i64,
+                range: Vec<KeyRange>,
+                limit: usize,
+                desc: bool)
+                -> Result<Vec<Chunk>> {
+        if tp == REQ_TYPE_SELECT {
+            self.get_rows_from_sel(range, limit, desc)
+        } else {
+            self.get_rows_from_idx(range, limit, desc)
+        }
+    }
+
+    fn get_rows_from_sel(&mut self,
+                         ranges: Vec<KeyRange>,
+                         limit: usize,
+                         desc: bool)
+                         -> Result<Vec<Chunk>> {
         let mut collected = 0;
         for ran in ranges {
             if collected >= limit {
@@ -607,11 +389,7 @@ impl<'a> SelectContext<'a> {
                    duration_to_ms(timer.elapsed()));
             collected += row_cnt;
         }
-        if self.core.aggr {
-            self.core.aggr_rows()
-        } else {
-            Ok(())
-        }
+        self.core.collector.take_collection()
     }
 
     fn key_only(&self) -> bool {
@@ -623,7 +401,7 @@ impl<'a> SelectContext<'a> {
 
     fn get_rows_from_range(&mut self, range: KeyRange, limit: usize, desc: bool) -> Result<usize> {
         let mut row_count = 0;
-        if is_point(&range) {
+        if util::is_point(&range) {
             let value = match try!(self.snap.get(&Key::from_raw(range.get_start()))) {
                 None => return Ok(0),
                 Some(v) => v,
@@ -672,14 +450,18 @@ impl<'a> SelectContext<'a> {
                 seek_key = if desc {
                     box_try!(table::truncate_as_row_key(&key)).to_vec()
                 } else {
-                    prefix_next(&key)
+                    util::prefix_next(&key)
                 };
             }
         }
         Ok(row_count)
     }
 
-    fn get_rows_from_idx(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
+    fn get_rows_from_idx(&mut self,
+                         ranges: Vec<KeyRange>,
+                         limit: usize,
+                         desc: bool)
+                         -> Result<Vec<Chunk>> {
         let mut collected = 0;
         for r in ranges {
             if collected >= limit {
@@ -687,11 +469,7 @@ impl<'a> SelectContext<'a> {
             }
             collected += try!(self.get_idx_row_from_range(r, limit, desc));
         }
-        if self.core.aggr {
-            self.core.aggr_rows()
-        } else {
-            Ok(())
-        }
+        self.core.collector.take_collection()
     }
 
     fn get_idx_row_from_range(&mut self, r: KeyRange, limit: usize, desc: bool) -> Result<usize> {
@@ -736,7 +514,7 @@ impl<'a> SelectContext<'a> {
                 };
                 row_cnt += try!(self.core.handle_row(handle, values));
             }
-            seek_key = if desc { key } else { prefix_next(&key) };
+            seek_key = if desc { key } else { util::prefix_next(&key) };
         }
         Ok(row_cnt)
     }

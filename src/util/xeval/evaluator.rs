@@ -56,9 +56,18 @@ impl EvalContext {
     }
 }
 
+fn decode_value_list<'a>(cache: &'a mut HashMap<isize, Vec<Datum>>,
+                         value_list_expr: &Expr)
+                         -> Result<&'a Vec<Datum>> {
+    let p = value_list_expr as *const Expr as isize;
+    let decoded = try!(cache.entry(p).or_try_insert_with(|| value_list_expr.get_val().decode()));
+    Ok(decoded)
+}
+
 /// `Evaluator` evaluates `tipb::Expr`.
 #[derive(Default)]
 pub struct Evaluator {
+    pub ctx: EvalContext,
     // column_id -> column_value
     pub row: HashMap<i64, Datum>,
     // expr pointer -> value list
@@ -66,47 +75,56 @@ pub struct Evaluator {
 }
 
 impl Evaluator {
-    pub fn batch_eval(&mut self, ctx: &EvalContext, exprs: &[Expr]) -> Result<Vec<Datum>> {
+    pub fn new(req: &SelectRequest) -> Result<Evaluator> {
+        let ctx = try!(EvalContext::new(req));
+        Ok(Evaluator {
+            ctx: ctx,
+            row: HashMap::new(),
+            cached_value_list: HashMap::new(),
+        })
+    }
+
+    pub fn batch_eval(&mut self, exprs: &[Expr]) -> Result<Vec<Datum>> {
         let mut res = Vec::with_capacity(exprs.len());
         for expr in exprs {
-            let r = try!(self.eval(ctx, expr));
+            let r = try!(self.eval(expr));
             res.push(r);
         }
         Ok(res)
     }
 
     /// Eval evaluates expr to a Datum.
-    pub fn eval(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    pub fn eval(&mut self, expr: &Expr) -> Result<Datum> {
         match expr.get_tp() {
             ExprType::Int64 => self.eval_int(expr),
             ExprType::Uint64 => self.eval_uint(expr),
             // maybe we should use take here?
             ExprType::String | ExprType::Bytes => Ok(Datum::Bytes(expr.get_val().to_vec())),
             ExprType::ColumnRef => self.eval_column_ref(expr),
-            ExprType::LT => self.eval_lt(ctx, expr),
-            ExprType::LE => self.eval_le(ctx, expr),
-            ExprType::EQ => self.eval_eq(ctx, expr),
-            ExprType::NE => self.eval_ne(ctx, expr),
-            ExprType::GE => self.eval_ge(ctx, expr),
-            ExprType::GT => self.eval_gt(ctx, expr),
-            ExprType::NullEQ => self.eval_null_eq(ctx, expr),
-            ExprType::And => self.eval_and(ctx, expr),
-            ExprType::Or => self.eval_or(ctx, expr),
-            ExprType::Not => self.eval_not(ctx, expr),
-            ExprType::Like => self.eval_like(ctx, expr),
+            ExprType::LT => self.eval_lt(expr),
+            ExprType::LE => self.eval_le(expr),
+            ExprType::EQ => self.eval_eq(expr),
+            ExprType::NE => self.eval_ne(expr),
+            ExprType::GE => self.eval_ge(expr),
+            ExprType::GT => self.eval_gt(expr),
+            ExprType::NullEQ => self.eval_null_eq(expr),
+            ExprType::And => self.eval_and(expr),
+            ExprType::Or => self.eval_or(expr),
+            ExprType::Not => self.eval_not(expr),
+            ExprType::Like => self.eval_like(expr),
             ExprType::Float32 |
             ExprType::Float64 => self.eval_float(expr),
             ExprType::MysqlDuration => self.eval_duration(expr),
             ExprType::MysqlDecimal => self.eval_decimal(expr),
-            ExprType::In => self.eval_in(ctx, expr),
-            ExprType::Plus => self.eval_arith(ctx, expr, Datum::checked_add),
-            ExprType::Div => self.eval_arith(ctx, expr, Datum::checked_div),
-            ExprType::Minus => self.eval_arith(ctx, expr, Datum::checked_minus),
-            ExprType::Mul => self.eval_arith(ctx, expr, Datum::checked_mul),
-            ExprType::IntDiv => self.eval_arith(ctx, expr, Datum::checked_int_div),
-            ExprType::Mod => self.eval_arith(ctx, expr, Datum::checked_rem),
-            ExprType::Case => self.eval_case_when(ctx, expr),
-            ExprType::Coalesce => self.eval_coalesce(ctx, expr),
+            ExprType::In => self.eval_in(expr),
+            ExprType::Plus => self.eval_arith(expr, Datum::checked_add),
+            ExprType::Div => self.eval_arith(expr, Datum::checked_div),
+            ExprType::Minus => self.eval_arith(expr, Datum::checked_minus),
+            ExprType::Mul => self.eval_arith(expr, Datum::checked_mul),
+            ExprType::IntDiv => self.eval_arith(expr, Datum::checked_int_div),
+            ExprType::Mod => self.eval_arith(expr, Datum::checked_rem),
+            ExprType::Case => self.eval_case_when(expr),
+            ExprType::Coalesce => self.eval_coalesce(expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -142,63 +160,63 @@ impl Evaluator {
         self.row.get(&i).cloned().ok_or_else(|| Error::Eval(format!("column {} not found", i)))
     }
 
-    fn eval_lt(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_lt(&mut self, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c < Ordering::Equal).into())
     }
 
-    fn eval_le(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_le(&mut self, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c <= Ordering::Equal).into())
     }
 
-    fn eval_eq(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_eq(&mut self, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c == Ordering::Equal).into())
     }
 
-    fn eval_ne(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_ne(&mut self, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c != Ordering::Equal).into())
     }
 
-    fn eval_ge(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_ge(&mut self, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c >= Ordering::Equal).into())
     }
 
-    fn eval_gt(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_gt(&mut self, expr: &Expr) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(expr));
         Ok(cmp.map(|c| c > Ordering::Equal).into())
     }
 
-    fn eval_null_eq(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
-        let cmp = try!(left.cmp(ctx, &right));
+    fn eval_null_eq(&mut self, expr: &Expr) -> Result<Datum> {
+        let (left, right) = try!(self.eval_two_children(expr));
+        let cmp = try!(left.cmp(&self.ctx, &right));
         Ok((cmp == Ordering::Equal).into())
     }
 
-    fn cmp_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Option<Ordering>> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+    fn cmp_children(&mut self, expr: &Expr) -> Result<Option<Ordering>> {
+        let (left, right) = try!(self.eval_two_children(expr));
         if left == Datum::Null || right == Datum::Null {
             return Ok(None);
         }
-        left.cmp(ctx, &right).map(Some).map_err(From::from)
+        left.cmp(&self.ctx, &right).map(Some).map_err(From::from)
     }
 
-    fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
+    fn eval_two_children(&mut self, expr: &Expr) -> Result<(Datum, Datum)> {
         let l = expr.get_children().len();
         if l != 2 {
             return Err(Error::Expr(format!("need 2 operands but got {}", l)));
         }
         let children = expr.get_children();
-        let left = try!(self.eval(ctx, &children[0]));
-        let right = try!(self.eval(ctx, &children[1]));
+        let left = try!(self.eval(&children[0]));
+        let right = try!(self.eval(&children[1]));
         Ok((left, right))
     }
 
-    fn eval_and(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        self.eval_two_children_as_bool(ctx, expr)
+    fn eval_and(&mut self, expr: &Expr) -> Result<Datum> {
+        self.eval_two_children_as_bool(expr)
             .map(|p| {
                 match p {
                     (Some(true), Some(true)) => true.into(),
@@ -208,8 +226,8 @@ impl Evaluator {
             })
     }
 
-    fn eval_or(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        self.eval_two_children_as_bool(ctx, expr).map(|p| {
+    fn eval_or(&mut self, expr: &Expr) -> Result<Datum> {
+        self.eval_two_children_as_bool(expr).map(|p| {
             match p {
                 (Some(true), _) | (_, Some(true)) => true.into(),
                 (Some(false), Some(false)) => false.into(),
@@ -218,12 +236,12 @@ impl Evaluator {
         })
     }
 
-    fn eval_not(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_not(&mut self, expr: &Expr) -> Result<Datum> {
         let children_cnt = expr.get_children().len();
         if children_cnt != 1 {
             return Err(Error::Expr(format!("expect 1 operand, got {}", children_cnt)));
         }
-        let d = try!(self.eval(ctx, &expr.get_children()[0]));
+        let d = try!(self.eval(&expr.get_children()[0]));
         if d == Datum::Null {
             return Ok(Datum::Null);
         }
@@ -231,8 +249,8 @@ impl Evaluator {
         Ok((b.map(|v| !v)).into())
     }
 
-    fn eval_like(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let (target, pattern) = try!(self.eval_two_children(ctx, expr));
+    fn eval_like(&mut self, expr: &Expr) -> Result<Datum> {
+        let (target, pattern) = try!(self.eval_two_children(expr));
         if Datum::Null == target || Datum::Null == pattern {
             return Ok(Datum::Null);
         }
@@ -257,23 +275,20 @@ impl Evaluator {
         }
     }
 
-    fn eval_two_children_as_bool(&mut self,
-                                 ctx: &EvalContext,
-                                 expr: &Expr)
-                                 -> Result<(Option<bool>, Option<bool>)> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+    fn eval_two_children_as_bool(&mut self, expr: &Expr) -> Result<(Option<bool>, Option<bool>)> {
+        let (left, right) = try!(self.eval_two_children(expr));
         let left_bool = try!(left.into_bool());
         let right_bool = try!(right.into_bool());
         Ok((left_bool, right_bool))
     }
 
-    fn eval_in(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_in(&mut self, expr: &Expr) -> Result<Datum> {
         if expr.get_children().len() != 2 {
             return Err(Error::Expr(format!("IN need 2 operand, got {}",
                                            expr.get_children().len())));
         }
         let children = expr.get_children();
-        let target = try!(self.eval(ctx, &children[0]));
+        let target = try!(self.eval(&children[0]));
         if let Datum::Null = target {
             return Ok(target);
         }
@@ -281,8 +296,8 @@ impl Evaluator {
         if value_list_expr.get_tp() != ExprType::ValueList {
             return Err(Error::Expr("the second children should be value list type".to_owned()));
         }
-        let decoded = try!(self.decode_value_list(value_list_expr));
-        if try!(check_in(ctx, target, decoded)) {
+        let decoded = try!(decode_value_list(&mut self.cached_value_list, value_list_expr));
+        if try!(check_in(&self.ctx, target, decoded)) {
             return Ok(true.into());
         }
         if decoded.first().map_or(false, |d| *d == Datum::Null) {
@@ -291,24 +306,16 @@ impl Evaluator {
         Ok(false.into())
     }
 
-    fn decode_value_list(&mut self, value_list_expr: &Expr) -> Result<&Vec<Datum>> {
-        let p = value_list_expr as *const Expr as isize;
-        let decoded = try!(self.cached_value_list
-            .entry(p)
-            .or_try_insert_with(|| value_list_expr.get_val().decode()));
-        Ok(decoded)
-    }
-
-    fn eval_arith<F>(&mut self, ctx: &EvalContext, expr: &Expr, f: F) -> Result<Datum>
+    fn eval_arith<F>(&mut self, expr: &Expr, f: F) -> Result<Datum>
         where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
     {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+        let (left, right) = try!(self.eval_two_children(expr));
         eval_arith(left, right, f)
     }
 
-    fn eval_case_when(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_case_when(&mut self, expr: &Expr) -> Result<Datum> {
         for chunk in expr.get_children().chunks(2) {
-            let res = try!(self.eval(ctx, &chunk[0]));
+            let res = try!(self.eval(&chunk[0]));
             if chunk.len() == 1 {
                 // else statement
                 return Ok(res);
@@ -316,14 +323,14 @@ impl Evaluator {
             if !try!(res.into_bool()).unwrap_or(false) {
                 continue;
             }
-            return self.eval(ctx, &chunk[1]).map_err(From::from);
+            return self.eval(&chunk[1]).map_err(From::from);
         }
         Ok(Datum::Null)
     }
 
-    fn eval_coalesce(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_coalesce(&mut self, expr: &Expr) -> Result<Datum> {
         for child in expr.get_children() {
-            match try!(self.eval(ctx, child)) {
+            match try!(self.eval(child)) {
                 Datum::Null => {}
                 res => return Ok(res),
             }
@@ -481,7 +488,7 @@ mod test {
                 let mut xevaluator = Evaluator::default();
                 xevaluator.row.insert(1, Datum::I64(100));
                 for (expr, exp) in cases {
-                    let res = xevaluator.eval(&Default::default(), &expr);
+                    let res = xevaluator.eval(&expr);
                     if res.is_err() {
                         panic!("failed to eval {:?}: {:?}", expr, res);
                     }
@@ -829,7 +836,7 @@ mod test {
 
         let mut eval = Evaluator::default();
         for (expr, expect_res) in cases {
-            let res = eval.eval(&Default::default(), &expr);
+            let res = eval.eval(&expr);
             if res.is_err() {
                 panic!("failed to execute {:?}: {:?}", expr, res);
             }

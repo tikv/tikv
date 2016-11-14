@@ -11,17 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod util;
+mod collector;
 mod endpoint;
 mod aggregate;
 mod metrics;
 
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
+use tipb::select::{SelectRequest, Chunk};
 
-use std::result;
-use std::error;
+use std::{result, error};
+use std::collections::HashMap;
 
 use storage::{txn, engine, mvcc};
+use ::util::xeval::Evaluator;
 
 quick_error! {
     #[derive(Debug)]
@@ -69,5 +73,30 @@ impl From<txn::Error> for Error {
     }
 }
 
-pub use self::endpoint::{Host as EndPointHost, RequestTask, SelectContext, SINGLE_GROUP,
-                         REQ_TYPE_SELECT, REQ_TYPE_INDEX, Task as EndPointTask};
+/// An abstract trait to handle row.
+///
+/// A common work flow is:
+///     1. create a collector;
+///     2. collect all qualified rows (pass condition check);
+///     3. take the collection.
+trait Collector: Sized {
+    /// Create a Collector.
+    fn create(sel: &SelectRequest) -> Result<Self>;
+
+    /// Collect a row.
+    ///
+    /// Only qualified row will be delivered to this function.
+    /// Returns the number of collected row.
+    fn collect(&mut self,
+               eval: &mut Evaluator,
+               handle: i64,
+               val: &HashMap<i64, &[u8]>)
+               -> Result<usize>;
+
+    /// Take the collection and finish handling.
+    fn take_collection(&mut self) -> Result<Vec<Chunk>>;
+}
+
+pub use self::endpoint::{Host as EndPointHost, RequestTask, REQ_TYPE_SELECT, REQ_TYPE_INDEX,
+                         Task as EndPointTask};
+pub use self::aggregate::SINGLE_GROUP;
