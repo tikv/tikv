@@ -45,10 +45,11 @@ use util::transport::SendCh;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
-                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask};
+                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
+                    ConsistencyCheckTask, ConsistencyCheckRunner};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
-use super::engine::{Iterable, Peekable, delete_all_in_range};
+use super::engine::{Iterable, Peekable, delete_all_in_range, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState};
 use super::peer_storage::{ApplySnapResult, SnapState};
@@ -206,6 +207,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
+    consistency_check_worker: Worker<ConsistencyCheckTask>,
 
     trans: T,
     pd_client: Arc<C>,
@@ -262,6 +264,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
+            consistency_check_worker: Worker::new("consistency check worker"),
             region_ranges: BTreeMap::new(),
             pending_regions: vec![],
             trans: trans,
@@ -389,6 +392,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
+
+        let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
+        box_try!(self.consistency_check_worker.start(consistency_check_runner));
 
         try!(event_loop.run(self));
         Ok(())
@@ -1023,6 +1029,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
                 }
+                ExecResult::ComputeHash { region, index, snap } => {
+                    self.on_ready_compute_hash(region, index, snap)
+                }
+                ExecResult::VerifyHash { index, hash } => {
+                    self.on_ready_verify_hash(region_id, index, hash)
+                }
             }
         }
         slow_log!(t,
@@ -1568,6 +1580,112 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
+// Consistency Check implementation.
+impl<T: Transport, C: PdClient> Store<T, C> {
+    fn register_consistency_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::ConsistencyCheck,
+                                       self.cfg.consistency_check_tick_interval * 1000) {
+            error!("{} register consistency check tick err: {:?}", self.tag, e);
+        };
+    }
+
+    fn on_consistency_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if self.consistency_check_worker.is_busy() {
+            // To avoid frequent scan, schedule new check only when all the
+            // scheduled check is done.
+            return;
+        }
+        let (mut candidate_id, mut candidate_check_time) = (0, Instant::now());
+        for (&region_id, peer) in &mut self.region_peers {
+            if !peer.is_leader() {
+                continue;
+            }
+            if peer.last_consistency_check_time < candidate_check_time {
+                candidate_id = region_id;
+                candidate_check_time = peer.last_consistency_check_time;
+            }
+        }
+
+        if candidate_id != 0 {
+            let peer = self.region_peers.get(&candidate_id).unwrap();
+
+            info!("{} scheduling consistent check", peer.tag);
+            let msg = Msg::RaftCmd {
+                request: new_compute_hash_request(candidate_id, &peer.peer),
+                callback: Box::new(|_| {}),
+            };
+
+            if let Err(e) = self.sendch.send(msg) {
+                error!("{} failed to schedule split check: {:?}", peer.tag, e);
+            }
+        }
+
+        self.register_consistency_check_tick(event_loop);
+    }
+
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+        let region_id = region.get_id();
+        self.region_peers.get_mut(&region_id).unwrap().last_consistency_check_time = Instant::now();
+        let task = ConsistencyCheckTask::compute_hash(region, index, snap);
+        info!("[region {}] schedule {}", region_id, task);
+        if let Err(e) = self.consistency_check_worker.schedule(task) {
+            error!("[region {}] schedule failed: {:?}", region_id, e);
+        }
+    }
+
+    fn on_ready_verify_hash(&self, region_id: u64, index: u64, hash: Vec<u8>) {
+        let task = ConsistencyCheckTask::verify_hash(region_id, index, hash);
+        info!("[region {}] schedule {}", region_id, task);
+        if let Err(e) = self.consistency_check_worker.schedule(task) {
+            error!("[region {}] schedule failed: {:?}", region_id, e);
+        }
+    }
+
+    fn on_hash_computed(&self, region_id: u64, index: u64, hash: Vec<u8>) {
+        let peer = match self.region_peers.get(&region_id) {
+            None => {
+                warn!("receive stale hash [region {}, index {}]", region_id, index);
+                return;
+            }
+            Some(p) => p.peer.clone(),
+        };
+
+        let mut request = RaftCmdRequest::new();
+        request.mut_header().set_region_id(region_id);
+        request.mut_header().set_peer(peer);
+        request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let mut admin = AdminRequest::new();
+        admin.set_cmd_type(AdminCmdType::VerifyHash);
+        admin.mut_verify_hash().set_index(index);
+        admin.mut_verify_hash().set_hash(hash);
+        request.set_admin_request(admin);
+
+        let msg = Msg::RaftCmd {
+            request: request,
+            callback: Box::new(|_| {}),
+        };
+        if let Err(e) = self.sendch.send(msg) {
+            error!("[region {}] failed to schedule verify command for index {}: {:?}",
+                   region_id,
+                   index,
+                   e);
+        }
+    }
+}
+
+fn new_compute_hash_request(region_id: u64, peer: &metapb::Peer) -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
+    request.mut_header().set_region_id(region_id);
+    request.mut_header().set_peer(peer.clone());
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::ComputeHash);
+    request.set_admin_request(admin);
+    request
+}
 
 fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
                                              tick: Tick,
@@ -1627,6 +1745,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SnapGenRes { region_id, snap } => {
                 self.on_snap_gen_res(region_id, snap);
             }
+            Msg::ComputeHashResult { region_id, index, hash } => {
+                self.on_hash_computed(region_id, index, hash);
+            }
         }
         slow_log!(t, "{} handle {}", self.tag, msg_str);
     }
@@ -1642,6 +1763,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
+            Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
@@ -1654,7 +1776,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                                        (self.raftlog_gc_worker.stop(),
                                         self.raftlog_gc_worker.name()),
                                        (self.compact_worker.stop(), self.compact_worker.name()),
-                                       (self.pd_worker.stop(), self.pd_worker.name())] {
+                                       (self.pd_worker.stop(), self.pd_worker.name()),
+                                       (self.consistency_check_worker.stop(),
+                                        self.consistency_check_worker.name())] {
                 if let Some(Err(e)) = handle.map(|h| h.join()) {
                     error!("{} failed to stop {}: {:?}", self.tag, name, e);
                 }

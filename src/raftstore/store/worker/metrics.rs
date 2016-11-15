@@ -49,6 +49,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref REGION_HASH_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_hash_total",
+            "Total number of raftstore has computing.",
+            &["type", "result"]
+        ).unwrap();
+
     pub static ref SNAP_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_snapshot_duration_seconds",
@@ -67,5 +74,11 @@ lazy_static! {
             "tikv_compact_range_cf_duration_seconds",
             "Bucketed histogram of compact range for cf execution",
             &["cf"]
+        ).unwrap();
+
+    pub static ref REGION_HASH_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_hash_duration_seconds",
+            "Bucketed histogram of raftstore hash compution duration"
         ).unwrap();
 }
