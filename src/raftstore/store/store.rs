@@ -1561,6 +1561,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
+        info!("{} [region {}] asks PD to merge", self.tag, region_id);
+
         let task = PdTask::AskMerge { region: region.clone() };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify PD to merge, err {}", peer.tag, e);
@@ -1568,6 +1570,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_rollback_region_merge(&mut self, into_region_id: u64) {
+        info!("{} rollbacks region merge for region id {}",
+              self.tag,
+              into_region_id);
+
         if let Some(into_peer) = self.region_peers.get_mut(&into_region_id) {
             if let Err(e) = into_peer.rollback_region_merge() {
                 error!("{} fails to rollback region merge for region id {}, err {:?}",
@@ -1833,6 +1839,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_storage_gc(&mut self, region_id: u64, peer_id: u64) {
+        info!("{} storage gc is done for region id {}, peer id {}",
+              self.tag,
+              region_id,
+              peer_id);
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         if self.region_check_worker.is_busy() {
