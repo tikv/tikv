@@ -47,10 +47,10 @@ lazy_static! {
             "Total number of connection"
         ).unwrap();
 
-    pub static ref RAFT_STORE_MSG_COUNTER: CounterVec =
+    pub static ref REPORT_FAILURE_MSG_COUNTER: CounterVec =
         register_counter_vec!(
-            "tikv_server_raft_store_msg_total",
-            "Total number of raft store messages",
-            &["type"]
+            "tikv_server_report_failure_msg_total",
+            "Total number of reporting failure messages",
+            &["type", "store_id"]
         ).unwrap();
 }

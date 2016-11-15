@@ -48,6 +48,7 @@ pub trait RaftStoreRouter: Send + Clone {
     fn report_snapshot(&self,
                        region_id: u64,
                        to_peer_id: u64,
+                       _: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
         self.send(StoreMsg::ReportSnapshot {
@@ -81,7 +82,8 @@ impl ServerRaftStoreRouter {
 
     fn validate_store_id(&self, store_id: u64) -> RaftStoreResult<()> {
         if store_id != self.store_id {
-            RAFT_STORE_MSG_COUNTER.with_label_values(&["store_not_match"]).inc();
+            let store = store_id.to_string();
+            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["store_not_match", &*store]).inc();
             Err(RaftStoreError::StoreNotMatch(store_id, self.store_id))
         } else {
             Ok(())
@@ -118,13 +120,13 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     fn report_snapshot(&self,
                        region_id: u64,
                        to_peer_id: u64,
+                       to_store_id: u64,
                        status: SnapshotStatus)
                        -> RaftStoreResult<()> {
-        let label = match status {
-            SnapshotStatus::Finish => "snapshot_finish",
-            SnapshotStatus::Failure => "snapshot_failure",
+        if status == SnapshotStatus::Failure {
+            let store = to_store_id.to_string();
+            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["snapshot", &*store]).inc();
         };
-        RAFT_STORE_MSG_COUNTER.with_label_values(&[label]).inc();
         self.send(StoreMsg::ReportSnapshot {
             region_id: region_id,
             to_peer_id: to_peer_id,
@@ -138,7 +140,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
                           to_store_id: u64)
                           -> RaftStoreResult<()> {
         let store = to_store_id.to_string();
-        RAFT_STORE_MSG_COUNTER.with_label_values(&["unreachable", &*store]).inc();
+        REPORT_FAILURE_MSG_COUNTER.with_label_values(&["unreachable", &*store]).inc();
         self.try_send(StoreMsg::ReportUnreachable {
             region_id: region_id,
             to_peer_id: to_peer_id,
