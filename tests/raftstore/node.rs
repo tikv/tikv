@@ -72,6 +72,7 @@ impl Channel<RaftMessage> for ChannelTransport {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
+        let to_store_id = msg.get_to_peer().get_store_id();
         let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
@@ -113,7 +114,10 @@ impl Channel<RaftMessage> for ChannelTransport {
                         .routers
                         .get(&from_store)
                         .unwrap()
-                        .report_snapshot(region_id, to_peer_id, SnapshotStatus::Finish)
+                        .report_snapshot(region_id,
+                                         to_peer_id,
+                                         to_store_id,
+                                         SnapshotStatus::Finish)
                         .unwrap();
                 }
                 Ok(())

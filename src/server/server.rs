@@ -492,11 +492,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter<T> {
         let region_id = data.msg.get_raft().get_region_id();
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
+        let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
 
         SnapshotReporter {
             router: self.raft_router.clone(),
             region_id: region_id,
             to_peer_id: to_peer_id,
+            to_store_id: to_store_id,
             reported: AtomicBool::new(false),
         }
     }
@@ -609,6 +611,7 @@ struct SnapshotReporter<T: RaftStoreRouter + 'static> {
     router: T,
     region_id: u64,
     to_peer_id: u64,
+    to_store_id: u64,
 
     reported: AtomicBool,
 }
@@ -627,9 +630,10 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
 
 
         if let Err(e) = self.router
-            .report_snapshot(self.region_id, self.to_peer_id, status) {
-            error!("report snapshot to peer {} with region {} err {:?}",
+            .report_snapshot(self.region_id, self.to_peer_id, self.to_store_id, status) {
+            error!("report snapshot to peer {} in store {} with region {} err {:?}",
                    self.to_peer_id,
+                   self.to_store_id,
                    self.region_id,
                    e);
         }
@@ -694,7 +698,12 @@ mod tests {
             Ok(())
         }
 
-        fn report_snapshot(&self, _: u64, _: u64, _: SnapshotStatus) -> RaftStoreResult<()> {
+        fn report_snapshot(&self,
+                           _: u64,
+                           _: u64,
+                           _: u64,
+                           _: SnapshotStatus)
+                           -> RaftStoreResult<()> {
             unimplemented!();
         }
 
