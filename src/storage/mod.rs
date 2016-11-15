@@ -94,6 +94,7 @@ pub enum Command {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
+        lock_ttl: u64,
     },
     Commit {
         ctx: Context,
@@ -382,6 +383,7 @@ impl Storage {
                           mutations: Vec<Mutation>,
                           primary: Vec<u8>,
                           start_ts: u64,
+                          lock_ttl: u64,
                           callback: Callback<Vec<Result<()>>>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
@@ -389,6 +391,7 @@ impl Storage {
             mutations: mutations,
             primary: primary,
             start_ts: start_ts,
+            lock_ttl: lock_ttl,
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Booleans(callback)));
@@ -636,6 +639,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
+                            0,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -677,6 +681,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
+                            0,
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -697,6 +702,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
+                            0,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -737,6 +743,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
+                            0,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -771,12 +778,14 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
+                            0,
                             expect_ok(tx.clone()))
             .unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
+                            0,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -811,6 +820,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                             b"x".to_vec(),
                             105,
+                            0,
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -834,6 +844,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
+                            0,
                             expect_too_busy(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -850,6 +861,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
+                            0,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
