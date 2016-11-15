@@ -605,7 +605,22 @@ impl Peer {
             try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
         }
 
-        let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+        // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
+        // In some cases, there will be some pending committed entries when applying a
+        // snapshot. If we call `handle_raft_commit_entries` directly, these updates
+        // will be written to disk. Because we apply snapshot asynchronously, so these
+        // updates will soon be removed. But the soft state of raft is still be updated
+        // in memory. Hence when handle ready next time, these updates won't be included
+        // in `ready.committed_entries` again, which will lead to inconsistency.
+        let exec_results = if self.is_applying() {
+            if let Some(ref mut hs) = ready.hs {
+                // Snapshot's metadata has been applied.
+                hs.set_commit(self.get_store().truncated_index());
+            }
+            vec![]
+        } else {
+            try!(self.handle_raft_commit_entries(&ready.committed_entries))
+        };
 
         slow_log!(t,
                   "{} handle ready, entries {}, committed entries {}, messages \
@@ -771,6 +786,9 @@ impl Peer {
         // TODO: validate request for unexpected changes.
         try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
+
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+
         try!(self.raft_group.propose(data));
         Ok(())
     }
@@ -805,6 +823,9 @@ impl Peer {
         PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change"]).inc();
 
         let data = try!(cmd.write_to_bytes());
+
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
 
         let mut cc = eraftpb::ConfChange::new();
@@ -969,6 +990,8 @@ impl Peer {
     fn handle_raft_commit_entries(&mut self,
                                   committed_entries: &[eraftpb::Entry])
                                   -> Result<Vec<ExecResult>> {
+        // We can't apply committed entries when this peer is still applying snapshot.
+        assert!(!self.is_applying());
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
@@ -979,6 +1002,14 @@ impl Peer {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
+            }
+
+            let expect_index = self.get_store().applied_index() + 1;
+            if expect_index != entry.get_index() {
+                panic!("{} expect index {}, but got {}",
+                       self.tag,
+                       expect_index,
+                       entry.get_index());
             }
 
             let res = try!(match entry.get_entry_type() {
@@ -1120,15 +1151,6 @@ impl Peer {
                       -> (RaftCmdResponse, Option<ExecResult>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
-
-        let last_applied_index = self.get_store().applied_index();
-        if last_applied_index >= index {
-            // How can it happen?
-            panic!("{} applied index moved backwards, {} >= {}",
-                   self.tag,
-                   last_applied_index,
-                   index);
-        }
 
         let mut ctx = ExecContext::new(self, index, term, req);
         let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {

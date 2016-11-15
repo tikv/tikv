@@ -26,10 +26,12 @@ pub struct MvccReader<'a> {
 
     scan_mode: Option<ScanMode>,
     key_only: bool,
+
+    fill_cache: bool,
 }
 
 impl<'a> MvccReader<'a> {
-    pub fn new(snapshot: &Snapshot, scan_mode: Option<ScanMode>) -> MvccReader {
+    pub fn new(snapshot: &Snapshot, scan_mode: Option<ScanMode>, fill_cache: bool) -> MvccReader {
         MvccReader {
             snapshot: snapshot,
             data_cursor: None,
@@ -37,6 +39,7 @@ impl<'a> MvccReader<'a> {
             write_cursor: None,
             scan_mode: scan_mode,
             key_only: false,
+            fill_cache: fill_cache,
         }
     }
 
@@ -50,7 +53,7 @@ impl<'a> MvccReader<'a> {
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
             self.data_cursor = Some(try!(self.snapshot
-                .iter(None, false, self.get_scan_mode(true))));
+                .iter(None, self.fill_cache, self.get_scan_mode(true))));
         }
 
         let k = key.append_ts(ts);
@@ -110,7 +113,7 @@ impl<'a> MvccReader<'a> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 self.write_cursor = Some(try!(self.snapshot
-                    .iter_cf(CF_WRITE, None, false, self.get_scan_mode(false))));
+                    .iter_cf(CF_WRITE, None, self.fill_cache, self.get_scan_mode(false))));
             }
         } else {
             let upper_bound_key = key.append_ts(0u64);
@@ -147,6 +150,7 @@ impl<'a> MvccReader<'a> {
                     key: try!(key.raw()),
                     primary: lock.primary,
                     ts: lock.ts,
+                    ttl: lock.ttl,
                 });
             }
         }
@@ -181,10 +185,7 @@ impl<'a> MvccReader<'a> {
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
             self.write_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_WRITE,
-                         None,
-                         !self.scan_mode.is_some(),
-                         self.get_scan_mode(false))));
+                .iter_cf(CF_WRITE, None, self.fill_cache, self.get_scan_mode(false))));
         }
         Ok(())
     }
@@ -192,10 +193,7 @@ impl<'a> MvccReader<'a> {
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
             self.lock_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_LOCK,
-                         None,
-                         !self.scan_mode.is_some(),
-                         self.get_scan_mode(true))));
+                .iter_cf(CF_LOCK, None, true, self.get_scan_mode(true))));
         }
         Ok(())
     }
@@ -295,32 +293,46 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn scan_lock<F>(&mut self, filter: F) -> Result<Vec<(Key, Lock)>>
+    #[allow(type_complexity)]
+    pub fn scan_lock<F>(&mut self,
+                        start: Option<Key>,
+                        filter: F,
+                        limit: Option<usize>)
+                        -> Result<(Vec<(Key, Lock)>, Option<Key>)>
         where F: Fn(&Lock) -> bool
     {
         try!(self.create_lock_cursor());
         let mut cursor = self.lock_cursor.as_mut().unwrap();
-        cursor.seek_to_first();
+        let ok = match start {
+            Some(ref x) => try!(cursor.seek(x)),
+            None => cursor.seek_to_first(),
+        };
+        if !ok {
+            return Ok((vec![], None));
+        }
         let mut locks = vec![];
         while cursor.valid() {
             let key = Key::from_encoded(cursor.key().to_vec());
             let lock = try!(Lock::parse(cursor.value()));
             if filter(&lock) {
-                locks.push((key, lock));
+                locks.push((key.clone(), lock));
+                if let Some(limit) = limit {
+                    if locks.len() >= limit {
+                        return Ok((locks, Some(key)));
+                    }
+                }
             }
             cursor.next();
         }
-        Ok(locks)
+        Ok((locks, None))
     }
 
     pub fn scan_keys(&mut self,
                      mut start: Option<Key>,
                      limit: usize)
                      -> Result<(Vec<Key>, Option<Key>)> {
-        let mut cursor = try!(self.snapshot.iter_cf(CF_WRITE,
-                                                    None,
-                                                    !self.scan_mode.is_some(),
-                                                    self.get_scan_mode(false)));
+        let mut cursor = try!(self.snapshot
+            .iter_cf(CF_WRITE, None, self.fill_cache, self.get_scan_mode(false)));
         let mut keys = vec![];
         loop {
             let ok = match start {

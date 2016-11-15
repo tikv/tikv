@@ -25,7 +25,7 @@ use std::{str, u64};
 use clap::{Arg, App, SubCommand};
 use protobuf::Message;
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState};
+use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, RaftApplyState, PeerState};
 use kvproto::eraftpb::Entry;
 use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
@@ -65,7 +65,11 @@ fn main() {
                 .arg(Arg::with_name("region")
                     .short("r")
                     .takes_value(true)
-                    .help("set the region id"))))
+                    .help("set the region id, if not specified, print all regions."))
+                .arg(Arg::with_name("skip-tombstone")
+                    .short("s")
+                    .takes_value(false)
+                    .help("skip tombstone region."))))
         .subcommand(SubCommand::with_name("scan")
             .about("print the range db range")
             .arg(Arg::with_name("from")
@@ -103,7 +107,11 @@ fn main() {
             .arg(Arg::with_name("key")
                 .short("key")
                 .takes_value(true)
-                .help("the query key")));
+                .help("the query key"))
+            .arg(Arg::with_name("encoded")
+                .short("e")
+                .takes_value(false)
+                .help("set it when the key is already encoded.")));
     let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
@@ -124,8 +132,13 @@ fn main() {
             };
             dump_raft_log_entry(db, &key);
         } else if let Some(matches) = matches.subcommand_matches("region") {
-            let region = String::from(matches.value_of("region").unwrap());
-            dump_region_info(db, region);
+            let skip_tombstone = matches.is_present("skip-tombstone");
+            match matches.value_of("region") {
+                Some(id) => {
+                    dump_region_info(&db, String::from(id).parse().unwrap(), skip_tombstone)
+                }
+                None => dump_all_region_info(db, skip_tombstone),
+            }
         } else {
             panic!("Currently only support raft log entry and scan.")
         }
@@ -135,7 +148,7 @@ fn main() {
         let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
         let cf_name = matches.value_of("cf").unwrap_or("default");
         if let Some(ref to) = to {
-            if to > &from {
+            if to <= &from {
                 panic!("The region's start pos must greater than the end pos.")
             }
         }
@@ -143,21 +156,22 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let cf_name = matches.value_of("cf").unwrap_or("default");
         let key = matches.value_of("key").unwrap();
+        let key_encoded = matches.is_present("encoded");
         println!("You are searching Key {}: ", key);
         match cf_name {
             CF_DEFAULT => {
-                dump_mvcc_default(&db, key);
+                dump_mvcc_default(&db, key, key_encoded);
             }
             CF_LOCK => {
-                dump_mvcc_lock(&db, key);
+                dump_mvcc_lock(&db, key, key_encoded);
             }
             CF_WRITE => {
-                dump_mvcc_write(&db, key);
+                dump_mvcc_write(&db, key, key_encoded);
             }
             "all" => {
-                dump_mvcc_default(&db, key);
-                dump_mvcc_lock(&db, key);
-                dump_mvcc_write(&db, key);
+                dump_mvcc_default(&db, key, key_encoded);
+                dump_mvcc_lock(&db, key, key_encoded);
+                dump_mvcc_write(&db, key, key_encoded);
             }
             _ => {
                 println!("The cf: {} cannot be dumped", cf_name);
@@ -170,12 +184,7 @@ fn main() {
 
 }
 
-fn gen_key_prefix(key: &str) -> Vec<u8> {
-    let encoded = encode_bytes(unescape(key).as_slice());
-    keys::data_key(encoded.as_slice())
-}
-
-pub trait MvccDeserializable {
+pub trait MvccDeserializable: PartialEq {
     fn deserialize(bytes: &[u8]) -> Self;
 }
 
@@ -197,6 +206,7 @@ impl MvccDeserializable for Vec<u8> {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub struct MvccKv<T> {
     key: Key,
     value: T,
@@ -204,13 +214,18 @@ pub struct MvccKv<T> {
 
 pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
                                             key_prefix: &str,
+                                            prefix_is_encoded: bool,
                                             mvcc_type: CfName)
-                                            -> Option<Vec<MvccKv<T>>> {
-    let prefix = gen_key_prefix(key_prefix);
+                                            -> Vec<MvccKv<T>> {
+    let encoded_prefix = if prefix_is_encoded {
+        unescape(key_prefix)
+    } else {
+        encode_bytes(unescape(key_prefix).as_slice())
+    };
     let mut iter = db.new_iterator_cf(mvcc_type, None, false).unwrap();
-    iter.seek(prefix.as_slice().into());
+    iter.seek(keys::data_key(&encoded_prefix).as_slice().into());
     if !iter.valid() {
-        None
+        vec![]
     } else {
         let kvs = iter.map(|s| {
             let key = &keys::origin_key(&s.0);
@@ -219,29 +234,29 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
                 value: T::deserialize(&s.1),
             }
         });
-        Some(kvs.take_while(|s| s.key.raw().unwrap().starts_with(key_prefix.as_bytes()))
-            .collect())
+        kvs.take_while(|s| s.key.encoded().starts_with(&encoded_prefix))
+            .collect()
     }
 }
 
 
-fn dump_mvcc_default(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, CF_DEFAULT).unwrap();
+fn dump_mvcc_default(db: &DB, key: &str, encoded: bool) {
+    let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, encoded, CF_DEFAULT);
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        println!("Key: {:?}", key);
+        println!("Key: {:?}", escape(key.encoded()));
         println!("Value: {:?}", escape(kv.value.as_slice()));
         println!("Start_ts: {:?}", ts);
         println!("");
     }
 }
 
-fn dump_mvcc_lock(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, CF_LOCK).unwrap();
+fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool) {
+    let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, encoded, CF_LOCK);
     for kv in kvs {
         let lock = &kv.value;
-        println!("Key: {:?}", kv.key);
+        println!("Key: {:?}", escape(kv.key.encoded()));
         println!("Primary: {:?}", escape(lock.primary.as_slice()));
         println!("Type: {:?}", lock.lock_type);
         println!("Start_ts: {:?}", lock.ts);
@@ -249,13 +264,13 @@ fn dump_mvcc_lock(db: &DB, key: &str) {
     }
 }
 
-fn dump_mvcc_write(db: &DB, key: &str) {
-    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, CF_WRITE).unwrap();
+fn dump_mvcc_write(db: &DB, key: &str, encoded: bool) {
+    let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, encoded, CF_WRITE);
     for kv in kvs {
         let write = &kv.value;
         let commit_ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        println!("Key: {:?}", key);
+        println!("Key: {:?}", escape(key.encoded()));
         println!("Type: {:?}", write.write_type);
         println!("Start_ts: {:?}", write.start_ts);
         println!("Commit_ts: {:?}", commit_ts);
@@ -283,12 +298,14 @@ fn dump_raft_log_entry(db: DB, idx_key: &[u8]) {
     println!("{:?}", msg);
 }
 
-fn dump_region_info(db: DB, region_id_str: String) {
-    let region_id = u64::from_str_radix(&region_id_str, 10).unwrap();
-
+fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     let region_state_key = keys::region_state_key(region_id);
-    println!("region state key: {}", escape(&region_state_key));
     let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
+    if skip_tombstone &&
+       region_state.as_ref().map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+        return;
+    }
+    println!("region state key: {}", escape(&region_state_key));
     println!("region state: {:?}", region_state);
 
     let raft_state_key = keys::raft_state_key(region_id);
@@ -300,6 +317,23 @@ fn dump_region_info(db: DB, region_id_str: String) {
     println!("apply state key: {}", escape(&apply_state_key));
     let apply_state: Option<RaftApplyState> = db.get_msg_cf(CF_RAFT, &apply_state_key).unwrap();
     println!("apply state: {:?}", apply_state);
+}
+
+fn dump_all_region_info(db: DB, skip_tombstone: bool) {
+    let start_key = keys::REGION_META_MIN_KEY;
+    let end_key = keys::REGION_META_MAX_KEY;
+    db.scan(start_key,
+              end_key,
+              false,
+              &mut |key, _| {
+            let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
+            dump_region_info(&db, region_id, skip_tombstone);
+            Ok(true)
+        })
+        .unwrap();
 }
 
 fn dump_range(db: DB, from: String, to: Option<String>, limit: Option<u64>, cf: &str) {
@@ -338,6 +372,7 @@ mod tests {
     use tempdir::TempDir;
     use tikv::util::rocksdb::new_engine;
     use tikv::storage::types::Key;
+    use tikv::util::escape;
 
     const PREFIX: &'static [u8] = b"k";
 
@@ -351,7 +386,9 @@ mod tests {
             let key = keys::data_key(Key::from_raw(k).append_ts(ts).encoded().as_slice());
             db.put(key.as_slice(), v).unwrap();
         }
-        let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", CF_DEFAULT).unwrap();
+        let kvs_gen: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(&db, "k", false, CF_DEFAULT);
+        assert_eq!(kvs_gen,
+                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_DEFAULT));
         let mut test_iter = test_data.clone();
         assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {
@@ -373,7 +410,7 @@ mod tests {
             })
             .collect();
         let lock_value: Vec<_> = test_data_lock.iter()
-            .map(|data| Lock::new(data.1, data.2.to_vec(), data.3).to_bytes())
+            .map(|data| Lock::new(data.1, data.2.to_vec(), data.3, 0).to_bytes())
             .collect();
         let kvs = keys.iter().zip(lock_value.iter());
         let lock_cf = db.cf_handle(CF_LOCK).unwrap();
@@ -389,12 +426,9 @@ mod tests {
                     &test_data.2[..] == &lock.primary[..] &&
                     test_data.3 == lock.ts);
         }
-        assert_iter(&gen_mvcc_iter(&db, "kv", CF_LOCK).unwrap(),
-                    test_data_lock[0]);
-        assert_iter(&gen_mvcc_iter(&db, "kx", CF_LOCK).unwrap(),
-                    test_data_lock[1]);
-        assert_iter(&gen_mvcc_iter(&db, "kz", CF_LOCK).unwrap(),
-                    test_data_lock[2]);
+        assert_iter(&gen_mvcc_iter(&db, "kv", false, CF_LOCK), test_data_lock[0]);
+        assert_iter(&gen_mvcc_iter(&db, "kx", false, CF_LOCK), test_data_lock[1]);
+        assert_iter(&gen_mvcc_iter(&db, "kz", false, CF_LOCK), test_data_lock[2]);
 
         // Test MVCC Write
         let test_data_write = vec![(PREFIX, WriteType::Delete, 5, 10),
@@ -417,7 +451,9 @@ mod tests {
         for (k, v) in kvs {
             db.put_cf(write_cf, k.as_slice(), v.as_slice()).unwrap();
         }
-        let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", CF_WRITE).unwrap();
+        let kvs_gen: Vec<MvccKv<Write>> = gen_mvcc_iter(&db, "k", false, CF_WRITE);
+        assert_eq!(kvs_gen,
+                   gen_mvcc_iter(&db, &escape(&encode_bytes(b"k")), true, CF_WRITE));
         let mut test_iter = test_data_write.clone();
         assert_eq!(test_iter.len(), kvs_gen.len());
         for kv in kvs_gen {

@@ -11,17 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::str::FromStr;
+use std::mem;
+use std::net::{SocketAddrV4, SocketAddrV6};
+
+use url;
 use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {
     #[derive(Debug)]
-    pub enum ParseConfigError {
+    pub enum ConfigError {
         RocksDB
         ReadableNumber
+        Limit(msg: String) {
+            description(&msg)
+            display("{}", msg)
+        }
+        Address(msg: String) {
+            description(&msg)
+            display("{}", msg)
+        }
     }
 }
 
-pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseConfigError> {
+pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ConfigError> {
     match &*tp.to_lowercase() {
         "no" => Ok(DBCompressionType::DBNo),
         "snappy" => Ok(DBCompressionType::DBSnappy),
@@ -29,12 +42,12 @@ pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ParseCon
         "bzip2" => Ok(DBCompressionType::DBBz2),
         "lz4" => Ok(DBCompressionType::DBLz4),
         "lz4hc" => Ok(DBCompressionType::DBLz4hc),
-        _ => Err(ParseConfigError::RocksDB),
+        _ => Err(ConfigError::RocksDB),
     }
 }
 
 pub fn parse_rocksdb_per_level_compression(tp: &str)
-                                           -> Result<Vec<DBCompressionType>, ParseConfigError> {
+                                           -> Result<Vec<DBCompressionType>, ConfigError> {
     let mut result: Vec<DBCompressionType> = vec![];
     let v: Vec<&str> = tp.split(':').collect();
     for i in &v {
@@ -45,24 +58,24 @@ pub fn parse_rocksdb_per_level_compression(tp: &str)
             "bzip2" => result.push(DBCompressionType::DBBz2),
             "lz4" => result.push(DBCompressionType::DBLz4),
             "lz4hc" => result.push(DBCompressionType::DBLz4hc),
-            _ => return Err(ParseConfigError::RocksDB),
+            _ => return Err(ConfigError::RocksDB),
         }
     }
 
     Ok(result)
 }
 
-pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ParseConfigError> {
+pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ConfigError> {
     match mode {
         0 => Ok(DBRecoveryMode::TolerateCorruptedTailRecords),
         1 => Ok(DBRecoveryMode::AbsoluteConsistency),
         2 => Ok(DBRecoveryMode::PointInTime),
         3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
-        _ => Err(ParseConfigError::RocksDB),
+        _ => Err(ConfigError::RocksDB),
     }
 }
 
-fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
+fn split_property(property: &str) -> Result<(f64, &str), ConfigError> {
     let mut indx = 0;
     for s in property.chars() {
         match s {
@@ -76,7 +89,7 @@ fn split_property(property: &str) -> Result<(f64, &str), ParseConfigError> {
     }
 
     let (num, unit) = property.split_at(indx);
-    num.parse::<f64>().map(|f| (f, unit)).or(Err(ParseConfigError::ReadableNumber))
+    num.parse::<f64>().map(|f| (f, unit)).or(Err(ConfigError::ReadableNumber))
 }
 
 const UNIT: usize = 1;
@@ -96,7 +109,7 @@ const SECOND: usize = MS * TIME_MAGNITUDE_1;
 const MINTUE: usize = SECOND * TIME_MAGNITUDE_2;
 const HOUR: usize = MINTUE * TIME_MAGNITUDE_2;
 
-pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
+pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
     let (num, unit) = try!(split_property(size));
 
     match &*unit.to_lowercase() {
@@ -113,8 +126,159 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ParseConfigError> {
         "m" => Ok((num * (MINTUE as f64)) as i64),
         "h" => Ok((num * (HOUR as f64)) as i64),
 
-        _ => Err(ParseConfigError::ReadableNumber),
+        _ => Err(ConfigError::ReadableNumber),
     }
+}
+
+#[cfg(unix)]
+pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    use libc;
+
+    unsafe {
+        let mut fd_limit = mem::zeroed();
+        let mut err = libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit);
+        if err != 0 {
+            return Err(ConfigError::Limit("check_max_open_fds failed".to_owned()));
+        }
+        if fd_limit.rlim_cur >= expect {
+            return Ok(());
+        }
+
+        let prev_limit = fd_limit.rlim_cur;
+        fd_limit.rlim_cur = expect;
+        if fd_limit.rlim_max < expect {
+            // If the process is not started by privileged user, this will fail.
+            fd_limit.rlim_max = expect;
+        }
+        err = libc::setrlimit(libc::RLIMIT_NOFILE, &fd_limit);
+        if err == 0 {
+            return Ok(());
+        }
+        Err(ConfigError::Limit(format!("the maximum number of open file descriptors is too \
+                                        small, got {}, expect greater or equal to {}",
+                                       prev_limit,
+                                       expect)))
+    }
+}
+
+#[cfg(not(unix))]
+pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+mod check_kernel {
+    use std::fs;
+    use std::io::Read;
+
+    use super::ConfigError;
+
+    // pub for tests.
+    pub type Checker = Fn(i64, i64) -> bool;
+
+    // pub for tests.
+    pub fn check_kernel_params(param_path: &str,
+                               expect: i64,
+                               checker: Box<Checker>)
+                               -> Result<(), ConfigError> {
+        let mut buffer = String::new();
+        try!(fs::File::open(param_path)
+            .and_then(|mut f| f.read_to_string(&mut buffer))
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+
+        let got = try!(buffer.trim_matches('\n')
+            .parse::<i64>()
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+
+        let mut param = String::new();
+        // skip 3, ["", "proc", "sys", ...]
+        for path in param_path.split('/').skip(3) {
+            param.push_str(path);
+            param.push('.');
+        }
+        param.pop();
+
+        if !checker(got, expect) {
+            return Err(ConfigError::Limit(format!("kernel parameters {} got {}, expect {}",
+                                                  param,
+                                                  got,
+                                                  expect)));
+        }
+
+        info!("kernel parameters {}: {}", param, got);
+        Ok(())
+    }
+
+    /// `check_kernel_params` checks kernel parameters, following are checked so far:
+    ///   - `net.core.somaxconn` should be greater or equak to 32768.
+    ///   - `net.ipv4.tcp_syncookies` should be 0
+    ///   - `vm.swappiness` shoud be 0
+    ///
+    /// Note that: It works on **Linux** only.
+    pub fn check_kernel() -> Vec<ConfigError> {
+        let params: Vec<(&str, i64, Box<Checker>)> = vec![
+            // Check net.core.somaxconn.
+            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| got >= expect),
+            // Check net.ipv4.tcp_syncookies.
+            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| got == expect),
+            // Check vm.swappiness.
+            ("/proc/sys/vm/swappiness", 0, box |got, expect| got == expect),
+        ];
+
+        let mut errors = Vec::with_capacity(params.len());
+        for (param_path, expect, checker) in params {
+            if let Err(e) = check_kernel_params(param_path, expect, checker) {
+                errors.push(e);
+            }
+        }
+
+        errors
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use self::check_kernel::check_kernel;
+
+#[cfg(not(target_os = "linux"))]
+pub fn check_kernel() -> Vec<ConfigError> {
+    Vec::new()
+}
+
+/// `check_addr` validates an address. Addresses are formed like "Host:Port".
+/// More details about **Host** and **Port** can be found in WHATWG URL Standard.
+pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
+    // Try to validate "IPv4:Port" and "[IPv6]:Port".
+    if SocketAddrV4::from_str(addr).is_ok() {
+        return Ok(());
+    }
+    if SocketAddrV6::from_str(addr).is_ok() {
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = addr.split(':')
+            .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
+            .collect();
+
+    // ["Host", "Port"]
+    if parts.len() != 2 {
+        return Err(ConfigError::Address(format!("invalid addr: {}", addr)));
+    }
+
+    // Check Port.
+    let port: u16 = try!(parts[1]
+        .parse()
+        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {}", addr))));
+    // Port = 0 is invalid.
+    if port == 0 {
+        return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {}", addr)));
+    }
+
+    // Check Host.
+    if let Err(e) = url::Host::parse(parts[0]) {
+        return Err(ConfigError::Address(format!("{:?}", e)));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -189,5 +353,65 @@ mod test {
                 parse_rocksdb_wal_recovery_mode(3).unwrap());
 
         assert!(parse_rocksdb_wal_recovery_mode(4).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_check_kernel() {
+        use std::i64;
+        use super::check_kernel::{check_kernel_params, Checker};
+
+        // The range of vm.swappiness is from 0 to 100.
+        let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
+            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got == expect), false),
+
+            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got < expect), true),
+        ];
+
+        for (path, expect, checker, is_ok) in table {
+            assert_eq!(check_kernel_params(path, expect, checker).is_ok(), is_ok);
+        }
+    }
+
+    #[test]
+    fn test_check_addrs() {
+        let table = vec![
+            ("127.0.0.1:8080",true),
+            ("[::1]:8080",true),
+            ("localhost:8080",true),
+            ("pingcap.com:8080",true),
+            ("funnydomain:8080",true),
+
+            ("127.0.0.1",false),
+            ("[::1]",false),
+            ("localhost",false),
+            ("pingcap.com",false),
+            ("funnydomain",false),
+            ("funnydomain:",false),
+
+            ("root@google.com:8080",false),
+            ("http://google.com:8080",false),
+            ("google.com:8080/path",false),
+            ("http://google.com:8080/path",false),
+            ("http://google.com:8080/path?lang=en",false),
+            ("http://google.com:8080/path?lang=en#top",false),
+
+            ("ftp://ftp.is.co.za/rfc/rfc1808.txt",false),
+            ("http://www.ietf.org/rfc/rfc2396.txt",false),
+            ("ldap://[2001:db8::7]/c=GB?objectClass?one",false),
+            ("mailto:John.Doe@example.com",false),
+            ("news:comp.infosystems.www.servers.unix",false),
+            ("tel:+1-816-555-1212",false),
+            ("telnet://192.0.2.16:80/",false),
+            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2",false),
+
+            (":8080",false),
+            ("8080",false),
+            ("8080:",false),
+        ];
+
+        for (addr, is_ok) in table {
+            assert_eq!(check_addr(addr).is_ok(), is_ok);
+        }
     }
 }

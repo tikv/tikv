@@ -578,14 +578,17 @@ impl TestPdClient {
         panic!("region {:?} has peer {:?}", region, peer);
     }
 
-    pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
-        let peer2 = peer.clone();
+    pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
             if region.get_id() != region_id {
                 return None;
             }
-            new_pd_add_change_peer(region, peer2.clone())
+            new_pd_add_change_peer(region, peer.clone())
         });
+    }
+
+    pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
+        self.add_peer(region_id, peer.clone());
         self.must_have_peer(region_id, peer);
     }
 

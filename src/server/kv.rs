@@ -182,6 +182,7 @@ impl<T: RaftStoreRouter + 'static> StoreHandler<T> {
                             mutations,
                             req.get_primary_lock().to_vec(),
                             req.get_start_version(),
+                            req.get_lock_ttl(),
                             cb)
             .map_err(Error::Storage)
     }
@@ -355,11 +356,15 @@ fn extract_committed(err: &StorageError) -> Option<u64> {
 fn extract_key_error(err: &StorageError) -> KeyError {
     let mut key_error = KeyError::new();
     match *err {
-        StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked { ref key, ref primary, ts })) => {
+        StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked { ref key,
+                                                                  ref primary,
+                                                                  ts,
+                                                                  ttl })) => {
             let mut lock_info = LockInfo::new();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
             lock_info.set_lock_version(ts);
+            lock_info.set_lock_ttl(ttl);
             key_error.set_locked(lock_info);
         }
         StorageError::Txn(TxnError::Mvcc(MvccError::WriteConflict)) |
@@ -510,7 +515,7 @@ mod tests {
         let k1_primary = k0.clone();
         let k1_ts = 10000;
         let kvs = vec![Ok((k0.clone(), v0.clone())),
-                       make_lock_error(k1.clone(), k1_primary.clone(), k1_ts)];
+                       make_lock_error(k1.clone(), k1_primary.clone(), k1_ts, 3000)];
         let resp = build_resp(Ok(kvs), super::cmd_scan_done);
         assert_eq!(MessageType::CmdScan, resp.get_field_type());
         let cmd = resp.get_cmd_scan_resp();
@@ -523,6 +528,7 @@ mod tests {
         lock_info1.set_primary_lock(k1_primary.clone());
         lock_info1.set_lock_version(k1_ts);
         lock_info1.set_key(k1.clone());
+        lock_info1.set_lock_ttl(3000);
         assert_eq!(lock_info1, *pairs[1].get_error().get_locked());
     }
 
@@ -626,11 +632,12 @@ mod tests {
         assert_eq!(region_err.get_not_leader(), &leader_info);
     }
 
-    fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64) -> StorageResult<T> {
+    fn make_lock_error<T>(key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64) -> StorageResult<T> {
         Err(mvcc::Error::KeyIsLocked {
                 key: key,
                 primary: primary,
                 ts: ts,
+                ttl: ttl,
             })
             .map_err(txn::Error::from)
             .map_err(storage::Error::from)

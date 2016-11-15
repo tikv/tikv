@@ -55,18 +55,21 @@ impl LockType {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub struct Lock {
     pub lock_type: LockType,
     pub primary: Vec<u8>,
     pub ts: u64,
+    pub ttl: u64,
 }
 
 impl Lock {
-    pub fn new(lock_type: LockType, primary: Vec<u8>, ts: u64) -> Lock {
+    pub fn new(lock_type: LockType, primary: Vec<u8>, ts: u64, ttl: u64) -> Lock {
         Lock {
             lock_type: lock_type,
             primary: primary,
             ts: ts,
+            ttl: ttl,
         }
     }
 
@@ -75,6 +78,7 @@ impl Lock {
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts).unwrap();
+        b.encode_var_u64(self.ttl).unwrap();
         b
     }
 
@@ -85,6 +89,11 @@ impl Lock {
         let lock_type = try!(LockType::from_u8(try!(b.read_u8())).ok_or(Error::BadFormatLock));
         let primary = try!(b.decode_compact_bytes());
         let ts = try!(b.decode_var_u64());
-        Ok(Lock::new(lock_type, primary, ts))
+        let ttl = if b.len() == 0 {
+            0
+        } else {
+            try!(b.decode_var_u64())
+        };
+        Ok(Lock::new(lock_type, primary, ts, ttl))
     }
 }

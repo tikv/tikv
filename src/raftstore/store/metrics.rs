@@ -82,4 +82,14 @@ lazy_static! {
             "Sizes of each column families.",
             &["type"]
         ).unwrap();
+
+    pub static ref PEER_PROPOSE_LOG_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            histogram_opts!{
+                "tikv_raftstore_propose_log_size",
+                "Bucketed histogram of peer proposing log size",
+                [ vec![256.0, 512.0, 1024.0, 4096.0, 65536.0, 262144.0, 524288.0, 1048576.0,
+                       2097152.0, 4194304.0, 8388608.0, 16777216.0] ]
+            }
+        ).unwrap();
 }

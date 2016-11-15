@@ -133,14 +133,14 @@ mod tests {
                     request: RaftCmdRequest,
                     timeout: Duration)
                     -> Result<RaftCmdResponse, Error> {
-        wait_event!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
+        wait_op!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
             sendch.try_send(Msg::RaftCmd {
                     request: request,
                     callback: cb,
                 })
                 .unwrap()
         },
-                    timeout)
+                 timeout)
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
