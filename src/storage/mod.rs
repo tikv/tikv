@@ -228,6 +228,21 @@ impl Command {
             Command::Gc { .. } => "gc",
         }
     }
+
+    pub fn set_context(&mut self, context: Context) {
+        match *self {
+            Command::Get { ref mut ctx, .. } |
+            Command::BatchGet { ref mut ctx, .. } |
+            Command::Scan { ref mut ctx, .. } |
+            Command::Prewrite { ref mut ctx, .. } |
+            Command::Commit { ref mut ctx, .. } |
+            Command::Cleanup { ref mut ctx, .. } |
+            Command::Rollback { ref mut ctx, .. } |
+            Command::ScanLock { ref mut ctx, .. } |
+            Command::ResolveLock { ref mut ctx, .. } |
+            Command::Gc { ref mut ctx, .. } => *ctx = context,
+        }
+    }
 }
 
 use util::transport::SendCh;

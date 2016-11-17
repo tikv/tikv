@@ -1114,7 +1114,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             return Err(Error::StaleEpoch(msg, new_regions));
         }
-        res
+        if res.is_err() {
+            return res;
+        }
+
+        let header = msg.get_header();
+        if header.has_term() && peer.term() != header.get_term() {
+            return Err(Error::StaleTerm);
+        }
+
+        Ok(())
     }
 
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {

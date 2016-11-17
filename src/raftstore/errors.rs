@@ -114,6 +114,9 @@ quick_error!{
             description("region is stale")
             display("StaleEpoch {}", msg)
         }
+        StaleTerm {
+            description("stale term")
+        }
         Coprocessor(err: CopError) {
             from()
             cause(err)
@@ -157,6 +160,9 @@ impl Into<errorpb::Error> for Error {
                 let mut e = errorpb::StaleEpoch::new();
                 e.set_new_regions(RepeatedField::from_vec(new_regions));
                 errorpb.set_stale_epoch(e);
+            }
+            Error::StaleTerm => {
+                errorpb.set_stale_term(errorpb::StaleTerm::new());
             }
             Error::Transport(transport::Error::Discard(_)) => {
                 errorpb.set_server_is_busy(errorpb::ServerIsBusy::new());

@@ -545,11 +545,12 @@ impl Scheduler {
     fn process_by_worker(&mut self, cid: u64, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
         debug!("process cmd with snapshot, cid={}", cid);
-        let cmd = {
+        let mut cmd = {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
             ctx.cmd.take().unwrap()
         };
+        cmd.set_context(snapshot.context());
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
         if readcmd {

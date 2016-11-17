@@ -298,7 +298,10 @@ impl StoreHandler {
         resp.set_cmd_gc_resp(gc);
     }
 
-    pub fn on_request(&self, req: Request, on_resp: OnResponse) -> Result<()> {
+    pub fn on_request(&self, mut req: Request, on_resp: OnResponse) -> Result<()> {
+        // Go client may set it to 0 if using gogoprotobuf.
+        req.mut_context().clear_term();
+
         if let Err(e) = match req.get_field_type() {
             MessageType::CmdGet => self.on_get(req, on_resp),
             MessageType::CmdScan => self.on_scan(req, on_resp),
