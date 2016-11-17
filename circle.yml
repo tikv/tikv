@@ -13,8 +13,9 @@ machine:
     LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
   pre:
     - |
-      sudo add-apt-repository ppa:ubuntu-toolchain-r/test
-      sudo apt-get update
+      sudo apt-get install apt -y
+      sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+      sudo apt-get update -y
       sudo apt-get install g++-4.8 zlib1g-dev libbz2-dev libsnappy-dev curl libdw-dev libelf-dev elfutils binutils-dev
   post:
     - sed -i 's/github/git-non-exist-hub/g' ~/.gitconfig
