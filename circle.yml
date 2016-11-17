@@ -54,7 +54,7 @@ dependencies:
          curl -L https://github.com/facebook/rocksdb/archive/4.12.fb.tar.gz -o rocksdb.tar.gz && \
          tar xf rocksdb.tar.gz && \
          cd rocksdb-4.12.fb && \
-         INSTALL_PATH=${LOCAL_PREFIX} make install-shared);
+         INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared);
       fi
 
 
