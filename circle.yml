@@ -1,0 +1,63 @@
+machine:
+  environment:
+    PATH: "$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+    LD_LIBRARY_PATH: "$LD_LIBRARY_PATH:$HOME/.local/lib"
+    LD_RUN_PATH: "$LD_RUN_PATH:$HOME/.local/lib"
+    DYLD_LIBRARY_PATH: "$DYLD_LIBRARY_PATH:$HOME/.local/lib"
+    LDFLAGS: "-L$HOME/.local/lib"
+    CPPFLAGS: "-I$HOME/.local/include"
+    PKG_CONFIG_PATH: "$PKG_CONFIG_PATH:$HOME/.local/lib/pkgconfig"
+    RUSTC_DATE: "2016-10-06"
+    LOCAL_PREFIX: "$HOME/.local"
+    # used by cargo
+    LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
+  pre:
+    - |
+      sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+      sudo apt-get update
+      sudo apt-get install g++-4.8 zlib1g-dev libbz2-dev libsnappy-dev curl libdw-dev libelf-dev elfutils binutils-dev
+  post:
+    - sed -i 's/github/git-non-exist-hub/g' ~/.gitconfig
+
+dependencies:
+  cache_directories:
+    # NOTE: it's bad idea to cache .multirust
+    #       since it'll increase cache restore time
+    # - ~/.multirust
+    - ~/.cargo
+    - ~/.local
+  pre:
+    # install rust/cargo
+    # install SDL2/SDL2_mixer
+    - |
+      if [[ ! -e $HOME/.cargo ]]; then
+        curl https://sh.rustup.rs -sSf |
+          sh -s -- --no-modify-path --default-toolchain "nightly-${RUSTC_DATE}" -y;
+        rustup default "nightly-${RUSTC_DATE}";
+      else
+        rustup default "nightly-${RUSTC_DATE}";
+      fi;
+
+      if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
+        (cd /tmp && \
+         curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz && \
+         tar xf gflags.tar.gz && \
+         cd gflags-2.1.2 && \
+         cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_PREFIX} . && \
+         make -j && \
+         make install);
+      fi;
+
+      if [[ ! -e $HOME/.local/lib/librocksdb.so ]]; then
+        (export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
+         cd /tmp && \
+         curl -L https://github.com/facebook/rocksdb/archive/4.12.fb.tar.gz -o rocksdb.tar.gz && \
+         tar xf rocksdb.tar.gz && \
+         cd rocksdb-4.12.fb && \
+         INSTALL_PATH=${LOCAL_DIR} make install-shared);
+      fi
+
+
+test:
+  override:
+    - make
