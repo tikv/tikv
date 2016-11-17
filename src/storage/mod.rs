@@ -44,6 +44,8 @@ pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 
+pub const COMMAND_TAG_GC: &'static str = "gc";
+
 #[derive(Debug, Clone)]
 pub enum Mutation {
     Put((Key, Value)),
@@ -203,6 +205,21 @@ impl Debug for Command {
 }
 
 impl Command {
+    pub fn get_ctx(&self) -> Context {
+        match *self {
+            Command::Get { ref ctx, .. } |
+            Command::BatchGet { ref ctx, .. } |
+            Command::Scan { ref ctx, .. } |
+            Command::Prewrite { ref ctx, .. } |
+            Command::Commit { ref ctx, .. } |
+            Command::Cleanup { ref ctx, .. } |
+            Command::Rollback { ref ctx, .. } |
+            Command::ScanLock { ref ctx, .. } |
+            Command::ResolveLock { ref ctx, .. } |
+            Command::Gc { ref ctx, .. } => ctx.clone(),
+        }
+    }
+
     pub fn readonly(&self) -> bool {
         match *self {
             Command::Get { .. } |
@@ -226,7 +243,7 @@ impl Command {
             Command::Rollback { .. } => "rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
-            Command::Gc { .. } => "gc",
+            Command::Gc { .. } => COMMAND_TAG_GC,
         }
     }
 }
