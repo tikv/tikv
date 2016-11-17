@@ -46,6 +46,10 @@ dependencies:
         rustup default "nightly-${RUSTC_DATE}";
       fi
     - |
+      if [[ ! -e $HOME/.cargo/bin/cargo-fmt ]]; then
+        cargo install rustfmt;
+      fi
+    - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         (cd /tmp && \
          curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz && \
@@ -77,4 +81,9 @@ test:
   pre:
     - docker run -d --name pd-test -p 2379:2379 pingcap/pd --client-urls=http://0.0.0.0:2379
   override:
-    - make test
+    - >
+      make format &&
+      git diff-index --quiet HEAD -- ||
+      (echo please make format before creating a pr!; exit 1)
+    - cargo test --features "default" -- --nocapture
+    - cargo test --features "default" --bench benches -- --nocapture
