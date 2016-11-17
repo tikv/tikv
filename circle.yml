@@ -28,7 +28,7 @@ dependencies:
     - ~/.multirust
     - ~/.cargo
     - ~/.local
-    - ~/tikv/target
+    - target
   pre:
     # install rust/cargo
     # install SDL2/SDL2_mixer
@@ -61,8 +61,11 @@ dependencies:
       fi
     - rm -rf .local/share; true
   post:
-    - cargo build --release:
-        timeout: 3600
+    # cargo test also use debug
+    - cargo build --debug:
+        timeout: 1800
+    - cargo test --features "default" --no-run:
+        timeout: 1800
 
 
 test:
