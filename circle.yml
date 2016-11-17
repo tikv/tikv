@@ -66,5 +66,7 @@ dependencies:
 
 
 test:
+  pre:
+    - docker run -d --name pd-test -p 2379:2379 pingcap/pd --client-urls=http://0.0.0.0:2379
   override:
-    - make
+    - make test
