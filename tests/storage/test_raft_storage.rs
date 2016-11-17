@@ -59,3 +59,29 @@ fn test_raft_storage() {
     assert!(storage.scan(ctx.clone(), key.clone(), 1, false, 20).is_err());
     assert!(storage.scan_lock(ctx.clone(), 20).is_err());
 }
+
+#[test]
+fn test_write_leader_change_twice() {
+    let mut cluster = new_server_cluster_with_cfs(0, 3, ALL_CFS);
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    let peers = region.get_peers();
+
+    cluster.must_transfer_leader(region.get_id(), peers[0].clone());
+    let engine = cluster.sim.rl().storages[&peers[0].get_id()].clone();
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(peers[0].clone());
+
+    let snapshot = engine.snapshot(&ctx).unwrap();
+    let ctx = snapshot.context();
+    // Not leader.
+    cluster.must_transfer_leader(region.get_id(), peers[1].clone());
+    assert!(engine.write(&ctx, vec![]).is_err());
+    // Term not match.
+    cluster.must_transfer_leader(region.get_id(), peers[0].clone());
+    assert!(engine.write(&ctx, vec![]).is_err());
+}

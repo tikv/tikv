@@ -237,6 +237,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"]).start_timer();
 
+        let ctx2 = ctx.clone();
+
         try!(self.exec_requests(ctx,
                                 vec![req],
                                 box move |res| {
@@ -247,7 +249,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 Ok(CmdRes::Snap(s)) => {
                     req_timer.observe_duration();
                     ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"]).inc();
-                    cb(Ok(box s))
+                    cb(Ok(box RaftKvSnapshot {
+                        region_snapshot: s,
+                        context: ctx2,
+                    }))
                 }
                 Err(e) => {
                     ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "failed"]).inc();
@@ -263,14 +268,19 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 }
 
-impl Snapshot for RegionSnapshot {
+struct RaftKvSnapshot {
+    region_snapshot: RegionSnapshot,
+    context: Context,
+}
+
+impl Snapshot for RaftKvSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
-        let v = box_try!(self.get_value(key.encoded()));
+        let v = box_try!(self.region_snapshot.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
-        let v = box_try!(self.get_value_cf(cf, key.encoded()));
+        let v = box_try!(self.region_snapshot.get_value_cf(cf, key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -280,7 +290,8 @@ impl Snapshot for RegionSnapshot {
                 fill_cache: bool,
                 mode: ScanMode)
                 -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound, fill_cache), mode))
+        Ok(Cursor::new(RegionSnapshot::iter(&self.region_snapshot, upper_bound, fill_cache),
+                       mode))
     }
 
     #[allow(needless_lifetimes)]
@@ -290,8 +301,15 @@ impl Snapshot for RegionSnapshot {
                    fill_cache: bool,
                    mode: ScanMode)
                    -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound, fill_cache)),
+        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(&self.region_snapshot,
+                                                    cf,
+                                                    upper_bound,
+                                                    fill_cache)),
                        mode))
+    }
+
+    fn context(&self) -> Context {
+        self.context.clone()
     }
 }
 

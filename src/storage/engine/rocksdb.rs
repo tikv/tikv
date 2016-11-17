@@ -187,6 +187,10 @@ impl Snapshot for RocksSnapshot {
         Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound, fill_cache)),
                        mode))
     }
+
+    fn context(&self) -> Context {
+        Context::new()
+    }
 }
 
 impl<'a> EngineIterator for DBIterator<'a> {

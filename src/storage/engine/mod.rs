@@ -93,6 +93,7 @@ pub trait Snapshot: Send {
                    fill_cache: bool,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
+    fn context(&self) -> Context;
 }
 
 pub trait Iterator {
