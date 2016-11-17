@@ -13,10 +13,9 @@ machine:
     LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
   pre:
     - |
-      sudo apt-get install apt -y
       sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
-      sudo apt-get update -y
-      sudo apt-get install g++-4.8 zlib1g-dev libbz2-dev libsnappy-dev curl libdw-dev libelf-dev elfutils binutils-dev
+      sudo apt-get update -y; true
+      sudo apt-get install -y g++-4.8 zlib1g-dev libbz2-dev libsnappy-dev curl libdw-dev libelf-dev elfutils binutils-dev
   post:
     - sed -i 's/github/git-non-exist-hub/g' ~/.gitconfig
 
@@ -55,7 +54,7 @@ dependencies:
          curl -L https://github.com/facebook/rocksdb/archive/4.12.fb.tar.gz -o rocksdb.tar.gz && \
          tar xf rocksdb.tar.gz && \
          cd rocksdb-4.12.fb && \
-         INSTALL_PATH=${LOCAL_DIR} make install-shared);
+         INSTALL_PATH=${LOCAL_PREFIX} make install-shared);
       fi
 
 
