@@ -32,6 +32,7 @@ pub enum Tick {
     PdStoreHeartbeat,
     SnapGc,
     CompactLockCf,
+    CheckStallRoQuery,
 }
 
 pub enum Msg {

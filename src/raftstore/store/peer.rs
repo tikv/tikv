@@ -30,7 +30,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
-use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX,
+           ReadState};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -48,6 +49,7 @@ use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+const READONLY_QUERY_TIMEOUT_MS: u64 = 5000; // 5 secs
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug)]
@@ -187,6 +189,10 @@ pub struct Peer {
     pub tag: String,
 
     pub last_compacted_idx: u64,
+
+    // follower readonly query
+    pending_readonly_queries: HashMap<Uuid, (PendingCmd, RaftCmdRequest, Instant)>,
+    ready_read_states: VecDeque<ReadState>,
 }
 
 impl Peer {
@@ -273,6 +279,8 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
+            pending_readonly_queries: Default::default(),
+            ready_read_states: Default::default(),
         };
 
         peer.load_all_coprocessors();
@@ -415,6 +423,35 @@ impl Peer {
         Ok(())
     }
 
+    pub fn is_request_allowed(&self, req: &RaftCmdRequest) -> bool {
+        // Read and write is allowed when the peer is leader, readonly request is allowed
+        // although when peer is follower.
+        if !self.is_leader() &&
+           (!self.is_readonly_query(req) || self.leader_id() == INVALID_ID || self.is_applying()) {
+            return false;
+        }
+
+        true
+    }
+
+    pub fn is_readonly_query(&self, req: &RaftCmdRequest) -> bool {
+        if req.get_requests().len() == 0 {
+            return false;
+        }
+
+        for cmd_req in req.get_requests() {
+            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
+                return false;
+            }
+        }
+
+        if self.get_store().applied_index_term != self.raft_group.raft.term {
+            return false;
+        }
+
+        true
+    }
+
     pub fn check_peers(&mut self) {
         if !self.is_leader() {
             self.peer_heartbeats.clear();
@@ -477,6 +514,28 @@ impl Peer {
             return StaleState::ToValidate;
         }
         StaleState::Valid
+    }
+
+    pub fn check_stall_readonly_query(&mut self, now: Instant) {
+        let mut expired = vec![];
+        let timeout = Duration::from_millis(READONLY_QUERY_TIMEOUT_MS);
+        for (k, v /* v = (cmd, req, start_time) */) in &self.pending_readonly_queries {
+            let duration = now.duration_since(v.2);
+            if duration > timeout {
+                expired.push(*k);
+            }
+        }
+
+        for uuid in expired {
+            warn!("{} read timeout for command {}", self.tag, uuid);
+            let (mut cmd, _, _) = self.pending_readonly_queries.remove(&uuid).unwrap();
+            let mut resp =
+                cmd_resp::new_error(Error::NotLeader(self.region_id,
+                                                     self.get_peer_from_cache(self.leader_id())));
+            cmd_resp::bind_uuid(&mut resp, cmd.uuid);
+            cmd_resp::bind_term(&mut resp, self.term());
+            cmd.call(resp);
+        }
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
@@ -546,6 +605,9 @@ impl Peer {
             try!(self.handle_raft_commit_entries(&ready.committed_entries))
         };
 
+        // handle follower readonly query
+        self.handle_readonly_query(&ready.read_states);
+
         slow_log!(t,
                   "{} handle ready, entries {}, committed entries {}, messages \
                    {}, snapshot {}, hard state changed {}",
@@ -561,6 +623,43 @@ impl Peer {
             apply_snap_result: apply_result,
             exec_results: exec_results,
         }))
+    }
+
+    fn handle_readonly_query(&mut self, read_states: &[ReadState]) {
+        for rs in read_states {
+            self.ready_read_states.push_back(rs.clone());
+        }
+        if self.ready_read_states.is_empty() {
+            return;
+        }
+
+        let applied_idx = self.get_store().apply_state.get_applied_index();
+        while !self.ready_read_states.is_empty() {
+            let rs = self.ready_read_states.pop_front().unwrap();
+            if rs.index > applied_idx {
+                self.ready_read_states.push_front(rs);
+                break;
+            }
+
+            let uuid = Uuid::from_bytes(&rs.request_ctx).unwrap();
+            if let Some((mut cmd, req, _)) = self.pending_readonly_queries
+                .remove(&uuid) {
+                let mut ctx = ExecContext::new(self, 0, 0, &req);
+                let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+                    error!("{} execute raft command err: {:?}", self.tag, e);
+                    (cmd_resp::new_error(e), None)
+                });
+
+                cmd_resp::bind_uuid(&mut resp, cmd.uuid);
+                cmd_resp::bind_term(&mut resp, self.term());
+                cmd.call(resp);
+            } else {
+                // command should be timeout and has been removed
+                info!("{} command [{}] receive read state but command not exist",
+                      self.tag,
+                      &uuid)
+            }
+        }
     }
 
     /// Propose a request.
@@ -580,22 +679,13 @@ impl Peer {
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
         PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let local_read = self.is_local_read(&req);
-        if local_read {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
-
-            // for read-only, if we don't care stale read, we can
-            // execute these commands immediately in leader.
-            let mut ctx = ExecContext::new(self, 0, 0, &req);
-            let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-                error!("{} execute raft command err: {:?}", self.tag, e);
-                (cmd_resp::new_error(e), None)
-            });
-
-            cmd_resp::bind_uuid(&mut resp, cmd.uuid);
-            cmd_resp::bind_term(&mut resp, self.term());
-            cmd.call(resp);
-            return false;
+        let readonly = self.is_readonly_query(&req);
+        if readonly {
+            let uuid = cmd.uuid;
+            self.pending_readonly_queries.insert(uuid, (cmd, req, Instant::now()));
+            self.raft_group.read_index(uuid.as_bytes().to_vec());
+            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["read_index_read"]).inc();
+            return true;
         } else if get_transfer_leader_cmd(&req).is_some() {
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
@@ -609,14 +699,16 @@ impl Peer {
             }
 
             // transfer leader command doesn't need to replicate log and apply, so we
-            // return immediately. Note that this command may fail, we can view it just as an advice
+            // return immediately. Note that this command may fail, we can view it
+            // just as an advice
             cmd.call(make_transfer_leader_response());
             return false;
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
                 info!("{} there is a pending conf change, try later", self.tag);
                 cmd_resp::bind_error(&mut err_resp,
-                                     box_err!("{} there is a pending conf change, try later",
+                                     box_err!("{} there is a pending conf change, try \
+                                               later",
                                               self.tag));
                 cmd.call(err_resp);
                 return false;
@@ -643,28 +735,6 @@ impl Peer {
         } else {
             self.pending_cmds.append_normal(cmd);
         }
-
-        true
-    }
-
-    fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
-        if (req.has_header() && req.get_header().get_read_quorum()) ||
-           !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
-            return false;
-        }
-
-        // If applied index's term is differ from current raft's term, leader transfer
-        // must happened, if read locally, we may read old value.
-        if self.get_store().applied_index_term != self.raft_group.raft.term {
-            return false;
-        }
-
-        for cmd_req in req.get_requests() {
-            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
-                return false;
-            }
-        }
-
         true
     }
 

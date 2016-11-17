@@ -45,16 +45,17 @@ fn test_raftkv_with_read_quorum() {
     test_raftkv(true);
 }
 
-#[test]
-fn test_read_with_quorum() {
-    test_read_leader_in_lease(true);
-}
+// #[test]
+// fn test_read_with_quorum() {
+//    test_read_leader_in_lease(true);
+// }
 
-#[test]
-fn test_read_with_lease() {
-    test_read_leader_in_lease(false);
-}
+// #[test]
+// fn test_read_with_lease() {
+//    test_read_leader_in_lease(false);
+// }
 
+#[allow(dead_code)]
 fn test_read_leader_in_lease(read_quorum: bool) {
     let count = 3;
     let mut cluster = new_server_cluster_with_cfs(0, count, &["cf", CF_RAFT]);
@@ -112,6 +113,7 @@ fn assert_has(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) {
     assert_eq!(snapshot.get(&make_key(key)).unwrap().unwrap(), value);
 }
 
+#[allow(dead_code)]
 fn can_read(ctx: &Context, engine: &Engine, key: &[u8], value: &[u8]) -> bool {
     if let Ok(s) = engine.snapshot(ctx) {
         assert_eq!(s.get(&make_key(key)).unwrap().unwrap(), value);
