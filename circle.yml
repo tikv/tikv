@@ -13,11 +13,11 @@ machine:
     LOCAL_PREFIX: "$HOME/.local"
     # used by cargo
     LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
+    RUST_TEST_THREADS: 1
+    RUSTFLAGS: "-Dwarnings"
   pre:
     - |
       sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
-      sudo apt-get update -y; true
-      sudo apt-get install -y g++-4.8 zlib1g-dev libbz2-dev libsnappy-dev curl libdw-dev libelf-dev elfutils binutils-dev
   post:
     - sed -i 's/github/git-non-exist-hub/g' ~/.gitconfig
 
@@ -28,8 +28,13 @@ dependencies:
     - ~/.multirust
     - ~/.cargo
     - ~/.local
+    - ~/.apt-cache
     - target
   pre:
+    - sudo rm -rf /var/cache/apt/archives && sudo ln -s ~/.apt-cache /var/cache/apt/archives && mkdir -p ~/.apt-cache/partial
+    - |
+      sudo apt-get update -y; true
+      sudo apt-get install -y g++-4.8 zlib1g-dev libbz2-dev libsnappy-dev curl libdw-dev libelf-dev elfutils binutils-dev
     # install rust/cargo
     # install SDL2/SDL2_mixer
     - |
