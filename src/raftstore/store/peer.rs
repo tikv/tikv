@@ -285,6 +285,11 @@ impl Peer {
         Ok(peer)
     }
 
+    #[inline]
+    fn next_proposal_index(&self) -> u64 {
+        self.raft_group.raft.raft_log.last_index() + 1
+    }
+
     pub fn destroy(&mut self) -> Result<()> {
         let t = Instant::now();
 
@@ -689,7 +694,14 @@ impl Peer {
 
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
+        let propose_index = self.next_proposal_index();
         try!(self.raft_group.propose(data));
+        if self.next_proposal_index() == propose_index {
+            // The message is dropped silently, this usually due to leader absence
+            // or transferring leader. Both cases can be considered as NotLeader error.
+            return Err(Error::NotLeader(self.region_id, None));
+        }
+
         Ok(())
     }
 
@@ -738,7 +750,15 @@ impl Peer {
               cc.get_change_type(),
               cc.get_node_id());
 
-        self.raft_group.propose_conf_change(cc).map_err(From::from)
+        let propose_index = self.next_proposal_index();
+        try!(self.raft_group.propose_conf_change(cc));
+        if self.next_proposal_index() == propose_index {
+            // The message is dropped silently, this usually due to leader absence
+            // or transferring leader. Both cases can be considered as NotLeader error.
+            return Err(Error::NotLeader(self.region_id, None));
+        }
+
+        Ok(())
     }
 
     pub fn check_epoch(&self, req: &RaftCmdRequest) -> Result<()> {
