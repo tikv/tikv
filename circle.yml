@@ -26,6 +26,7 @@ dependencies:
     # - ~/.multirust
     - ~/.cargo
     - ~/.local
+    - ~/tikv/target
   pre:
     # install rust/cargo
     # install SDL2/SDL2_mixer
@@ -36,8 +37,8 @@ dependencies:
         rustup default "nightly-${RUSTC_DATE}";
       else
         rustup default "nightly-${RUSTC_DATE}";
-      fi;
-
+      fi
+    - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         (cd /tmp && \
          curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz && \
@@ -46,8 +47,8 @@ dependencies:
          cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_PREFIX} . && \
          make -j && \
          make install);
-      fi;
-
+      fi
+    - |
       if [[ ! -e $HOME/.local/lib/librocksdb.so ]]; then
         (export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
          cd /tmp && \
@@ -56,6 +57,7 @@ dependencies:
          cd rocksdb-4.12.fb && \
          INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared);
       fi
+    - rm -rf .local/share; true
 
 
 test:
