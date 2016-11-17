@@ -62,7 +62,7 @@ dependencies:
     - rm -rf .local/share; true
   post:
     # cargo test also use debug
-    - cargo build --debug:
+    - cargo build:
         timeout: 1800
     - cargo test --features "default" --no-run:
         timeout: 1800
