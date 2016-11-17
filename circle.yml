@@ -23,7 +23,7 @@ dependencies:
   cache_directories:
     # NOTE: it's bad idea to cache .multirust
     #       since it'll increase cache restore time
-    # - ~/.multirust
+    - ~/.multirust
     - ~/.cargo
     - ~/.local
     - ~/tikv/target
@@ -58,6 +58,8 @@ dependencies:
          INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared);
       fi
     - rm -rf .local/share; true
+  post:
+    - cargo build --release
 
 
 test:
