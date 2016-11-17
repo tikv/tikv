@@ -12,7 +12,6 @@
 // limitations under the License.
 
 
-use std::collections::HashMap;
 use std::fmt::{self, Formatter, Display};
 
 use crc::crc32::{self, Digest, Hasher32};
@@ -22,10 +21,10 @@ use kvproto::metapb::Region;
 use raftstore::store::{keys, Msg};
 use raftstore::store::engine::{Snapshot, Iterable, Peekable};
 use storage::CF_RAFT;
-use util::escape;
 use util::worker::Runnable;
 
 use super::metrics::*;
+use raftstore::store::metrics::*;
 use super::MsgSender;
 
 /// Consistency checking task.
@@ -34,11 +33,6 @@ pub enum Task {
         index: u64,
         region: Region,
         snap: Snapshot,
-    },
-    VerifyHash {
-        region_id: u64,
-        index: u64,
-        hash: Vec<u8>,
     },
 }
 
@@ -50,14 +44,6 @@ impl Task {
             snap: snap,
         }
     }
-
-    pub fn verify_hash(region_id: u64, index: u64, hash: Vec<u8>) -> Task {
-        Task::VerifyHash {
-            region_id: region_id,
-            index: index,
-            hash: hash,
-        }
-    }
 }
 
 impl Display for Task {
@@ -66,29 +52,17 @@ impl Display for Task {
             Task::ComputeHash { ref region, index, .. } => {
                 write!(f, "Compute Hash Task for {:?} at {}", region, index)
             }
-            Task::VerifyHash { region_id, index, ref hash } => {
-                write!(f,
-                       "Verify Hash Task for {} at {} [hash: {}]",
-                       region_id,
-                       index,
-                       escape(hash))
-            }
         }
     }
 }
 
 pub struct Runner<C: MsgSender> {
     ch: C,
-    // region_id -> (index, checksum)
-    checksum: HashMap<u64, (u64, u32)>,
 }
 
 impl<C: MsgSender> Runner<C> {
     pub fn new(ch: C) -> Runner<C> {
-        Runner {
-            ch: ch,
-            checksum: HashMap::new(),
-        }
+        Runner { ch: ch }
     }
 
     fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
@@ -139,36 +113,11 @@ impl<C: MsgSender> Runner<C> {
             index: index,
             hash: checksum,
         };
-        self.checksum.insert(region_id, (index, sum));
         if let Err(e) = self.ch.try_send(msg) {
             warn!("[region {}] failed to send hash compute result, err {:?}",
                   region_id,
                   e);
         }
-    }
-
-    fn verify_hash(&mut self, region_id: u64, expect_index: u64, expect_hash: Vec<u8>) {
-        if let Some(&(index, checksum)) = self.checksum.get(&region_id) {
-            if index != expect_index {
-                REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
-                warn!("[region {}] computed hash belongs to index {}, but we want {}, skip.",
-                      region_id,
-                      index,
-                      expect_index);
-                return;
-            }
-            let mut actual_hash = [0; 4];
-            actual_hash.as_mut().write_u32::<BigEndian>(checksum).unwrap();
-            if expect_hash != actual_hash {
-                REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "failed"]).inc();
-                panic!("[region {}] hash not correct, want {}, got {}!!!",
-                       region_id,
-                       escape(&expect_hash),
-                       escape(&actual_hash));
-            }
-        }
-        REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
-        self.checksum.remove(&region_id);
     }
 }
 
@@ -176,7 +125,6 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
         match task {
             Task::ComputeHash { region, index, snap } => self.compute_hash(region, index, snap),
-            Task::VerifyHash { region_id, index, hash } => self.verify_hash(region_id, index, hash),
         }
     }
 }
@@ -242,24 +190,5 @@ mod test {
             }
             e => panic!("unexpected {:?}", e),
         }
-
-        {
-            let checksum = runner.checksum.get(&region.get_id()).unwrap();
-            assert_eq!(checksum.0, 10);
-            assert_eq!(checksum.1, sum);
-        }
-
-        runner.run(Task::verify_hash(region.get_id(), 5, vec![1, 2]));
-        // invalid index should be skipped.
-        assert!(runner.checksum.contains_key(&region.get_id()));
-
-        runner.run(Task::verify_hash(region.get_id(), 10, checksum_bytes));
-        // successful check should remove related entry.
-        assert!(runner.checksum.is_empty());
-
-        runner.run(Task::compute_hash(region.clone(), 15, Snapshot::new(db.clone())));
-        rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        let res = recover_safe!(|| runner.run(Task::verify_hash(region.get_id(), 15, vec![])));
-        assert!(res.is_err(), "invalid hash should lead to panic");
     }
 }

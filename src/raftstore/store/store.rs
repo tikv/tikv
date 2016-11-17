@@ -32,7 +32,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, duration_to_nanos};
+use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -1601,9 +1601,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if !peer.is_leader() {
                 continue;
             }
-            if peer.last_consistency_check_time < candidate_check_time {
+            if peer.consistency_state.last_check_time < candidate_check_time {
                 candidate_id = region_id;
-                candidate_check_time = peer.last_consistency_check_time;
+                candidate_check_time = peer.consistency_state.last_check_time;
             }
         }
 
@@ -1626,7 +1626,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
         let region_id = region.get_id();
-        self.region_peers.get_mut(&region_id).unwrap().last_consistency_check_time = Instant::now();
+        self.region_peers.get_mut(&region_id).unwrap().consistency_state.last_check_time =
+            Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!("[region {}] schedule {}", region_id, task);
         if let Err(e) = self.consistency_check_worker.schedule(task) {
@@ -1634,32 +1635,108 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_verify_hash(&self, region_id: u64, index: u64, hash: Vec<u8>) {
-        let task = ConsistencyCheckTask::verify_hash(region_id, index, hash);
-        info!("[region {}] schedule {}", region_id, task);
-        if let Err(e) = self.consistency_check_worker.schedule(task) {
-            error!("[region {}] schedule failed: {:?}", region_id, e);
+    fn on_ready_verify_hash(&mut self,
+                            region_id: u64,
+                            expected_index: u64,
+                            expected_hash: Vec<u8>) {
+        let state = match self.region_peers.get_mut(&region_id) {
+            None => {
+                warn!("receive stale hash [region {}, index {}]",
+                      region_id,
+                      expected_index);
+                return;
+            }
+            Some(p) => &mut p.consistency_state,
+        };
+
+        if expected_index < state.index {
+            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
+            warn!("[region {}] has scheduled a new hash: {} > {}, skip.",
+                  region_id,
+                  state.index,
+                  expected_index);
+            return;
         }
+
+        if state.index == expected_index {
+            if state.hash != expected_hash {
+                panic!("[region {}] hash at {} not correct, want {}, got {}!!!",
+                       region_id,
+                       expected_index,
+                       escape(&expected_hash),
+                       escape(&state.hash));
+            }
+            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
+            state.hash = vec![];
+            return;
+        }
+
+        if state.index != INVALID_INDEX && !state.hash.is_empty() {
+            // Maybe computing is too slow or computed result is dropped due to channel full.
+            // If computing is too slow, miss count will be increased twice.
+            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
+            warn!("[region {}] hash belongs to index {}, but we want {}, skip.",
+                  region_id,
+                  state.index,
+                  expected_index);
+        }
+
+        state.index = expected_index;
+        state.hash = expected_hash;
     }
 
-    fn on_hash_computed(&self, region_id: u64, index: u64, hash: Vec<u8>) {
-        let peer = match self.region_peers.get(&region_id) {
+    fn on_hash_computed(&mut self, region_id: u64, index: u64, hash: Vec<u8>) {
+        let (state, peer) = match self.region_peers.get_mut(&region_id) {
             None => {
                 warn!("receive stale hash [region {}, index {}]", region_id, index);
                 return;
             }
-            Some(p) => p.peer.clone(),
+            Some(p) => (&mut p.consistency_state, &p.peer),
         };
+
+        if index < state.index {
+            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
+            warn!("[region {}] has scheduled a new hash: {} > {}, skip.",
+                  region_id,
+                  state.index,
+                  index);
+            return;
+        }
+
+        if state.index == index {
+            if state.hash != hash {
+                panic!("[region {}] hash at {} not correct, want {}, got {}!!!",
+                       region_id,
+                       index,
+                       escape(&hash),
+                       escape(&state.hash));
+            }
+            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
+            state.hash = vec![];
+            return;
+        }
+
+        if state.index != INVALID_INDEX && !state.hash.is_empty() {
+            // Maybe hash computed result is discard on leader.
+            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
+            warn!("[region {}] found stale hash at index {}, expect {}, skip.",
+                  region_id,
+                  state.index,
+                  index);
+        }
+
+        state.index = index;
+        state.hash = hash;
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(region_id);
-        request.mut_header().set_peer(peer);
+        request.mut_header().set_peer(peer.clone());
         request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
         let mut admin = AdminRequest::new();
         admin.set_cmd_type(AdminCmdType::VerifyHash);
         admin.mut_verify_hash().set_index(index);
-        admin.mut_verify_hash().set_hash(hash);
+        admin.mut_verify_hash().set_hash(state.hash.clone());
         request.set_admin_request(admin);
 
         let msg = Msg::RaftCmd {

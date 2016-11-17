@@ -92,4 +92,11 @@ lazy_static! {
                        2097152.0, 4194304.0, 8388608.0, 16777216.0] ]
             }
         ).unwrap();
+
+    pub static ref REGION_HASH_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_hash_total",
+            "Total number of raftstore has computing.",
+            &["type", "result"]
+        ).unwrap();
 }
