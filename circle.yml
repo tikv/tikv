@@ -1,4 +1,6 @@
 machine:
+  services:
+    - docker
   environment:
     PATH: "$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     LD_LIBRARY_PATH: "$LD_LIBRARY_PATH:$HOME/.local/lib"
@@ -59,7 +61,8 @@ dependencies:
       fi
     - rm -rf .local/share; true
   post:
-    - cargo build --release
+    - cargo build --release:
+        timeout: 3600
 
 
 test:
