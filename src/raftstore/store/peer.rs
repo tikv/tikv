@@ -62,10 +62,8 @@ pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
     pub cb: Option<Callback>,
-    /// `renew_lease_time` contains two Instants:
-    /// (last_leader_lease_expired_time, lease_renew_start_time)
-    /// These Instants are used to renew a leader peer's lease.
-    pub lease_renew_time: Option<(Timespec, Timespec)>,
+    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
+    pub renew_lease_time: Option<Timespec>,
 }
 
 impl PendingCmd {
@@ -194,7 +192,7 @@ pub struct Peer {
 
     pub last_compacted_idx: u64,
 
-    candidate_begin_time: Option<Timespec>,
+    become_candidate_time: Option<Timespec>,
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
 }
@@ -283,7 +281,7 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
-            candidate_begin_time: None,
+            become_candidate_time: None,
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
@@ -499,20 +497,24 @@ impl Peer {
     }
 
     fn calculate_lease_expired_time(&self,
-                                    candidate_begin: Option<Timespec>,
-                                    leader_begin: Timespec)
-                                    -> Timespec {
-        if candidate_begin.is_none() {
+                                    send_to_quorum_ts: Option<Timespec>,
+                                    quorum_commit_ts: Timespec)
+                                    -> Option<Timespec> {
+        if send_to_quorum_ts.is_none() {
             // This peer switches from raft follower state to leader state directly
             // This case could happen iff there is only one peer in the cluster.
-            leader_begin + self.election_timeout
+            // In this case, take election_timeout as leader lease.
+            Some(quorum_commit_ts + self.election_timeout)
         } else {
-            let d = leader_begin - candidate_begin.unwrap();
-            if self.election_timeout < d {
-                //
-                leader_begin + self.election_timeout
+            // The valid leader lease should be
+            // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
+            // And the expired timestamp for that leader lease is "quorum_commit_ts + lease".
+            let d = quorum_commit_ts - send_to_quorum_ts.unwrap();
+            if d > self.election_timeout {
+                // The leader lease will expire if it takes too long to achieve quorum commit.
+                None
             } else {
-                leader_begin + (self.election_timeout - d)
+                Some(quorum_commit_ts + (self.election_timeout - d))
             }
         }
     }
@@ -544,17 +546,18 @@ impl Peer {
             let ss = ready.ss.as_ref().unwrap();
             match ss.raft_state {
                 StateRole::Candidate => {
-                    self.candidate_begin_time = Some(clocktime::now_monotonic_raw_clocktime())
+                    self.become_candidate_time = Some(clocktime::now_monotonic_raw_clocktime())
                 }
                 StateRole::Leader => {
                     let leader_begin_time = clocktime::now_monotonic_raw_clocktime();
-                    let expired_time =
-                        self.calculate_lease_expired_time(self.candidate_begin_time,
+                    self.leader_lease_expired_time =
+                        self.calculate_lease_expired_time(self.become_candidate_time,
                                                           leader_begin_time);
-                    self.leader_lease_expired_time = Some(expired_time);
+ ;
+                    self.become_candidate_time = None;
                 }
                 _ => {
-                    self.candidate_begin_time = None;
+                    self.become_candidate_time = None;
                     self.leader_lease_expired_time = None;
                 }
             }
@@ -646,6 +649,9 @@ impl Peer {
             let now = clocktime::now_monotonic_raw_clocktime();
             let expired_time = self.leader_lease_expired_time.unwrap();
             if now > expired_time {
+                // Reset leader lease expired time.
+                self.leader_lease_expired_time = None;
+
                 // Try to renew leader lease by writing a "do snap" request to raft quorum.
                 let uuid = Uuid::new_v4();
                 let extend_lease_request =
@@ -654,7 +660,7 @@ impl Peer {
                     uuid: uuid,
                     term: self.term(),
                     cb: Some(Box::new(|_| {})),
-                    lease_renew_time: Some((expired_time, now)),
+                    renew_lease_time: Some(now),
                 };
                 if let Err(e) = self.propose_normal(extend_lease_request) {
                     cmd_resp::bind_error(&mut err_resp, e);
@@ -724,12 +730,16 @@ impl Peer {
                 return false;
             }
 
+            // Try to renew leader lease on every conf change request.
+            cmd.renew_lease_time = Some(clocktime::now_monotonic_raw_clocktime());
             self.pending_cmds.set_conf_change(cmd);
         } else if let Err(e) = self.propose_normal(req) {
             cmd_resp::bind_error(&mut err_resp, e);
             cmd.call(err_resp);
             return false;
         } else {
+            // Try to renew leader lease on every consistent read/write request.
+            cmd.renew_lease_time = Some(clocktime::now_monotonic_raw_clocktime());
             self.pending_cmds.append_normal(cmd);
         }
 
@@ -745,6 +755,11 @@ impl Peer {
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
         if self.get_store().applied_index_term != self.raft_group.raft.term {
+            return false;
+        }
+
+        // If the leader lease has been expired, local read should not be performed.
+        if self.leader_lease_expired_time.is_none() {
             return false;
         }
 
@@ -1078,11 +1093,11 @@ impl Peer {
                uuid: Uuid,
                term: u64,
                cmd: &RaftCmdRequest)
-               -> Option<(Callback, Option<(Timespec, Timespec)>)> {
+               -> Option<(Callback, Option<Timespec>)> {
         if get_change_peer_cmd(cmd).is_some() {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some((cmd.cb.take().unwrap(), cmd.lease_renew_time.take()));
+                    return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.take()));
                 } else {
                     self.notify_not_leader(cmd);
                 }
@@ -1091,7 +1106,7 @@ impl Peer {
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some((head.cb.take().unwrap(), head.lease_renew_time.take()));
+                return Some((head.cb.take().unwrap(), head.renew_lease_time.take()));
             }
             // because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
@@ -1126,16 +1141,30 @@ impl Peer {
             return exec_result;
         }
 
-        let (cb, renew_lease_time) = cmd_cb.unwrap();
+        let (cb, lease_renew_time) = cmd_cb.unwrap();
         // Try to renew the leader lease as this command asks to.
-        if let Some((expired_time, renew_time)) = renew_lease_time {
+        if let Some(renew_time) = lease_renew_time {
             if let Some(current_expired_time) = self.leader_lease_expired_time {
-                if current_expired_time == expired_time {
-                    let now = clocktime::now_monotonic_raw_clocktime();
-                    let next_expired_time =
-                        self.calculate_lease_expired_time(Some(renew_time), now);
-                    self.leader_lease_expired_time = Some(next_expired_time);
+                // This peer is leader and has unexpired leader lease.
+                // Calculate the renewed lease for this command. If the renewed lease is valid and
+                // lives longer then current leader lease, update the leader lease for this peer
+                // to the renewed lease.
+                let now = clocktime::now_monotonic_raw_clocktime();
+                if let Some(next_expired_time) =
+                       self.calculate_lease_expired_time(Some(renew_time), now) {
+                    // Use the lease expired timestamp comparation here, so that these codes still
+                    // work no matter how the leader changes before applying this command.
+                    if current_expired_time < next_expired_time {
+                        self.leader_lease_expired_time = Some(next_expired_time)
+                    }
                 }
+            } else if self.is_leader() {
+                // This peer is leader but its leader lease has been expired.
+                // Calculate the renewed lease for this command, and update the leader lease
+                // for this peer.
+                let now = clocktime::now_monotonic_raw_clocktime();
+                self.leader_lease_expired_time =
+                    self.calculate_lease_expired_time(Some(renew_time), now);
             }
         }
         // Involve post appy hook.
