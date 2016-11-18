@@ -21,13 +21,13 @@ use std::time::{Instant, Duration};
 use time::{Timespec, Duration as TimeDuration};
 
 use rocksdb::{DB, WriteBatch, Writable};
-use protobuf::{self, Message, RepeatedField};
+use protobuf::{self, Message};
 use uuid::Uuid;
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, SnapRequest,
-                          CmdType, AdminCmdType, Request, Response, AdminRequest, AdminResponse,
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
+                          AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
@@ -651,32 +651,8 @@ impl Peer {
             if now > expired_time {
                 // Reset leader lease expired time.
                 self.leader_lease_expired_time = None;
-
-                // Try to renew leader lease by writing a "do snap" request to raft quorum.
-                let uuid = Uuid::new_v4();
-                let extend_lease_request =
-                    new_do_snap_request(self.region(), self.peer.clone(), uuid);
-                let pending_cmd = PendingCmd {
-                    uuid: uuid,
-                    term: self.term(),
-                    cb: Some(Box::new(|_| {})),
-                    renew_lease_time: Some(now),
-                };
-                if let Err(e) = self.propose_normal(extend_lease_request) {
-                    cmd_resp::bind_error(&mut err_resp, e);
-                    cmd.call(err_resp);
-                    return false;
-                }
-                self.pending_cmds.append_normal(pending_cmd);
-
-                // Perform consistent read for this read request
-                if let Err(e) = self.propose_normal(req) {
-                    cmd_resp::bind_error(&mut err_resp, e);
-                    cmd.call(err_resp);
-                } else {
-                    self.pending_cmds.append_normal(cmd);
-                }
-                return true;
+                // Perform a consistent read to raft quorum and try to renew the leader lease.
+                return self.propose(cmd, req, err_resp);
             }
 
             // for read-only, if we don't care stale read, we can
@@ -1252,22 +1228,6 @@ impl Peer {
             cmd.cb.take();
         }
     }
-}
-
-fn new_do_snap_request(region: &metapb::Region, peer: metapb::Peer, uuid: Uuid) -> RaftCmdRequest {
-    let mut request = Request::new();
-    request.set_cmd_type(CmdType::Snap);
-    request.set_snap(SnapRequest::new());
-
-    let mut req = RaftCmdRequest::new();
-    req.mut_header().set_region_id(region.get_id());
-    req.mut_header().set_region_epoch(region.get_region_epoch().clone());
-    req.mut_header().set_peer(peer);
-    req.mut_header().set_read_quorum(true);
-    req.mut_header().set_uuid(uuid.as_bytes().to_vec());
-
-    req.set_requests(RepeatedField::from_vec(vec![request]));
-    req
 }
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
