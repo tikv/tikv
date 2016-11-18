@@ -54,8 +54,8 @@ impl<'a> MvccTxn<'a> {
         self.write_size
     }
 
-    fn lock_key(&mut self, key: Key, lock_type: LockType, primary: Vec<u8>) {
-        let lock = Lock::new(lock_type, primary, self.start_ts).to_bytes();
+    fn lock_key(&mut self, key: Key, lock_type: LockType, primary: Vec<u8>, ttl: u64) {
+        let lock = Lock::new(lock_type, primary, self.start_ts, ttl).to_bytes();
         self.write_size += CF_LOCK.len() + key.encoded().len() + lock.len();
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
@@ -479,7 +479,7 @@ mod tests {
         assert!(txn.get(&key).unwrap().is_none());
         assert_eq!(txn.write_size, 0);
 
-        txn.prewrite(Mutation::Put((key.clone(), b"value".to_vec())), b"pk").unwrap();
+        txn.prewrite(Mutation::Put((key.clone(), b"value".to_vec())), b"pk", 0).unwrap();
         assert!(txn.write_size() > 0);
         engine.write(&ctx, txn.modifies()).unwrap();
 
