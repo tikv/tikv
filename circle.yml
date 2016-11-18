@@ -42,10 +42,7 @@ dependencies:
       else
         rustup default "nightly-${RUSTC_DATE}";
       fi
-    - |
-      if [[ ! -e $HOME/.cargo/bin/cargo-fmt ]]; then
-        cargo install rustfmt;
-      fi
+    - [[ ! -e $HOME/.cargo/bin/cargo-fmt ]] || cargo install rustfmt
     - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         (cd /tmp && \
