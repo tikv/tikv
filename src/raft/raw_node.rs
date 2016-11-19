@@ -68,6 +68,14 @@ fn is_response_msg(t: MessageType) -> bool {
     }
 }
 
+pub fn vote_resp_msg_type(t: MessageType) -> MessageType {
+    match t {
+        MessageType::MsgRequestVote => MessageType::MsgRequestVoteResponse,
+        MessageType::MsgRequestPreVote => MessageType::MsgRequestPreVoteResponse,
+        _ => panic!("Not a vote message: {:?}", t),
+    }
+}
+
 pub fn is_empty_snap(s: &Snapshot) -> bool {
     s.get_metadata().get_index() == 0
 }
@@ -394,25 +402,25 @@ mod test {
 
     #[test]
     fn test_is_local_msg() {
-        let tests = vec![
-            (MessageType::MsgHup, true),
-            (MessageType::MsgBeat, true),
-            (MessageType::MsgUnreachable, true),
-            (MessageType::MsgSnapStatus, true),
-            (MessageType::MsgCheckQuorum, true),
-            (MessageType::MsgPropose, false),
-            (MessageType::MsgAppend, false),
-            (MessageType::MsgAppendResponse, false),
-            (MessageType::MsgRequestVote, false),
-            (MessageType::MsgRequestVoteResponse, false),
-            (MessageType::MsgSnapshot, false),
-            (MessageType::MsgHeartbeat, false),
-            (MessageType::MsgHeartbeatResponse, false),
-            (MessageType::MsgTransferLeader, false),
-            (MessageType::MsgTimeoutNow, false),
-            (MessageType::MsgReadIndex, false),
-            (MessageType::MsgReadIndexResp, false),
-        ];
+        let tests = vec![(MessageType::MsgHup, true),
+                         (MessageType::MsgBeat, true),
+                         (MessageType::MsgUnreachable, true),
+                         (MessageType::MsgSnapStatus, true),
+                         (MessageType::MsgCheckQuorum, true),
+                         (MessageType::MsgPropose, false),
+                         (MessageType::MsgAppend, false),
+                         (MessageType::MsgAppendResponse, false),
+                         (MessageType::MsgRequestVote, false),
+                         (MessageType::MsgRequestVoteResponse, false),
+                         (MessageType::MsgSnapshot, false),
+                         (MessageType::MsgHeartbeat, false),
+                         (MessageType::MsgHeartbeatResponse, false),
+                         (MessageType::MsgTransferLeader, false),
+                         (MessageType::MsgTimeoutNow, false),
+                         (MessageType::MsgReadIndex, false),
+                         (MessageType::MsgReadIndexResp, false),
+                         (MessageType::MsgRequestPreVote, false),
+                         (MessageType::MsgRequestPreVoteResponse, false)];
         for (msg_type, result) in tests {
             assert_eq!(is_local_msg(msg_type), result);
         }

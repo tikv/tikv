@@ -28,6 +28,7 @@
 
 use std::cmp;
 use std::boxed::Box;
+use std::fmt;
 use raft::storage::Storage;
 use rand::{self, Rng};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
@@ -37,7 +38,9 @@ use raft::errors::{Result, Error, StorageError};
 use std::collections::HashMap;
 use raft::raft_log::{self, RaftLog};
 use raft::read_only::{ReadOnlyOption, ReadState, ReadOnly};
+use raft::raw_node::vote_resp_msg_type;
 
+const CAMPAIGN_PREELECTION: &'static [u8] = b"CampaignPreElection";
 const CAMPAIGN_ELECTION: &'static [u8] = b"CampaignElection";
 const CAMPAIGN_TRANSFER: &'static [u8] = b"CampaignTransfer";
 
@@ -46,6 +49,19 @@ pub enum StateRole {
     Follower,
     Candidate,
     Leader,
+    PreCandidate,
+}
+
+impl fmt::Display for StateRole {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let printable = match *self {
+            StateRole::Follower => "Follower",
+            StateRole::Candidate => "Candidate",
+            StateRole::PreCandidate => "PreCandidate",
+            StateRole::Leader => "Leader",
+        };
+        write!(f, "{}", printable)
+    }
 }
 
 impl Default for StateRole {
@@ -105,6 +121,11 @@ pub struct Config {
     /// check_quorum specifies if the leader should check quorum activity. Leader steps down when
     /// quorum is not active for an electionTimeout.
     pub check_quorum: bool,
+
+    /// PreVote enables the Pre-Vote algorithm described in raft thesis section
+    /// 9.6. This prevents disruption when a node that has been partitioned away
+    /// rejoins the cluster.
+    pub pre_vote: bool,
 
     /// read_only_option specifies how the read only request is processed.
     pub read_only_option: ReadOnlyOption,
@@ -191,6 +212,8 @@ pub struct Raft<T: Storage> {
 
     pub check_quorum: bool,
 
+    pub pre_vote: bool,
+
     heartbeat_timeout: usize,
     election_timeout: usize,
 
@@ -255,6 +278,7 @@ impl<T: Storage> Raft<T> {
             prs: HashMap::with_capacity(peers.len()),
             state: StateRole::Follower,
             check_quorum: c.check_quorum,
+            pre_vote: c.pre_vote,
             read_only: ReadOnly::new(c.read_only_option),
             heartbeat_timeout: c.heartbeat_tick,
             election_timeout: c.election_tick,
@@ -562,7 +586,9 @@ impl<T: Storage> Raft<T> {
 
     pub fn tick(&mut self) {
         match self.state {
-            StateRole::Candidate | StateRole::Follower => self.tick_election(),
+            StateRole::Candidate | StateRole::Follower | StateRole::PreCandidate => {
+                self.tick_election()
+            }
             StateRole::Leader => self.tick_heartbeat(),
         }
     }
@@ -624,6 +650,12 @@ impl<T: Storage> Raft<T> {
         info!("{} became candidate at term {}", self.tag, self.term);
     }
 
+    pub fn become_precandidate(&mut self) {
+        assert!(self.state != StateRole::Leader);
+        self.state = StateRole::PreCandidate;
+        info!("{} became pre-candidate at term {}", self.tag, self.term);
+    }
+
     // TODO: revoke pub when there is a better way to test.
     pub fn become_leader(&mut self) {
         assert!(self.state != StateRole::Follower,
@@ -653,11 +685,20 @@ impl<T: Storage> Raft<T> {
     }
 
     fn campaign(&mut self, campaign_type: &[u8]) {
-        self.become_candidate();
+        let (vote_msg, term) = if campaign_type == CAMPAIGN_PREELECTION {
+            self.become_precandidate();
+            (MessageType::MsgRequestPreVote, self.term + 1)
+        } else {
+            self.become_candidate();
+            (MessageType::MsgRequestVote, self.term)
+        };
         let id = self.id;
-        let poll_res = self.poll(id, true);
-        if self.quorum() == poll_res {
-            self.become_leader();
+        if self.quorum() == self.poll(id, vote_resp_msg_type(vote_msg), true) {
+            if campaign_type == CAMPAIGN_PREELECTION {
+                self.campaign(CAMPAIGN_ELECTION);
+            } else {
+                self.become_leader();
+            }
             return;
         }
         let ids: Vec<_> = self.prs.keys().cloned().collect();
@@ -665,13 +706,15 @@ impl<T: Storage> Raft<T> {
             if id == self.id {
                 continue;
             }
-            info!("{} [logterm: {}, index: {}] sent vote request to {} at term {}",
+            info!("{} [logterm: {}, index: {}] sent {:?} request to {} at term {}",
                   self.tag,
                   self.raft_log.last_term(),
                   self.raft_log.last_index(),
+                  vote_msg,
                   id,
                   self.term);
-            let mut m = new_message(id, MessageType::MsgRequestVote, None);
+            let mut m = new_message(id, vote_msg, None);
+            m.set_term(term);
             m.set_index(self.raft_log.last_index());
             m.set_log_term(self.raft_log.last_term());
             if campaign_type == CAMPAIGN_TRANSFER {
@@ -681,15 +724,17 @@ impl<T: Storage> Raft<T> {
         }
     }
 
-    fn poll(&mut self, id: u64, v: bool) -> usize {
+    fn poll(&mut self, id: u64, t: MessageType, v: bool) -> usize {
         if v {
-            info!("{} received vote from {} at term {}",
+            info!("{} received {:?} from {} at term {}",
                   self.tag,
+                  t,
                   id,
                   self.term)
         } else {
-            info!("{} received vote rejection from {} at term {}",
+            info!("{} received {:?} rejection from {} at term {}",
                   self.tag,
+                  t,
                   id,
                   self.term)
         }
@@ -698,36 +743,13 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn step(&mut self, m: Message) -> Result<()> {
-        if m.get_msg_type() == MessageType::MsgHup {
-            if self.state == StateRole::Leader {
-                debug!("{} ignoring MsgHup because already leader", self.tag);
-            } else {
-                let ents = self.raft_log
-                    .slice(self.raft_log.applied + 1,
-                           self.raft_log.committed + 1,
-                           raft_log::NO_LIMIT)
-                    .expect("unexpected error getting unapplied entries");
-                let n = self.num_pending_conf(&ents);
-                if n != 0 && self.raft_log.committed > self.raft_log.applied {
-                    warn!("{} cannot campaign at term {} since there are still {} pending \
-                           configuration changes to apply",
-                          self.id,
-                          self.term,
-                          n);
-                    return Ok(());
-                }
-                info!("{} is starting a new election at term {}",
-                      self.tag,
-                      self.term);
-                self.campaign(CAMPAIGN_ELECTION);
-            }
-            return Ok(());
-        }
+        // Handle the message term, which may result in our stepping down to a follower.
 
         if m.get_term() == 0 {
             // local message
         } else if m.get_term() > self.term {
-            let leader_id = if m.get_msg_type() == MessageType::MsgRequestVote {
+            let leader_id = if m.get_msg_type() == MessageType::MsgRequestVote ||
+                               m.get_msg_type() == MessageType::MsgRequestPreVote {
                 let force = m.get_context() == CAMPAIGN_TRANSFER;
                 let in_lease = self.check_quorum && self.leader_id != INVALID_ID &&
                                self.election_elapsed < self.election_timeout;
@@ -735,13 +757,14 @@ impl<T: Storage> Raft<T> {
                     // if a server receives ReqeustVote request within the minimum election
                     // timeout of hearing from a current leader, it does not update its term
                     // or grant its vote
-                    info!("{} [logterm: {}, index: {}, vote: {}] ignored vote from \
+                    info!("{} [logterm: {}, index: {}, vote: {}] ignored {:?} vote from \
                            {} [logterm: {}, index: {}] at term {}: lease is not expired \
                            (remaining ticks: {})",
                           self.tag,
                           self.raft_log.last_term(),
                           self.raft_log.last_index(),
                           self.vote,
+                          m.get_msg_type(),
                           m.get_from(),
                           m.get_log_term(),
                           m.get_index(),
@@ -755,13 +778,16 @@ impl<T: Storage> Raft<T> {
             } else {
                 m.get_from()
             };
-            info!("{} [term: {}] received a {:?} message with higher term from {} [term: {}]",
-                  self.tag,
-                  self.term,
-                  m.get_msg_type(),
-                  m.get_from(),
-                  m.get_term());
-            self.become_follower(m.get_term(), leader_id);
+            if m.get_msg_type() != MessageType::MsgRequestPreVote ||
+               !(m.get_msg_type() == MessageType::MsgRequestPreVoteResponse && !m.get_reject()) {
+                info!("{} [term: {}] received a {:?} message with higher term from {} [term: {}]",
+                      self.tag,
+                      self.term,
+                      m.get_msg_type(),
+                      m.get_from(),
+                      m.get_term());
+                self.become_follower(m.get_term(), leader_id);
+            }
         } else if m.get_term() < self.term {
             if self.check_quorum &&
                (m.get_msg_type() == MessageType::MsgHeartbeat ||
@@ -771,11 +797,11 @@ impl<T: Storage> Raft<T> {
                 // also mean that this node has advanced its term number during a network
                 // partition, and it is now unable to either win an election or to rejoin
                 // the majority on the old term. If checkQuorum is false, this will be
-                // handled by incrementing term numbers in response to MsgVote with a higher
-                // term, but if checkQuorum is true we may not advance the term on MsgVote and
+                // handled by incrementing term numbers in response to MsgRequestVote with a higher
+                // term, but if checkQuorum is true we may not advance the term on MsgRequestVote and
                 // must generate other messages to advance the term. The net result of these
                 // two features is to minimize the disruption caused by nodes that have been
-                // removed from the cluster's configuration: a removed node will send MsgVotes
+                // removed from the cluster's configuration: a removed node will send MsgRequestVotes
                 // which will be ignored, but it will not receive MsgApp or MsgHeartbeat, so it
                 // will not create disruptive term increases
                 let to_send = new_message(m.get_from(), MessageType::MsgAppendResponse, None);
@@ -798,11 +824,88 @@ impl<T: Storage> Raft<T> {
                 return Ok(());
             }
         }
-        match self.state {
-            StateRole::Candidate => self.step_candidate(m),
-            StateRole::Follower => self.step_follower(m),
-            StateRole::Leader => self.step_leader(m),
+
+
+        match m.get_msg_type() {
+            MessageType::MsgHup => {
+                if self.state != StateRole::Leader {
+                    let ents = self.raft_log
+                        .slice(self.raft_log.applied + 1,
+                               self.raft_log.committed + 1,
+                               raft_log::NO_LIMIT)
+                        .unwrap();
+                    let n = self.num_pending_conf(&ents[..]);
+                    if n != 0 && self.raft_log.committed > self.raft_log.applied {
+                        warn!("{} cannot campaign at term {} since there are still {} pending \
+                               configuration changes to apply",
+                              self.id,
+                              self.term,
+                              n);
+                        return Ok(());
+                    }
+                    info!("{} is starting a new election at term {}",
+                          self.tag,
+                          self.term);
+                    if self.pre_vote {
+                        self.campaign(CAMPAIGN_PREELECTION);
+                    } else {
+                        self.campaign(CAMPAIGN_ELECTION);
+                    }
+                } else {
+                    debug!("{} ignoring MsgHup because already leader", self.tag);
+                }
+            }
+            MessageType::MsgRequestVote |
+            MessageType::MsgRequestPreVote => {
+                if (self.vote == INVALID_ID || m.get_term() > self.term ||
+                    self.vote == m.get_from()) &&
+                   self.raft_log.is_up_to_date(m.get_index(), m.get_log_term()) {
+                    info!("{} [logterm: {}, index: {}, vote: {}] cast {:?} for {} [logterm: {}, \
+                           index: {}] at term {}",
+                          self.tag,
+                          self.raft_log.last_term(),
+                          self.raft_log.last_index(),
+                          self.vote,
+                          m.get_msg_type(),
+                          m.get_from(),
+                          m.get_log_term(),
+                          m.get_index(),
+                          self.term);
+                    let to_send =
+                        new_message(m.get_from(), vote_resp_msg_type(m.get_msg_type()), None);
+                    self.send(to_send);
+                    if m.get_msg_type() == MessageType::MsgRequestVote {
+                        self.election_elapsed = 0;
+                        self.vote = m.get_from();
+                    }
+                } else {
+                    info!("{} [logterm: {}, index:{}, vote:{}] rejected {:?} from {} [logterm: \
+                           {}, index: {}] at term {}",
+                          self.tag,
+                          self.raft_log.last_term(),
+                          self.raft_log.last_index(),
+                          self.vote,
+                          m.get_msg_type(),
+                          m.get_from(),
+                          m.get_log_term(),
+                          m.get_index(),
+                          self.term);
+                    let mut to_send =
+                        new_message(m.get_from(), vote_resp_msg_type(m.get_msg_type()), None);
+                    to_send.set_reject(true);
+                    self.send(to_send);
+                }
+            }
+            _ => {
+                match self.state {
+                    StateRole::Candidate | StateRole::PreCandidate => self.step_candidate(m),
+                    StateRole::Follower => self.step_follower(m),
+                    StateRole::Leader => self.step_leader(m),
+                }
+            }
         }
+
+
         Ok(())
     }
 
@@ -1093,15 +1196,6 @@ impl<T: Storage> Raft<T> {
                 self.bcast_append();
                 return;
             }
-            MessageType::MsgRequestVote => {
-                self.log_vote_reject(&m);
-                let mut to_sent = Message::new();
-                to_sent.set_to(m.get_to());
-                to_sent.set_msg_type(MessageType::MsgRequestVoteResponse);
-                to_sent.set_reject(true);
-                self.send(to_sent);
-                return;
-            }
             MessageType::MsgReadIndex => {
                 if self.quorum() > 1 {
                     // thinking: use an interally defined context instead of the user given context.
@@ -1194,25 +1288,24 @@ impl<T: Storage> Raft<T> {
                 self.become_follower(term, m.get_from());
                 self.handle_snapshot(m);
             }
-            MessageType::MsgRequestVote => {
-                self.log_vote_reject(&m);
-                let t = MessageType::MsgRequestVoteResponse;
-                let mut to_send = new_message(m.get_from(), t, None);
-                to_send.set_reject(true);
-                self.send(to_send);
-            }
+            MessageType::MsgRequestPreVoteResponse |
             MessageType::MsgRequestVoteResponse => {
-                let gr = self.poll(m.get_from(), !m.get_reject());
-                let quorum = self.quorum();
+                let gr = self.poll(m.get_from(), m.get_msg_type(), !m.get_reject());
+                // let quorum = self.quorum();
                 info!("{} [quorum:{}] has received {} votes and {} vote rejections",
                       self.tag,
-                      quorum,
+                      self.quorum(),
                       gr,
                       self.votes.len() - gr);
-                if quorum == gr {
-                    self.become_leader();
-                    self.bcast_append();
-                } else if quorum == self.votes.len() - gr {
+                if self.quorum() == gr {
+                    if self.state == StateRole::PreCandidate {
+                        self.campaign(CAMPAIGN_ELECTION);
+                    } else {
+                        self.become_leader();
+                        self.bcast_append();
+                    }
+                } else if self.votes.len() - gr == self.quorum() {
+                    let term = self.term;
                     self.become_follower(term, INVALID_ID);
                 }
             }
@@ -1254,23 +1347,6 @@ impl<T: Storage> Raft<T> {
                 self.leader_id = m.get_from();
                 self.handle_snapshot(m);
             }
-            MessageType::MsgRequestVote => {
-                let t = MessageType::MsgRequestVoteResponse;
-                if (self.vote == INVALID_ID || self.vote == m.get_from()) &&
-                   self.raft_log.is_up_to_date(m.get_index(), m.get_log_term()) {
-                    self.log_vote_approve(&m);
-                    self.election_elapsed = 0;
-                    self.vote = m.get_from();
-                    let mut to_send = new_message(m.get_from(), t, None);
-                    to_send.set_reject(false);
-                    self.send(to_send);
-                } else {
-                    self.log_vote_reject(&m);
-                    let mut to_send = new_message(m.get_from(), t, None);
-                    to_send.set_reject(true);
-                    self.send(to_send);
-                }
-            }
             MessageType::MsgTransferLeader => {
                 if self.leader_id == INVALID_ID {
                     info!("{} no leader at term {}; dropping leader transfer msg",
@@ -1287,6 +1363,9 @@ impl<T: Storage> Raft<T> {
                       self.tag,
                       self.term,
                       m.get_from());
+                /// Leadership trnasfers never use prevote even if self.prevte is true; we
+                /// know we are not recovering from a partition to there is no need for the
+                /// extra round trip.
                 self.campaign(CAMPAIGN_TRANSFER);
             }
             MessageType::MsgReadIndex => {
