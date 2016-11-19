@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(stable_features)]
+#![feature(mpsc_recv_timeout)]
 #![feature(plugin)]
 #![feature(test)]
 #![feature(fnbox)]
@@ -84,6 +86,11 @@ fn print_result(smp: BenchSamples) {
 }
 
 fn main() {
+    if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
+        panic!("To run bench, please make sure the maximum number of open file descriptors not \
+                less than 4096: {:?}",
+               e);
+    }
     // TODO allow user to specify flag to just bench some cases.
     raftstore::bench_raftstore();
     mvcc::bench_engine();

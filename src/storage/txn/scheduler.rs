@@ -282,7 +282,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock { max_ts, .. } => {
-            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward));
+            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true);
             let res = reader.scan_lock(None, |lock| lock.ts <= max_ts, None)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
@@ -304,7 +304,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         // Scan the locks with timestamp `start_ts`, then either commit them if the command has
         // commit timestamp populated or rollback otherwise.
         Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, .. } => {
-            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward));
+            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true);
             let res = reader.scan_lock(scan_key.take(),
                            |lock| lock.ts == start_ts,
                            Some(RESOLVE_LOCK_BATCH_SIZE))
@@ -331,7 +331,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Collects garbage.
         Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
-            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward));
+            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true);
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
@@ -381,11 +381,11 @@ fn process_write_impl(cid: u64,
                       snapshot: &Snapshot)
                       -> Result<()> {
     let (pr, modifies) = match cmd {
-        Command::Prewrite { ref mutations, ref primary, start_ts, .. } => {
+        Command::Prewrite { ref mutations, ref primary, start_ts, lock_ttl, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, None);
             let mut results = vec![];
             for m in mutations {
-                match txn.prewrite(m.clone(), primary) {
+                match txn.prewrite(m.clone(), primary, lock_ttl) {
                     Ok(_) => results.push(Ok(())),
                     e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
                     Err(e) => return Err(Error::from(e)),

@@ -36,6 +36,15 @@ use test::Bencher;
 use util::KvGenerator;
 
 #[bench]
+fn _bench_check_requirement(_: &mut test::Bencher) {
+    if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
+        panic!("To run bench, please make sure the maximum number of open file descriptors not \
+                less than 4096: {:?}",
+               e);
+    }
+}
+
+#[bench]
 fn bench_kv_iter(b: &mut Bencher) {
     let mut g = KvGenerator::new(100, 1000);
     b.iter(|| g.next());

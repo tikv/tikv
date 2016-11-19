@@ -12,6 +12,8 @@
 // limitations under the License.
 
 #![crate_type = "lib"]
+#![allow(stable_features)]
+#![feature(mpsc_recv_timeout)]
 #![feature(test)]
 #![feature(optin_builtin_traits)]
 #![feature(btree_range, collections_bound)]

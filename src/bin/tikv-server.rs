@@ -408,7 +408,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     cfg.storage.sched_msg_per_tick =
         get_toml_int(config, "storage.scheduler-messages-per-tick", Some(1024)) as usize;
     cfg.storage.sched_concurrency =
-        get_toml_int(config, "storage.scheduler-concurrency", Some(10240)) as usize;
+        get_toml_int(config, "storage.scheduler-concurrency", Some(102400)) as usize;
     cfg.storage.sched_worker_pool_size =
         get_toml_int(config, "storage.scheduler-worker-pool-size", Some(4)) as usize;
 

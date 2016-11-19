@@ -609,3 +609,58 @@ fn test_server_remove_leader_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 2);
     test_remove_leader_with_uncommitted_log(&mut cluster);
 }
+
+// In some rare cases, a proposal may be dropped inside raft silently.
+// We need to make sure the callback of dropped proposal should be cleaned
+// up eventually.
+#[test]
+fn test_node_dropped_proposal() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
+    // disable compact log to make test more stable.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    // We use three peers([1, 2, 3]) for this test.
+    cluster.run();
+
+    // make sure peer 1 is leader
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // so peer 3 won't have latest messages, it can't become leader.
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
+        .msg_type(MessageType::MsgAppend)));
+    cluster.must_put(b"k1", b"v1");
+
+    // peer 1 and peer 2 must have k1, but peer 3 must not.
+    for i in 1..3 {
+        let engine = cluster.get_engine(i);
+        must_get_equal(&engine, b"k1", b"v1");
+    }
+
+    let engine3 = cluster.get_engine(3);
+    must_get_none(&engine3, b"k1");
+
+    let put_msg = vec![new_put_cmd(b"k2", b"v2")];
+    let region = cluster.get_region(b"");
+    let mut put_req = new_request(region.get_id(),
+                                  region.get_region_epoch().clone(),
+                                  put_msg,
+                                  false);
+    put_req.mut_header().set_peer(new_peer(1, 1));
+    // peer (3, 3) won't become leader and transfer leader request will be canceled
+    // after about an election timeout. Before it's canceled, all proposal will be dropped
+    // silently.
+    cluster.transfer_leader(1, new_peer(3, 3));
+
+    let (tx, rx) = mpsc::channel();
+    cluster.sim
+        .rl()
+        .get_node_router(1)
+        .send_command(put_req,
+                      box move |resp: RaftCmdResponse| {
+                          let _ = tx.send(resp);
+                      })
+        .unwrap();
+
+    // Although proposal is dropped, callback should be cleaned up in time.
+    rx.recv_timeout(Duration::from_secs(5)).expect("callback should have been called with in 5s.");
+}

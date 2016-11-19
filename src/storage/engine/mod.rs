@@ -47,13 +47,13 @@ pub trait Engine: Send + Debug {
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_event!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout)
+        wait_op!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout)
             .unwrap_or_else(|| Err(Error::Timeout(timeout)))
     }
 
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_event!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout)
+        wait_op!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout)
             .unwrap_or_else(|| Err(Error::Timeout(timeout)))
     }
 
