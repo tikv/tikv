@@ -546,14 +546,16 @@ impl Peer {
             let ss = ready.ss.as_ref().unwrap();
             match ss.raft_state {
                 StateRole::Candidate => {
-                    self.become_candidate_time = Some(clocktime::now_monotonic_raw_clocktime())
+                    self.become_candidate_time = Some(clocktime::now_monotonic_raw_clocktime());
                 }
                 StateRole::Leader => {
                     let leader_begin_time = clocktime::now_monotonic_raw_clocktime();
                     self.leader_lease_expired_time =
                         self.calculate_lease_expired_time(self.become_candidate_time,
                                                           leader_begin_time);
- ;
+                    debug!("{} calculate leader lease expired time {:?}",
+                           self.tag,
+                           self.leader_lease_expired_time);
                     self.become_candidate_time = None;
                 }
                 _ => {
@@ -649,6 +651,9 @@ impl Peer {
             let now = clocktime::now_monotonic_raw_clocktime();
             let expired_time = self.leader_lease_expired_time.unwrap();
             if now > expired_time {
+                debug!("{} leader lease expired time {:?} is outdated",
+                       self.tag,
+                       self.leader_lease_expired_time);
                 // Reset leader lease expired time.
                 self.leader_lease_expired_time = None;
                 // Perform a consistent read to raft quorum and try to renew the leader lease.
@@ -1131,6 +1136,10 @@ impl Peer {
                     // Use the lease expired timestamp comparation here, so that these codes still
                     // work no matter how the leader changes before applying this command.
                     if current_expired_time < next_expired_time {
+                        debug!("{} update leader lease expired time from {:?} to {:?}",
+                               self.tag,
+                               self.leader_lease_expired_time,
+                               next_expired_time);
                         self.leader_lease_expired_time = Some(next_expired_time)
                     }
                 }
@@ -1141,6 +1150,9 @@ impl Peer {
                 let now = clocktime::now_monotonic_raw_clocktime();
                 self.leader_lease_expired_time =
                     self.calculate_lease_expired_time(Some(renew_time), now);
+                debug!("{} update leader lease expired time from None to {:?}",
+                       self.tag,
+                       self.leader_lease_expired_time);
             }
         }
         // Involve post appy hook.
