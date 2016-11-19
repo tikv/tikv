@@ -794,26 +794,44 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
+        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(ids.len());
         for region_id in ids {
-            let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans, &mut self.raft_metrics) {
+                match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
+                    Err(e) => {
+                        // TODO: should we panic or shutdown the store?
+                        error!("{} handle raft ready append err: {:?}", peer.tag, e);
+                        return Err(e);
+                    }
+                    Ok(Some(ready_result)) => ready_results.push((region_id, ready_result)),
+                    Ok(None) => {}
+                }
+            }
+        }
+
+        for (region_id, ready_result) in ready_results {
+            let ready_result = {
+                let peer = self.region_peers.get_mut(&region_id).unwrap_or_else(|| {
+                    panic!("[region {}] must exist after handle_raft_ready_append",
+                           region_id);
+                });
+
+                match peer.handle_raft_ready_apply(ready_result) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
                         error!("{} handle raft ready err: {:?}", peer.tag, e);
                         return Err(e);
                     }
-                    Ok(ready) => ready_result = ready,
+                    Ok(ready_result) => ready_result,
                 }
-            }
+            };
 
-            if let Some(ready_result) = ready_result {
-                if let Err(e) = self.on_ready_result(region_id, ready_result) {
-                    error!("[region {}] handle raft ready result err: {:?}",
-                           region_id,
-                           e);
-                    return Err(e);
-                }
+
+            if let Err(e) = self.on_ready_result(region_id, ready_result) {
+                error!("[region {}] handle raft ready result err: {:?}",
+                       region_id,
+                       e);
+                return Err(e);
             }
         }
 
