@@ -64,7 +64,7 @@ fn print_usage(program: &str, opts: Options) {
 }
 
 fn exit_with_err(msg: String) -> ! {
-    warn!("{}", msg);
+    error!("{}", msg);
     process::exit(1)
 }
 
@@ -88,14 +88,13 @@ fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
 
 fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> bool {
     let b = match config.lookup(name) {
-            Some(&toml::Value::Boolean(b)) => Some(b),
-            None => {
-                info!("{} use default {:?}", name, default);
-                default
-            }
-            _ => exit_with_err(format!("{} boolean is excepted", name)),
+        Some(&toml::Value::Boolean(b)) => b,
+        None => {
+            info!("{} use default {:?}", name, default);
+            default.unwrap_or_else(|| exit_with_err(format!("please specify {}", name)))
         }
-        .unwrap_or_else(|| exit_with_err(format!("please specify {}", name)));
+        _ => exit_with_err(format!("{} boolean is excepted", name)),
+    };
     info!("toml value {}: {:?}", name, b);
 
     b
@@ -103,14 +102,13 @@ fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> 
 
 fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) -> String {
     let s = match config.lookup(name) {
-            Some(&toml::Value::String(ref s)) => Some(s.clone()),
-            None => {
-                info!("{} use default {:?}", name, default);
-                default
-            }
-            _ => exit_with_err(format!("{} string is excepted", name)),
+        Some(&toml::Value::String(ref s)) => s.clone(),
+        None => {
+            info!("{} use default {:?}", name, default);
+            default.unwrap_or_else(|| exit_with_err(format!("please specify {}", name)))
         }
-        .unwrap_or_else(|| exit_with_err(format!("please specify {}", name)));
+        _ => exit_with_err(format!("{} string is excepted", name)),
+    };
     info!("toml value {}: {:?}", name, s);
 
     s
@@ -118,22 +116,17 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
 
 fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
     let i = match config.lookup(name) {
-            Some(&toml::Value::Integer(i)) => Some(i),
-            Some(&toml::Value::String(ref s)) => {
-                util::config::parse_readable_int(s)
-                    .map_err(|e| {
-                        info!("{} parse failed {:?}", name, e);
-                        e
-                    })
-                    .ok()
-            }
-            None => {
-                info!("{} use default {:?}", name, default);
-                default
-            }
-            _ => exit_with_err(format!("{} int or readable int is excepted", name)),
+        Some(&toml::Value::Integer(i)) => i,
+        Some(&toml::Value::String(ref s)) => {
+            util::config::parse_readable_int(s)
+                .unwrap_or_else(|e| exit_with_err(format!("{} parse failed {:?}", name, e)))
         }
-        .unwrap_or_else(|| exit_with_err(format!("please specify {}", name)));
+        None => {
+            info!("{} use default {:?}", name, default);
+            default.unwrap_or_else(|| exit_with_err(format!("please specify {}", name)))
+        }
+        _ => exit_with_err(format!("{} int or readable int is excepted", name)),
+    };
     info!("toml value {} : {}", name, i);
 
     i
