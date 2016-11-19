@@ -604,7 +604,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                           "storage.scheduler-concurrency",
                           matches,
                           config,
-                          Some(10240),
+                          Some(102400),
                           |v| v.as_integer()) as usize;
     cfg.storage.sched_worker_pool_size =
         get_integer_value("",
