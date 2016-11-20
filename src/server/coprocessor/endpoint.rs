@@ -14,7 +14,7 @@
 use std::usize;
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 use std::boxed::FnBox;
 use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
@@ -46,6 +46,10 @@ use super::metrics::*;
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 pub const BATCH_ROW_COUNT: usize = 64;
+
+// If a request has been handled for more than 60 seconds, the client should
+// be timeout already, so it can be safely aborted.
+const REQUEST_MAX_HANDLE_SECS: u64 = 60;
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
@@ -87,13 +91,18 @@ impl Display for Task {
 
 pub struct RequestTask {
     req: Request,
+    // The deadline before which the task should be responded.
+    deadline: Instant,
     on_resp: OnResponse,
 }
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
+        let mut deadline = Instant::now();
+        deadline += Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         RequestTask {
             req: req,
+            deadline: deadline,
             on_resp: on_resp,
         }
     }
@@ -114,9 +123,14 @@ impl BatchRunnable<Task> for Host {
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
+        let now = Instant::now();
         for task in tasks.drain(..) {
             match task {
                 Task::Request(req) => {
+                    if req.deadline <= now {
+                        on_req_outdated(req.deadline, now, req.req.get_tp());
+                        continue;
+                    }
                     let key = {
                         let ctx = req.req.get_context();
                         (ctx.get_region_id(),
@@ -167,8 +181,16 @@ fn on_error(e: Error, cb: ResponseHandler) {
         Error::Region(e) => resp.set_region_error(e),
         Error::Locked(info) => resp.set_locked(info),
         Error::Other(_) => resp.set_other_error(format!("{}", e)),
+        Error::Outdated(deadline, now, tp) => return on_req_outdated(deadline, now, tp),
     }
     cb(resp)
+}
+
+fn on_req_outdated(deadline: Instant, now: Instant, tp: i64) {
+    let t = get_req_type_str(tp);
+    OUTDATED_REQ_COUNTER.with_label_values(&["select", t]).inc();
+    let elapsed = now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+    OUTDATED_REQ_WAIT_TIME.with_label_values(&["select", t]).observe(elapsed.as_secs() as f64);
 }
 
 fn on_snap_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
@@ -184,6 +206,14 @@ fn on_snap_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     });
 }
 
+fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
+    let now = Instant::now();
+    if deadline <= now {
+        return Err(Error::Outdated(deadline, now, tp));
+    }
+    Ok(())
+}
+
 pub struct TiDbEndPoint {
     snap: Box<Snapshot>,
 }
@@ -197,25 +227,31 @@ impl TiDbEndPoint {
 impl TiDbEndPoint {
     fn handle_requests(&self, reqs: Vec<RequestTask>) {
         for t in reqs {
-            self.handle_request(t.req, t.on_resp);
+            let now = Instant::now();
+            if t.deadline <= now {
+                on_req_outdated(t.deadline, now, t.req.get_tp());
+            } else {
+                self.handle_request(t.req, t.deadline, t.on_resp);
+            }
         }
     }
 
-    fn handle_request(&self, req: Request, on_resp: OnResponse) {
+    fn handle_request(&self, req: Request, deadline: Instant, on_resp: OnResponse) {
         let cb = box move |r| {
             let mut resp_msg = Message::new();
             resp_msg.set_msg_type(MessageType::CopResp);
             resp_msg.set_cop_resp(r);
             on_resp.call_box((resp_msg,));
         };
-        match req.get_tp() {
+        let tp = req.get_tp();
+        match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
                 let mut sel = SelectRequest::new();
                 if let Err(e) = sel.merge_from_bytes(req.get_data()) {
                     on_error(box_err!(e), cb);
                     return;
                 }
-                match self.handle_select(req, sel) {
+                match self.handle_select(req, deadline, sel) {
                     Ok(r) => cb(r),
                     Err(e) => on_error(e, cb),
                 }
@@ -224,7 +260,11 @@ impl TiDbEndPoint {
         }
     }
 
-    pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
+    pub fn handle_select(&self,
+                         mut req: Request,
+                         deadline: Instant,
+                         sel: SelectRequest)
+                         -> Result<Response> {
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap));
         let mut range = req.take_ranges().into_vec();
@@ -244,9 +284,9 @@ impl TiDbEndPoint {
         let select_timer = select_histogram.start_timer();
 
         let res = if req.get_tp() == REQ_TYPE_SELECT {
-            ctx.get_rows_from_sel(range, limit, desc)
+            ctx.get_rows_from_sel(range, limit, desc, deadline)
         } else {
-            ctx.get_rows_from_idx(range, limit, desc)
+            ctx.get_rows_from_idx(range, limit, desc, deadline)
         };
 
         select_timer.observe_duration();
@@ -594,18 +634,24 @@ impl<'a> SelectContext<'a> {
         })
     }
 
-    fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
+    fn get_rows_from_sel(&mut self,
+                         ranges: Vec<KeyRange>,
+                         limit: usize,
+                         desc: bool,
+                         deadline: Instant)
+                         -> Result<()> {
         let mut collected = 0;
         for ran in ranges {
             if collected >= limit {
                 break;
             }
             let timer = Instant::now();
-            let row_cnt = try!(self.get_rows_from_range(ran, limit, desc));
+            let row_cnt = try!(self.get_rows_from_range(ran, limit, desc, deadline));
             debug!("fetch {} rows takes {} ms",
                    row_cnt,
                    duration_to_ms(timer.elapsed()));
             collected += row_cnt;
+            try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
         }
         if self.core.aggr {
             self.core.aggr_rows()
@@ -621,7 +667,12 @@ impl<'a> SelectContext<'a> {
         }
     }
 
-    fn get_rows_from_range(&mut self, range: KeyRange, limit: usize, desc: bool) -> Result<usize> {
+    fn get_rows_from_range(&mut self,
+                           range: KeyRange,
+                           limit: usize,
+                           desc: bool,
+                           deadline: Instant)
+                           -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
             let value = match try!(self.snap.get(&Key::from_raw(range.get_start()))) {
@@ -647,6 +698,9 @@ impl<'a> SelectContext<'a> {
                                                      },
                                                      self.key_only()));
             while limit > row_count {
+                if row_count & 255 == 0 {
+                    try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
+                }
                 let kv = if desc {
                     try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
                 } else {
@@ -679,13 +733,19 @@ impl<'a> SelectContext<'a> {
         Ok(row_count)
     }
 
-    fn get_rows_from_idx(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
+    fn get_rows_from_idx(&mut self,
+                         ranges: Vec<KeyRange>,
+                         limit: usize,
+                         desc: bool,
+                         deadline: Instant)
+                         -> Result<()> {
         let mut collected = 0;
         for r in ranges {
             if collected >= limit {
                 break;
             }
-            collected += try!(self.get_idx_row_from_range(r, limit, desc));
+            collected += try!(self.get_idx_row_from_range(r, limit, desc, deadline));
+            try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
         }
         if self.core.aggr {
             self.core.aggr_rows()
@@ -694,7 +754,12 @@ impl<'a> SelectContext<'a> {
         }
     }
 
-    fn get_idx_row_from_range(&mut self, r: KeyRange, limit: usize, desc: bool) -> Result<usize> {
+    fn get_idx_row_from_range(&mut self,
+                              r: KeyRange,
+                              limit: usize,
+                              desc: bool,
+                              deadline: Instant)
+                              -> Result<usize> {
         let mut row_cnt = 0;
         let mut seek_key = if desc {
             r.get_end().to_vec()
@@ -708,6 +773,9 @@ impl<'a> SelectContext<'a> {
                                                  },
                                                  self.key_only()));
         while row_cnt < limit {
+            if row_cnt & 255 == 0 {
+                try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
+            }
             let nk = if desc {
                 try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
             } else {
