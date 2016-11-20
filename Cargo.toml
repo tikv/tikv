@@ -42,7 +42,7 @@ toml = "0.1"
 num = "0.1"
 libc = "0.2.11"
 crc = "1.2"
-fs2 = "0.2"
+fs2 = "0.4"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
 protobuf = "1.0"
