@@ -24,6 +24,7 @@ use std::{cmp, u64};
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
+use fs2;
 use uuid::Uuid;
 use time::{self, Timespec};
 
@@ -41,7 +42,6 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -1332,17 +1332,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
-        let disk_stat = match get_disk_stat(self.engine.path()) {
-            Ok(disk_stat) => disk_stat,
-            Err(_) => {
-                error!("{} get disk stat for rocksdb {} failed",
+        let disk_stats = match fs2::statvfs(self.engine.path()) {
+            Err(e) => {
+                error!("{} get disk stat for rocksdb {} failed: {}",
                        self.tag,
-                       self.engine.path());
+                       self.engine.path(),
+                       e);
                 return;
             }
+            Ok(stats) => stats,
         };
 
-        let capacity = cmp::min(disk_stat.capacity, self.cfg.capacity);
+        let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
 
         stats.set_capacity(capacity);
 
@@ -1372,8 +1373,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // We only care rocksdb SST file size, so we should
         // check disk available here.
-        if available > disk_stat.available {
-            available = disk_stat.available
+        if available > disk_stats.free_space() {
+            available = disk_stats.free_space();
         }
 
         stats.set_store_id(self.store_id());
