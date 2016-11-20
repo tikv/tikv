@@ -55,10 +55,7 @@ signal = "0.2"
 backtrace = "0.2.3"
 clap = "2"
 url = "1.2"
-
-# The getopts in crate.io is outdated, use the latest getopts instead.
-[dependencies.getopts]
-git = "https://github.com/rust-lang-nursery/getopts"
+getopts = "0.2"
 
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"
