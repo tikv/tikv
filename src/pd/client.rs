@@ -17,15 +17,16 @@ use std::time::Duration;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+use std::collections::HashSet;
 use util::codec::rpc;
 use util::make_std_tcp_conn;
 
 use rand::{self, Rng};
 
-use kvproto::pdpb::{Request, Response};
+use kvproto::pdpb::{self, Request, Response};
 use kvproto::msgpb::{Message, MessageType};
 
-use super::{Result, PdClient};
+use super::{Result, PdClient, protocol};
 use super::metrics::*;
 
 const MAX_PD_SEND_RETRY_COUNT: usize = 100;
@@ -34,9 +35,70 @@ const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
 const PD_RPC_PREFIX: &'static str = "/pd/rpc";
 
+// `validate_endpoints` validates pd members, make sure they are in the same cluster.
+// Notice that it ignores failed pd nodes.
+fn validate_endpoints(cluster_id: u64, endpoints: &[String]) -> Result<()> {
+    if endpoints.is_empty() {
+        return Err(box_err!("empty PD list"));
+    }
+
+    let len = endpoints.len();
+    let mut endpoints_set = HashSet::with_capacity(len);
+    let mut members_resps = Vec::with_capacity(len);
+
+    for ep in endpoints {
+        let mut stream = match rpc_connect(ep.as_str()) {
+            Ok(stream) => stream,
+            // Ignore failed pd node.
+            Err(_) => continue,
+        };
+
+        let mut req = protocol::new_request(cluster_id, pdpb::CommandType::GetPDMembers);
+        req.set_get_pd_members(pdpb::GetPDMembersRequest::new());
+        let (id, mut resp) = match send_msg(&mut stream, cluster_id, &req) {
+            Ok((id, resp)) => (id, resp),
+            // Ignore failed pd node.
+            Err(_) => continue,
+        };
+
+        if id != cluster_id {
+            return Err(box_err!("PD response msg_id not match, want {}, got {}",
+                                cluster_id,
+                                id));
+        }
+
+        let members = resp.take_get_pd_members().take_members();
+
+        if (members.len() < len) || (!endpoints_set.insert(ep)) {
+            return Err(box_err!("inconsistent PD list, a duplicate PD url or an invalid PD url"));
+        }
+
+        let mut members_array = members.into_vec();
+
+        members_array.sort_by(|a, b| a.get_name().cmp(b.get_name()));
+        members_resps.push(members_array);
+    }
+
+    // Check all fields.
+    match members_resps.pop() {
+        Some(sample) => {
+            for members in members_resps {
+                if sample != members {
+                    return Err(box_err!("inconsistent PD list, expect: {:?}, got: {:?}",
+                                        sample,
+                                        members));
+                }
+            }
+
+            Ok(())
+        }
+        None => Err(box_err!("PD cluster stop responding")),
+    }
+}
+
 #[derive(Debug)]
 struct RpcClientCore {
-    endpoints: String,
+    endpoints: Vec<String>,
     stream: Option<TcpStream>,
 }
 
@@ -44,6 +106,7 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
     let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
 
     let mut req = Message::new();
+
     req.set_msg_type(MessageType::PdReq);
     // TODO: optimize clone later in HTTP refactor.
     req.set_pd_req(message.clone());
@@ -62,42 +125,50 @@ fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u
     Ok((id, resp.take_pd_resp()))
 }
 
-fn rpc_connect(endpoints: &str) -> Result<TcpStream> {
-    // Randomize hosts.
-    let mut hosts: Vec<String> = endpoints.split(',').map(|s| s.into()).collect();
-    rand::thread_rng().shuffle(&mut hosts);
+fn rpc_connect(endpoint: &str) -> Result<TcpStream> {
+    let mut stream = try!(make_std_tcp_conn(endpoint));
+    try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
 
-    for host in &hosts {
-        let mut stream = match make_std_tcp_conn(host.as_str()) {
-            Ok(stream) => stream,
-            Err(_) => continue,
-        };
-        try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-
-        // Send a HTTP header to tell PD to hijack this connection for RPC.
-        let header_str = format!("GET {} HTTP/1.0\r\n\r\n", PD_RPC_PREFIX);
-        let header = header_str.as_bytes();
-        match stream.write_all(header) {
-            Ok(_) => return Ok(stream),
-            Err(_) => continue,
-        }
+    // Send a HTTP header to tell PD to hijack this connection for RPC.
+    let header_str = format!("GET {} HTTP/1.0\r\n\r\n", PD_RPC_PREFIX);
+    let header = header_str.as_bytes();
+    match stream.write_all(header) {
+        Ok(_) => Ok(stream),
+        Err(err) => Err(box_err!("failed to connect to {} error: {:?}", endpoint, err)),
     }
-
-    Err(box_err!("failed to connect to {:?}", hosts))
 }
 
 impl RpcClientCore {
-    fn new(endpoints: &str) -> RpcClientCore {
+    fn new(endpoints: Vec<String>) -> RpcClientCore {
         RpcClientCore {
-            endpoints: endpoints.into(),
+            endpoints: endpoints,
             stream: None,
         }
     }
 
     fn try_connect(&mut self) -> Result<()> {
-        let stream = try!(rpc_connect(&self.endpoints));
-        self.stream = Some(stream);
-        Ok(())
+        // Randomize endpoints.
+        let len = self.endpoints.len();
+        let mut indexes: Vec<usize> = (0..len).collect();
+        rand::thread_rng().shuffle(&mut indexes);
+
+        for i in indexes {
+            let ep = &self.endpoints[i];
+            match rpc_connect(ep.as_str()) {
+                Ok(stream) => {
+                    info!("PD client connects to {}", ep);
+                    self.stream = Some(stream);
+                    return Ok(());
+                }
+
+                Err(_) => {
+                    error!("failed to connect to {}, try next", ep);
+                    continue;
+                }
+            }
+        }
+
+        Err(box_err!("failed to connect to {:?}", self.endpoints))
     }
 
     fn send(&mut self, msg_id: u64, req: &Request) -> Result<Response> {
@@ -147,15 +218,21 @@ pub struct RpcClient {
 
 impl RpcClient {
     pub fn new(endpoints: &str) -> Result<RpcClient> {
+        let endpoints: Vec<String> = endpoints.split(',')
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+            .collect();
+
         let mut client = RpcClient {
             msg_id: AtomicUsize::new(0),
-            core: Mutex::new(RpcClientCore::new(endpoints)),
+            core: Mutex::new(RpcClientCore::new(endpoints.clone())),
             cluster_id: 0,
         };
 
         for _ in 0..MAX_PD_SEND_RETRY_COUNT {
             match client.get_cluster_id() {
                 Ok(id) => {
+                    try!(validate_endpoints(id, &endpoints));
                     client.cluster_id = id;
                     return Ok(client);
                 }
