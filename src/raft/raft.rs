@@ -1363,9 +1363,9 @@ impl<T: Storage> Raft<T> {
                       self.tag,
                       self.term,
                       m.get_from());
-                /// Leadership trnasfers never use prevote even if self.prevte is true; we
-                /// know we are not recovering from a partition to there is no need for the
-                /// extra round trip.
+                // Leadership trnasfers never use prevote even if self.prevte is true; we
+                // know we are not recovering from a partition to there is no need for the
+                // extra round trip.
                 self.campaign(CAMPAIGN_TRANSFER);
             }
             MessageType::MsgReadIndex => {
