@@ -542,6 +542,7 @@ impl Peer {
 
         let t = SlowTimer::new();
 
+        // Update leader lease variables when the raft state changes
         if ready.ss.is_some() {
             let ss = ready.ss.as_ref().unwrap();
             match ss.raft_state {

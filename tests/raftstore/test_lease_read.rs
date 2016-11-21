@@ -57,10 +57,12 @@ fn do_local_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
 // A helper function for testing the lease reads and lease renewing.
 // The leader keep a record of its leader lease, and use the system's
 // monotonic raw clocktime to check whether its lease has been expired.
-// If the leader lease is valid, the leader serves read requests as the lease reads.
-// Otherwise, it handles read requests as consistent reads, which would be replicated
-// to the raft quorum.
-// When the leader performs consistent read or write, it will try to renew its lease.
+// If the leader lease is valid, the leader serves local read requests as the lease reads,
+// and serves quorum read requests and consistent reads. If the leader lease has expired,
+// the leader handles both local read and quorum read requests as consistent reads.
+// All writes are consistent.
+// The consistent read/write would be written to raft log and replicated to the raft quorum.
+// Everytime the leader performs consistent read/write, it will try to renew its lease.
 fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
