@@ -12,7 +12,7 @@
 // limitations under the License.
 
 // `now_monotonic_raw` returns the monotonic raw clocktime corresponding to "now".
-pub use self::inner::now_monotonic_raw;
+pub use self::inner::raw_now;
 
 #[cfg(not(any(target_os = "linux")))]
 mod inner {
@@ -20,7 +20,7 @@ mod inner {
 
     const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
-    pub fn now_monotonic_raw() -> Timespec {
+    pub fn raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
         // Currently use `time::get_precise_ns()` instead.
         let ns = time::precise_time_ns();
@@ -36,7 +36,7 @@ mod inner {
     use time::Timespec;
     use libc;
 
-    pub fn now_monotonic_raw() -> Timespec {
+    pub fn raw_now() -> Timespec {
         let mut t = libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,
@@ -56,8 +56,8 @@ mod tests {
 
     #[test]
     fn test_now_monotonic_raw() {
-        let early_time = now_monotonic_raw();
-        let late_time = now_monotonic_raw();
+        let early_time = raw_now();
+        let late_time = raw_now();
         // The monotonic raw clocktime must be monotonic.
         assert!(late_time > early_time);
     }
