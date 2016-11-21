@@ -43,7 +43,7 @@ mod inner {
         };
         let res = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut t) };
         if res == -1 {
-            panic!("failet to get monotonic raw locktime, err {}",
+            panic!("failed to get monotonic raw locktime, err {}",
                    io::Error::last_os_error());
         }
         Timespec::new(t.tv_sec, t.tv_nsec as i32)
