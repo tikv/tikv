@@ -55,7 +55,7 @@ fn do_local_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
 }
 
 // A helper function for testing the lease reads and lease renewing.
-// The leader keep a record of its leader lease, and use the system's
+// The leader keeps a record of its leader lease, and uses the system's
 // monotonic raw clocktime to check whether its lease has been expired.
 // If the leader lease is valid, the leader serves local read requests as the lease reads,
 // and serves quorum read requests and consistent reads. If the leader lease has expired,
