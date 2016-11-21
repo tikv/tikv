@@ -497,25 +497,18 @@ impl Peer {
     }
 
     fn calculate_lease_expired_time(&self,
-                                    send_to_quorum_ts: Option<Timespec>,
+                                    send_to_quorum_ts: Timespec,
                                     quorum_commit_ts: Timespec)
                                     -> Option<Timespec> {
-        if send_to_quorum_ts.is_none() {
-            // This peer switches from raft follower state to leader state directly
-            // This case could happen iff there is only one peer in the cluster.
-            // In this case, take election_timeout as leader lease.
-            Some(quorum_commit_ts + self.election_timeout)
+        // The valid leader lease should be
+        // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
+        // And the expired timestamp for that leader lease is "quorum_commit_ts + lease".
+        let d = quorum_commit_ts - send_to_quorum_ts;
+        if d > self.election_timeout {
+            // The leader lease will expire if it takes too long to achieve quorum commit.
+            None
         } else {
-            // The valid leader lease should be
-            // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
-            // And the expired timestamp for that leader lease is "quorum_commit_ts + lease".
-            let d = quorum_commit_ts - send_to_quorum_ts.unwrap();
-            if d > self.election_timeout {
-                // The leader lease will expire if it takes too long to achieve quorum commit.
-                None
-            } else {
-                Some(quorum_commit_ts + (self.election_timeout - d))
-            }
+            Some(quorum_commit_ts + (self.election_timeout - d))
         }
     }
 
@@ -527,10 +520,7 @@ impl Peer {
                 StateRole::Leader => {
                     let now = clocktime::now_monotonic_raw_clocktime();
                     self.become_leader_time = Some(now);
-                    self.leader_lease_expired_time = self.calculate_lease_expired_time(None, now);
-                    debug!("{} becomes leader, set leader lease expired time to {:?}",
-                           self.tag,
-                           self.leader_lease_expired_time);
+                    debug!("{} becomes leader at {:?}", self.tag, now);
                 }
                 StateRole::Follower => {
                     self.become_leader_time = None;
@@ -1052,7 +1042,7 @@ impl Peer {
             if self.is_leader() && term == self.raft_group.raft.term {
                 let now = clocktime::now_monotonic_raw_clocktime();
                 let next_expired_time =
-                    self.calculate_lease_expired_time(self.become_leader_time, now);
+                    self.calculate_lease_expired_time(self.become_leader_time.unwrap(), now);
                 debug!("{} update leade lease expired time from {:?} to {:?}, when leader \
                         commits the first empty entry during its term",
                        self.tag,
@@ -1146,7 +1136,7 @@ impl Peer {
                 // to the renewed lease.
                 let now = clocktime::now_monotonic_raw_clocktime();
                 if let Some(next_expired_time) =
-                       self.calculate_lease_expired_time(Some(renew_time), now) {
+                       self.calculate_lease_expired_time(renew_time, now) {
                     // Use the lease expired timestamp comparation here, so that these codes still
                     // work no matter how the leader changes before applying this command.
                     if current_expired_time < next_expired_time {
@@ -1162,8 +1152,7 @@ impl Peer {
                 // Calculate the renewed lease for this command, and update the leader lease
                 // for this peer.
                 let now = clocktime::now_monotonic_raw_clocktime();
-                self.leader_lease_expired_time =
-                    self.calculate_lease_expired_time(Some(renew_time), now);
+                self.leader_lease_expired_time = self.calculate_lease_expired_time(renew_time, now);
                 debug!("{} update leader lease expired time from None to {:?}",
                        self.tag,
                        self.leader_lease_expired_time);
