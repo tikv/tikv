@@ -15,7 +15,6 @@ use std::usize;
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::time::{Instant, Duration};
-use std::boxed::FnBox;
 use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
 
@@ -54,6 +53,8 @@ const REQUEST_MAX_HANDLE_SECS: u64 = 60;
 const DEFAULT_ERROR_CODE: i32 = 1;
 
 pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
+
+const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
 pub struct Host {
     engine: Box<Engine>,
@@ -128,7 +129,8 @@ impl BatchRunnable<Task> for Host {
             match task {
                 Task::Request(req) => {
                     if req.deadline <= now {
-                        on_req_outdated(req.deadline, now, req.req.get_tp());
+                        on_error(Error::Outdated(req.deadline, now, req.req.get_tp()),
+                                 req.on_resp);
                         continue;
                     }
                     let key = {
@@ -173,37 +175,37 @@ impl BatchRunnable<Task> for Host {
     }
 }
 
-type ResponseHandler = Box<FnBox(Response) -> ()>;
-
-fn on_error(e: Error, cb: ResponseHandler) {
+fn on_error(e: Error, cb: OnResponse) {
     let mut resp = Response::new();
     match e {
         Error::Region(e) => resp.set_region_error(e),
         Error::Locked(info) => resp.set_locked(info),
         Error::Other(_) => resp.set_other_error(format!("{}", e)),
-        Error::Outdated(deadline, now, tp) => return on_req_outdated(deadline, now, tp),
-    }
-    cb(resp)
-}
+        Error::Outdated(deadline, now, tp) => {
+            let t = get_req_type_str(tp);
+            let elapsed = now.duration_since(deadline) +
+                          Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+            OUTDATED_REQ_WAIT_TIME.with_label_values(&["select", t])
+                .observe(elapsed.as_secs() as f64);
 
-fn on_req_outdated(deadline: Instant, now: Instant, tp: i64) {
-    let t = get_req_type_str(tp);
-    OUTDATED_REQ_COUNTER.with_label_values(&["select", t]).inc();
-    let elapsed = now.duration_since(deadline) + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
-    OUTDATED_REQ_WAIT_TIME.with_label_values(&["select", t]).observe(elapsed.as_secs() as f64);
+            if cfg!(test) {
+                resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
+            } else {
+                return;
+            }
+        }
+    }
+    respond(resp, cb);
 }
 
 fn on_snap_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     error!("failed to get snapshot: {:?}", e);
     on_error(e.into(),
-             box move |r| {
-        let mut resp_msg = Message::new();
-        resp_msg.set_msg_type(MessageType::CopResp);
-        resp_msg.set_cop_resp(r);
-        for t in reqs {
-            t.on_resp.call_box((resp_msg.clone(),));
-        }
-    });
+             box move |resp_msg: Message| {
+                 for t in reqs {
+                     (t.on_resp)(resp_msg.clone());
+                 }
+             });
 }
 
 fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
@@ -212,6 +214,13 @@ fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
         return Err(Error::Outdated(deadline, now, tp));
     }
     Ok(())
+}
+
+fn respond(resp: Response, on_resp: OnResponse) {
+    let mut resp_msg = Message::new();
+    resp_msg.set_msg_type(MessageType::CopResp);
+    resp_msg.set_cop_resp(resp);
+    on_resp.call_box((resp_msg,));
 }
 
 pub struct TiDbEndPoint {
@@ -229,7 +238,7 @@ impl TiDbEndPoint {
         for t in reqs {
             let now = Instant::now();
             if t.deadline <= now {
-                on_req_outdated(t.deadline, now, t.req.get_tp());
+                on_error(Error::Outdated(t.deadline, now, t.req.get_tp()), t.on_resp);
             } else {
                 self.handle_request(t.req, t.deadline, t.on_resp);
             }
@@ -237,26 +246,20 @@ impl TiDbEndPoint {
     }
 
     fn handle_request(&self, req: Request, deadline: Instant, on_resp: OnResponse) {
-        let cb = box move |r| {
-            let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CopResp);
-            resp_msg.set_cop_resp(r);
-            on_resp.call_box((resp_msg,));
-        };
         let tp = req.get_tp();
         match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
                 let mut sel = SelectRequest::new();
                 if let Err(e) = sel.merge_from_bytes(req.get_data()) {
-                    on_error(box_err!(e), cb);
+                    on_error(box_err!(e), on_resp);
                     return;
                 }
                 match self.handle_select(req, deadline, sel) {
-                    Ok(r) => cb(r),
-                    Err(e) => on_error(e, cb),
+                    Ok(r) => respond(r, on_resp),
+                    Err(e) => on_error(e, on_resp),
                 }
             }
-            t => on_error(box_err!("unsupported tp {}", t), cb),
+            t => on_error(box_err!("unsupported tp {}", t), on_resp),
         }
     }
 
@@ -827,10 +830,39 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
 mod tests {
     use super::*;
 
+    use util::worker::Worker;
+    use storage::engine::{self, TEMP_DIR};
+
+    use kvproto::coprocessor::Request;
+    use kvproto::msgpb::MessageType;
+
+    use std::sync::*;
+    use std::time::Duration;
+
     #[test]
     fn test_get_req_type_str() {
         assert_eq!(get_req_type_str(REQ_TYPE_SELECT), STR_REQ_TYPE_SELECT);
         assert_eq!(get_req_type_str(REQ_TYPE_INDEX), STR_REQ_TYPE_INDEX);
         assert_eq!(get_req_type_str(0), STR_REQ_TYPE_UNKNOWN);
+    }
+
+    #[test]
+    fn test_req_outdated() {
+        let mut worker = Worker::new("test-endpoint");
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let end_point = Host::new(engine, worker.scheduler(), 1);
+        worker.start_batch(end_point, 30).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut task = RequestTask::new(Request::new(),
+                                        box move |msg| {
+                                            tx.send(msg).unwrap();
+                                        });
+        task.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        worker.schedule(Task::Request(task)).unwrap();
+        let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(resp.get_msg_type(), MessageType::CopResp);
+        let copr_resp = resp.get_cop_resp();
+        assert!(copr_resp.has_other_error());
+        assert_eq!(copr_resp.get_other_error(), super::OUTDATED_ERROR_MSG);
     }
 }

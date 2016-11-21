@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{HistogramVec, CounterVec};
+use prometheus::HistogramVec;
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec =
@@ -21,12 +21,6 @@ lazy_static! {
             &["type", "req"]
         ).unwrap();
 
-    pub static ref OUTDATED_REQ_COUNTER: CounterVec =
-        register_counter_vec!(
-            "tikv_coprocessor_outdated_request_total",
-            "Total number of outdated request",
-            &["type"]
-        ).unwrap();
     pub static ref OUTDATED_REQ_WAIT_TIME: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_outdated_request_wait_seconds",
