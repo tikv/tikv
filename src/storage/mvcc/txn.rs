@@ -20,7 +20,7 @@ use super::write::{WriteType, Write};
 use super::{Error, Result};
 use super::metrics::*;
 
-pub const MAX_TXN_WRITE_SIZE: usize = 512 * 1024;
+pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
 pub struct MvccTxn<'a> {
     reader: MvccReader<'a>,
