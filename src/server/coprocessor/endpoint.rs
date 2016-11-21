@@ -49,6 +49,7 @@ pub const BATCH_ROW_COUNT: usize = 64;
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
 const REQUEST_MAX_HANDLE_SECS: u64 = 60;
+const REQUEST_CHECKPOINT: usize = 255;
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
@@ -701,7 +702,7 @@ impl<'a> SelectContext<'a> {
                                                      },
                                                      self.key_only()));
             while limit > row_count {
-                if row_count & 255 == 0 {
+                if row_count & REQUEST_CHECKPOINT == 0 {
                     try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
                 }
                 let kv = if desc {
@@ -776,7 +777,7 @@ impl<'a> SelectContext<'a> {
                                                  },
                                                  self.key_only()));
         while row_cnt < limit {
-            if row_cnt & 255 == 0 {
+            if row_cnt & REQUEST_CHECKPOINT == 0 {
                 try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
             }
             let nk = if desc {
