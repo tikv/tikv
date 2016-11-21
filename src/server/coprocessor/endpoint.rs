@@ -100,8 +100,7 @@ pub struct RequestTask {
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
-        let mut deadline = Instant::now();
-        deadline += Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+        let deadline = Instant::now() + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         RequestTask {
             req: req,
             deadline: deadline,
