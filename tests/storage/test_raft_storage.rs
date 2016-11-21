@@ -11,8 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::mpsc::channel;
+use std::time::Duration;
+use std::thread;
 use tikv::util::HandyRwLock;
-use tikv::storage::{Mutation, make_key, ALL_CFS};
+use tikv::storage::{self, Storage, Engine, Snapshot, Modify, Mutation, make_key, ALL_CFS};
+use tikv::storage::engine::{self, Callback, Result};
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
 use raftstore::cluster::Cluster;
@@ -61,7 +67,7 @@ fn test_raft_storage() {
 }
 
 #[test]
-fn test_write_leader_change_twice() {
+fn test_engine_leader_change_twice() {
     let mut cluster = new_server_cluster_with_cfs(0, 3, ALL_CFS);
     cluster.run();
 
@@ -84,4 +90,86 @@ fn test_write_leader_change_twice() {
     // Term not match.
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     assert!(engine.write(&ctx, vec![]).is_err());
+}
+
+#[test]
+fn test_scheduler_leader_change_twice() {
+    let mut cluster = new_server_cluster_with_cfs(0, 3, ALL_CFS);
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    let peers = region.get_peers();
+
+    cluster.must_transfer_leader(region.get_id(), peers[0].clone());
+    let engine = cluster.sim.rl().storages[&peers[0].get_id()].clone();
+    let block = Arc::new(AtomicBool::new(true));
+    let engine = BlockSnapshotEngine {
+        engine: engine,
+        block_snapshot: block.clone(),
+    };
+    let config = Default::default();
+    let mut storage = Storage::from_engine(box engine, &config).unwrap();
+    storage.start(&config).unwrap();
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(peers[0].clone());
+
+    let (tx, rx) = channel();
+    storage.async_prewrite(ctx.clone(),
+                        vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+                        b"k".to_vec(),
+                        10,
+                        0,
+                        box move |res: storage::Result<_>| {
+            if let &storage::Error::Engine(engine::Error::Request(ref e)) = res.as_ref()
+                .err()
+                .unwrap() {
+                assert!(e.has_stale_term());
+            } else {
+                panic!("expect stale term, but got {:?}", res);
+            }
+            tx.send(1).unwrap();
+        })
+        .unwrap();
+
+    // Transfer leader twice, then unblock snapshot.
+    cluster.must_transfer_leader(region.get_id(), peers[1].clone());
+    cluster.must_transfer_leader(region.get_id(), peers[0].clone());
+    block.store(false, Ordering::SeqCst);
+
+    rx.recv().unwrap();
+}
+
+#[derive(Debug)]
+struct BlockSnapshotEngine {
+    engine: Box<Engine>,
+    block_snapshot: Arc<AtomicBool>,
+}
+
+impl Engine for BlockSnapshotEngine {
+    fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()> {
+        self.engine.async_write(ctx, batch, callback)
+    }
+
+    fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()> {
+        let block_snapshot = self.block_snapshot.clone();
+        self.engine.async_snapshot(ctx,
+                                   box move |res| {
+            thread::spawn(move || {
+                while block_snapshot.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                callback(res);
+            });
+        })
+    }
+
+    fn clone(&self) -> Box<Engine + 'static> {
+        box BlockSnapshotEngine {
+            engine: self.engine.clone(),
+            block_snapshot: self.block_snapshot.clone(),
+        }
+    }
 }
