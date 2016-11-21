@@ -515,7 +515,7 @@ impl Peer {
         if self.is_leader() {
             self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
                 // We don't care that the message is sent failed, so here just log this error.
-                info!("{} leader send messages err {:?}", self.tag, e);
+                warn!("{} leader send messages err {:?}", self.tag, e);
             })
         }
 
@@ -536,7 +536,7 @@ impl Peer {
 
         if !self.is_leader() {
             self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
-                info!("{} follower send messages err {:?}", self.tag, e);
+                warn!("{} follower send messages err {:?}", self.tag, e);
             })
         }
 
@@ -556,9 +556,7 @@ impl Peer {
         }))
     }
 
-    pub fn handle_raft_ready_apply(&mut self,
-                                   mut ready_result: ReadyResult)
-                                   -> Result<ReadyResult> {
+    pub fn handle_raft_ready_apply(&mut self, ready_result: &mut ReadyResult) -> Result<()> {
         let mut ready = ready_result.ready.take().unwrap_or_else(|| {
             panic!("{} must have a ready in ReadyResult", self.tag);
         });
@@ -581,7 +579,7 @@ impl Peer {
         };
 
         self.raft_group.advance(ready);
-        Ok(ready_result)
+        Ok(())
     }
 
     /// Propose a request.

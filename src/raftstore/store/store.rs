@@ -809,17 +809,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        for (region_id, ready_result) in ready_results {
-            let ready_result = {
+        for (region_id, mut ready_result) in ready_results {
+            {
                 let peer = self.region_peers.get_mut(&region_id).unwrap();
 
-                match peer.handle_raft_ready_apply(ready_result) {
-                    Err(e) => {
-                        // TODO: should we panic or shutdown the store?
-                        error!("{} handle raft ready err: {:?}", peer.tag, e);
-                        continue;
-                    }
-                    Ok(ready_result) => ready_result,
+                if let Err(e) = peer.handle_raft_ready_apply(&mut ready_result) {
+                    // TODO: should we panic or shutdown the store?
+                    error!("{} handle raft ready err: {:?}", peer.tag, e);
+                    continue;
                 }
             };
 
