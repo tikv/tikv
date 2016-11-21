@@ -273,7 +273,7 @@ impl Conn {
     {
         if !self.send_buffer.is_empty() {
             msg.encode_to(&mut self.send_buffer).unwrap();
-            // We have register it aleady, no need to register again.
+            // We have registered it aleady, no need to register again.
             return Ok(());
         }
 
