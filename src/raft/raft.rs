@@ -798,12 +798,12 @@ impl<T: Storage> Raft<T> {
                 // partition, and it is now unable to either win an election or to rejoin
                 // the majority on the old term. If checkQuorum is false, this will be
                 // handled by incrementing term numbers in response to MsgRequestVote with a higher
-                // term, but if checkQuorum is true we may not advance the term on MsgRequestVote and
-                // must generate other messages to advance the term. The net result of these
+                // term, but if checkQuorum is true we may not advance the term on MsgRequestVote
+                // and must generate other messages to advance the term. The net result of these
                 // two features is to minimize the disruption caused by nodes that have been
-                // removed from the cluster's configuration: a removed node will send MsgRequestVotes
-                // which will be ignored, but it will not receive MsgApp or MsgHeartbeat, so it
-                // will not create disruptive term increases
+                // removed from the cluster's configuration: a removed node will send
+                // MsgRequestVotes which will be ignored, but it will not receive MsgApp or
+                // MsgHeartbeat, so it will not create disruptive term increases
                 let to_send = new_message(m.get_from(), MessageType::MsgAppendResponse, None);
                 self.send(to_send);
             } else {
