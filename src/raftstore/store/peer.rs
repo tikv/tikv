@@ -500,13 +500,14 @@ impl Peer {
                                     -> Option<Timespec> {
         // The valid leader lease should be
         // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
-        // And the expired timestamp for that leader lease is "quorum_commit_ts + lease".
+        // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
+        // which is "send_to_quorum_ts + election_timeout" in short.
         let d = quorum_commit_ts - send_to_quorum_ts;
         if d > self.election_timeout {
             // The leader lease will expire if it takes too long to achieve quorum commit.
             None
         } else {
-            Some(quorum_commit_ts + (self.election_timeout - d))
+            Some(send_to_quorum_ts + self.election_timeout)
         }
     }
 
@@ -1115,35 +1116,33 @@ impl Peer {
 
         let (cb, lease_renew_time) = cmd_cb.unwrap();
         // Try to renew the leader lease as this command asks to.
-        if let Some(renew_time) = lease_renew_time {
-            if let Some(current_expired_time) = self.leader_lease_expired_time {
-                // This peer is leader and has unexpired leader lease.
-                // Calculate the renewed lease for this command. If the renewed lease is valid and
-                // lives longer then current leader lease, update the leader lease for this peer
-                // to the renewed lease.
-                let now = clocktime::raw_now();
-                if let Some(next_expired_time) =
-                       self.calculate_lease_expired_time(renew_time, now) {
-                    // Use the lease expired timestamp comparation here, so that these codes still
-                    // work no matter how the leader changes before applying this command.
-                    if current_expired_time < next_expired_time {
-                        debug!("{} update leader lease expired time from {:?} to {:?}",
-                               self.tag,
-                               self.leader_lease_expired_time,
-                               next_expired_time);
-                        self.leader_lease_expired_time = Some(next_expired_time)
-                    }
+        let renew_time = lease_renew_time.unwrap();
+        if let Some(current_expired_time) = self.leader_lease_expired_time {
+            // This peer is leader and has unexpired leader lease.
+            // Calculate the renewed lease for this command. If the renewed lease is valid and
+            // lives longer then current leader lease, update the leader lease for this peer
+            // to the renewed lease.
+            let now = clocktime::raw_now();
+            if let Some(next_expired_time) = self.calculate_lease_expired_time(renew_time, now) {
+                // Use the lease expired timestamp comparation here, so that these codes still
+                // work no matter how the leader changes before applying this command.
+                if current_expired_time < next_expired_time {
+                    debug!("{} update leader lease expired time from {:?} to {:?}",
+                           self.tag,
+                           self.leader_lease_expired_time,
+                           next_expired_time);
+                    self.leader_lease_expired_time = Some(next_expired_time)
                 }
-            } else if self.is_leader() {
-                // This peer is leader but its leader lease has been expired.
-                // Calculate the renewed lease for this command, and update the leader lease
-                // for this peer.
-                let now = clocktime::raw_now();
-                self.leader_lease_expired_time = self.calculate_lease_expired_time(renew_time, now);
-                debug!("{} update leader lease expired time from None to {:?}",
-                       self.tag,
-                       self.leader_lease_expired_time);
             }
+        } else if self.is_leader() {
+            // This peer is leader but its leader lease has been expired.
+            // Calculate the renewed lease for this command, and update the leader lease
+            // for this peer.
+            let now = clocktime::raw_now();
+            self.leader_lease_expired_time = self.calculate_lease_expired_time(renew_time, now);
+            debug!("{} update leader lease expired time from None to {:?}",
+                   self.tag,
+                   self.leader_lease_expired_time);
         }
         // Involve post appy hook.
         self.coprocessor_host.post_apply(self.raft_group.get_store(), &cmd, &mut resp);
