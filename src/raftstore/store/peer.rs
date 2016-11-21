@@ -513,7 +513,10 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1
         if self.is_leader() {
-            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
+            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
+                // We don't care that the message is sent failed, so here just log this error.
+                info!("{} leader send messages err {:?}", self.tag, e);
+            })
         }
 
         let apply_result = match self.mut_store().handle_raft_ready(&ready) {
@@ -532,14 +535,19 @@ impl Peer {
         };
 
         if !self.is_leader() {
-            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
+            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
+                info!("{} follower send messages err {:?}", self.tag, e);
+            })
         }
 
         slow_log!(t,
-                  "{} append {} logs, send {} messages",
+                  "{} handle ready, entries {}, messages \
+                   {}, snapshot {}, hard state changed {}",
                   self.tag,
                   ready.entries.len(),
-                  ready.messages.len());
+                  ready.messages.len(),
+                  apply_result.is_some(),
+                  ready.hs.is_some());
 
         Ok(Some(ReadyResult {
             ready: Some(ready),

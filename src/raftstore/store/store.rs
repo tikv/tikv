@@ -789,7 +789,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self) -> Result<()> {
+    fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
@@ -801,7 +801,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
                         error!("{} handle raft ready append err: {:?}", peer.tag, e);
-                        return Err(e);
+                        continue;
                     }
                     Ok(Some(ready_result)) => ready_results.push((region_id, ready_result)),
                     Ok(None) => {}
@@ -811,36 +811,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         for (region_id, ready_result) in ready_results {
             let ready_result = {
-                let peer = self.region_peers.get_mut(&region_id).unwrap_or_else(|| {
-                    panic!("[region {}] must exist after handle_raft_ready_append",
-                           region_id);
-                });
+                let peer = self.region_peers.get_mut(&region_id).unwrap();
 
                 match peer.handle_raft_ready_apply(ready_result) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
                         error!("{} handle raft ready err: {:?}", peer.tag, e);
-                        return Err(e);
+                        continue;
                     }
                     Ok(ready_result) => ready_result,
                 }
             };
 
-
-            if let Err(e) = self.on_ready_result(region_id, ready_result) {
-                error!("[region {}] handle raft ready result err: {:?}",
-                       region_id,
-                       e);
-                return Err(e);
-            }
+            self.on_ready_result(region_id, ready_result)
         }
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
             .inc_by(duration_to_nanos(t.elapsed()) as f64)
             .unwrap();
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
-
-        Ok(())
     }
 
     fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
@@ -1020,7 +1009,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.region_ranges.insert(enc_end_key(&region), region.get_id());
     }
 
-    fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
+    fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) {
         if let Some(apply_result) = ready_result.apply_snap_result {
             self.on_ready_apply_snapshot(apply_result);
         }
@@ -1043,8 +1032,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   "[region {}] on ready {} results",
                   region_id,
                   result_count);
-
-        Ok(())
     }
 
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
@@ -1682,10 +1669,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         // We handle raft ready in event loop.
-        if let Err(e) = self.on_raft_ready() {
-            // TODO: should we panic here or shutdown the store?
-            error!("{} handle raft ready err: {:?}", self.tag, e);
-        }
+        self.on_raft_ready();
         self.pending_regions.clear();
     }
 }
