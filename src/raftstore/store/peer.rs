@@ -830,7 +830,6 @@ impl Peer {
         send_msg.set_region_id(self.region_id);
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-        let mut unreachable = false;
 
         let from_peer = match self.get_peer_from_cache(msg.get_from()) {
             Some(p) => p,
@@ -889,12 +888,8 @@ impl Peer {
                   to_store_id,
                   e);
 
-            unreachable = true;
-        }
-
-        if unreachable {
+            // unreachable store
             self.raft_group.report_unreachable(to_peer_id);
-
             if msg_type == eraftpb::MessageType::MsgSnapshot {
                 self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
