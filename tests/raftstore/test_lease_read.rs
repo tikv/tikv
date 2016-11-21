@@ -239,13 +239,6 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
                escape(key),
                escape(&value))
     }
-
-    // Recover the network for `test_peer`.
-    cluster.clear_send_filters();
-
-    // Check a new leader elected for the cluster.
-    cluster.reset_leader_of_region(region_id);
-    assert_ne!(cluster.leader_of_region(region_id), Some(test_peer.clone()));
 }
 
 #[test]

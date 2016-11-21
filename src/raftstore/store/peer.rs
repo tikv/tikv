@@ -35,7 +35,7 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVAL
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::{escape, SlowTimer, rocksdb};
+use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::{PdClient, INVALID_ID};
 use storage::{CF_LOCK, CF_RAFT};
 use super::store::{Store, RaftReadyMetrics, RaftMessageMetrics, RaftMetrics};
@@ -47,7 +47,7 @@ use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
-use super::clocktime;
+
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -192,7 +192,7 @@ pub struct Peer {
 
     pub last_compacted_idx: u64,
 
-    become_candidate_time: Option<Timespec>,
+    become_leader_time: Option<Timespec>,
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
 }
@@ -281,7 +281,7 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
-            become_candidate_time: None,
+            become_leader_time: None,
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
@@ -519,6 +519,28 @@ impl Peer {
         }
     }
 
+    fn update_leader_lease(&mut self, ready: &Ready) {
+        // Update leader lease variables when the raft state changes
+        if ready.ss.is_some() {
+            let ss = ready.ss.as_ref().unwrap();
+            match ss.raft_state {
+                StateRole::Leader => {
+                    let now = clocktime::now_monotonic_raw_clocktime();
+                    self.become_leader_time = Some(now);
+                    self.leader_lease_expired_time = self.calculate_lease_expired_time(None, now);
+                    debug!("{} becomes leader, set leader lease expired time to {:?}",
+                           self.tag,
+                           self.leader_lease_expired_time);
+                }
+                StateRole::Follower => {
+                    self.become_leader_time = None;
+                    self.leader_lease_expired_time = None;
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub fn handle_raft_ready<T: Transport>(&mut self,
                                            trans: &T,
                                            metrics: &mut RaftMetrics)
@@ -542,29 +564,7 @@ impl Peer {
 
         let t = SlowTimer::new();
 
-        // Update leader lease variables when the raft state changes
-        if ready.ss.is_some() {
-            let ss = ready.ss.as_ref().unwrap();
-            match ss.raft_state {
-                StateRole::Candidate => {
-                    self.become_candidate_time = Some(clocktime::now_monotonic_raw_clocktime());
-                }
-                StateRole::Leader => {
-                    let leader_begin_time = clocktime::now_monotonic_raw_clocktime();
-                    self.leader_lease_expired_time =
-                        self.calculate_lease_expired_time(self.become_candidate_time,
-                                                          leader_begin_time);
-                    debug!("{} calculate leader lease expired time {:?}",
-                           self.tag,
-                           self.leader_lease_expired_time);
-                    self.become_candidate_time = None;
-                }
-                _ => {
-                    self.become_candidate_time = None;
-                    self.leader_lease_expired_time = None;
-                }
-            }
-        }
+        self.update_leader_lease(&ready);
 
         self.add_ready_metric(&ready, &mut metrics.ready);
 
@@ -1046,6 +1046,19 @@ impl Peer {
             while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
                 // apprently, all the callbacks whose term is less than entry's term are stale.
                 self.notify_not_leader(cmd);
+            }
+            // Update the leader lease when the leader commits the first empty entry
+            // during its term.
+            if self.is_leader() && term == self.raft_group.raft.term {
+                let now = clocktime::now_monotonic_raw_clocktime();
+                let next_expired_time =
+                    self.calculate_lease_expired_time(self.become_leader_time, now);
+                debug!("{} update leade lease expired time from {:?} to {:?}, when leader \
+                        commits the first empty entry during its term",
+                       self.tag,
+                       self.leader_lease_expired_time,
+                       next_expired_time);
+                self.leader_lease_expired_time = next_expired_time;
             }
             return Ok(None);
         }

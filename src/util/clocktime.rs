@@ -13,18 +13,23 @@
 
 pub use self::inner::now_monotonic_raw_clocktime;
 
-#[cfg(any(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux")))]
 mod inner {
     use time::{self, Timespec};
 
+    const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+
     pub fn now_monotonic_raw_clocktime() -> Timespec {
-        // TODO Add monotonic raw clock time impl for macos
-        // Currently use the `time::get_time()` instead.
-        time::get_time()
+        // TODO Add monotonic raw clock time impl for macos and windows
+        // Currently use `time::get_precise_ns()` instead.
+        let ns = time::precise_time_ns();
+        let s = ns / NANOSECONDS_PER_SECOND;
+        let ns = ns % NANOSECONDS_PER_SECOND;
+        Timespec::new(s as i64, ns as i32)
     }
 }
 
-#[cfg(not(any(target_os = "macos")))]
+#[cfg(any(target_os = "linux"))]
 mod inner {
     use std::io;
     use time::Timespec;
@@ -37,8 +42,22 @@ mod inner {
         };
         let res = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut t) };
         if res == -1 {
-            panic!(io::Error::last_os_error());
+            panic!("failet to get monotonic raw locktime, err {}",
+                   io::Error::last_os_error());
         }
         Timespec::new(t.tv_sec, t.tv_nsec as i32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_now_monotonic_raw_clocktime() {
+        let early_time = now_monotonic_raw_clocktime();
+        let late_time = now_monotonic_raw_clocktime();
+        // The monotonic raw clocktime must be monotonic.
+        assert!(late_time > early_time);
     }
 }

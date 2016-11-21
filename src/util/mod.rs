@@ -41,6 +41,7 @@ pub mod sockopt;
 pub mod transport;
 pub mod time_monitor;
 pub mod file_log;
+pub mod clocktime;
 pub mod metrics;
 
 pub use self::fs::{DiskStat, get_disk_stat};
