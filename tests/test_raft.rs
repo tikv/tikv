@@ -153,7 +153,8 @@ impl Interface {
             for id in ids {
                 self.prs.insert(*id, Progress { ..Default::default() });
             }
-            self.reset(0);
+            let term = self.term;
+            self.reset(term);
         }
     }
 }
