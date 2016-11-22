@@ -803,24 +803,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         error!("{} handle raft ready append err: {:?}", peer.tag, e);
                         continue;
                     }
-                    Ok(Some(ready_result)) => ready_results.push((region_id, ready_result)),
+                    Ok(Some(res)) => ready_results.push((region_id, res)),
                     Ok(None) => {}
                 }
             }
         }
 
-        for (region_id, mut ready_result) in ready_results {
+        for (region_id, mut res) in ready_results {
             {
                 let peer = self.region_peers.get_mut(&region_id).unwrap();
 
-                if let Err(e) = peer.handle_raft_ready_apply(&mut ready_result) {
+                if let Err(e) = peer.handle_raft_ready_apply(&mut res) {
                     // TODO: should we panic or shutdown the store?
                     error!("{} handle raft ready err: {:?}", peer.tag, e);
                     continue;
                 }
             };
 
-            self.on_ready_result(region_id, ready_result)
+            self.on_ready_result(region_id, res)
         }
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
