@@ -656,6 +656,7 @@ fn test_aggr_first() {
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:3"), 3),
+        (3, Some("name:5"), 3),
         (4, Some("name:0"), 1),
         (5, Some("name:5"), 4),
         (6, Some("name:5"), 4),
@@ -671,7 +672,7 @@ fn test_aggr_first() {
     let exp = vec![
         (Datum::Bytes(b"name:0".to_vec()), 1),
         (Datum::Bytes(b"name:3".to_vec()), 2),
-        (Datum::Bytes(b"name:5".to_vec()), 5),
+        (Datum::Bytes(b"name:5".to_vec()), 3),
         (Datum::Null, 7),
     ];
     let req = Select::from(&product.table).first(product.id).group_by(&[product.name]).build();
@@ -690,7 +691,7 @@ fn test_aggr_first() {
         (3, Datum::Bytes(b"name:3".to_vec())),
         (1, Datum::Bytes(b"name:0".to_vec())),
         (4, Datum::Bytes(b"name:5".to_vec())),
-        (5, Datum::Bytes(b"name:5".to_vec())),
+        (5, Datum::Null),
         (6, Datum::Null),
     ];
     let req = Select::from(&product.table).first(product.name).group_by(&[product.count]).build();
