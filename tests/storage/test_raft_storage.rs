@@ -123,7 +123,7 @@ fn test_scheduler_leader_change_twice() {
                         10,
                         0,
                         box move |res: storage::Result<_>| {
-            if let &storage::Error::Engine(engine::Error::Request(ref e)) = res.as_ref()
+            if let storage::Error::Engine(engine::Error::Request(ref e)) = *res.as_ref()
                 .err()
                 .unwrap() {
                 assert!(e.has_stale_term());
