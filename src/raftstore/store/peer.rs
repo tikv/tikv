@@ -626,7 +626,7 @@ impl Peer {
                 // a stale pending conf change before next conf change is applied. If it
                 // becomes leader again with the stale pending conf change, will enter
                 // this block, so we notify leadership may have changed.
-                self.notify_not_leader(cmd);
+                self.notify_stale_command(cmd);
             }
 
             if let Err(e) = self.propose_conf_change(req) {
@@ -668,14 +668,9 @@ impl Peer {
         true
     }
 
-    /// Call the callback of `cmd` that leadership may have been changed.
-    ///
-    /// Please note that, `NotLeader` here doesn't mean that currently this
-    /// peer is not leader.
-    fn notify_not_leader(&self, mut cmd: PendingCmd) {
-        let leader = self.get_peer_from_cache(self.leader_id());
-        let not_leader = Error::NotLeader(self.region_id, leader);
-        let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
+    /// Call the callback of `cmd` that is stale.
+    fn notify_stale_command(&self, mut cmd: PendingCmd) {
+        let resp = cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, self.term());
         info!("{} command {} is stale, skip", self.tag, cmd.uuid);
         cmd.call(resp);
     }
@@ -944,7 +939,7 @@ impl Peer {
             assert!(term > 0);
             while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
                 // apprently, all the callbacks whose term is less than entry's term are stale.
-                self.notify_not_leader(cmd);
+                self.notify_stale_command(cmd);
             }
             return Ok(None);
         }
@@ -976,7 +971,7 @@ impl Peer {
                 if cmd.uuid == uuid {
                     return Some(cmd.cb.take().unwrap());
                 } else {
-                    self.notify_not_leader(cmd);
+                    self.notify_stale_command(cmd);
                 }
             }
             return None;
@@ -988,7 +983,7 @@ impl Peer {
             // because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
             // TODO: call coprocessor with uuid instead.
-            self.notify_not_leader(head);
+            self.notify_stale_command(head);
         }
         None
     }

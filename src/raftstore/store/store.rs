@@ -1100,6 +1100,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Err(box_err!("mismatch peer id {} != {}", peer.peer_id(), peer_id));
         }
 
+        let header = msg.get_header();
+        // If header's term is 2 verions behind current term, leadership may have been changed away.
+        if header.has_term() && peer.term() > header.get_term() + 1 {
+            return Err(Error::StaleCommand);
+        }
+
         let res = peer.check_epoch(msg);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
             // Attach the next region which might be split from the current region. But it doesn't
@@ -1114,17 +1120,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             return Err(Error::StaleEpoch(msg, new_regions));
         }
-        if res.is_err() {
-            return res;
-        }
-
-        let header = msg.get_header();
-        // If header's term is 2 verions behind current term, leadership may have been changed away.
-        if header.has_term() && peer.term() > header.get_term() + 1 {
-            return Err(Error::StaleTerm);
-        }
-
-        Ok(())
+        res
     }
 
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {

@@ -94,7 +94,7 @@ fn test_engine_leader_change_twice() {
 
 #[test]
 fn test_scheduler_leader_change_twice() {
-    let mut cluster = new_server_cluster_with_cfs(0, 3, ALL_CFS);
+    let mut cluster = new_server_cluster_with_cfs(0, 2, ALL_CFS);
     cluster.run();
 
     let region = cluster.get_region(b"");
@@ -126,14 +126,15 @@ fn test_scheduler_leader_change_twice() {
             if let storage::Error::Engine(engine::Error::Request(ref e)) = *res.as_ref()
                 .err()
                 .unwrap() {
-                assert!(e.has_stale_term());
+                assert!(e.has_stale_command());
             } else {
-                panic!("expect stale term, but got {:?}", res);
+                panic!("expect stale command, but got {:?}", res);
             }
             tx.send(1).unwrap();
         })
         .unwrap();
-
+    // Sleep a while, the prewrite should be blocked at snapshot stage.
+    thread::sleep(Duration::from_millis(50));
     // Transfer leader twice, then unblock snapshot.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
