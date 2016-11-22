@@ -34,7 +34,10 @@ const SOCKET_READ_TIMEOUT: u64 = 3;
 const SOCKET_WRITE_TIMEOUT: u64 = 3;
 
 const PD_RPC_PREFIX: &'static str = "/pd/rpc";
-const MSG_ID_VALIDATE: u64 = 0;
+
+// Only for `validate_endpoints`.
+const MSG_ID_VALIDATION: u64 = 0;
+const CLUSTER_ID_VALIDATION: u64 = 0;
 
 // `validate_endpoints` validates pd members, make sure they are in the same cluster.
 // Notice that it ignores failed pd nodes.
@@ -46,7 +49,8 @@ fn validate_endpoints(endpoints: &[String]) -> Result<()> {
     let len = endpoints.len();
     let mut endpoints_set = HashSet::with_capacity(len);
 
-    let mut sample = None;
+    let mut sample_id = None;
+    let mut sample_members = None;
     for ep in endpoints {
         if !endpoints_set.insert(ep) {
             return Err(box_err!("a duplicate PD url {}", ep));
@@ -58,35 +62,47 @@ fn validate_endpoints(endpoints: &[String]) -> Result<()> {
             Err(_) => continue,
         };
 
-        let mut req = protocol::new_request(MSG_ID_VALIDATE, pdpb::CommandType::GetPDMembers);
+        let mut req = protocol::new_request(CLUSTER_ID_VALIDATION, pdpb::CommandType::GetPDMembers);
         req.set_get_pd_members(pdpb::GetPDMembersRequest::new());
-        let (id, mut resp) = match send_msg(&mut stream, MSG_ID_VALIDATE, &req) {
-            Ok((id, resp)) => (id, resp),
+        let (mid, mut resp) = match send_msg(&mut stream, MSG_ID_VALIDATION, &req) {
+            Ok((mid, resp)) => (mid, resp),
             // Ignore failed pd node.
             Err(_) => continue,
         };
 
-        if id != MSG_ID_VALIDATE {
-            return Err(box_err!("PD response msg_id not match, want {}, got {}",
-                                MSG_ID_VALIDATE,
-                                id));
+        if mid != MSG_ID_VALIDATION {
+            return Err(box_err!("PD response msg_id mismatch, want {}, got {}",
+                                MSG_ID_VALIDATION,
+                                mid));
         }
 
+        // Check cluster ID.
+        let cid = resp.take_header().get_cluster_id();
+        if let Some(sample) = sample_id {
+            if sample != cid {
+                return Err(box_err!("PD response cluster_id mismatch, want {}, got {}",
+                                    sample,
+                                    cid));
+            }
+        } else {
+            sample_id = Some(cid);
+        }
+
+        // Check all fields.
         let mut members = resp.take_get_pd_members().take_members().into_vec();
         if members.len() < len {
             return Err(box_err!("inconsistent PD list, there is an invalid PD url"));
         }
 
-        // Check all fields.
         members.sort_by(|a, b| a.get_name().cmp(b.get_name()));
-        if let Some(ref sample) = sample {
+        if let Some(ref sample) = sample_members {
             if *sample != members {
                 return Err(box_err!("inconsistent PD list, expect: {:?}, got: {:?}",
                                     sample,
                                     members));
             }
         } else {
-            sample = Some(members);
+            sample_members = Some(members);
         }
     }
 
