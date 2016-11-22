@@ -565,7 +565,7 @@ fn test_leader_election(pre_vote: bool) {
         // three logs further along than 0
         (Network::new(vec![None,
                            Some(ents(vec![1])),
-                           Some(ents(vec![1])),
+                           Some(ents(vec![1,1])),
                            Some(ents(vec![1])),
                            None],
                       pre_vote), StateRole::Follower, 1),
