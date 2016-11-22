@@ -20,7 +20,6 @@ use std::io::Error as IoError;
 use kvproto::kvrpcpb::LockInfo;
 use mio::{EventLoop, EventLoopBuilder};
 use self::metrics::*;
-use server::transport::RaftStoreRouter;
 
 pub mod engine;
 pub mod mvcc;
@@ -44,7 +43,6 @@ pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 
-pub const COMMAND_TAG_GC: &'static str = "gc";
 
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -205,21 +203,6 @@ impl Debug for Command {
 }
 
 impl Command {
-    pub fn get_ctx(&self) -> Context {
-        match *self {
-            Command::Get { ref ctx, .. } |
-            Command::BatchGet { ref ctx, .. } |
-            Command::Scan { ref ctx, .. } |
-            Command::Prewrite { ref ctx, .. } |
-            Command::Commit { ref ctx, .. } |
-            Command::Cleanup { ref ctx, .. } |
-            Command::Rollback { ref ctx, .. } |
-            Command::ScanLock { ref ctx, .. } |
-            Command::ResolveLock { ref ctx, .. } |
-            Command::Gc { ref ctx, .. } => ctx.clone(),
-        }
-    }
-
     pub fn readonly(&self) -> bool {
         match *self {
             Command::Get { .. } |
@@ -243,26 +226,26 @@ impl Command {
             Command::Rollback { .. } => "rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
-            Command::Gc { .. } => COMMAND_TAG_GC,
+            Command::Gc { .. } => "gc",
         }
     }
 }
 
 use util::transport::SendCh;
 
-struct StorageHandle<T: RaftStoreRouter + 'static> {
+struct StorageHandle {
     handle: Option<thread::JoinHandle<()>>,
-    event_loop: Option<EventLoop<Scheduler<T>>>,
+    event_loop: Option<EventLoop<Scheduler>>,
 }
 
-pub struct Storage<T: RaftStoreRouter + 'static> {
+pub struct Storage {
     engine: Box<Engine>,
     sendch: SendCh<Msg>,
-    handle: Arc<Mutex<StorageHandle<T>>>,
+    handle: Arc<Mutex<StorageHandle>>,
 }
 
-impl<T: RaftStoreRouter> Storage<T> {
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage<T>> {
+impl Storage {
+    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
         let sendch = SendCh::new(event_loop.channel(), "kv-storage");
@@ -278,12 +261,12 @@ impl<T: RaftStoreRouter> Storage<T> {
         })
     }
 
-    pub fn new(config: &Config) -> Result<Storage<T>> {
+    pub fn new(config: &Config) -> Result<Storage> {
         let engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
-    pub fn start(&mut self, config: &Config, router: T) -> Result<()> {
+    pub fn start(&mut self, config: &Config) -> Result<()> {
         let mut handle = self.handle.lock().unwrap();
         if handle.handle.is_some() {
             return Err(box_err!("scheduler is already running"));
@@ -301,8 +284,7 @@ impl<T: RaftStoreRouter> Storage<T> {
                                            ch,
                                            sched_concurrency,
                                            sched_worker_pool_size,
-                                           sched_too_busy_threshold,
-                                           router);
+                                           sched_too_busy_threshold);
             if let Err(e) = el.run(&mut sched) {
                 panic!("scheduler run err:{:?}", e);
             }
@@ -519,8 +501,8 @@ impl<T: RaftStoreRouter> Storage<T> {
     }
 }
 
-impl<T: RaftStoreRouter> Clone for Storage<T> {
-    fn clone(&self) -> Storage<T> {
+impl Clone for Storage {
+    fn clone(&self) -> Storage {
         Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
@@ -563,9 +545,9 @@ quick_error! {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
-pub fn create_event_loop<T: RaftStoreRouter + 'static>(notify_capacity: usize,
-                                                       messages_per_tick: usize)
-                                                       -> Result<EventLoop<Scheduler<T>>> {
+pub fn create_event_loop(notify_capacity: usize,
+                         messages_per_tick: usize)
+                         -> Result<EventLoop<Scheduler>> {
     let mut builder = EventLoopBuilder::new();
     builder.notify_capacity(notify_capacity);
     builder.messages_per_tick(messages_per_tick);
@@ -577,7 +559,6 @@ pub fn create_event_loop<T: RaftStoreRouter + 'static>(notify_capacity: usize,
 mod tests {
     use super::*;
     use std::sync::mpsc::{channel, Sender};
-    use server::transport::MockRaftStoreRouter;
     use kvproto::kvrpcpb::Context;
 
     fn expect_get_none(done: Sender<i32>) -> Callback<Option<Value>> {
@@ -647,7 +628,7 @@ mod tests {
     fn test_get_put() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config, MockRaftStoreRouter).unwrap();
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_get(Context::new(),
                        make_key(b"x"),
@@ -691,7 +672,7 @@ mod tests {
         // New engine lack of some column families.
         let engine = engine::new_local_engine(&config.path, &["default"]).unwrap();
         let mut storage = Storage::from_engine(engine, &config).unwrap();
-        storage.start(&config, MockRaftStoreRouter).unwrap();
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![
@@ -712,7 +693,7 @@ mod tests {
     fn test_scan() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config, MockRaftStoreRouter).unwrap();
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![
@@ -753,7 +734,7 @@ mod tests {
     fn test_batch_get() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config, MockRaftStoreRouter).unwrap();
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![
@@ -792,7 +773,7 @@ mod tests {
     fn test_txn() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config, MockRaftStoreRouter).unwrap();
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
@@ -852,7 +833,7 @@ mod tests {
         let mut config = Config::new();
         config.sched_too_busy_threshold = 0;
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config, MockRaftStoreRouter).unwrap();
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_get(Context::new(),
                        make_key(b"x"),
@@ -875,7 +856,7 @@ mod tests {
     fn test_cleanup() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config, MockRaftStoreRouter).unwrap();
+        storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],

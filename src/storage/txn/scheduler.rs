@@ -36,7 +36,7 @@ use std::fmt::{self, Formatter, Debug};
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
-              Error as StorageError, ScanMode, COMMAND_TAG_GC};
+              Error as StorageError, ScanMode};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError};
 use storage::{Key, Value, KvPair};
@@ -49,7 +49,6 @@ use super::Error;
 use super::store::SnapshotStore;
 use super::latch::{Latches, Lock};
 use super::super::metrics::*;
-use server::transport::RaftStoreRouter;
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -154,7 +153,6 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
 pub struct RunningCtx {
     cid: u64,
     cmd: Option<Command>,
-    cmd_ctx: Context,
     lock: Lock,
     callback: Option<StorageCb>,
     tag: &'static str,
@@ -166,11 +164,9 @@ impl RunningCtx {
     /// Creates a context for a running command.
     pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> RunningCtx {
         let tag = cmd.tag();
-        let cmd_ctx = cmd.get_ctx();
         RunningCtx {
             cid: cid,
             cmd: Some(cmd),
-            cmd_ctx: cmd_ctx,
             lock: lock,
             callback: Some(cb),
             tag: tag,
@@ -196,7 +192,7 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallbac
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
-pub struct Scheduler<T: RaftStoreRouter> {
+pub struct Scheduler {
     engine: Box<Engine>,
 
     // cid -> context
@@ -214,19 +210,16 @@ pub struct Scheduler<T: RaftStoreRouter> {
 
     // worker pool
     worker_pool: ThreadPool,
-
-    raft_router: T,
 }
 
-impl<T: RaftStoreRouter> Scheduler<T> {
+impl Scheduler {
     /// Creates a scheduler.
     pub fn new(engine: Box<Engine>,
                schedch: SendCh<Msg>,
                concurrency: usize,
                worker_pool_size: usize,
-               sched_too_busy_threshold: usize,
-               raft_router: T)
-               -> Scheduler<T> {
+               sched_too_busy_threshold: usize)
+               -> Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: HashMap::new(),
@@ -236,7 +229,6 @@ impl<T: RaftStoreRouter> Scheduler<T> {
             sched_too_busy_threshold: sched_too_busy_threshold,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
-            raft_router: raft_router,
         }
     }
 }
@@ -505,7 +497,7 @@ fn extract_ctx(cmd: &Command) -> &Context {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> Scheduler<T> {
+impl Scheduler {
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
@@ -674,16 +666,6 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
         }
     }
 
-    fn report_storage_gc(&mut self, region_id: u64, peer_id: u64) {
-        // Notify corresponding peer to check region size after GC is done.
-        if let Err(e) = self.raft_router.report_storage_gc(region_id, peer_id) {
-            error!("report storage gc for region {}, peer {} failed, err={:?}",
-                   region_id,
-                   peer_id,
-                   e);
-        }
-    }
-
     /// Event handler for the success of read.
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
@@ -698,10 +680,6 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
             self.schedule_command(cmd, cb);
         } else {
             execute_callback(cb, pr);
-            if ctx.tag == COMMAND_TAG_GC {
-                self.report_storage_gc(ctx.cmd_ctx.get_region_id(),
-                                       ctx.cmd_ctx.get_peer().get_id());
-            }
         }
 
         self.release_lock(&ctx.lock, cid);
@@ -754,10 +732,6 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
             self.schedule_command(cmd, cb);
         } else {
             execute_callback(cb, pr);
-            if ctx.tag == COMMAND_TAG_GC {
-                self.report_storage_gc(ctx.cmd_ctx.get_region_id(),
-                                       ctx.cmd_ctx.get_peer().get_id());
-            }
         }
 
         self.release_lock(&ctx.lock, cid);
@@ -787,7 +761,7 @@ impl<T: RaftStoreRouter + 'static> Scheduler<T> {
 }
 
 /// Handler of the scheduler event loop.
-impl<T: RaftStoreRouter + 'static> mio::Handler for Scheduler<T> {
+impl mio::Handler for Scheduler {
     type Timeout = ();
     type Message = Msg;
 

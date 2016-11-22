@@ -80,7 +80,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
 
     raft_router: T,
 
-    store: StoreHandler<T>,
+    store: StoreHandler,
     end_point_worker: Worker<EndPointTask>,
 
     snap_mgr: SnapManager,
@@ -100,7 +100,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
                listener: TcpListener,
-               storage: Storage<T>,
+               storage: Storage,
                raft_router: T,
                resolver: S,
                snap_mgr: SnapManager)
@@ -326,7 +326,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                     self.remove_conn(event_loop, token);
                 }
             }
-
         }
     }
 
@@ -724,12 +723,11 @@ mod tests {
         let cfg = Config::new();
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let mut storage = Storage::new(&cfg.storage).unwrap();
+        storage.start(&cfg.storage).unwrap();
 
         let (tx, rx) = mpsc::channel();
         let router = TestRaftStoreRouter::new(tx);
         let report_unreachable_count = router.report_unreachable_count.clone();
-
-        storage.start(&cfg.storage, router.clone()).unwrap();
 
         let mut server = Server::new(&mut event_loop,
                                      &cfg,

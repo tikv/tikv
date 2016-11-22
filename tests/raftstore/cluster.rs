@@ -632,9 +632,9 @@ impl<T: Simulator> Cluster<T> {
         let region_id = region.get_id();
         let leader = self.leader_of_region(region_id).unwrap();
         let ch = self.sim.rl().get_store_sendch(leader.get_store_id()).unwrap();
-        let msg = Msg::ReportStorageGc {
+        let msg = Msg::MergeCheckResult {
             region_id: region_id,
-            peer_id: leader.get_id(),
+            epoch: region.get_region_epoch().clone(),
         };
         ch.send(msg).unwrap();
     }

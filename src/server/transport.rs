@@ -64,13 +64,6 @@ pub trait RaftStoreRouter: Send + Clone {
             to_peer_id: to_peer_id,
         })
     }
-
-    fn report_storage_gc(&self, region_id: u64, peer_id: u64) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::ReportStorageGc {
-            region_id: region_id,
-            peer_id: peer_id,
-        })
-    }
 }
 
 #[derive(Clone)]

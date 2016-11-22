@@ -2011,9 +2011,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
             }
-            Msg::ReportStorageGc { region_id, peer_id } => {
-                self.on_storage_gc(region_id, peer_id);
-            }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
             Msg::SnapGenRes { region_id, snap } => {
                 self.on_snap_gen_res(region_id, snap);

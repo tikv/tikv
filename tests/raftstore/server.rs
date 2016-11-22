@@ -41,10 +41,9 @@ use super::util::sleep_ms;
 use super::transport_simulate::*;
 
 type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
-pub type SimulateRaftStoreRouter = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
 
 pub struct ServerCluster {
-    pub routers: HashMap<u64, SimulateRaftStoreRouter>,
+    routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
     senders: HashMap<u64, SendCh<Msg>>,
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
@@ -175,7 +174,7 @@ impl Simulator for ServerCluster {
         self.sim_trans.insert(node_id, simulate_trans);
 
         let mut store = create_raft_storage(sim_router.clone(), engine, &cfg).unwrap();
-        store.start(&cfg.storage, sim_router.clone()).unwrap();
+        store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
         let mut server = Server::new(&mut event_loop,

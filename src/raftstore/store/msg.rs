@@ -63,8 +63,6 @@ pub enum Msg {
 
     ReportUnreachable { region_id: u64, to_peer_id: u64 },
 
-    ReportStorageGc { region_id: u64, peer_id: u64 },
-
     // For snapshot stats.
     SnapshotStats,
     SnapGenRes {
@@ -98,12 +96,6 @@ impl fmt::Debug for Msg {
                        "peer {} for region {} is unreachable",
                        to_peer_id,
                        region_id)
-            }
-            Msg::ReportStorageGc { ref region_id, ref peer_id } => {
-                write!(fmt,
-                       "storage gc for region {}, peer {} is done",
-                       region_id,
-                       peer_id)
             }
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
             Msg::SnapGenRes { region_id, ref snap } => {

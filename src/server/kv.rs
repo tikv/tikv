@@ -27,7 +27,6 @@ use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
 use storage::engine::Error as EngineError;
 use util::escape;
-use super::transport::RaftStoreRouter;
 
 use super::{Result, Error, OnResponse};
 
@@ -122,12 +121,12 @@ fn cmd_gc_done(r: StorageResult<()>, resp: &mut Response) {
     resp.set_cmd_gc_resp(gc);
 }
 
-pub struct StoreHandler<T: RaftStoreRouter + 'static> {
-    pub store: Storage<T>,
+pub struct StoreHandler {
+    pub store: Storage,
 }
 
-impl<T: RaftStoreRouter + 'static> StoreHandler<T> {
-    pub fn new(store: Storage<T>) -> StoreHandler<T> {
+impl StoreHandler {
+    pub fn new(store: Storage) -> StoreHandler {
         StoreHandler { store: store }
     }
 

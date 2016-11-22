@@ -16,10 +16,10 @@ use tikv::storage::{Mutation, make_key, ALL_CFS};
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
 use raftstore::cluster::Cluster;
-use raftstore::server::{SimulateRaftStoreRouter, ServerCluster};
+use raftstore::server::ServerCluster;
 use super::sync_storage::SyncStorage;
 
-fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateRaftStoreRouter>, Context) {
+fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
     let mut cluster = new_server_cluster_with_cfs(0, 1, ALL_CFS);
     cluster.run();
     // make sure leader has been elected.
@@ -28,14 +28,13 @@ fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage<SimulateRaftStoreR
     let region = cluster.get_region(b"");
     let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
     let engine = cluster.sim.rl().storages[&leader_id.get_id()].clone();
-    let router = cluster.sim.rl().routers[&leader_id.get_id()].clone();
 
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
 
-    (cluster, SyncStorage::from_engine(engine, &Default::default(), router), ctx)
+    (cluster, SyncStorage::from_engine(engine, &Default::default()), ctx)
 }
 
 #[test]
