@@ -778,7 +778,7 @@ impl<T: Storage> Raft<T> {
             } else {
                 m.get_from()
             };
-            if m.get_msg_type() != MessageType::MsgRequestPreVote ||
+            if m.get_msg_type() != MessageType::MsgRequestPreVote &&
                !(m.get_msg_type() == MessageType::MsgRequestPreVoteResponse && !m.get_reject()) {
                 info!("{} [term: {}] received a {:?} message with higher term from {} [term: {}]",
                       self.tag,
@@ -871,8 +871,9 @@ impl<T: Storage> Raft<T> {
                           m.get_log_term(),
                           m.get_index(),
                           self.term);
-                    let to_send =
+                    let mut to_send =
                         new_message(m.get_from(), vote_resp_msg_type(m.get_msg_type()), None);
+                    to_send.set_reject(false);
                     self.send(to_send);
                     if m.get_msg_type() == MessageType::MsgRequestVote {
                         self.election_elapsed = 0;

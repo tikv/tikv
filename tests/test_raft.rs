@@ -36,7 +36,6 @@ use std::cmp;
 use kvproto::eraftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
                        ConfChange, ConfChangeType};
 use rand;
-use util::init_log;
 
 
 pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
@@ -156,7 +155,8 @@ impl Interface {
             for id in ids {
                 self.prs.insert(*id, Progress { ..Default::default() });
             }
-            self.reset(0);
+            let term = self.term;
+            self.reset(term);
         }
     }
 }
@@ -546,7 +546,6 @@ fn test_leader_election_pre_vote() {
 }
 
 fn test_leader_election(pre_vote: bool) {
-    init_log();
     let mut tests = vec![
         (Network::new(vec![None, None, None], pre_vote), StateRole::Leader, 1),
         (Network::new(vec![None, None, NOP_STEPPER], pre_vote), StateRole::Leader, 1),
@@ -566,8 +565,8 @@ fn test_leader_election(pre_vote: bool) {
         // three logs further along than 0
         (Network::new(vec![None,
                            Some(ents(vec![1])),
-                           Some(ents(vec![2])),
-                           Some(ents(vec![1, 3])),
+                           Some(ents(vec![1])),
+                           Some(ents(vec![1])),
                            None],
                       pre_vote), StateRole::Follower, 1),
 
@@ -672,9 +671,9 @@ fn test_vote_from_any_state_(vt: MessageType) {
         assert!(!resp.get_reject());
 
         if vt == MessageType::MsgRequestVote {
-            assert!(sm.state != StateRole::Follower);
-            assert!(sm.term != new_term);
-            assert!(sm.vote != 2);
+            assert_eq!(sm.state, StateRole::Follower);
+            assert_eq!(sm.term, new_term);
+            assert_eq!(sm.vote, 2);
         } else {
             assert_eq!(sm.state, state);
             assert_eq!(sm.term, orig_term);
@@ -993,8 +992,8 @@ fn test_proposal() {
     let mut tests = vec![
         (Network::new(vec![None, None, None], false), true),
         (Network::new(vec![None, None, NOP_STEPPER], false), true),
-        (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER], false), true),
-        (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None], false), true),
+        (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER], false), false),
+        (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None], false), false),
         (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None, None], false), true),
     ];
 
@@ -1436,7 +1435,7 @@ fn test_state_transition() {
         (StateRole::PreCandidate, StateRole::Follower, true, 0, INVALID_ID),
         (StateRole::PreCandidate, StateRole::PreCandidate, true, 0, INVALID_ID),
         (StateRole::PreCandidate, StateRole::Candidate, true, 1, INVALID_ID),
-        (StateRole::PreCandidate, StateRole::Leader, true, 1, INVALID_ID),
+        (StateRole::PreCandidate, StateRole::Leader, true, 0, 1),
 
         (StateRole::Candidate, StateRole::Follower, true, 0, INVALID_ID),
         (StateRole::Candidate, StateRole::PreCandidate, true, 0, INVALID_ID),
@@ -1444,7 +1443,7 @@ fn test_state_transition() {
         (StateRole::Candidate, StateRole::Leader, true, 0, 1),
 
         (StateRole::Leader, StateRole::Follower, true, 1, INVALID_ID),
-        (StateRole::Leader, StateRole::PreCandidate, true, 0, INVALID_ID),
+        (StateRole::Leader, StateRole::PreCandidate, false, 0, INVALID_ID),
         (StateRole::Leader, StateRole::Candidate, false, 1, INVALID_ID),
         (StateRole::Leader, StateRole::Leader, true, 0, 1),
     ];
