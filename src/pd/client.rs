@@ -36,15 +36,15 @@ const SOCKET_WRITE_TIMEOUT: u64 = 3;
 const PD_RPC_PREFIX: &'static str = "/pd/rpc";
 
 // Only for `validate_endpoints`.
-const MSG_ID_VALIDATION: u64 = 0;
-const CLUSTER_ID_VALIDATION: u64 = 0;
+const VALIDATE_MSG_ID: u64 = 0;
+const VALIDATE_CLUSTER_ID: u64 = 0;
 
 // `validate_endpoints` validates pd members, make sure they are in the same cluster.
 // It returns a cluster ID.
 // Notice that it ignores failed pd nodes.
 fn validate_endpoints(endpoints: &[String]) -> Result<u64> {
     if endpoints.is_empty() {
-        return Err(box_err!("empty PD list"));
+        return Err(box_err!("empty PD endpoints"));
     }
 
     let len = endpoints.len();
@@ -63,17 +63,17 @@ fn validate_endpoints(endpoints: &[String]) -> Result<u64> {
             Err(_) => continue,
         };
 
-        let mut req = protocol::new_request(CLUSTER_ID_VALIDATION, pdpb::CommandType::GetPDMembers);
+        let mut req = protocol::new_request(VALIDATE_CLUSTER_ID, pdpb::CommandType::GetPDMembers);
         req.set_get_pd_members(pdpb::GetPDMembersRequest::new());
-        let (mid, mut resp) = match send_msg(&mut stream, MSG_ID_VALIDATION, &req) {
+        let (mid, mut resp) = match send_msg(&mut stream, VALIDATE_MSG_ID, &req) {
             Ok((mid, resp)) => (mid, resp),
             // Ignore failed pd node.
             Err(_) => continue,
         };
 
-        if mid != MSG_ID_VALIDATION {
+        if mid != VALIDATE_MSG_ID {
             return Err(box_err!("PD response msg_id mismatch, want {}, got {}",
-                                MSG_ID_VALIDATION,
+                                VALIDATE_MSG_ID,
                                 mid));
         }
 
@@ -92,13 +92,13 @@ fn validate_endpoints(endpoints: &[String]) -> Result<u64> {
         // Check all fields.
         let mut members = resp.take_get_pd_members().take_members().into_vec();
         if members.len() < len {
-            return Err(box_err!("inconsistent PD list, there is an invalid PD url"));
+            return Err(box_err!("inconsistent PD endpoints, there is an invalid PD url"));
         }
 
         members.sort_by(|a, b| a.get_name().cmp(b.get_name()));
         if let Some(ref sample) = sample_members {
             if *sample != members {
-                return Err(box_err!("inconsistent PD list, expect: {:?}, got: {:?}",
+                return Err(box_err!("inconsistent PD endpoints, expect: {:?}, got: {:?}",
                                     sample,
                                     members));
             }
@@ -237,7 +237,7 @@ impl RpcClient {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let mut cluster_id = CLUSTER_ID_VALIDATION;
+        let mut cluster_id = VALIDATE_CLUSTER_ID;
         for _ in 0..MAX_PD_SEND_RETRY_COUNT {
             match validate_endpoints(&endpoints) {
                 Ok(id) => {
@@ -250,7 +250,7 @@ impl RpcClient {
             }
         }
 
-        if cluster_id == CLUSTER_ID_VALIDATION {
+        if cluster_id == VALIDATE_CLUSTER_ID {
             return Err(box_err!("failed to get cluster id from pd"));
         }
 
