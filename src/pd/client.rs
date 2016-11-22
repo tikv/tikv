@@ -26,7 +26,7 @@ use rand::{self, Rng};
 use kvproto::pdpb::{self, Request, Response};
 use kvproto::msgpb::{Message, MessageType};
 
-use super::{Result, PdClient, protocol};
+use super::{Result, protocol};
 use super::metrics::*;
 
 const MAX_PD_SEND_RETRY_COUNT: usize = 100;
@@ -40,8 +40,9 @@ const MSG_ID_VALIDATION: u64 = 0;
 const CLUSTER_ID_VALIDATION: u64 = 0;
 
 // `validate_endpoints` validates pd members, make sure they are in the same cluster.
+// It returns a cluster ID.
 // Notice that it ignores failed pd nodes.
-fn validate_endpoints(endpoints: &[String]) -> Result<()> {
+fn validate_endpoints(endpoints: &[String]) -> Result<u64> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD list"));
     }
@@ -49,7 +50,7 @@ fn validate_endpoints(endpoints: &[String]) -> Result<()> {
     let len = endpoints.len();
     let mut endpoints_set = HashSet::with_capacity(len);
 
-    let mut sample_id = None;
+    let mut cluster_id = None;
     let mut sample_members = None;
     for ep in endpoints {
         if !endpoints_set.insert(ep) {
@@ -78,14 +79,14 @@ fn validate_endpoints(endpoints: &[String]) -> Result<()> {
 
         // Check cluster ID.
         let cid = resp.take_header().get_cluster_id();
-        if let Some(sample) = sample_id {
+        if let Some(sample) = cluster_id {
             if sample != cid {
                 return Err(box_err!("PD response cluster_id mismatch, want {}, got {}",
                                     sample,
                                     cid));
             }
         } else {
-            sample_id = Some(cid);
+            cluster_id = Some(cid);
         }
 
         // Check all fields.
@@ -106,7 +107,7 @@ fn validate_endpoints(endpoints: &[String]) -> Result<()> {
         }
     }
 
-    Ok(())
+    cluster_id.ok_or(box_err!("PD cluster stop responding"))
 }
 
 #[derive(Debug)]
@@ -236,19 +237,11 @@ impl RpcClient {
             .filter(|s| !s.is_empty())
             .collect();
 
-        try!(validate_endpoints(&endpoints));
-
-        let mut client = RpcClient {
-            msg_id: AtomicUsize::new(0),
-            core: Mutex::new(RpcClientCore::new(endpoints)),
-            cluster_id: 0,
-        };
-
+        let mut cluster_id = CLUSTER_ID_VALIDATION;
         for _ in 0..MAX_PD_SEND_RETRY_COUNT {
-            match client.get_cluster_id() {
+            match validate_endpoints(&endpoints) {
                 Ok(id) => {
-                    client.cluster_id = id;
-                    return Ok(client);
+                    cluster_id = id;
                 }
                 Err(e) => {
                     warn!("failed to get cluster id from pd: {:?}", e);
@@ -256,7 +249,16 @@ impl RpcClient {
                 }
             }
         }
-        Err(box_err!("failed to get cluster id from pd"))
+
+        if cluster_id == CLUSTER_ID_VALIDATION {
+            return Err(box_err!("failed to get cluster id from pd"));
+        }
+
+        Ok(RpcClient {
+            msg_id: AtomicUsize::new(0),
+            core: Mutex::new(RpcClientCore::new(endpoints)),
+            cluster_id: cluster_id,
+        })
     }
 
     pub fn send(&self, req: &Request) -> Result<Response> {
