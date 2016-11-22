@@ -25,10 +25,15 @@ const RAFT_LOG_GC_INTERVAL: u64 = 5000;
 const RAFT_LOG_GC_THRESHOLD: u64 = 50;
 const RAFT_LOG_GC_LIMIT: u64 = 100000;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
+const MERGE_REGION_CHECK_TICK_INTERVAL: u64 = 600000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 // When the db size of a region goes beyond `REGION_MAX_SIZE`,
 // the leader peer of this region will request PD to perform a region split action.
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
+// When the count of delete happened a region goes beyond
+// `REGION_MERGE_CHECK_ON_DELETE_COUNT`, the leader peer of this region will check
+// whether it's necessary to perform a region merge action.
+const REGION_MERGE_CHECK_ON_DELETE_COUNT: u64 = 10000;
 // When the db size of a region goes below `REGION_MERGE_SIZE`,
 // the leader peer of this region will request PD to perform a region merge action.
 const REGION_MERGE_SIZE: u64 = 10 * 1024 * 1024;
@@ -73,13 +78,19 @@ pub struct Config {
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: u64,
+    // Interval (ms) to check region whether it's necessary to perform region merge.
+    pub merge_region_check_tick_interval: u64,
     /// When region [a, b) size meets region_max_size, it will be split
     /// into two region into [a, c), [c, b). And the size of [a, c) will
     /// be region_split_size (or a little bit smaller).
     pub region_max_size: u64,
     pub region_split_size: u64,
-    /// When the size of a region decreases to `region_merge_size` after a storage GC,
-    /// the corresponding peer will request PD to perform a region merge.
+    // When the count of delete happened a region goes beyond
+    // `region_merge_check_on_delete_count`, the leader peer of this region will check
+    // whether it's necessary to perform a region merge action.
+    pub region_merge_check_on_delete_count: u64,
+    // When the db size of a region goes below `region_merge_size`,
+    // the leader peer of this region will request PD to perform a region merge action.
     pub region_merge_size: u64,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
@@ -130,8 +141,10 @@ impl Default for Config {
             raft_log_gc_threshold: RAFT_LOG_GC_THRESHOLD,
             raft_log_gc_limit: RAFT_LOG_GC_LIMIT,
             split_region_check_tick_interval: SPLIT_REGION_CHECK_TICK_INTERVAL,
+            merge_region_check_tick_interval: MERGE_REGION_CHECK_TICK_INTERVAL,
             region_max_size: REGION_MAX_SIZE,
             region_split_size: REGION_SPLIT_SIZE,
+            region_merge_check_on_delete_count: REGION_MERGE_CHECK_ON_DELETE_COUNT,
             region_merge_size: REGION_MERGE_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
             region_compact_check_tick_interval: REGION_COMPACT_CHECK_TICK_INTERVAL,

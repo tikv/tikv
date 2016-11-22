@@ -366,6 +366,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
         self.register_split_region_check_tick(event_loop);
+        self.register_merge_region_check_tick(event_loop);
         self.register_compact_check_tick(event_loop);
         self.register_pd_heartbeat_tick(event_loop);
         self.register_pd_store_heartbeat_tick(event_loop);
@@ -1465,6 +1466,42 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_split_region_check_tick(event_loop);
     }
 
+    fn register_merge_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::MergeRegionCheck,
+                                       self.cfg.merge_region_check_tick_interval) {
+            error!("{} register merge region check tick err: {:?}", self.tag, e);
+        }
+    }
+
+    fn on_merge_region_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        // To avoid frequent scan, we only schedule new task if region check worker is idle.
+        if self.region_check_worker.is_busy() {
+            self.register_merge_region_check_tick(event_loop);
+            return;
+        }
+        for (_, peer) in &mut self.region_peers {
+            if !peer.is_leader() {
+                continue;
+            }
+
+            if peer.delete_count < self.cfg.region_merge_check_on_delete_count {
+                continue;
+            }
+            info!("{} region's delete count {} >= {}, need to check whether should merge",
+                  peer.tag,
+                  peer.delete_count,
+                  self.cfg.region_merge_check_on_delete_count);
+            let task = region_check::new_merge_check_task(peer.get_store());
+            if let Err(e) = self.region_check_worker.schedule(task) {
+                error!("{} failed to schedule merge check: {}", self.tag, e);
+            }
+            peer.delete_count = 0;
+        }
+
+        self.register_merge_region_check_tick(event_loop);
+    }
+
     fn register_compact_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactCheck,
@@ -1838,45 +1875,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_storage_gc(&mut self, region_id: u64, peer_id: u64) {
-        info!("{} storage gc is done for region id {}, peer id {}",
-              self.tag,
-              region_id,
-              peer_id);
-        // To avoid frequent scan, we only add new scan tasks if all previous tasks
-        // have finished.
-        if self.region_check_worker.is_busy() {
-            warn!("split check worker is busy, ignore gc notify for [region {}] peer {}",
-                  region_id,
-                  peer_id);
-            return;
-        }
-
-        // Check that the region and peer do exist.
-        if let Some(peer) = self.region_peers.get(&region_id) {
-            if peer.peer_id() == peer_id {
-                // Only handle gc notify on leader peer.
-                if !peer.is_leader() {
-                    return;
-                }
-
-                info!("{} gc is done, need to check whether should merge",
-                      peer.tag);
-                let task = region_check::new_merge_check_task(peer.get_store());
-                // If it fails to schedule this task, another gc in the future
-                // will re-trigger the checking for region merge.
-                // So it's fine to just log an error message here.
-                if let Err(e) = self.region_check_worker.schedule(task) {
-                    error!("failed to schedule merge check: {}", e);
-                }
-                return;
-            }
-        }
-        error!("[region {}] peer {} not found, skip handling gc notify",
-               region_id,
-               peer_id);
-    }
-
     fn on_snap_gen_res(&mut self, region_id: u64, snap: Option<Snapshot>) {
         let peer = match self.region_peers.get_mut(&region_id) {
             None => return,
@@ -2025,6 +2023,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::Raft => self.on_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
             Tick::SplitRegionCheck => self.on_split_region_check_tick(event_loop),
+            Tick::MergeRegionCheck => self.on_merge_region_check_tick(event_loop),
             Tick::CompactCheck => self.on_compact_check_tick(event_loop),
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),

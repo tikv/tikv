@@ -207,6 +207,7 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
 
+    pub delete_count: u64,
     merge_state: MergeState,
     start_merging_time: Option<Instant>,
 
@@ -304,6 +305,7 @@ impl Peer {
             delete_keys_hint: 0,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
+            delete_count: 0,
             merge_state: merge_state,
             start_merging_time: Some(Instant::now()),
             tag: tag,
@@ -1849,6 +1851,7 @@ impl Peer {
         } else {
             self.size_diff_hint = 0;
         }
+        self.delete_count += 1;
         let resp = Response::new();
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();
