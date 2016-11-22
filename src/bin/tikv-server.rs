@@ -180,6 +180,35 @@ fn check_system_config(config: &toml::Value) {
     }
 }
 
+fn listen_address(matches: &Matches, config: &toml::Value) -> String {
+    let addr = get_flag_string(matches, "A").unwrap_or_else(|| {
+        get_toml_string(config,
+                        "server.addr",
+                        Some(DEFAULT_LISTENING_ADDR.to_owned()))
+    });
+
+    util::config::check_addr(&addr)
+        .map_err(|e| exit_with_err(format!("{:?}", e)))
+        .unwrap();
+
+    let all_addr = "0.0.0.0";
+    match addr.find(all_addr) {
+        Some(_) => {
+            info!("Start listening on {}... advertise-addr is required", addr);
+
+            let adv_addr = get_flag_string(matches, "advertise-addr")
+                .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", None));
+
+            if let Some(_) = adv_addr.find(all_addr) {
+                exit_with_err(format!("{} is not allowed in advertise-addr", all_addr));
+            }
+        }
+        None => info!("Start listening on {}...", addr),
+    }
+
+    addr
+}
+
 fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let rmode = get_toml_int(config, "rocksdb.wal-recovery-mode", Some(2));
@@ -634,12 +663,7 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    let addr = get_flag_string(&matches, "A").unwrap_or_else(|| {
-        get_toml_string(&config,
-                        "server.addr",
-                        Some(DEFAULT_LISTENING_ADDR.to_owned()))
-    });
-    info!("Start listening on {}...", addr);
+    let addr = listen_address(&matches, &config);
     let listener = bind(&addr).unwrap();
 
     let pd_endpoints = get_flag_string(&matches, "pd")
