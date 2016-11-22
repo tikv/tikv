@@ -1122,32 +1122,6 @@ impl<T: Storage> Raft<T> {
         }
     }
 
-    fn log_vote_reject(&self, m: &Message) {
-        info!("{} [logterm: {}, index: {}, vote: {}] rejected vote from {} [logterm: {}, \
-               index: {}] at term {}",
-              self.tag,
-              self.raft_log.last_term(),
-              self.raft_log.last_index(),
-              self.vote,
-              m.get_from(),
-              m.get_log_term(),
-              m.get_index(),
-              self.term);
-    }
-
-    fn log_vote_approve(&self, m: &Message) {
-        info!("{} [logterm: {}, index: {}, vote: {}] voted for {} [logterm: {}, index: {}] \
-               at term {}",
-              self.tag,
-              self.raft_log.last_term(),
-              self.raft_log.last_index(),
-              self.vote,
-              m.get_from(),
-              m.get_log_term(),
-              m.get_index(),
-              self.term);
-    }
-
     fn step_leader(&mut self, mut m: Message) {
         // These message types do not require any progress for m.From.
         match m.get_msg_type() {

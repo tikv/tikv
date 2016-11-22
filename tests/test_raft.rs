@@ -36,6 +36,7 @@ use std::cmp;
 use kvproto::eraftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
                        ConfChange, ConfChangeType};
 use rand;
+use util::init_log;
 
 
 pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
@@ -155,7 +156,6 @@ impl Interface {
             for id in ids {
                 self.prs.insert(*id, Progress { ..Default::default() });
             }
-            let term = self.term;
             self.reset(0);
         }
     }
@@ -546,6 +546,7 @@ fn test_leader_election_pre_vote() {
 }
 
 fn test_leader_election(pre_vote: bool) {
+    init_log();
     let mut tests = vec![
         (Network::new(vec![None, None, None], pre_vote), StateRole::Leader, 1),
         (Network::new(vec![None, None, NOP_STEPPER], pre_vote), StateRole::Leader, 1),
@@ -614,7 +615,7 @@ fn test_leader_cycle(pre_vote: bool) {
     let mut network = Network::new(vec![None, None, None], pre_vote);
     for campaigner_id in 1..4 {
         network.send(vec![new_message(campaigner_id, campaigner_id, MessageType::MsgHup, 0)]);
-        for (_, sm) in &network.peers {
+        for  sm in network.peers.values() {
             if sm.id == campaigner_id && sm.state != StateRole::Leader {
                 panic!("preVote={}: campaigning node {} state = {}, wnat StateLeader",
                        pre_vote,
@@ -666,7 +667,7 @@ fn test_vote_from_any_state_(vt: MessageType) {
         msg.set_index(42);
         sm.step(msg).expect("");
         assert_eq!(sm.msgs.len(), 1);
-        let ref resp = sm.msgs[0];
+        let resp = &sm.msgs[0];
         assert_eq!(resp.get_msg_type(), vote_resp_msg_type(vt));
         assert!(!resp.get_reject());
 
