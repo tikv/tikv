@@ -615,7 +615,7 @@ fn test_leader_cycle(pre_vote: bool) {
     let mut network = Network::new(vec![None, None, None], pre_vote);
     for campaigner_id in 1..4 {
         network.send(vec![new_message(campaigner_id, campaigner_id, MessageType::MsgHup, 0)]);
-        for  sm in network.peers.values() {
+        for sm in network.peers.values() {
             if sm.id == campaigner_id && sm.state != StateRole::Leader {
                 panic!("preVote={}: campaigning node {} state = {}, wnat StateLeader",
                        pre_vote,
