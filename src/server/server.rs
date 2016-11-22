@@ -326,6 +326,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                     self.remove_conn(event_loop, token);
                 }
             }
+
         }
     }
 

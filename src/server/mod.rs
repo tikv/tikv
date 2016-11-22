@@ -19,10 +19,8 @@ use std::io::Write;
 use mio::Token;
 
 use kvproto::msgpb::{self, MessageType};
-use kvproto::eraftpb::MessageType as RaftMessageType;
-
 use util::codec::rpc;
-
+use kvproto::eraftpb::MessageType as RaftMessageType;
 mod conn;
 mod kv;
 mod metrics;
