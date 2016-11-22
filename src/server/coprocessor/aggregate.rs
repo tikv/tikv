@@ -61,9 +61,6 @@ impl AggrFunc for First {
         if args.len() != 1 {
             return Err(box_err!("Wrong number of args for AggFuncFirstRow: {}", args.len()));
         }
-        if args[0] == Datum::Null {
-            return Ok(());
-        }
         *self = args.pop();
         Ok(())
     }
