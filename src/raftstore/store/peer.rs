@@ -503,7 +503,7 @@ impl Peer {
     }
 
     fn update_leader_lease(&mut self, ready: &Ready) {
-        // Update leader lease variables when the raft state changes
+        // Update leader lease when the raft state changes
         if ready.ss.is_some() {
             let ss = ready.ss.as_ref().unwrap();
             match ss.raft_state {
