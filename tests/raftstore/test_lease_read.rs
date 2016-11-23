@@ -31,13 +31,13 @@ use super::server::new_server_cluster;
 use super::transport_simulate::*;
 use super::util::*;
 
-// Perform a local read on the specified peer.
-fn do_local_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
-                                       peer: Peer,
-                                       region: Region,
-                                       key: &[u8],
-                                       timeout: Duration)
-                                       -> Result<Vec<u8>> {
+// Issue a read request on the specified peer.
+fn read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
+                              peer: Peer,
+                              region: Region,
+                              key: &[u8],
+                              timeout: Duration)
+                              -> Result<Vec<u8>> {
     let mut request = new_request(region.get_id(),
                                   region.get_region_epoch().clone(),
                                   vec![new_get_cmd(key)],
@@ -52,6 +52,25 @@ fn do_local_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
     let mut get = resp.mut_responses()[0].take_get();
     assert!(get.has_value());
     Ok(get.take_value())
+}
+
+fn must_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
+                                   peer: Peer,
+                                   region: Region,
+                                   key: &[u8],
+                                   value: &[u8]) {
+    let timeout = Duration::from_secs(1);
+    match read_on_peer(cluster, peer, region, key, timeout) {
+        Ok(v) => {
+            if v != value {
+                panic!("read key {}, expect value {}, got {}",
+                       escape(key),
+                       escape(value),
+                       escape(&v))
+            }
+        }
+        Err(e) => panic!("failed to read for key {}, err {:?}", escape(key), e),
+    }
 }
 
 // A helper function for testing the lease reads and lease renewing.
@@ -71,41 +90,27 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let election_timeout = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
                            cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
-    let test_node_id = 1u64;
-    let test_store_id = 1u64;
-    let test_peer = new_peer(test_store_id, test_node_id);
+    let node_id = 1u64;
+    let store_id = 1u64;
+    let peer = new_peer(store_id, node_id);
     cluster.run();
 
     // Write the initial value for a key.
     let key = b"k";
     cluster.must_put(key, b"v1");
-    // Force `test_peer` to become leader.
+    // Force `peer` to become leader.
     let region = cluster.get_region(key);
     let region_id = region.get_id();
-    cluster.must_transfer_leader(region_id, test_peer.clone());
-    assert_eq!(cluster.leader_of_region(region_id), Some(test_peer.clone()));
-    let engine = cluster.get_engine(test_store_id);
+    cluster.must_transfer_leader(region_id, peer.clone());
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
+    let engine = cluster.get_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
 
     // Issue a read request and check the value on response.
-    let timeout = Duration::from_secs(1);
-    match do_local_read_on_peer(cluster, test_peer.clone(), region.clone(), key, timeout) {
-        Ok(value) => {
-            if value != b"v1" {
-                panic!("key {}, expect value {}, got {}",
-                       escape(key),
-                       escape(b"v1"),
-                       escape(&value))
-            }
-        }
-        Err(e) => {
-            panic!("failed to do local read for key {}, err {:?}",
-                   escape(key),
-                   e)
-        }
-    }
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+
     // Check the leader did a local read.
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index);
@@ -114,25 +119,10 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(election_timeout);
 
     // Issue a read request and check the value on response.
-    let timeout = Duration::from_secs(1);
-    match do_local_read_on_peer(cluster, test_peer.clone(), region.clone(), key, timeout) {
-        Ok(value) => {
-            if value != b"v1" {
-                panic!("key {}, expect value {}, got {}",
-                       escape(key),
-                       escape(b"v1"),
-                       escape(&value))
-            }
-        }
-        Err(e) => {
-            panic!("failed to do local read for key {}, err {:?}",
-                   escape(key),
-                   e)
-        }
-    }
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
 
     // Check the leader did a consistent read and renewed its lease.
-    assert_eq!(cluster.leader_of_region(region_id), Some(test_peer.clone()));
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
@@ -143,27 +133,13 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, b"v2");
 
     // Check the leader has renewed its lease so that it could do lease read.
-    assert_eq!(cluster.leader_of_region(region_id), Some(test_peer.clone()));
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 2);
 
     // Issue a read request and check the value on response.
-    let timeout = Duration::from_secs(1);
-    match do_local_read_on_peer(cluster, test_peer.clone(), region, key, timeout) {
-        Ok(value) => {
-            if value != b"v2" {
-                panic!("key {}, expect value {}, got {}",
-                       escape(key),
-                       escape(b"v1"),
-                       escape(&value))
-            }
-        }
-        Err(e) => {
-            panic!("failed to do local read for key {}, err {:?}",
-                   escape(key),
-                   e)
-        }
-    }
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v2");
+
     // Check the leader did a local read.
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 2);
@@ -212,29 +188,29 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let election_timeout = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
                            cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
-    let test_node_id = 3u64;
-    let test_store_id = 3u64;
-    let test_peer = new_peer(test_store_id, test_node_id);
+    let node_id = 3u64;
+    let store_id = 3u64;
+    let peer = new_peer(store_id, node_id);
     cluster.run();
 
     // Write the initial value for a key.
     let key = b"k";
     cluster.must_put(key, b"v1");
-    // Force `test_peer` to become leader.
+    // Force `peer` to become leader.
     let region = cluster.get_region(key);
     let region_id = region.get_id();
-    cluster.must_transfer_leader(region_id, test_peer.clone());
-    assert_eq!(cluster.leader_of_region(region_id), Some(test_peer.clone()));
+    cluster.must_transfer_leader(region_id, peer.clone());
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
 
-    // Isolate `test_peer` from other peers.
-    cluster.add_send_filter(IsolationFilterFactory::new(test_store_id));
+    // Isolate `peer` from other peers.
+    cluster.add_send_filter(IsolationFilterFactory::new(store_id));
 
     // Wait for the leader lease to expire and a new leader is elected.
     thread::sleep(election_timeout * 2);
 
     // Issue a read request and check the value on response.
     let timeout = Duration::from_secs(1);
-    if let Ok(value) = do_local_read_on_peer(cluster, test_peer.clone(), region, key, timeout) {
+    if let Ok(value) = read_on_peer(cluster, peer.clone(), region, key, timeout) {
         panic!("key {}, expect error but got {}",
                escape(key),
                escape(&value))
