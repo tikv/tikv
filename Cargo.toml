@@ -42,7 +42,7 @@ toml = "0.1"
 num = "0.1"
 libc = "0.2.11"
 crc = "1.2"
-fs2 = "0.2"
+fs2 = "0.4"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
 protobuf = "1.0"
@@ -55,16 +55,14 @@ signal = "0.2"
 backtrace = "0.2.3"
 clap = "2"
 url = "1.2"
-
-# The getopts in crate.io is outdated, use the latest getopts instead.
-[dependencies.getopts]
-git = "https://github.com/rust-lang-nursery/getopts"
+getopts = "0.2"
 
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
+branch = "busyjay/checksum"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"

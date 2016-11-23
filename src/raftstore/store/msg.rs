@@ -20,6 +20,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
 
+use util::escape;
+
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 
 #[derive(Debug)]
@@ -32,6 +34,7 @@ pub enum Tick {
     PdStoreHeartbeat,
     SnapGc,
     CompactLockCf,
+    ConsistencyCheck,
 }
 
 pub enum Msg {
@@ -65,6 +68,13 @@ pub enum Msg {
         region_id: u64,
         snap: Option<Snapshot>,
     },
+
+    // For consistency check
+    ComputeHashResult {
+        region_id: u64,
+        index: u64,
+        hash: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -93,6 +103,13 @@ impl fmt::Debug for Msg {
                        "SnapGenRes [region_id: {}, is_success: {}]",
                        region_id,
                        snap.is_some())
+            }
+            Msg::ComputeHashResult { region_id, index, ref hash } => {
+                write!(fmt,
+                       "ComputeHashResult [region_id: {}, index: {}, hash: {}]",
+                       region_id,
+                       index,
+                       escape(&hash))
             }
         }
     }

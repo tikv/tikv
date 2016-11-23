@@ -89,6 +89,12 @@ pub enum ExecResult {
         left: metapb::Region,
         right: metapb::Region,
     },
+    ComputeHash {
+        region: metapb::Region,
+        index: u64,
+        snap: Snapshot,
+    },
+    VerifyHash { index: u64, hash: Vec<u8> },
 }
 
 // When we apply commands in handing ready, we should also need a way to
@@ -96,6 +102,7 @@ pub enum ExecResult {
 // We can save these intermediate results in ready result.
 // We only need to care administration commands now.
 pub struct ReadyResult {
+    pub ready: Option<Ready>,
     // We can execute multi commands like 1, conf change, 2 split region, ...
     // in one ready, and outer store should handle these results sequentially too.
     pub exec_results: Vec<ExecResult>,
@@ -164,6 +171,13 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     cmd.call(resp);
 }
 
+pub struct ConsistencyState {
+    pub last_check_time: Instant,
+    // (computed_result_or_to_be_revified, index, hash)
+    pub index: u64,
+    pub hash: Vec<u8>,
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
@@ -181,6 +195,8 @@ pub struct Peer {
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
+
+    pub consistency_state: ConsistencyState,
 
     leader_missing_time: Option<Instant>,
 
@@ -273,6 +289,11 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
+            consistency_state: ConsistencyState {
+                last_check_time: Instant::now(),
+                index: INVALID_INDEX,
+                hash: vec![],
+            },
         };
 
         peer.load_all_coprocessors();
@@ -484,10 +505,10 @@ impl Peer {
         StaleState::Valid
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self,
-                                           trans: &T,
-                                           metrics: &mut RaftMetrics)
-                                           -> Result<Option<ReadyResult>> {
+    pub fn handle_raft_ready_append<T: Transport>(&mut self,
+                                                  trans: &T,
+                                                  metrics: &mut RaftMetrics)
+                                                  -> Result<Option<ReadyResult>> {
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
@@ -512,7 +533,10 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1
         if self.is_leader() {
-            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
+            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
+                // We don't care that the message is sent failed, so here just log this error.
+                warn!("{} leader send messages err {:?}", self.tag, e);
+            })
         }
 
         let apply_result = match self.mut_store().handle_raft_ready(&ready) {
@@ -531,8 +555,31 @@ impl Peer {
         };
 
         if !self.is_leader() {
-            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
+            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
+                warn!("{} follower send messages err {:?}", self.tag, e);
+            })
         }
+
+        slow_log!(t,
+                  "{} handle ready, entries {}, messages \
+                   {}, snapshot {}, hard state changed {}",
+                  self.tag,
+                  ready.entries.len(),
+                  ready.messages.len(),
+                  apply_result.is_some(),
+                  ready.hs.is_some());
+
+        Ok(Some(ReadyResult {
+            ready: Some(ready),
+            apply_snap_result: apply_result,
+            exec_results: vec![],
+        }))
+    }
+
+    pub fn handle_raft_ready_apply(&mut self, ready_result: &mut ReadyResult) -> Result<()> {
+        let mut ready = ready_result.ready.take().unwrap_or_else(|| {
+            panic!("{} must have a ready in ReadyResult", self.tag);
+        });
 
         // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
@@ -541,7 +588,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        let exec_results = if self.is_applying() {
+        ready_result.exec_results = if self.is_applying() {
             if let Some(ref mut hs) = ready.hs {
                 // Snapshot's metadata has been applied.
                 hs.set_commit(self.get_store().truncated_index());
@@ -551,21 +598,8 @@ impl Peer {
             try!(self.handle_raft_commit_entries(&ready.committed_entries))
         };
 
-        slow_log!(t,
-                  "{} handle ready, entries {}, committed entries {}, messages \
-                   {}, snapshot {}, hard state changed {}",
-                  self.tag,
-                  ready.entries.len(),
-                  ready.committed_entries.len(),
-                  ready.messages.len(),
-                  apply_result.is_some(),
-                  ready.hs.is_some());
-
         self.raft_group.advance(ready);
-        Ok(Some(ReadyResult {
-            apply_snap_result: apply_result,
-            exec_results: exec_results,
-        }))
+        Ok(())
     }
 
     /// Propose a request.
@@ -766,7 +800,9 @@ impl Peer {
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
-                AdminCmdType::InvalidAdmin => {}
+                AdminCmdType::InvalidAdmin |
+                AdminCmdType::ComputeHash |
+                AdminCmdType::VerifyHash => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
                 AdminCmdType::TransferLeader => {
@@ -830,7 +866,6 @@ impl Peer {
         send_msg.set_region_id(self.region_id);
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-        let mut unreachable = false;
 
         let from_peer = match self.get_peer_from_cache(msg.get_from()) {
             Some(p) => p,
@@ -889,12 +924,8 @@ impl Peer {
                   to_store_id,
                   e);
 
-            unreachable = true;
-        }
-
-        if unreachable {
+            // unreachable store
             self.raft_group.report_unreachable(to_peer_id);
-
             if msg_type == eraftpb::MessageType::MsgSnapshot {
                 self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
@@ -1095,7 +1126,9 @@ impl Peer {
                 ExecResult::ChangePeer { ref region, .. } => {
                     storage.region = region.clone();
                 }
-                ExecResult::CompactLog { .. } => {}
+                ExecResult::CompactLog { .. } |
+                ExecResult::ComputeHash { .. } |
+                ExecResult::VerifyHash { .. } => {}
                 ExecResult::SplitRegion { ref left, .. } => {
                     storage.region = left.clone();
                 }
@@ -1210,6 +1243,8 @@ impl Peer {
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
+            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
+            AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
@@ -1576,4 +1611,39 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
+}
+
+// Consistency Check
+impl Peer {
+    fn exec_compute_hash(&self,
+                         ctx: &ExecContext,
+                         _: &AdminRequest)
+                         -> Result<(AdminResponse, Option<ExecResult>)> {
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::ComputeHash {
+            region: self.region().clone(),
+            index: ctx.index,
+            // This snapshot may be hold for a long time, which may cause too many
+            // open files in rocksdb.
+            // TODO: figure out another way to do consistency check without snapshot
+            // or short life snapshot.
+            snap: Snapshot::new(self.engine.clone()),
+        })))
+    }
+
+    fn exec_verify_hash(&self,
+                        _: &ExecContext,
+                        req: &AdminRequest)
+                        -> Result<(AdminResponse, Option<ExecResult>)> {
+        let verify_req = req.get_verify_hash();
+        let index = verify_req.get_index();
+        let hash = verify_req.get_hash().to_vec();
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::VerifyHash {
+            index: index,
+            hash: hash,
+        })))
+    }
 }

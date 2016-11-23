@@ -949,9 +949,8 @@ mod test {
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raftstore;
     use raftstore::store::{Msg, bootstrap, new_snap_mgr, SnapKey};
-    use raftstore::store::worker::{RegionRunner, MsgSender};
+    use raftstore::store::worker::RegionRunner;
     use util::codec::number::NumberEncoder;
     use raftstore::store::worker::RegionTask;
     use util::worker::{Worker, Scheduler};
@@ -961,13 +960,6 @@ mod test {
     use kvproto::eraftpb::HardState;
 
     use super::*;
-
-    impl MsgSender for Sender<Msg> {
-        fn send(&self, msg: Msg) -> raftstore::Result<()> {
-            Sender::send(self, msg).unwrap();
-            Ok(())
-        }
-    }
 
     fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
         let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
