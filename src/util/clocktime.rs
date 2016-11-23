@@ -14,7 +14,7 @@
 // `now_monotonic_raw` returns the monotonic raw clocktime corresponding to "now".
 pub use self::inner::raw_now;
 
-#[cfg(not(any(target_os = "linux")))]
+#[cfg(not(target_os = "linux"))]
 mod inner {
     use time::{self, Timespec};
 
@@ -30,7 +30,7 @@ mod inner {
     }
 }
 
-#[cfg(any(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 mod inner {
     use std::io;
     use time::Timespec;
@@ -42,7 +42,7 @@ mod inner {
             tv_nsec: 0,
         };
         let res = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut t) };
-        if res == -1 {
+        if res != 0 {
             panic!("failed to get monotonic raw locktime, err {}",
                    io::Error::last_os_error());
         }
@@ -58,7 +58,7 @@ mod tests {
     fn test_now_monotonic_raw() {
         let early_time = raw_now();
         let late_time = raw_now();
-        // The monotonic raw clocktime must be monotonic.
+        // The monotonic raw clocktime must be strictly monotonic increasing.
         assert!(late_time > early_time);
     }
 }

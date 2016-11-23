@@ -714,6 +714,12 @@ impl Peer {
             return false;
         }
 
+        for cmd_req in req.get_requests() {
+            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
+                return false;
+            }
+        }
+
         // If the leader lease has been expired, local read should not be performed.
         if self.leader_lease_expired_time.is_none() {
             return false;
@@ -729,12 +735,6 @@ impl Peer {
             self.leader_lease_expired_time = None;
             // Perform a consistent read to raft quorum and try to renew the leader lease.
             return false;
-        }
-
-        for cmd_req in req.get_requests() {
-            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
-                return false;
-            }
         }
 
         true
@@ -1061,11 +1061,11 @@ impl Peer {
                uuid: Uuid,
                term: u64,
                cmd: &RaftCmdRequest)
-               -> Option<(Callback, Option<Timespec>)> {
+               -> Option<(Callback, Timespec)> {
         if get_change_peer_cmd(cmd).is_some() {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.take()));
+                    return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.take().unwrap()));
                 } else {
                     self.notify_not_leader(cmd);
                 }
@@ -1074,7 +1074,7 @@ impl Peer {
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some((head.cb.take().unwrap(), head.renew_lease_time.take()));
+                return Some((head.cb.take().unwrap(), head.renew_lease_time.take().unwrap()));
             }
             // because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
@@ -1111,12 +1111,11 @@ impl Peer {
 
         let (cb, lease_renew_time) = cmd_cb.unwrap();
         // Try to renew the leader lease as this command asks to.
-        let renew_time = lease_renew_time.unwrap();
         if let Some(current_expired_time) = self.leader_lease_expired_time {
             // This peer is leader and has recorded leader lease.
             // Calculate the renewed lease for this command. If the renewed lease lives longer
             // than current leader lease, update the leader lease to the renewed lease.
-            let next_expired_time = self.next_lease_expired_time(renew_time);
+            let next_expired_time = self.next_lease_expired_time(lease_renew_time);
             // Use the lease expired timestamp comparation here, so that these codes still
             // work no matter how the leader changes before applying this command.
             if current_expired_time < next_expired_time {
@@ -1130,7 +1129,7 @@ impl Peer {
             // This peer is leader but its leader lease has been expired.
             // Calculate the renewed lease for this command, and update the leader lease
             // for this peer.
-            let next_expired_time = self.next_lease_expired_time(renew_time);
+            let next_expired_time = self.next_lease_expired_time(lease_renew_time);
             debug!("{} update leader lease expired time from None to {:?}",
                    self.tag,
                    self.leader_lease_expired_time);

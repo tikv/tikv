@@ -102,7 +102,6 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = cluster.get_region(key);
     let region_id = region.get_id();
     cluster.must_transfer_leader(region_id, peer.clone());
-    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     let engine = cluster.get_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
@@ -200,7 +199,6 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = cluster.get_region(key);
     let region_id = region.get_id();
     cluster.must_transfer_leader(region_id, peer.clone());
-    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
 
     // Isolate `peer` from other peers.
     cluster.add_send_filter(IsolationFilterFactory::new(store_id));
