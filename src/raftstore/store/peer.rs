@@ -850,12 +850,12 @@ impl Peer {
                 AdminCmdType::CompactLog |
                 AdminCmdType::SuspendRegion |
                 AdminCmdType::InvalidAdmin => {}
-                AdminCmdType::Split |
+                AdminCmdType::Split => check_ver = true,
+                AdminCmdType::ChangePeer => check_conf_ver = true,
+                AdminCmdType::TransferLeader |
                 AdminCmdType::Merge |
                 AdminCmdType::CommitMerge |
-                AdminCmdType::ShutdownRegion => check_ver = true,
-                AdminCmdType::ChangePeer => check_conf_ver = true,
-                AdminCmdType::TransferLeader => {
+                AdminCmdType::ShutdownRegion => {
                     check_ver = true;
                     check_conf_ver = true;
                 }
