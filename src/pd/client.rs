@@ -242,6 +242,7 @@ impl RpcClient {
             match validate_endpoints(&endpoints) {
                 Ok(id) => {
                     cluster_id = id;
+                    break;
                 }
                 Err(e) => {
                     warn!("failed to get cluster id from pd: {:?}", e);
