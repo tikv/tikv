@@ -1172,25 +1172,31 @@ impl Peer {
             .write(ctx.wb)
             .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
 
-        let mut storage = self.mut_store();
-        storage.apply_state = ctx.apply_state;
-        storage.applied_index_term = term;
+        self.mut_store().apply_state = ctx.apply_state;
+        self.mut_store().applied_index_term = term;
 
         if let Some(ref exec_result) = exec_result {
             match *exec_result {
                 ExecResult::ChangePeer { ref region, .. } => {
-                    storage.region = region.clone();
+                    self.mut_store().region = region.clone();
                 }
                 ExecResult::CompactLog { .. } |
-                ExecResult::StartMerge { .. } |
                 ExecResult::RollbackMerge { .. } |
-                ExecResult::SuspendRegion { .. } |
                 ExecResult::ShutdownRegion { .. } => {}
                 ExecResult::SplitRegion { ref left, .. } => {
-                    storage.region = left.clone();
+                    self.mut_store().region = left.clone();
+                }
+                ExecResult::StartMerge { .. } => {
+                    self.merge_state = MergeState::Merging;
+                    self.start_merging_time = Some(Instant::now());
+                }
+                ExecResult::SuspendRegion { .. } => {
+                    self.merge_state = MergeState::Suspended;
                 }
                 ExecResult::CommitMerge { ref new, .. } => {
-                    storage.region = new.clone();
+                    self.mut_store().region = new.clone();
+                    self.merge_state = MergeState::NoMerge;
+                    self.start_merging_time = None;
                 }
             }
         }
@@ -1523,11 +1529,21 @@ impl Peer {
         })))
     }
 
+    fn set_peer_merge_state<T: Mutable>(&mut self, w: &T, state: RegionMergeState) -> Result<()> {
+        let state_key = keys::region_state_key(self.region().get_id());
+        let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+            .unwrap();
+
+        region_local_state.set_merge_state(state);
+        try!(w.put_msg(&state_key, &region_local_state));
+        Ok(())
+    }
+
     fn exec_merge(&mut self,
-                  _ctx: &ExecContext,
+                  ctx: &ExecContext,
                   req: &AdminRequest)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
-        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "all"]).inc();
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["start merge", "all"]).inc();
 
         let merge_req = req.get_merge();
         info!("{} merge from region {:?} into region {:?}",
@@ -1538,6 +1554,8 @@ impl Peer {
         let mut resp = AdminResponse::new();
         resp.set_merge(MergeResponse::new());
 
+        // TODO check epoch version and conf version
+
         if self.merge_state != MergeState::NoMerge {
             // Just ignore this region merge command since this peer is already
             // in `Merging` or `Suspended` state
@@ -1547,18 +1565,17 @@ impl Peer {
             Ok((resp, None))
         } else {
             // update peer local state
-            let state_key = keys::region_state_key(self.region().get_id());
-            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
-                .unwrap();
             let mut merge_state = RegionMergeState::new();
             merge_state.set_state(MergeState::Merging);
             merge_state.set_from_region(merge_req.get_from_region().clone());
-            region_local_state.set_merge_state(merge_state);
-            try!(self.engine.put_msg(&state_key, &region_local_state));
-            self.merge_state = MergeState::Merging;
-            self.start_merging_time = Some(Instant::now());
+            self.set_peer_merge_state(&ctx.wb, merge_state.clone()).unwrap_or_else(|e| {
+                panic!("{} failed to set peer merge state {:?}: {:?}",
+                       self.tag,
+                       merge_state,
+                       e);
+            });
 
-            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "success"]).inc();
+            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["start merge", "success"]).inc();
 
             Ok((resp,
                 Some(ExecResult::StartMerge {
@@ -1569,7 +1586,7 @@ impl Peer {
     }
 
     fn exec_suspend_region(&mut self,
-                           _ctx: &ExecContext,
+                           ctx: &ExecContext,
                            req: &AdminRequest)
                            -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["suspend", "all"]).inc();
@@ -1605,14 +1622,14 @@ impl Peer {
             // the suspend command will be retried by the leader of control region
             // in a region merge procedure.
             // Skip to write the `Suspended` state to hard driver when the command is a retry.
-            let state_key = keys::region_state_key(self.region().get_id());
-            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
-                .unwrap();
             let mut merge_state = RegionMergeState::new();
             merge_state.set_state(MergeState::Suspended);
-            region_local_state.set_merge_state(merge_state);
-            try!(self.engine.put_msg(&state_key, &region_local_state));
-            self.merge_state = MergeState::Suspended;
+            self.set_peer_merge_state(&ctx.wb, merge_state.clone()).unwrap_or_else(|e| {
+                panic!("{} failed to set peer merge state {:?}: {:?}",
+                       self.tag,
+                       merge_state,
+                       e);
+            });
         }
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["suspend", "success"]).inc();
@@ -1625,7 +1642,7 @@ impl Peer {
     }
 
     fn exec_commit_merge(&mut self,
-                         _ctx: &ExecContext,
+                         ctx: &ExecContext,
                          req: &AdminRequest)
                          -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["commit merge", "all"]).inc();
@@ -1647,7 +1664,9 @@ impl Peer {
             Ok((resp, None))
         } else {
             let state_key = keys::region_state_key(self.region().get_id());
-            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+            let mut region_local_state = self.engine
+                .get_msg::<RegionLocalState>(&state_key)
+                .unwrap()
                 .unwrap();
             let mut merge_state = RegionMergeState::new();
             // Update region's merge state
@@ -1673,9 +1692,12 @@ impl Peer {
             new_region.mut_region_epoch().set_version(region_version);
             region_local_state.set_region(new_region.clone());
             // Persist peer local state
-            try!(self.engine.put_msg(&state_key, &region_local_state));
-            self.merge_state = MergeState::NoMerge;
-            self.start_merging_time = None;
+            ctx.wb.put_msg(&state_key, &region_local_state.clone()).unwrap_or_else(|e| {
+                panic!("{} failed to set peer state {:?}: {:?}",
+                       self.tag,
+                       region_local_state,
+                       e);
+            });
 
             PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["commit merge", "success"]).inc();
 
