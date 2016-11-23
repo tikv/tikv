@@ -185,13 +185,13 @@ fn check_advertise_address(addr: &str) {
         .map_err(|e| exit_with_err(format!("{:?}", e)))
         .unwrap();
 
-    // FIXME: Forbiden addresses ending in 0 or 255? Those are not always invalid.
+    // FIXME: Forbidden addresses ending in 0 or 255? Those are not always invalid.
     // See more: https://en.wikipedia.org/wiki/IPv4#Addresses_ending_in_0_or_255
-    let invalid_patterns = [("0.0.0.0", "0.0.0.0 is not allowed")];
+    let invalid_patterns = ["0.0.0.0"];
 
-    for &(pat, reason) in &invalid_patterns {
+    for pat in &invalid_patterns {
         if let Some(_) = addr.find(pat) {
-            exit_with_err(format!("invalid advertise-addr: {}", reason));
+            exit_with_err(format!("invalid advertise-addr: {:?}", addr));
         }
     }
 }
