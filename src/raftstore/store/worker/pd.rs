@@ -205,24 +205,24 @@ impl<T: PdClient> Runner<T> {
                           transfer_leader.get_peer());
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     self.send_admin_request(region, peer, req)
-                } else if resp.has_region_merge() {
-                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["region merge"]).inc();
+                } else if resp.has_merge_region() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge region"]).inc();
 
-                    let mut region_merge = resp.take_region_merge();
+                    let mut merge_region = resp.take_merge_region();
                     info!("[region {}] try to merge region {:?} into {:?}",
                           region.get_id(),
-                          region_merge.get_from_region(),
+                          merge_region.get_from_region(),
                           region);
-                    let req = new_region_merge_request(region_merge.take_from_region());
-                    self.send_admin_request(region, peer, req);
-                } else if resp.has_region_shutdown() {
-                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["region shutdown"]).inc();
+                    let req = new_merge_region_request(merge_region.take_from_region());
+                    self.send_admin_request(merge_region.take_into_region(), peer, req);
+                } else if resp.has_shutdown_region() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["shutdown region"]).inc();
 
-                    let mut region_shutdown = resp.take_region_shutdown();
+                    let mut shutdown_region = resp.take_shutdown_region();
                     info!("[region {}] try to shutdown region {:?} after region merge",
                           region.get_id(),
-                          region_shutdown.get_region());
-                    let req = new_region_shutdown_request(region_shutdown.take_region());
+                          shutdown_region.get_region());
+                    let req = new_shutdown_region_request(shutdown_region.take_region());
                     self.send_admin_request(region, peer, req);
                 }
             }
@@ -410,14 +410,14 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     req
 }
 
-fn new_region_merge_request(from_region: metapb::Region) -> AdminRequest {
+fn new_merge_region_request(from_region: metapb::Region) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::Merge);
     req.mut_merge().set_from_region(from_region);
     req
 }
 
-fn new_region_shutdown_request(region: metapb::Region) -> AdminRequest {
+fn new_shutdown_region_request(region: metapb::Region) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::ShutdownRegion);
     req.mut_shutdown_region().set_region(region);

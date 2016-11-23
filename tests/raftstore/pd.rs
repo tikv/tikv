@@ -219,7 +219,7 @@ impl Cluster {
         self.add_region(&region);
 
         if region.get_id() == from_region_id {
-            // migrate data in `from_region` to `into_region` if neccessary
+            // migrate data in `from_region` to `into_region` if necessary
             let into_region = try!(self.get_region_by_id(into_region_id)).unwrap();
             let mut into_store_ids = HashSet::new();
             let mut into_store_peers = HashMap::new();
@@ -282,9 +282,10 @@ impl Cluster {
                 let diff = &into_store_ids - &from_store_ids;
                 if diff.is_empty() {
                     // start to merge meta-data and peers
-                    let mut region_merge = pdpb::RegionMerge::new();
-                    region_merge.set_from_region(from_region.clone());
-                    resp.set_region_merge(region_merge);
+                    let mut merge_region = pdpb::MergeRegion::new();
+                    merge_region.set_from_region(from_region.clone());
+                    merge_region.set_into_region(region);
+                    resp.set_merge_region(merge_region);
                     return Ok(resp);
                 }
             }
@@ -437,9 +438,9 @@ impl Cluster {
                         -> Result<pdpb::RegionHeartbeatResponse> {
         if self.shutdown_region_ids.contains(&region.get_id()) {
             let mut resp = pdpb::RegionHeartbeatResponse::new();
-            let mut region_shutdown = pdpb::RegionShutdown::new();
-            region_shutdown.set_region(region);
-            resp.set_region_shutdown(region_shutdown);
+            let mut shutdown_region = pdpb::ShutdownRegion::new();
+            shutdown_region.set_region(region);
+            resp.set_shutdown_region(shutdown_region);
             return Ok(resp);
         }
         for peer in &down_peers {
@@ -738,6 +739,8 @@ impl PdClient for TestPdClient {
 
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
         try!(self.check_bootstrap());
+
+        // TODO reject split request if this region is in region merge
 
         // Must ConfVer and Version be same?
         let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap().unwrap();
