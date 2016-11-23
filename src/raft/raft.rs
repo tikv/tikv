@@ -320,7 +320,8 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn in_lease(&self) -> bool {
-        self.state == StateRole::Leader && self.check_quorum
+        self.state == StateRole::Leader && self.check_quorum &&
+        self.election_elapsed < self.election_timeout
     }
 
     fn quorum(&self) -> usize {

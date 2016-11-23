@@ -196,6 +196,13 @@ fn test_multi_server_base() {
 
 
 fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
+    // `DelayFilter` is implemented by `thread::sleep()`, which delays both message deliverage
+    // and the running nodes. Those delayed nodes work like running with slow ticks.
+    // This conflicts with the tick calibration with clocktime. Because The tick calibration
+    // would cause the leader with slow ticks to lose its lease, which is not expected in this case.
+    // So the tick calibration is disabled here to avoid this conflict with `DelayFilter`.
+    cluster.cfg.raft_store.calibrate_tick_with_clocktime = false;
+
     cluster.run();
     cluster.add_send_filter(CloneFilterFactory(DelayFilter::new(Duration::from_millis(30))));
     test_multi_base_after_bootstrap(cluster);
@@ -210,7 +217,7 @@ fn test_multi_server_latency() {
 
 fn test_multi_random_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(RandomLatencyFilter::new(50)));
+    cluster.add_send_filter(CloneFilterFactory(RandomLatencyFilter::new(10)));
     test_multi_base_after_bootstrap(cluster);
 }
 

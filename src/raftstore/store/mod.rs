@@ -19,6 +19,7 @@ pub mod transport;
 pub mod bootstrap;
 pub mod cmd_resp;
 pub mod util;
+pub mod clocktime;
 
 mod store;
 mod peer;

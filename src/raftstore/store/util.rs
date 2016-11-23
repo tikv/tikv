@@ -13,6 +13,7 @@
 
 use std::option::Option;
 
+use time::{self, Timespec};
 use uuid::Uuid;
 
 use kvproto::metapb;
@@ -87,8 +88,15 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
     epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
+pub fn format_clocktime(ts: Timespec) -> String {
+    let tm = time::at(ts);
+    let res = time::strftime("%z %Y-%m-%d %H:%M:%S", &tm).unwrap();
+    res + &format!(" {}", tm.tm_nsec)
+}
+
 #[cfg(test)]
 mod tests {
+    use time;
     use kvproto::metapb;
 
     use super::*;
@@ -129,5 +137,13 @@ mod tests {
         assert!(remove_peer(&mut region, 1).is_none());
         assert!(find_peer(&region, 1).is_none());
 
+    }
+
+    #[test]
+    fn test_format_clocktime() {
+        let s = String::from("+0800 2016-11-10 15:01:37");
+        let ts = time::strptime(&s, "%z %Y-%m-%d %H:%M:%S").unwrap().to_timespec();
+        let expect = time::strftime("%z %Y-%m-%d %H:%M:%S", &time::at(ts)).unwrap() + " 0";
+        assert_eq!(expect, format_clocktime(ts));
     }
 }
