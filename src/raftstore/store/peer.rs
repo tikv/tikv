@@ -634,25 +634,10 @@ impl Peer {
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
         PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let local_read = self.is_local_read(&req);
-        if local_read {
+        if self.maybe_read_local(&req) {
             PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
 
-            // If the leader lease has been expired, local read should not be performed.
-            let now = clocktime::raw_now();
-            let expired_time = self.leader_lease_expired_time.unwrap();
-            if now > expired_time {
-                debug!("{} leader lease expired time {:?} is outdated",
-                       self.tag,
-                       self.leader_lease_expired_time);
-                // Reset leader lease expired time.
-                self.leader_lease_expired_time = None;
-                // Perform a consistent read to raft quorum and try to renew the leader lease.
-                return self.propose(cmd, req, err_resp);
-            }
-
-            // for read-only, if we don't care stale read, we can
-            // execute these commands immediately in leader.
+            // Execute ready-only commands immediately in leader when doing local reads.
             let mut ctx = ExecContext::new(self, 0, 0, &req);
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
                 error!("{} execute raft command err: {:?}", self.tag, e);
@@ -718,7 +703,7 @@ impl Peer {
         true
     }
 
-    fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
+    fn maybe_read_local(&mut self, req: &RaftCmdRequest) -> bool {
         if (req.has_header() && req.get_header().get_read_quorum()) ||
            !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
             return false;
@@ -732,6 +717,18 @@ impl Peer {
 
         // If the leader lease has been expired, local read should not be performed.
         if self.leader_lease_expired_time.is_none() {
+            return false;
+        }
+
+        let now = clocktime::raw_now();
+        let expired_time = self.leader_lease_expired_time.unwrap();
+        if now > expired_time {
+            debug!("{} leader lease expired time {:?} is outdated",
+                   self.tag,
+                   self.leader_lease_expired_time);
+            // Reset leader lease expired time.
+            self.leader_lease_expired_time = None;
+            // Perform a consistent read to raft quorum and try to renew the leader lease.
             return false;
         }
 
