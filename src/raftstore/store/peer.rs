@@ -507,17 +507,26 @@ impl Peer {
         if ready.ss.is_some() {
             let ss = ready.ss.as_ref().unwrap();
             match ss.raft_state {
-                StateRole::Leader => {
+                StateRole::Candidate => {
+                    // There is a time window between the underlying raft node receives
+                    // RequestVote responses from quorum inside raft module, and peer is notified
+                    // the new raft state is leader in in function.
+                    // This is usually caused the scheduling of OS.
+                    // The lease expired time is set here when the underlying raft node
+                    // becomes candidate, before sending out RequestVote requests.
+                    // So the leader lease is still safe for lease read if this peer becomes
+                    // leader, no matter how the scheduling of OS works.
                     self.leader_lease_expired_time =
                         Some(self.next_lease_expired_time(clocktime::raw_now()));
-                    debug!("{} becomes leader and sets lease expired time to {:?}",
+                }
+                StateRole::Leader => {
+                    debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
                            self.leader_lease_expired_time);
                 }
                 StateRole::Follower => {
                     self.leader_lease_expired_time = None;
                 }
-                _ => {}
             }
         }
     }
