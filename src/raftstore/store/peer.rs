@@ -91,7 +91,7 @@ pub enum ExecResult {
         left: metapb::Region,
         right: metapb::Region,
     },
-    MergeRegion {
+    StartMerge {
         from_region: metapb::Region,
         into_region: metapb::Region,
     },
@@ -1182,7 +1182,7 @@ impl Peer {
                     storage.region = region.clone();
                 }
                 ExecResult::CompactLog { .. } |
-                ExecResult::MergeRegion { .. } |
+                ExecResult::StartMerge { .. } |
                 ExecResult::RollbackMerge { .. } |
                 ExecResult::SuspendRegion { .. } |
                 ExecResult::ShutdownRegion { .. } => {}
@@ -1561,7 +1561,7 @@ impl Peer {
             PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["merge", "success"]).inc();
 
             Ok((resp,
-                Some(ExecResult::MergeRegion {
+                Some(ExecResult::StartMerge {
                 from_region: merge_req.get_from_region().clone(),
                 into_region: self.region().clone(),
             })))

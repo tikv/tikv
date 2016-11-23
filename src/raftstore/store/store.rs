@@ -1253,7 +1253,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
                 }
-                ExecResult::MergeRegion { from_region, into_region } => {
+                ExecResult::StartMerge { from_region, into_region } => {
                     self.on_ready_merge_region(from_region, into_region)
                 }
                 ExecResult::RollbackMerge { from_region, into_region } => {
