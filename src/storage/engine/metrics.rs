@@ -26,7 +26,7 @@ lazy_static! {
             histogram_opts!(
                 "tikv_storage_engine_async_request_duration_seconds",
                 "Bucketed histogram of processing successful asynchronous requests.",
-                [exponential_buckets(0.0005, 2.0, 15).unwrap()]),
+                [exponential_buckets(0.0005, 2.0, 20).unwrap()]),
             &["type"]
         ).unwrap();
 
