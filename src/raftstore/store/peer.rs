@@ -507,19 +507,17 @@ impl Peer {
         if ready.ss.is_some() {
             let ss = ready.ss.as_ref().unwrap();
             match ss.raft_state {
-                StateRole::Candidate => {
-                    // There is a time window between the underlying raft node receives
-                    // RequestVote responses from quorum inside raft module, and peer is notified
-                    // the new raft state is leader in in function.
-                    // This is usually caused the scheduling of OS.
-                    // The lease expired time is set here when the underlying raft node
-                    // becomes candidate, before sending out RequestVote requests.
-                    // So the leader lease is still safe for lease read if this peer becomes
-                    // leader, no matter how the scheduling of OS works.
+                StateRole::Leader => {
+                    // The local read could only be performed after a new leader has applied
+                    // the first empty entry on its term. After that the lease expired time
+                    // should be updated to
+                    //   send_to_quorum_ts + election_timeout
+                    // as the function `next_lease_expired_time` explains.
+                    // The lease expired time could be updated ahead right after it becomes
+                    // leader, since it's more convenient to do it here and it does not
+                    // hurt the correctness.
                     self.leader_lease_expired_time =
                         Some(self.next_lease_expired_time(clocktime::raw_now()));
-                }
-                StateRole::Leader => {
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
                            self.leader_lease_expired_time);
@@ -527,6 +525,7 @@ impl Peer {
                 StateRole::Follower => {
                     self.leader_lease_expired_time = None;
                 }
+                _ => {}
             }
         }
     }
@@ -634,7 +633,7 @@ impl Peer {
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
         PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        if self.maybe_read_local(&req) {
+        if self.should_read_local(&req) {
             PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
 
             // Execute ready-only commands immediately in leader when doing local reads.
@@ -703,7 +702,7 @@ impl Peer {
         true
     }
 
-    fn maybe_read_local(&mut self, req: &RaftCmdRequest) -> bool {
+    fn should_read_local(&mut self, req: &RaftCmdRequest) -> bool {
         if (req.has_header() && req.get_header().get_read_quorum()) ||
            !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
             return false;
