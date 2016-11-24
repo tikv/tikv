@@ -139,7 +139,7 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
 pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, ConfigError> {
     let mut map = HashMap::new();
 
-    let re = Regex::new(r"^[a-z0-9][a-z0-9-._]*[a-z0-9]$").unwrap();
+    let re = Regex::new(r"^[a-z0-9]([a-z0-9-._]*[a-z0-9])?$").unwrap();
     for label in labels.split(',') {
         if label.is_empty() {
             continue;
@@ -468,6 +468,9 @@ mod test {
 
         let map = parse_store_labels("").unwrap();
         assert!(map.is_empty());
+
+        let map = parse_store_labels("a=0").unwrap();
+        assert_eq!(map.get("a").unwrap(), "0");
 
         let map = parse_store_labels("a.1-2=b_1.2").unwrap();
         assert_eq!(map.get("a.1-2").unwrap(), "b_1.2");
