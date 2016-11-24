@@ -36,6 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -492,6 +493,12 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
+fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
+    let labels = get_flag_string(matches, "labels")
+        .unwrap_or_else(|| get_toml_string(config, "server.labels", Some("".to_owned())));
+    util::config::parse_store_labels(&labels).unwrap()
+}
+
 fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
     where T: RaftStoreRouter,
           S: StoreAddrResolver + Send + 'static
@@ -624,6 +631,10 @@ fn main() {
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
                 "dsn: raftkv");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
+    opts.optopt("",
+                "labels",
+                "attributes about this server",
+                "zone=example-zone,disk=example-disk");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
@@ -676,6 +687,7 @@ fn main() {
                             &config,
                             cluster_id,
                             &format!("{}", listener.local_addr().unwrap()));
+    cfg.labels = get_store_labels(&matches, &config);
     cfg.storage.path = get_store_path(&matches, &config);
 
     if cluster_id == DEFAULT_CLUSTER_ID {
