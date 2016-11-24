@@ -182,43 +182,48 @@ impl<'a> MvccTxn<'a> {
         let mut delete_versions = 0;
         let mut latest_delete = None;
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
+            ts = commit - 1;
+            versions += 1;
+
             if self.write_size >= MAX_TXN_WRITE_SIZE {
                 // Cannot remove latest delete when we haven't iterate all versions.
                 latest_delete = None;
                 break;
             }
-            if !remove_older {
-                if commit <= safe_point {
-                    // Set `remove_older` after we find the latest value.
-                    match write.write_type {
-                        WriteType::Put | WriteType::Delete => {
-                            remove_older = true;
-                        }
-                        WriteType::Rollback | WriteType::Lock => {}
-                    }
 
-                    // Latest write before `safe_point` can be deleted if its type is Delete,
-                    // Rollback or Lock.
-                    match write.write_type {
-                        WriteType::Delete => {
-                            latest_delete = Some(commit);
-                        }
-                        WriteType::Rollback | WriteType::Lock => {
-                            self.delete_write(key, commit);
-                            delete_versions += 1;
-                        }
-                        WriteType::Put => {}
-                    }
-                }
-            } else {
+            if remove_older {
                 self.delete_write(key, commit);
                 if write.write_type == WriteType::Put {
                     self.delete_value(key, write.start_ts);
                 }
                 delete_versions += 1;
+                continue;
             }
-            ts = commit - 1;
-            versions += 1;
+
+            if commit > safe_point {
+                continue;
+            }
+
+            // Set `remove_older` after we find the latest value.
+            match write.write_type {
+                WriteType::Put | WriteType::Delete => {
+                    remove_older = true;
+                }
+                WriteType::Rollback | WriteType::Lock => {}
+            }
+
+            // Latest write before `safe_point` can be deleted if its type is Delete,
+            // Rollback or Lock.
+            match write.write_type {
+                WriteType::Delete => {
+                    latest_delete = Some(commit);
+                }
+                WriteType::Rollback | WriteType::Lock => {
+                    self.delete_write(key, commit);
+                    delete_versions += 1;
+                }
+                WriteType::Put => {}
+            }
         }
         if let Some(commit) = latest_delete {
             self.delete_write(key, commit);
