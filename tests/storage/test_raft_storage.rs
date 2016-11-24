@@ -82,7 +82,6 @@ fn test_engine_leader_change_twice() {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peers[0].clone());
 
-    let snapshot = engine.snapshot(&ctx).unwrap();
     // Not leader.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     assert!(engine.write(&ctx, vec![]).is_err());
