@@ -390,7 +390,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
         get_toml_int(config,
                      "raftstore.region-compact-delete-keys-count",
                      Some(200_000)) as u64;
-    
+
     cfg.raft_store.lock_cf_compact_interval_secs =
         get_toml_int(config,
                      "raftstore.lock-cf-compact-interval-secs",
