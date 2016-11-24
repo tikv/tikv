@@ -12,6 +12,8 @@ addr = "127.0.0.1:20160"
 advertise-addr = ""
 # set the path to rocksdb directory.
 store = "/tmp/tikv/store"
+# set attributes about this server, e.g. "zone=us-west-1,disk=ssd".
+labels = ""
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
 # notify capacity, 40960 is suitable for about 7000 regions.
