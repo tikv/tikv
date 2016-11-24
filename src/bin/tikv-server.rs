@@ -381,15 +381,20 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.region-split-check-diff",
                      Some(8 * 1024 * 1024)) as u64;
 
-    cfg.raft_store.region_compact_check_tick_interval =
+    cfg.raft_store.region_compact_check_interval_secs =
         get_toml_int(config,
-                     "raftstore.region-compact-check-tick-interval",
-                     Some(300_000)) as u64;
+                     "raftstore.region-compact-check-interval-secs",
+                     Some(300)) as u64;
 
     cfg.raft_store.region_compact_delete_keys_count =
         get_toml_int(config,
                      "raftstore.region-compact-delete-keys-count",
                      Some(200_000)) as u64;
+    
+    cfg.raft_store.lock_cf_compact_interval_secs =
+        get_toml_int(config,
+                     "raftstore.lock-cf-compact-interval-secs",
+                     Some(300_000)) as u64;
 
     let max_peer_down_millis =
         get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;

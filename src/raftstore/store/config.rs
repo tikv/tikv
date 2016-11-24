@@ -28,8 +28,8 @@ const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
-const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 300_000;
-const REGION_COMPACT_DELETE_KEYS_COUNT: u64 = 1_000_000;
+const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 300;
+const REGION_COMPACT_DELETE_KEYS_COUNT: u64 = 200_000;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 10000;
 const STORE_CAPACITY: u64 = u64::MAX;
@@ -75,8 +75,8 @@ pub struct Config {
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_check_size_diff: u64,
-    /// Interval (ms) to check whether start compaction for a region.
-    pub region_compact_check_tick_interval: u64,
+    /// Interval to check whether start compaction for a region.
+    pub region_compact_check_interval_secs: u64,
     /// When delete keys of a region exceeds the size, a compaction will
     /// be started.
     pub region_compact_delete_keys_count: u64,
@@ -117,7 +117,7 @@ impl Default for Config {
             region_max_size: REGION_MAX_SIZE,
             region_split_size: REGION_SPLIT_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
-            region_compact_check_tick_interval: REGION_COMPACT_CHECK_TICK_INTERVAL,
+            region_compact_check_interval_secs: REGION_COMPACT_CHECK_TICK_INTERVAL,
             region_compact_delete_keys_count: REGION_COMPACT_DELETE_KEYS_COUNT,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
             pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,
