@@ -492,7 +492,10 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
-fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
+fn start_server<T, S>(mut server: Server<T, S>,
+                      mut el: EventLoop<Server<T, S>>,
+                      engine: Arc<DB>,
+                      backup_path: &str)
     where T: RaftStoreRouter,
           S: StoreAddrResolver + Send + 'static
 {
@@ -503,15 +506,15 @@ fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>,
             server.run(&mut el).unwrap();
         })
         .unwrap();
-    handle_signal(ch, engine);
+    handle_signal(ch, engine, backup_path);
     h.join().unwrap();
 }
 
 #[cfg(unix)]
-fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
+fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
     use signal::trap::Trap;
-    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1};
-    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1]);
+    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
+    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
     for sig in trap {
         match sig {
             SIGTERM | SIGINT => {
@@ -536,6 +539,13 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
                 if let Some(v) = engine.get_statistics() {
                     info!("{}", v)
                 }
+            }
+            SIGUSR2 => {
+                info!("making backup ...");
+                if let Err(e) = util::rocksdb::backup(&engine, backup_path) {
+                    error!("fail to backup: {}", e);
+                }
+                info!("backup done");
             }
             // TODO: handle more signal
             _ => unreachable!(),
@@ -584,7 +594,17 @@ fn run_raft_server(listener: TcpListener,
                           resolver,
                           snap_mgr)
         .unwrap();
-    start_server(svr, event_loop, engine);
+
+    let backup_path = {
+        let mut path = get_toml_string(config, "server.backup", Some(String::new()));
+        if path.is_empty() {
+            path = store_path;
+            path.push_str("_backup");
+        }
+        info!("backup path: {:?}", path);
+        path
+    };
+    start_server(svr, event_loop, engine, &backup_path);
     node.stop().unwrap();
 }
 

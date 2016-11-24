@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{DB, Options};
+use rocksdb::{DB, Options, BackupEngine};
 pub use rocksdb::CFHandle;
 use std::collections::HashSet;
 use std::path::Path;
@@ -136,6 +136,11 @@ fn db_exist(path: &str) -> bool {
     // but db has not been created, DB::list_column_families will failed and we can cleanup
     // the directory by this indication.
     fs::read_dir(&path).unwrap().next().is_some()
+}
+
+pub fn backup(db: &DB, path: &str) -> Result<(), String> {
+    let be = try!(BackupEngine::new(Options::default(), path));
+    be.create_new_backup(db)
 }
 
 #[cfg(test)]
