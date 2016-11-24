@@ -83,11 +83,11 @@ fn test_engine_leader_change_twice() {
     ctx.set_peer(peers[0].clone());
 
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let ctx = snapshot.context();
     // Not leader.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     assert!(engine.write(&ctx, vec![]).is_err());
     // Term not match.
+    ctx.set_term(0);
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     assert!(engine.write(&ctx, vec![]).is_err());
 }

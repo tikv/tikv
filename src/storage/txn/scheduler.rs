@@ -40,6 +40,7 @@ use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
 use kvproto::kvrpcpb::{Context, LockInfo};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError};
 use storage::{Key, Value, KvPair};
+use storage::engine::CbContext;
 use std::collections::HashMap;
 use mio::{self, EventLoop};
 use util::transport::SendCh;
@@ -72,6 +73,7 @@ pub enum Msg {
     RawCmd { cmd: Command, cb: StorageCb },
     SnapshotFinished {
         cid: u64,
+        cb_ctx: CbContext,
         snapshot: EngineResult<Box<Snapshot>>,
     },
     ReadFinished { cid: u64, pr: ProcessResult },
@@ -85,6 +87,7 @@ pub enum Msg {
     WriteFinished {
         cid: u64,
         pr: ProcessResult,
+        cb_ctx: CbContext,
         result: EngineResult<()>,
     },
 }
@@ -178,10 +181,11 @@ impl RunningCtx {
 
 /// Creates a callback to receive async results of write prepare from the storage engine.
 fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
-    Box::new(move |result: EngineResult<()>| {
+    Box::new(move |(cb_ctx, result)| {
         if let Err(e) = ch.send(Msg::WriteFinished {
             cid: cid,
             pr: pr,
+            cb_ctx: cb_ctx,
             result: result,
         }) {
             panic!("send write finished to scheduler failed cid={}, err:{:?}",
@@ -481,22 +485,6 @@ fn process_write_impl(cid: u64,
     Ok(())
 }
 
-/// Extracts the context of a command.
-fn extract_ctx(cmd: &Command) -> &Context {
-    match *cmd {
-        Command::Get { ref ctx, .. } |
-        Command::BatchGet { ref ctx, .. } |
-        Command::Scan { ref ctx, .. } |
-        Command::Prewrite { ref ctx, .. } |
-        Command::Commit { ref ctx, .. } |
-        Command::Cleanup { ref ctx, .. } |
-        Command::Rollback { ref ctx, .. } |
-        Command::ScanLock { ref ctx, .. } |
-        Command::ResolveLock { ref ctx, .. } |
-        Command::Gc { ref ctx, .. } => ctx,
-    }
-}
-
 impl Scheduler {
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
@@ -542,7 +530,7 @@ impl Scheduler {
     }
 
     /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(&mut self, cid: u64, snapshot: Box<Snapshot>) {
+    fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
         debug!("process cmd with snapshot, cid={}", cid);
         let mut cmd = {
@@ -550,7 +538,9 @@ impl Scheduler {
             assert_eq!(ctx.cid, cid);
             ctx.cmd.take().unwrap()
         };
-        cmd.set_context(snapshot.context());
+        if let Some(term) = cb_ctx.term {
+            cmd.mut_context().set_term(term);
+        }
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
         if readcmd {
@@ -577,7 +567,7 @@ impl Scheduler {
     fn extract_context(&self, cid: u64) -> &Context {
         let ctx = &self.cmd_ctxs.get(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
-        extract_ctx(ctx.cmd.as_ref().unwrap())
+        ctx.cmd.as_ref().unwrap().get_context()
     }
 
     /// Event handler for new command.
@@ -632,9 +622,10 @@ impl Scheduler {
     fn get_snapshot(&mut self, cid: u64) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot"]).inc();
         let ch = self.schedch.clone();
-        let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
+        let cb = box move |(cb_ctx, snapshot)| {
             if let Err(e) = ch.send(Msg::SnapshotFinished {
                 cid: cid,
+                cb_ctx: cb_ctx,
                 snapshot: snapshot,
             }) {
                 panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
@@ -651,13 +642,16 @@ impl Scheduler {
     /// Event handler for the completion of get snapshot.
     ///
     /// Delivers the command along with the snapshot to a worker thread to execute.
-    fn on_snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
+    fn on_snapshot_finished(&mut self,
+                            cid: u64,
+                            cb_ctx: CbContext,
+                            snapshot: EngineResult<Box<Snapshot>>) {
         debug!("receive snapshot finish msg for cid={}", cid);
         match snapshot {
             Ok(snapshot) => {
                 SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
                     .inc();
-                self.process_by_worker(cid, snapshot);
+                self.process_by_worker(cid, cb_ctx, snapshot);
             }
             Err(e) => {
                 SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
@@ -711,7 +705,7 @@ impl Scheduler {
             return self.on_write_finished(cid, pr, Ok(()));
         }
         let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
-        if let Err(e) = self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb) {
+        if let Err(e) = self.engine.async_write(cmd.get_context(), to_be_write, engine_cb) {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
                 .inc();
             self.finish_with_err(cid, Error::from(e));
@@ -771,13 +765,15 @@ impl mio::Handler for Scheduler {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
             Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-            Msg::SnapshotFinished { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
+            Msg::SnapshotFinished { cid, cb_ctx, snapshot } => {
+                self.on_snapshot_finished(cid, cb_ctx, snapshot)
+            }
             Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
             Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
                 self.on_write_prepare_finished(cid, cmd, pr, to_be_write)
             }
             Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
-            Msg::WriteFinished { cid, pr, result } => self.on_write_finished(cid, pr, result),
+            Msg::WriteFinished { cid, pr, result, .. } => self.on_write_finished(cid, pr, result),
         }
     }
 

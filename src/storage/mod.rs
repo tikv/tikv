@@ -229,7 +229,22 @@ impl Command {
         }
     }
 
-    pub fn set_context(&mut self, context: Context) {
+    pub fn get_context(&self) -> &Context {
+        match *self {
+            Command::Get { ref ctx, .. } |
+            Command::BatchGet { ref ctx, .. } |
+            Command::Scan { ref ctx, .. } |
+            Command::Prewrite { ref ctx, .. } |
+            Command::Commit { ref ctx, .. } |
+            Command::Cleanup { ref ctx, .. } |
+            Command::Rollback { ref ctx, .. } |
+            Command::ScanLock { ref ctx, .. } |
+            Command::ResolveLock { ref ctx, .. } |
+            Command::Gc { ref ctx, .. } => ctx,
+        }
+    }
+
+    pub fn mut_context(&mut self) -> &mut Context {
         match *self {
             Command::Get { ref mut ctx, .. } |
             Command::BatchGet { ref mut ctx, .. } |
@@ -240,7 +255,7 @@ impl Command {
             Command::Rollback { ref mut ctx, .. } |
             Command::ScanLock { ref mut ctx, .. } |
             Command::ResolveLock { ref mut ctx, .. } |
-            Command::Gc { ref mut ctx, .. } => *ctx = context,
+            Command::Gc { ref mut ctx, .. } => ctx,
         }
     }
 }

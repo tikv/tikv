@@ -31,7 +31,8 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{Engine, Modify, Cursor, Snapshot, ScanMode, Callback, Iterator as EngineIterator};
+use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback,
+            Iterator as EngineIterator};
 use storage::{Key, Value, CfName, CF_DEFAULT};
 use super::metrics::*;
 
@@ -95,31 +96,35 @@ pub struct RaftKv<S: RaftStoreRouter + 'static> {
 
 enum CmdRes {
     Resp(Vec<Response>),
-    Snap((RegionSnapshot, u64)),
+    Snap(RegionSnapshot),
 }
 
 fn on_result(mut resp: RaftCmdResponse,
              resp_cnt: usize,
              uuid: &[u8],
              db: Arc<DB>)
-             -> Result<CmdRes> {
+             -> (CbContext, Result<CmdRes>) {
+    let mut cb_ctx = CbContext::new();
+    cb_ctx.term = Some(resp.get_header().get_current_term());
+
     if resp.get_header().get_uuid() != uuid {
-        return Err(Error::InvalidResponse("response is not correct!!!".to_owned()));
+        return (cb_ctx, Err(Error::InvalidResponse("response is not correct!!!".to_owned())));
     }
     if resp.get_header().has_error() {
-        return Err(Error::RequestFailed(resp.take_header().take_error()));
+        return (cb_ctx, Err(Error::RequestFailed(resp.take_header().take_error())));
     }
     if resp_cnt != resp.get_responses().len() {
-        return Err(Error::InvalidResponse("response count is not equal to requests, \
-                                            something must go wrong."
-            .to_owned()));
+        return (cb_ctx,
+                Err(Error::InvalidResponse("response count is not equal to requests, something \
+                                            must go wrong."
+            .to_owned())));
     }
     let mut resps = resp.take_responses();
     if resps.len() != 1 || resps[0].get_cmd_type() != CmdType::Snap {
-        return Ok(CmdRes::Resp(resps.into_vec()));
+        return (cb_ctx, Ok(CmdRes::Resp(resps.into_vec())));
     }
     let snap = RegionSnapshot::from_raw(db, resps[0].take_snap().take_region());
-    Ok(CmdRes::Snap((snap, resp.get_header().get_current_term())))
+    (cb_ctx, Ok(CmdRes::Snap(snap)))
 }
 
 impl<S: RaftStoreRouter> RaftKv<S> {
@@ -137,7 +142,8 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         let db = self.db.clone();
         try!(self.router.send_command(req,
                                       box move |resp| {
-                                          cb(on_result(resp, l, &uuid, db).map_err(Error::into));
+                                          let (cb_ctx, res) = on_result(resp, l, &uuid, db);
+                                          cb((cb_ctx, res.map_err(Error::into)));
                                       }));
         Ok(())
     }
@@ -213,20 +219,20 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
         try!(self.exec_requests(ctx,
                                 reqs,
-                                box move |res| {
+                                box move |(cb_ctx, res)| {
             match res {
                 Ok(CmdRes::Resp(_)) => {
                     req_timer.observe_duration();
                     ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "success"]).inc();
 
-                    cb(Ok(()))
+                    cb((cb_ctx, Ok(())))
                 }
                 Ok(CmdRes::Snap(_)) => {
-                    cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
+                    cb((cb_ctx, Err(box_err!("unexpect snapshot, should mutate instead."))))
                 }
                 Err(e) => {
                     ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "failed"]).inc();
-                    cb(Err(e))
+                    cb((cb_ctx, Err(e)))
                 }
             }
         }));
@@ -240,27 +246,21 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"]).start_timer();
 
-        let mut ctx2 = ctx.clone();
-
         try!(self.exec_requests(ctx,
                                 vec![req],
-                                box move |res| {
+                                box move |(cb_ctx, res)| {
             match res {
                 Ok(CmdRes::Resp(r)) => {
-                    cb(Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()))
+                    cb((cb_ctx, Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into())))
                 }
-                Ok(CmdRes::Snap((s, term))) => {
+                Ok(CmdRes::Snap(s)) => {
                     req_timer.observe_duration();
                     ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"]).inc();
-                    ctx2.set_term(term);
-                    cb(Ok(box RaftKvSnapshot {
-                        region_snapshot: s,
-                        context: ctx2,
-                    }))
+                    cb((cb_ctx, Ok(box s)))
                 }
                 Err(e) => {
                     ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "failed"]).inc();
-                    cb(Err(e))
+                    cb((cb_ctx, Err(e)))
                 }
             }
         }));
@@ -272,19 +272,14 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 }
 
-struct RaftKvSnapshot {
-    region_snapshot: RegionSnapshot,
-    context: Context,
-}
-
-impl Snapshot for RaftKvSnapshot {
+impl Snapshot for RegionSnapshot {
     fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
-        let v = box_try!(self.region_snapshot.get_value(key.encoded()));
+        let v = box_try!(self.get_value(key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
-        let v = box_try!(self.region_snapshot.get_value_cf(cf, key.encoded()));
+        let v = box_try!(self.get_value_cf(cf, key.encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -294,8 +289,7 @@ impl Snapshot for RaftKvSnapshot {
                 fill_cache: bool,
                 mode: ScanMode)
                 -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(RegionSnapshot::iter(&self.region_snapshot, upper_bound, fill_cache),
-                       mode))
+        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound, fill_cache), mode))
     }
 
     #[allow(needless_lifetimes)]
@@ -305,15 +299,8 @@ impl Snapshot for RaftKvSnapshot {
                    fill_cache: bool,
                    mode: ScanMode)
                    -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(&self.region_snapshot,
-                                                    cf,
-                                                    upper_bound,
-                                                    fill_cache)),
+        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound, fill_cache)),
                        mode))
-    }
-
-    fn context(&self) -> Context {
-        self.context.clone()
     }
 }
 

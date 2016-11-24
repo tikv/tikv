@@ -33,7 +33,17 @@ pub const TEMP_DIR: &'static str = "";
 const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
-pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
+pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
+
+pub struct CbContext {
+    pub term: Option<u64>,
+}
+
+impl CbContext {
+    fn new() -> CbContext {
+        CbContext { term: None }
+    }
+}
 
 #[derive(Debug)]
 pub enum Modify {
@@ -47,14 +57,18 @@ pub trait Engine: Send + Debug {
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout)
-            .unwrap_or_else(|| Err(Error::Timeout(timeout)))
+        match wait_op!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout) {
+            Some((_, res)) => res,
+            None => Err(Error::Timeout(timeout)),
+        }
     }
 
     fn snapshot(&self, ctx: &Context) -> Result<Box<Snapshot>> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout)
-            .unwrap_or_else(|| Err(Error::Timeout(timeout)))
+        match wait_op!(|cb| self.async_snapshot(ctx, cb).unwrap(), timeout) {
+            Some((_, res)) => res,
+            None => Err(Error::Timeout(timeout)),
+        }
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
@@ -93,7 +107,6 @@ pub trait Snapshot: Send {
                    fill_cache: bool,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
-    fn context(&self) -> Context;
 }
 
 pub trait Iterator {

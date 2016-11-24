@@ -147,7 +147,7 @@ impl BatchRunnable<Task> for Host {
             let id = self.last_req_id;
             let sched = self.sched.clone();
             if let Err(e) = self.engine.async_snapshot(reqs[0].req.get_context(),
-                                                       box move |res| {
+                                                       box move |(_cb_ctx, res)| {
                                                            sched.schedule(Task::SnapRes(id, res))
                                                                .unwrap()
                                                        }) {
