@@ -21,6 +21,7 @@ use rocksdb::DB;
 use pd::{INVALID_ID, PdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
+use protobuf::RepeatedField;
 use util::transport::SendCh;
 use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
                        SnapManager};
@@ -68,6 +69,15 @@ impl<C> Node<C>
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+
+        let mut labels = Vec::new();
+        for (k, v) in &cfg.labels {
+            let mut label = metapb::StoreLabel::new();
+            label.set_key(k.to_owned());
+            label.set_value(v.to_owned());
+            labels.push(label);
+        }
+        store.set_labels(RepeatedField::from_vec(labels));
 
         let ch = SendCh::new(event_loop.channel(), "raftstore");
         Node {
