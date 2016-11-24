@@ -37,7 +37,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, SlowTimer, rocksdb};
 use pd::{PdClient, INVALID_ID};
 use storage::{CF_LOCK, CF_RAFT};
-use super::store::{Store, RaftReadyMetrics, RaftMessageMetrics, RaftMetrics};
+use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
 use super::msg::Callback;
@@ -46,6 +46,7 @@ use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
+use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -588,7 +589,8 @@ impl Peer {
     pub fn propose(&mut self,
                    mut cmd: PendingCmd,
                    req: RaftCmdRequest,
-                   mut err_resp: RaftCmdResponse)
+                   mut err_resp: RaftCmdResponse,
+                   metrics: &mut RaftProposeMetrics)
                    -> bool {
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
@@ -597,11 +599,11 @@ impl Peer {
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
+        metrics.all += 1;
 
         let local_read = self.is_local_read(&req);
         if local_read {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
+            metrics.local_read += 1;
 
             // for read-only, if we don't care stale read, we can
             // execute these commands immediately in leader.
@@ -616,6 +618,8 @@ impl Peer {
             cmd.call(resp);
             return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
+            metrics.transfer_leader += 1;
+
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
 
@@ -648,14 +652,14 @@ impl Peer {
                 self.notify_not_leader(cmd);
             }
 
-            if let Err(e) = self.propose_conf_change(req) {
+            if let Err(e) = self.propose_conf_change(req, metrics) {
                 cmd_resp::bind_error(&mut err_resp, e);
                 cmd.call(err_resp);
                 return false;
             }
 
             self.pending_cmds.set_conf_change(cmd);
-        } else if let Err(e) = self.propose_normal(req) {
+        } else if let Err(e) = self.propose_normal(req, metrics) {
             cmd_resp::bind_error(&mut err_resp, e);
             cmd.call(err_resp);
             return false;
@@ -699,13 +703,17 @@ impl Peer {
         cmd.call(resp);
     }
 
-    fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["normal"]).inc();
+    fn propose_normal(&mut self,
+                      mut cmd: RaftCmdRequest,
+                      metrics: &mut RaftProposeMetrics)
+                      -> Result<()> {
+        metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
         try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
 
+        // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let propose_index = self.next_proposal_index();
@@ -720,8 +728,6 @@ impl Peer {
     }
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["transfer_leader"]).inc();
-
         info!("{} transfer leader to {:?}", self.tag, peer);
 
         self.raft_group.transfer_leader(peer.get_id());
@@ -745,11 +751,15 @@ impl Peer {
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
-    fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change"]).inc();
+    fn propose_conf_change(&mut self,
+                           cmd: RaftCmdRequest,
+                           metrics: &mut RaftProposeMetrics)
+                           -> Result<()> {
+        metrics.conf_change += 1;
 
         let data = try!(cmd.write_to_bytes());
 
+        // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
