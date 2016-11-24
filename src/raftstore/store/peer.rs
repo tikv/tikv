@@ -1075,7 +1075,7 @@ impl Peer {
         if get_change_peer_cmd(cmd).is_some() {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.take().unwrap()));
+                    return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.unwrap()));
                 } else {
                     self.notify_not_leader(cmd);
                 }
@@ -1084,7 +1084,7 @@ impl Peer {
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some((head.cb.take().unwrap(), head.renew_lease_time.take().unwrap()));
+                return Some((head.cb.take().unwrap(), head.renew_lease_time.unwrap()));
             }
             // because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
