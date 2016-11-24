@@ -180,8 +180,11 @@ impl<'a> MvccTxn<'a> {
         let mut ts: u64 = u64::max_value();
         let mut versions = 0;
         let mut delete_versions = 0;
+        let mut latest_delete = None;
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
             if self.write_size >= MAX_TXN_WRITE_SIZE {
+                // Cannot remove latest delete when we haven't iterate all versions.
+                latest_delete = None;
                 break;
             }
             if !remove_older {
@@ -197,7 +200,10 @@ impl<'a> MvccTxn<'a> {
                     // Latest write before `safe_point` can be deleted if its type is Delete,
                     // Rollback or Lock.
                     match write.write_type {
-                        WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
+                        WriteType::Delete => {
+                            latest_delete = Some(commit);
+                        }
+                        WriteType::Rollback | WriteType::Lock => {
                             self.delete_write(key, commit);
                             delete_versions += 1;
                         }
@@ -213,6 +219,10 @@ impl<'a> MvccTxn<'a> {
             }
             ts = commit - 1;
             versions += 1;
+        }
+        if let Some(commit) = latest_delete {
+            self.delete_write(key, commit);
+            delete_versions += 1;
         }
         MVCC_VERSIONS_HISTOGRAM.observe(versions as f64);
         if delete_versions > 0 {
