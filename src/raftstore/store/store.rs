@@ -480,6 +480,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 if let Some((from_region, into_region)) =
                        peer.maybe_region_merge_timeout(self.cfg.region_merge_retry_duration) {
+
+                    // TODO scan the status of from_region
+                    // 1. if from_region is gone, rollback
+                    // 2. if from_region's epoch has changed, rollback
+                    // 3. else retry suspend from_region
+                    // use self.on_ready_rollback_merge(from_region, into_region) to rollback
+
                     region_to_retry_merge.push((from_region, into_region));
                 }
             }
@@ -999,10 +1006,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_merge_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
+
+        // TODO if into_peer is not leader, return
+
         info!("{} handle merge region result from region {:?}, into region {:?}",
               self.tag,
               from_region,
               into_region);
+
+        // TODO check whether all peers in `into_region` have replicated to the state `Merging`.
+        // If not, check it in tick()
 
         if let Some(from_peer) = self.region_peers.get(&from_region.get_id()) {
             // Send suspend command to `from_region`.
@@ -1256,9 +1269,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::StartMerge { from_region, into_region } => {
                     self.on_ready_merge_region(from_region, into_region)
                 }
-                ExecResult::RollbackMerge { from_region, into_region } => {
-                    self.on_ready_rollback_merge(from_region, into_region)
-                }
                 ExecResult::SuspendRegion { from_region, into_region } => {
                     self.on_ready_suspend_region(from_region, into_region)
                 }
@@ -1446,6 +1456,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
         for (_, peer) in &mut self.region_peers {
             if !peer.is_leader() {
+                continue;
+            }
+
+            if peer.is_in_region_merge() {
+                info!("{} skip checking region split when it's in region merge procedure",
+                      peer.tag);
                 continue;
             }
 

@@ -95,10 +95,6 @@ pub enum ExecResult {
         from_region: metapb::Region,
         into_region: metapb::Region,
     },
-    RollbackMerge {
-        from_region: metapb::Region,
-        into_region: metapb::Region,
-    },
     SuspendRegion {
         from_region: metapb::Region,
         into_region: metapb::Region,
@@ -400,6 +396,10 @@ impl Peer {
 
     pub fn is_applying(&self) -> bool {
         self.get_store().is_applying()
+    }
+
+    pub fn is_in_region_merge(&self) -> bool {
+        self.merge_state != MergeState::NoMerge
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
@@ -848,12 +848,12 @@ impl Peer {
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
-                AdminCmdType::SuspendRegion |
                 AdminCmdType::InvalidAdmin => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
                 AdminCmdType::TransferLeader |
                 AdminCmdType::Merge |
+                AdminCmdType::SuspendRegion |
                 AdminCmdType::CommitMerge |
                 AdminCmdType::ShutdownRegion => {
                     check_ver = true;
@@ -1181,7 +1181,6 @@ impl Peer {
                     self.mut_store().region = region.clone();
                 }
                 ExecResult::CompactLog { .. } |
-                ExecResult::RollbackMerge { .. } |
                 ExecResult::ShutdownRegion { .. } => {}
                 ExecResult::SplitRegion { ref left, .. } => {
                     self.mut_store().region = left.clone();
@@ -1361,6 +1360,15 @@ impl Peer {
               util::conf_change_type_str(&change_type),
               region.get_region_epoch());
 
+        // Skip applying change peer command when this region is in region merge procedure.
+        if self.is_in_region_merge() {
+            info!("{} ignore change peer request: {:?}, since it's in region merge procedure",
+                  self.tag,
+                  request);
+            return Err(box_err!("ignore change peer request: {:?} when region is in region merge",
+                                request));
+        }
+
         // TODO: we should need more check, like peer validation, duplicated id, etc.
         let exists = util::find_peer(&region, store_id).is_some();
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
@@ -1472,6 +1480,16 @@ impl Peer {
               escape(split_key),
               region);
 
+        // Skip applying region split command when this region is in region merge procedure.
+        if self.is_in_region_merge() {
+            info!("{} ignore region split request at key: {}, since it's in region merge \
+                   procedure",
+                  self.tag,
+                  escape(split_key));
+            return Err(box_err!("ignore split request: {:?} when region is in region merge",
+                                split_req));
+        }
+
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();
 
@@ -1554,17 +1572,29 @@ impl Peer {
         let mut resp = AdminResponse::new();
         resp.set_merge(MergeResponse::new());
 
-        // TODO check epoch version and conf version
+        {
+            // Ensure the into_region epoch is not outdated.
+            let epoch = merge_req.get_into_region().get_region_epoch();
+            let latest_epoch = self.region().get_region_epoch();
+            if util::is_epoch_stale(epoch, latest_epoch) {
+                // The region epoch in this merge request is outdated, because
+                // a pending region split or member change is applied and
+                // the region epoch has changed.
+                // Ignore this merge request.
+                return Ok((resp, None));
+            }
+        }
 
         if self.merge_state != MergeState::NoMerge {
             // Just ignore this region merge command since this peer is already
-            // in `Merging` or `Suspended` state
-            info!("{} not in NoMerge state, ignore region merge {:?}",
+            // in `Merging` or `Suspended` state.
+            info!("{} already in merge state {:?}, ignore region merge request {:?}",
                   self.tag,
+                  self.merge_state,
                   merge_req);
             Ok((resp, None))
         } else {
-            // update peer local state
+            // Update peer local state.
             let mut merge_state = RegionMergeState::new();
             merge_state.set_state(MergeState::Merging);
             merge_state.set_from_region(merge_req.get_from_region().clone());
@@ -1602,24 +1632,21 @@ impl Peer {
 
         {
             // Ensure the region epoch in suspend command is not outdated.
-            let from_epoch = suspend_region.get_from_region().get_region_epoch();
+            let epoch = suspend_region.get_from_region().get_region_epoch();
             let latest_epoch = self.region().get_region_epoch();
-            if util::is_epoch_stale(from_epoch, latest_epoch) {
-                // A region split, region merge or member change has happened before,
-                // so that the region epoch in suspend command is outdated,
-                // when compared to the local region state.
-                // Rollback this region merge.
-                return Ok((resp,
-                           Some(ExecResult::RollbackMerge {
-                    from_region: suspend_region.get_from_region().clone(),
-                    into_region: suspend_region.get_into_region().clone(),
-                })));
+            if util::is_epoch_stale(epoch, latest_epoch) {
+                // The region epoch in this request is outdated, because
+                // a pending region split, member change or region merge is applied and
+                // the region epoch has changed.
+                // The `into_region` will notice this region epoch change and
+                // rollback the region merge, when it scans the `from_region` info periodically.
+                return Ok((resp, None));
             }
         }
 
         if self.merge_state != MergeState::Suspended {
             // If the following `ExecResult::SuspendRegion` is lost due to a node crash,
-            // the suspend command will be retried by the leader of control region
+            // this suspend region command will be retried by the leader of `into_region`
             // in a region merge procedure.
             // Skip to write the `Suspended` state to hard driver when the command is a retry.
             let mut merge_state = RegionMergeState::new();
