@@ -97,7 +97,7 @@ impl<T: Display> Scheduler<T> {
             return Err(Stopped(t));
         }
         self.counter.fetch_add(1, Ordering::SeqCst);
-        PENDING_TASKS.with_label_values(&[&self.name]).add(1.0);
+        PENDING_TASKS.with_label_values(&[&self.name]).inc();
         Ok(())
     }
 
