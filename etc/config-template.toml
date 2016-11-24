@@ -60,6 +60,13 @@ region-split-check-diff = "8MB"
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
 
+# Interval to check whether start compaction for a region.
+# region-compact-check-interval-secs = 300
+# When delete keys of a region exceeds the size, a compaction will be started.
+# region-compact-delete-keys-count = 200000
+# Interval to check whether start lock compaction for a region.
+# lock-cf-compact-interval-secs = 600
+
 [pd]
 # pd endpoints 
 endpoints = ""
