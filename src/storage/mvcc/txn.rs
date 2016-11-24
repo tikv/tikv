@@ -20,10 +20,13 @@ use super::write::{WriteType, Write};
 use super::{Error, Result};
 use super::metrics::*;
 
+pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
+
 pub struct MvccTxn<'a> {
     reader: MvccReader<'a>,
     start_ts: u64,
     writes: Vec<Modify>,
+    write_size: usize,
 }
 
 impl<'a> fmt::Debug for MvccTxn<'a> {
@@ -39,6 +42,7 @@ impl<'a> MvccTxn<'a> {
             reader: MvccReader::new(snapshot, mode, true /* fill_cache */),
             start_ts: start_ts,
             writes: vec![],
+            write_size: 0,
         }
     }
 
@@ -46,13 +50,43 @@ impl<'a> MvccTxn<'a> {
         self.writes
     }
 
+    pub fn write_size(&self) -> usize {
+        self.write_size
+    }
+
     fn lock_key(&mut self, key: Key, lock_type: LockType, primary: Vec<u8>, ttl: u64) {
-        let lock = Lock::new(lock_type, primary, self.start_ts, ttl);
-        self.writes.push(Modify::Put(CF_LOCK, key, lock.to_bytes()));
+        let lock = Lock::new(lock_type, primary, self.start_ts, ttl).to_bytes();
+        self.write_size += CF_LOCK.len() + key.encoded().len() + lock.len();
+        self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
 
     fn unlock_key(&mut self, key: Key) {
+        self.write_size += CF_LOCK.len() + key.encoded().len();
         self.writes.push(Modify::Delete(CF_LOCK, key));
+    }
+
+    fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
+        let key = key.append_ts(ts);
+        self.write_size += key.encoded().len() + value.len();
+        self.writes.push(Modify::Put(CF_DEFAULT, key, value));
+    }
+
+    fn delete_value(&mut self, key: &Key, ts: u64) {
+        let key = key.append_ts(ts);
+        self.write_size += key.encoded().len();
+        self.writes.push(Modify::Delete(CF_DEFAULT, key));
+    }
+
+    fn put_write(&mut self, key: &Key, ts: u64, value: Value) {
+        let key = key.append_ts(ts);
+        self.write_size += CF_WRITE.len() + key.encoded().len() + value.len();
+        self.writes.push(Modify::Put(CF_WRITE, key, value));
+    }
+
+    fn delete_write(&mut self, key: &Key, ts: u64) {
+        let key = key.append_ts(ts);
+        self.write_size += CF_WRITE.len() + key.encoded().len();
+        self.writes.push(Modify::Delete(CF_WRITE, key));
     }
 
     pub fn get(&mut self, key: &Key) -> Result<Option<Value>> {
@@ -84,8 +118,8 @@ impl<'a> MvccTxn<'a> {
                       lock_ttl);
 
         if let Mutation::Put((_, ref value)) = mutation {
-            let value_key = key.append_ts(self.start_ts);
-            self.writes.push(Modify::Put(CF_DEFAULT, value_key, value.clone()));
+            let ts = self.start_ts;
+            self.put_value(key, ts, value.clone());
         }
         Ok(())
     }
@@ -109,7 +143,7 @@ impl<'a> MvccTxn<'a> {
             }
         };
         let write = Write::new(WriteType::from_lock_type(lock_type), self.start_ts);
-        self.writes.push(Modify::Put(CF_WRITE, key.append_ts(commit_ts), write.to_bytes()));
+        self.put_write(key, commit_ts, write.to_bytes());
         self.unlock_key(key.clone());
         Ok(())
     }
@@ -117,8 +151,7 @@ impl<'a> MvccTxn<'a> {
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
         match try!(self.reader.load_lock(key)) {
             Some(ref lock) if lock.ts == self.start_ts => {
-                let data_key = key.append_ts(lock.ts);
-                self.writes.push(Modify::Delete(CF_DEFAULT, data_key));
+                self.delete_value(key, lock.ts);
             }
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
@@ -135,9 +168,9 @@ impl<'a> MvccTxn<'a> {
                 };
             }
         }
-        self.writes.push(Modify::Put(CF_WRITE,
-                                     key.append_ts(self.start_ts),
-                                     Write::new(WriteType::Rollback, self.start_ts).to_bytes()));
+        let write = Write::new(WriteType::Rollback, self.start_ts);
+        let ts = self.start_ts;
+        self.put_write(key, ts, write.to_bytes());
         self.unlock_key(key.clone());
         Ok(())
     }
@@ -148,6 +181,9 @@ impl<'a> MvccTxn<'a> {
         let mut versions = 0;
         let mut delete_versions = 0;
         while let Some((commit, write)) = try!(self.reader.seek_write(key, ts)) {
+            if self.write_size >= MAX_TXN_WRITE_SIZE {
+                break;
+            }
             if !remove_older {
                 if commit <= safe_point {
                     // Set `remove_older` after we find the latest value.
@@ -162,16 +198,16 @@ impl<'a> MvccTxn<'a> {
                     // Rollback or Lock.
                     match write.write_type {
                         WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
-                            self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                            self.delete_write(key, commit);
                             delete_versions += 1;
                         }
                         WriteType::Put => {}
                     }
                 }
             } else {
-                self.writes.push(Modify::Delete(CF_WRITE, key.append_ts(commit)));
+                self.delete_write(key, commit);
                 if write.write_type == WriteType::Put {
-                    self.writes.push(Modify::Delete(CF_DEFAULT, key.append_ts(write.start_ts)));
+                    self.delete_value(key, write.start_ts);
                 }
                 delete_versions += 1;
             }
@@ -429,6 +465,29 @@ mod tests {
         must_scan_keys(engine.as_ref(), None, 3, vec![b"a", b"c", b"e"], None);
         must_scan_keys(engine.as_ref(), None, 2, vec![b"a", b"c"], Some(b"c"));
         must_scan_keys(engine.as_ref(), Some(b"c"), 1, vec![b"c"], Some(b"c"));
+    }
+
+    #[test]
+    fn test_write_size() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), 10, None);
+        let key = make_key(b"key");
+        assert_eq!(txn.write_size, 0);
+
+        assert!(txn.get(&key).unwrap().is_none());
+        assert_eq!(txn.write_size, 0);
+
+        txn.prewrite(Mutation::Put((key.clone(), b"value".to_vec())), b"pk", 0).unwrap();
+        assert!(txn.write_size() > 0);
+        engine.write(&ctx, txn.modifies()).unwrap();
+
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), 10, None);
+        txn.commit(&key, 15).unwrap();
+        assert!(txn.write_size() > 0);
+        engine.write(&ctx, txn.modifies()).unwrap();
     }
 
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {

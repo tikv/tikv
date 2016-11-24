@@ -24,6 +24,7 @@ use std::{cmp, u64};
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
+use fs2;
 use uuid::Uuid;
 use time::{self, Timespec};
 
@@ -41,7 +42,6 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -789,40 +789,44 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self) -> Result<()> {
+    fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
+        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(ids.len());
         for region_id in ids {
-            let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans, &mut self.raft_metrics) {
+                match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
-                        error!("{} handle raft ready err: {:?}", peer.tag, e);
-                        return Err(e);
+                        error!("{} handle raft ready append err: {:?}", peer.tag, e);
+                        continue;
                     }
-                    Ok(ready) => ready_result = ready,
+                    Ok(Some(res)) => ready_results.push((region_id, res)),
+                    Ok(None) => {}
                 }
             }
+        }
 
-            if let Some(ready_result) = ready_result {
-                if let Err(e) = self.on_ready_result(region_id, ready_result) {
-                    error!("[region {}] handle raft ready result err: {:?}",
-                           region_id,
-                           e);
-                    return Err(e);
+        for (region_id, mut res) in ready_results {
+            {
+                let peer = self.region_peers.get_mut(&region_id).unwrap();
+
+                if let Err(e) = peer.handle_raft_ready_apply(&mut res) {
+                    // TODO: should we panic or shutdown the store?
+                    error!("{} handle raft ready err: {:?}", peer.tag, e);
+                    continue;
                 }
-            }
+            };
+
+            self.on_ready_result(region_id, res)
         }
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
             .inc_by(duration_to_nanos(t.elapsed()) as f64)
             .unwrap();
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
-
-        Ok(())
     }
 
     fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
@@ -1002,7 +1006,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.region_ranges.insert(enc_end_key(&region), region.get_id());
     }
 
-    fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
+    fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) {
         if let Some(apply_result) = ready_result.apply_snap_result {
             self.on_ready_apply_snapshot(apply_result);
         }
@@ -1025,8 +1029,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   "[region {}] on ready {} results",
                   region_id,
                   result_count);
-
-        Ok(())
     }
 
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
@@ -1333,17 +1335,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
-        let disk_stat = match get_disk_stat(self.engine.path()) {
-            Ok(disk_stat) => disk_stat,
-            Err(_) => {
-                error!("{} get disk stat for rocksdb {} failed",
+        let disk_stats = match fs2::statvfs(self.engine.path()) {
+            Err(e) => {
+                error!("{} get disk stat for rocksdb {} failed: {}",
                        self.tag,
-                       self.engine.path());
+                       self.engine.path(),
+                       e);
                 return;
             }
+            Ok(stats) => stats,
         };
 
-        let capacity = cmp::min(disk_stat.capacity, self.cfg.capacity);
+        let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
 
         stats.set_capacity(capacity);
 
@@ -1373,8 +1376,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // We only care rocksdb SST file size, so we should
         // check disk available here.
-        if available > disk_stat.available {
-            available = disk_stat.available
+        if available > disk_stats.free_space() {
+            available = disk_stats.free_space();
         }
 
         stats.set_store_id(self.store_id());
@@ -1665,10 +1668,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         // We handle raft ready in event loop.
-        if let Err(e) = self.on_raft_ready() {
-            // TODO: should we panic here or shutdown the store?
-            error!("{} handle raft ready err: {:?}", self.tag, e);
-        }
+        self.on_raft_ready();
         self.pending_regions.clear();
     }
 }

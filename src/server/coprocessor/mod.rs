@@ -19,6 +19,7 @@ use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
 
 use std::result;
+use std::time::Instant;
 use std::error;
 
 use storage::{txn, engine, mvcc};
@@ -33,6 +34,9 @@ quick_error! {
         Locked(l: LockInfo) {
             description("key is locked")
             display("locked {:?}", l)
+        }
+        Outdated(deadline: Instant, now: Instant, tp: i64) {
+            description("request is outdated")
         }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
