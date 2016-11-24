@@ -144,15 +144,14 @@ pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, Confi
         if label.is_empty() {
             continue;
         }
+        let label = label.to_lowercase();
         let kv: Vec<_> = label.split('=').collect();
         match kv[..] {
             [k, v] => {
-                let k = k.to_lowercase();
-                let v = v.to_lowercase();
-                if !re.is_match(&k) || !re.is_match(&v) {
+                if !re.is_match(k) || !re.is_match(v) {
                     return Err(ConfigError::StoreLabels(format!("invalid label {}", label)));
                 }
-                if map.insert(k, v).is_some() {
+                if map.insert(k.to_owned(), v.to_owned()).is_some() {
                     return Err(ConfigError::StoreLabels(format!("duplicated label {}", label)));
                 }
             }
