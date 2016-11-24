@@ -100,6 +100,65 @@ fn test_raw_node_step() {
     }
 }
 
+
+// test_raw_node_read_index_to_old_leader ensures that MsgReadIndex to old leader gets
+// forward to the new leader and 'send' method does not attach its term
+#[test]
+fn test_raw_node_read_index_to_old_leader() {
+    let r1 = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
+    let r2 = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let r3 = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+
+    let mut nt = Network::new(vec![Some(r1), Some(r2), Some(r3)]);
+
+    // elect r1 as leader
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+    let mut test_entries = Entry::new();
+    test_entries.set_data(b"testdata".to_vec());
+
+    // send readindex request to r2(follower)
+    let _ =
+        nt.peers.get_mut(&2).unwrap().step(new_message_with_entries(2,
+                                                                    2,
+                                                                    MessageType::MsgReadIndex,
+                                                                    vec![test_entries.clone()]));
+
+    // verify r2(follower) forwards this message to r1(leader) with term not set
+    assert_eq!(nt.peers.get(&2).unwrap().msgs.len(), 1);
+    let read_index_msg1 =
+        new_message_with_entries(2, 1, MessageType::MsgReadIndex, vec![test_entries.clone()]);
+    assert_eq!(read_index_msg1, nt.peers.get(&2).unwrap().msgs[0]);
+
+    // send readindex request to r3(follower)
+    let _ =
+        nt.peers.get_mut(&3).unwrap().step(new_message_with_entries(3,
+                                                                    3,
+                                                                    MessageType::MsgReadIndex,
+                                                                    vec![test_entries.clone()]));
+
+    // verify r3(follower) forwards this message to r1(leader) with term not set as well.
+    assert_eq!(nt.peers.get(&3).unwrap().msgs.len(), 1);
+
+    let read_index_msg2 =
+        new_message_with_entries(3, 1, MessageType::MsgReadIndex, vec![test_entries.clone()]);
+
+    // now elect r3 as leader
+    nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
+    // let r1 steps the two messages previously we got from r2, r3
+    let _ = nt.peers.get_mut(&1).unwrap().step(read_index_msg1);
+    let _ = nt.peers.get_mut(&1).unwrap().step(read_index_msg2);
+
+    // verify r1(follower) forwards these messages again to r3(new leader)
+    assert_eq!(nt.peers.get(&1).unwrap().msgs.len(), 2);
+
+    let read_index_msg3 =
+        new_message_with_entries(1, 3, MessageType::MsgReadIndex, vec![test_entries.clone()]);
+
+    assert_eq!(nt.peers.get(&1).unwrap().msgs[0], read_index_msg3);
+    assert_eq!(nt.peers.get(&1).unwrap().msgs[1], read_index_msg3);
+}
+
 // test_raw_node_propose_and_conf_change ensures that RawNode.propose and
 // RawNode.propose_conf_change send the given proposal and ConfChange to the underlying raft.
 #[test]
