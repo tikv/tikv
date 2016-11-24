@@ -124,10 +124,10 @@ fn test_raw_node_read_index_to_old_leader() {
                                                                     vec![test_entries.clone()]));
 
     // verify r2(follower) forwards this message to r1(leader) with term not set
-    assert_eq!(nt.peers.get(&2).unwrap().msgs.len(), 1);
+    assert_eq!(nt.peers[&2].msgs.len(), 1);
     let read_index_msg1 =
         new_message_with_entries(2, 1, MessageType::MsgReadIndex, vec![test_entries.clone()]);
-    assert_eq!(read_index_msg1, nt.peers.get(&2).unwrap().msgs[0]);
+    assert_eq!(read_index_msg1, nt.peers[&2].msgs[0]);
 
     // send readindex request to r3(follower)
     let _ =
@@ -137,10 +137,11 @@ fn test_raw_node_read_index_to_old_leader() {
                                                                     vec![test_entries.clone()]));
 
     // verify r3(follower) forwards this message to r1(leader) with term not set as well.
-    assert_eq!(nt.peers.get(&3).unwrap().msgs.len(), 1);
+    assert_eq!(nt.peers[&3].msgs.len(), 1);
 
     let read_index_msg2 =
         new_message_with_entries(3, 1, MessageType::MsgReadIndex, vec![test_entries.clone()]);
+    assert_eq!(nt.peers[&3].msgs[0], read_index_msg2);
 
     // now elect r3 as leader
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
@@ -150,13 +151,13 @@ fn test_raw_node_read_index_to_old_leader() {
     let _ = nt.peers.get_mut(&1).unwrap().step(read_index_msg2);
 
     // verify r1(follower) forwards these messages again to r3(new leader)
-    assert_eq!(nt.peers.get(&1).unwrap().msgs.len(), 2);
+    assert_eq!(nt.peers[&1].msgs.len(), 2);
 
     let read_index_msg3 =
         new_message_with_entries(1, 3, MessageType::MsgReadIndex, vec![test_entries.clone()]);
 
-    assert_eq!(nt.peers.get(&1).unwrap().msgs[0], read_index_msg3);
-    assert_eq!(nt.peers.get(&1).unwrap().msgs[1], read_index_msg3);
+    assert_eq!(nt.peers[&1].msgs[0], read_index_msg3);
+    assert_eq!(nt.peers[&1].msgs[1], read_index_msg3);
 }
 
 // test_raw_node_propose_and_conf_change ensures that RawNode.propose and
