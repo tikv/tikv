@@ -28,6 +28,9 @@ const DEFAULT_RECV_BUFFER_SIZE: usize = 128 * 1024;
 pub struct Config {
     pub cluster_id: u64,
 
+    // Server tags.
+    pub tags: Vec<String>,
+
     // Server listening address.
     pub addr: String,
 
@@ -47,6 +50,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
+            tags: Vec::new(),
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,

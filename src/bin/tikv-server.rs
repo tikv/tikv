@@ -132,6 +132,31 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
     i
 }
 
+fn get_array_value<F>(short: &str,
+                      long: &str,
+                      matches: &Matches,
+                      config: &toml::Value,
+                      default: Option<Vec<String>>,
+                      f: F)
+                      -> Vec<String>
+    where F: Fn(&toml::Value) -> Option<Vec<String>>
+{
+    // avoid panic if short is not defined.
+    let s: Option<Vec<String>> = if matches.opt_defined(short) {
+        matches.opt_str(short).map(|x| x.split(',').map(|s| s.to_owned()).collect())
+    } else {
+        None
+    };
+
+    s.or_else(|| {
+            config.lookup(long).and_then(|v| f(v)).or_else(|| {
+                info!("{}, use default {:?}", long, default);
+                default
+            })
+        })
+        .expect(&format!("please specify {}", long))
+}
+
 fn initial_log(matches: &Matches, config: &toml::Value) {
     let level = get_flag_string(matches, "L")
         .unwrap_or_else(|| get_toml_string(config, "server.log-level", Some("info".to_owned())));
@@ -364,6 +389,7 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
 fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
+    cfg.tags = get_server_tags(matches, config);
     cfg.addr = addr.to_owned();
     cfg.notify_capacity = get_toml_int(config, "server.notify-capacity", Some(40960)) as usize;
 
@@ -495,6 +521,41 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     }
     let absolute_path = p.canonicalize().unwrap();
     format!("{}", absolute_path.display())
+}
+
+fn get_server_tags(matches: &Matches, config: &toml::Value) -> Vec<String> {
+    let tags = get_array_value("tags",
+                               "server.tags",
+                               matches,
+                               config,
+                               Some(Vec::new()),
+                               |v| {
+        v.as_slice().and_then(|s| {
+            let mut tags = Vec::new();
+            for x in s {
+                if let Some(t) = x.as_str() {
+                    tags.push(t.to_owned());
+                } else {
+                    panic!("tag {} is not a string", x);
+                }
+            }
+            Some(tags)
+        })
+    });
+
+    // Convert tags to lowercase, and remove empty or duplicated tags
+    let mut tags: Vec<String> = tags.iter()
+        .filter_map(|x| {
+            if x.is_empty() {
+                None
+            } else {
+                Some(x.to_lowercase())
+            }
+        })
+        .collect();
+    tags.sort();
+    tags.dedup();
+    tags
 }
 
 fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
@@ -629,6 +690,10 @@ fn main() {
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
                 "dsn: raftkv");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
+    opts.optopt("",
+                "tags",
+                "set server tags (separated by comma and case insensitive)",
+                "default: \"\"");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
