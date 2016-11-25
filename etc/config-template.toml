@@ -69,6 +69,9 @@ max-peer-down-duration = "5m"
 # Interval to check whether start lock compaction for a region.
 # lock-cf-compact-interval-secs = 600
 
+# Interval (s) to check region whether the data are consistent.
+# consistency-check-interval-secs = 0
+
 [pd]
 # pd endpoints 
 endpoints = ""
