@@ -37,7 +37,8 @@ mod read_only;
 
 pub use self::storage::{RaftState, Storage};
 pub use self::errors::{Result, Error, StorageError};
-pub use self::raft::{Raft, StateRole, Config, INVALID_ID, INVALID_INDEX, SoftState, quorum};
+pub use self::raft::{Raft, StateRole, Config, INVALID_ID, INVALID_INDEX, SoftState,
+                     vote_resp_msg_type};
 pub use self::raft_log::{RaftLog, NO_LIMIT};
 pub use self::raw_node::{Ready, RawNode, Peer, is_empty_snap, SnapshotStatus};
 pub use self::status::Status;

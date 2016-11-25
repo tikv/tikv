@@ -63,16 +63,9 @@ fn is_response_msg(t: MessageType) -> bool {
         MessageType::MsgAppendResponse |
         MessageType::MsgRequestVoteResponse |
         MessageType::MsgHeartbeatResponse |
-        MessageType::MsgUnreachable => true,
+        MessageType::MsgUnreachable |
+        MessageType::MsgRequestPreVoteResponse => true,
         _ => false,
-    }
-}
-
-pub fn vote_resp_msg_type(t: MessageType) -> MessageType {
-    match t {
-        MessageType::MsgRequestVote => MessageType::MsgRequestVoteResponse,
-        MessageType::MsgRequestPreVote => MessageType::MsgRequestPreVoteResponse,
-        _ => panic!("Not a vote message: {:?}", t),
     }
 }
 

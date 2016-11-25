@@ -26,7 +26,6 @@
 // limitations under the License.
 
 use tikv::raft::*;
-use tikv::raft::raw_node::vote_resp_msg_type;
 use tikv::raft::storage::MemStorage;
 use std::collections::HashMap;
 use protobuf::{self, RepeatedField};
@@ -562,11 +561,12 @@ fn test_leader_election(pre_vote: bool) {
                            None],
                       pre_vote), StateRole::Leader, 1),
 
-        // three logs further along than 0
+        // three logs futher along than 0, but in the same term so rejection
+        // are returned instead of the votes being ignored.
         (Network::new(vec![None,
                            Some(ents(vec![1])),
-                           Some(ents(vec![1,1])),
                            Some(ents(vec![1])),
+                           Some(ents(vec![1,1])),
                            None],
                       pre_vote), StateRole::Follower, 1),
 
@@ -587,6 +587,9 @@ fn test_leader_election(pre_vote: bool) {
         network.send(vec![m]);
         let raft = network.peers.get(&1).unwrap();
         let (exp_state, exp_term) = if state == StateRole::Candidate && pre_vote {
+            // In pre_vote mode, an election that fails to complete
+            // leaves the node in pre_candidate state without advancing
+            // the term.
             (StateRole::PreCandidate, 0)
         } else {
             (state, term)
@@ -610,18 +613,22 @@ fn test_leader_cycle_pre_vote() {
     test_leader_cycle(true)
 }
 
+// test_leader_cycle verifies that each node in a cluster can campaign
+// and be elected in turn. This ensures that elections (including
+// pre_vote) work when not starting from a clean state (as they do in
+// test_leader_election)
 fn test_leader_cycle(pre_vote: bool) {
     let mut network = Network::new(vec![None, None, None], pre_vote);
     for campaigner_id in 1..4 {
         network.send(vec![new_message(campaigner_id, campaigner_id, MessageType::MsgHup, 0)]);
         for sm in network.peers.values() {
             if sm.id == campaigner_id && sm.state != StateRole::Leader {
-                panic!("preVote={}: campaigning node {} state = {}, wnat StateLeader",
+                panic!("preVote={}: campaigning node {} state = {:?}, wnat StateLeader",
                        pre_vote,
                        sm.id,
                        sm.state);
             } else if sm.id != campaigner_id && sm.state != StateRole::Follower {
-                panic!("preVote={}: after campaign of node {}, node {} had state = {}, wnat \
+                panic!("preVote={}: after campaign of node {}, node {} had state = {:?}, wnat \
                         StateFollower",
                        pre_vote,
                        campaigner_id,
@@ -658,6 +665,8 @@ fn test_vote_from_any_state_(vt: MessageType) {
                 sm.become_leader();
             }
         }
+        // Note that setting our state above may have advanced sm.term
+        // past its initial value.
         let orig_term = sm.term;
         let new_term = sm.term + 1;
         let mut msg = new_message(2, 1, vt, 1);
@@ -670,13 +679,17 @@ fn test_vote_from_any_state_(vt: MessageType) {
         assert_eq!(resp.get_msg_type(), vote_resp_msg_type(vt));
         assert!(!resp.get_reject());
 
+        // If this was a real vote, we reset our state and term.
         if vt == MessageType::MsgRequestVote {
             assert_eq!(sm.state, StateRole::Follower);
             assert_eq!(sm.term, new_term);
             assert_eq!(sm.vote, 2);
         } else {
+            // In a pre_vote, nothing changes.
             assert_eq!(sm.state, state);
             assert_eq!(sm.term, orig_term);
+            // If st == Follower or PreCandidate, sm hasn't vote yet.
+            // In Candidate or Leader, it's voted for itself.
             assert!(sm.vote == INVALID_ID || sm.vote == 1);
         }
     }
@@ -810,7 +823,7 @@ fn test_commit_without_new_term_entry() {
 }
 
 #[test]
-fn test_dueling_precandidates() {
+fn test_dueling_pre_candidates() {
     let mut a = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
     let mut b = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
     let mut c = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
@@ -823,11 +836,15 @@ fn test_dueling_precandidates() {
 
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+    // 1 becomes leader since it receives votes from 1 and 2
     assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    // 3 campaigns then reverts to follower when its pre_vote is rejected
     assert_eq!(nt.peers[&3].state, StateRole::Follower);
 
     nt.recover();
 
+    // Candidtate 3 now increases its term and tries to vote again.
+    // With pre_vote, it does not disrupt the leader.
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
     let wlog = new_raft_log(vec![empty_entry(1, 1)], 2, 1);
     let wlog2 = new_raft_log_with_storage(new_storage());
