@@ -1136,7 +1136,7 @@ impl Peer {
                 self.leader_lease_expired_time = Some(next_expired_time)
             }
         } else if self.is_leader() {
-            // This peer is leader but its leader lease has been expired.
+            // This peer is leader but its leader lease has expired.
             // Calculate the renewed lease for this command, and update the leader lease
             // for this peer.
             let next_expired_time = self.next_lease_expired_time(lease_renew_time);

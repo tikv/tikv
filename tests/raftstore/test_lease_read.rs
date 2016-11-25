@@ -85,7 +85,7 @@ fn must_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
 fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
-    // Increase raft tick interval to make this test case running reliably.
+    // Increase the Raft tick interval to make this test case running reliably.
     cluster.cfg.raft_store.raft_base_tick_interval = 50;
 
     let election_timeout = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
@@ -110,7 +110,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Issue a read request and check the value on response.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
 
-    // Check the leader does a local read.
+    // Check if the leader does a local read.
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index);
 
@@ -120,7 +120,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Issue a read request and check the value on response.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
 
-    // Check the leader does a consistent read and renewed its lease.
+    // Check if the leader does a consistent read and renewed its lease.
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
