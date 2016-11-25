@@ -8,8 +8,8 @@
 [server]
 # set listening address.
 addr = "127.0.0.1:20160"
-# if not set, use addr instead. set advertise listening address for client communication.
-advertise-addr = ""
+# set advertise listening address for client communication, if not set, use addr instead.
+#advertise-addr = ""
 # set the path to rocksdb directory.
 store = "/tmp/tikv/store"
 # set attributes about this server, e.g. "zone=us-west-1,disk=ssd".
