@@ -23,7 +23,7 @@ pub struct RaftReadyMetrics {
 }
 
 impl RaftReadyMetrics {
-    /// Flushs all metrics
+    /// Flushes all metrics
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.message > 0 {
@@ -66,7 +66,7 @@ pub struct RaftMessageMetrics {
 }
 
 impl RaftMessageMetrics {
-    /// Flushs all metrics
+    /// Flushes all metrics
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.append > 0 {
@@ -137,7 +137,7 @@ pub struct RaftProposeMetrics {
 }
 
 impl RaftProposeMetrics {
-    /// Flushs all metrics
+    /// Flushes all metrics
     fn flush(&mut self) {
         // reset all buffered metrics once they have been added
         if self.all > 0 {
