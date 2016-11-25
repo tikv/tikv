@@ -1124,9 +1124,9 @@ impl Peer {
         if let Some(current_expired_time) = self.leader_lease_expired_time {
             // This peer is leader and has recorded leader lease.
             // Calculate the renewed lease for this command. If the renewed lease lives longer
-            // than current leader lease, update the leader lease to the renewed lease.
+            // than the current leader lease, update the current leader lease to the renewed lease.
             let next_expired_time = self.next_lease_expired_time(lease_renew_time);
-            // Use the lease expired timestamp comparation here, so that these codes still
+            // Use the lease expired timestamp comparison here, so that these codes still
             // work no matter how the leader changes before applying this command.
             if current_expired_time < next_expired_time {
                 debug!("{} update leader lease expired time from {:?} to {:?}",
