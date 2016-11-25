@@ -57,7 +57,8 @@ use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
-const ROCKSDB_STATS_KEY: &'static str = "rocksdb.stats";
+const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
+const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -540,7 +541,14 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
                 info!("{}", String::from_utf8(buffer).unwrap());
 
                 // Log common rocksdb stats.
-                if let Some(v) = engine.get_property_value(ROCKSDB_STATS_KEY) {
+                for name in engine.cf_names() {
+                    let handler = engine.cf_handle(name).unwrap();
+                    if let Some(v) = engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+                        info!("{}", v)
+                    }
+                }
+
+                if let Some(v) = engine.get_property_value(ROCKSDB_DB_STATS_KEY) {
                     info!("{}", v)
                 }
 
