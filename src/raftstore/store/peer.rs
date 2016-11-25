@@ -504,19 +504,19 @@ impl Peer {
     }
 
     fn update_leader_lease(&mut self, ready: &Ready) {
-        // Update leader lease when the raft state changes
+        // Update leader lease when the Raft state changes.
         if ready.ss.is_some() {
             let ss = ready.ss.as_ref().unwrap();
             match ss.raft_state {
                 StateRole::Leader => {
-                    // The local read could only be performed after a new leader has applied
-                    // the first empty entry on its term. After that the lease expired time
+                    // The local read can only be performed after a new leader has applied
+                    // the first empty entry on its term. After that the lease expiring time
                     // should be updated to
                     //   send_to_quorum_ts + election_timeout
-                    // as the function `next_lease_expired_time` explains.
-                    // The lease expired time could be updated ahead right after it becomes
-                    // leader, since it's more convenient to do it here and it does not
-                    // hurt the correctness.
+                    // as the comments in `next_lease_expired_time` function explain.
+                    // It is recommended to update the lease expiring time right after
+                    // this peer becomes leader because it's more convenient to do it here and
+                    // it has no impact on the correctness.
                     self.leader_lease_expired_time =
                         Some(self.next_lease_expired_time(clocktime::raw_now()));
                     debug!("{} becomes leader and lease expired time is {:?}",
@@ -560,7 +560,7 @@ impl Peer {
         self.add_ready_metric(&ready, &mut metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
-        // For more details, check raft thesis 10.2.1
+        // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
             self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
                 // We don't care that the message is sent failed, so here just log this error.
@@ -735,7 +735,7 @@ impl Peer {
             }
         }
 
-        // If the leader lease has been expired, local read should not be performed.
+        // If the leader lease has expired, local read should not be performed.
         if self.leader_lease_expired_time.is_none() {
             return false;
         }
@@ -746,9 +746,9 @@ impl Peer {
             debug!("{} leader lease expired time {:?} is outdated",
                    self.tag,
                    self.leader_lease_expired_time);
-            // Reset leader lease expired time.
+            // Reset leader lease expiring time.
             self.leader_lease_expired_time = None;
-            // Perform a consistent read to raft quorum and try to renew the leader lease.
+            // Perform a consistent read to Raft quorum and try to renew the leader lease.
             return false;
         }
 
@@ -1086,7 +1086,7 @@ impl Peer {
             if head.uuid == uuid {
                 return Some((head.cb.take().unwrap(), head.renew_lease_time.unwrap()));
             }
-            // because of the lack of original RaftCmdRequest, we skip calling
+            // Because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
             // TODO: call coprocessor with uuid instead.
             self.notify_not_leader(head);
@@ -1145,7 +1145,7 @@ impl Peer {
                    self.leader_lease_expired_time);
             self.leader_lease_expired_time = Some(next_expired_time);
         }
-        // Involve post appy hook.
+        // Involve post apply hook.
         self.coprocessor_host.post_apply(self.raft_group.get_store(), &cmd, &mut resp);
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
