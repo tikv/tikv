@@ -918,7 +918,7 @@ mod tests {
             let task = RequestTask::new(Request::new(),
                                         box move |msg| {
                                             thread::sleep(Duration::from_millis(100));
-                                            tx.send(msg).unwrap();
+                                            let _ = tx.send(msg);
                                         });
             worker.schedule(Task::Request(task)).unwrap();
         }
@@ -930,7 +930,6 @@ mod tests {
                 continue;
             }
             assert!(copr_resp.get_region_error().has_server_is_busy());
-            worker.stop().unwrap().join().unwrap();
             return;
         }
         panic!("suppose to get ServerIsBusy error.");
