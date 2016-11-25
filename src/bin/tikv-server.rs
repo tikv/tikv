@@ -36,6 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -56,7 +57,8 @@ use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
-const ROCKSDB_STATS_KEY: &'static str = "rocksdb.stats";
+const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
+const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -404,15 +406,20 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.region-split-check-diff",
                      Some(8 * 1024 * 1024)) as u64;
 
-    cfg.raft_store.region_compact_check_tick_interval =
+    cfg.raft_store.region_compact_check_interval_secs =
         get_toml_int(config,
-                     "raftstore.region-compact-check-tick-interval",
-                     Some(300_000)) as u64;
+                     "raftstore.region-compact-check-interval-secs",
+                     Some(300)) as u64;
 
     cfg.raft_store.region_compact_delete_keys_count =
         get_toml_int(config,
                      "raftstore.region-compact-delete-keys-count",
-                     Some(200_000)) as u64;
+                     Some(1_000_000)) as u64;
+
+    cfg.raft_store.lock_cf_compact_interval_secs =
+        get_toml_int(config,
+                     "raftstore.lock-cf-compact-interval-secs",
+                     Some(300_000)) as u64;
 
     let max_peer_down_millis =
         get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
@@ -492,6 +499,12 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
+fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
+    let labels = get_flag_string(matches, "labels")
+        .unwrap_or_else(|| get_toml_string(config, "server.labels", Some("".to_owned())));
+    util::config::parse_store_labels(&labels).unwrap()
+}
+
 fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
     where T: RaftStoreRouter,
           S: StoreAddrResolver + Send + 'static
@@ -528,7 +541,14 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
                 info!("{}", String::from_utf8(buffer).unwrap());
 
                 // Log common rocksdb stats.
-                if let Some(v) = engine.get_property_value(ROCKSDB_STATS_KEY) {
+                for name in engine.cf_names() {
+                    let handler = engine.cf_handle(name).unwrap();
+                    if let Some(v) = engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+                        info!("{}", v)
+                    }
+                }
+
+                if let Some(v) = engine.get_property_value(ROCKSDB_DB_STATS_KEY) {
                     info!("{}", v)
                 }
 
@@ -624,6 +644,10 @@ fn main() {
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
                 "dsn: raftkv");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
+    opts.optopt("",
+                "labels",
+                "attributes about this server",
+                "zone=example-zone,disk=example-disk");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
@@ -676,6 +700,7 @@ fn main() {
                             &config,
                             cluster_id,
                             &format!("{}", listener.local_addr().unwrap()));
+    cfg.labels = get_store_labels(&matches, &config);
     cfg.storage.path = get_store_path(&matches, &config);
 
     if cluster_id == DEFAULT_CLUSTER_ID {

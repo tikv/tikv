@@ -537,6 +537,20 @@ fn test_txn_store_gc2() {
     }
 }
 
+#[test]
+fn test_txn_store_gc3() {
+    let key_len = 10_000;
+    let key = vec![b'k'; 10_000];
+    let store = new_assertion_storage();
+    for k in 1u64..(MAX_TXN_WRITE_SIZE / key_len * 2) as u64 {
+        store.put_ok(&key, b"", k * 10, k * 10 + 5);
+    }
+    store.delete_ok(&key, 1000, 1050);
+    store.get_none(&key, 2000);
+    store.gc_ok(2000);
+    store.get_none(&key, 3000);
+}
+
 struct Oracle {
     ts: AtomicUsize,
 }
