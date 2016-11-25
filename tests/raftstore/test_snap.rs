@@ -33,7 +33,7 @@ use super::util::*;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
-    cluster.cfg.raft_store.raft_log_gc_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 10;
     cluster.cfg.raft_store.snap_apply_batch_size = 500;
     let pd_client = cluster.pd_client.clone();
@@ -103,7 +103,7 @@ fn test_server_huge_snapshot() {
 fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
-    cluster.cfg.raft_store.raft_log_gc_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
     cluster.cfg.raft_store.snap_gc_timeout = 2;
 
@@ -239,7 +239,7 @@ fn test_server_concurrent_snap() {
 fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
-    cluster.cfg.raft_store.raft_log_gc_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
     cluster.cfg.raft_store.snap_gc_timeout = 2;
 
@@ -326,7 +326,7 @@ fn test_node_stale_snap() {
     let mut cluster = new_node_cluster(0, 3);
     // disable compact log to make snapshot only be sent when peer is first added.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_limit = 1000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -412,7 +412,7 @@ impl Filter<Msg> for SnapshotAppendFilter {
 fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
-    cluster.cfg.raft_store.raft_log_gc_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = 50;
     cluster.cfg.raft_store.snap_gc_timeout = 2;
 
