@@ -8,10 +8,12 @@
 [server]
 # set listening address.
 addr = "127.0.0.1:20160"
-# if not set, use addr instead. set advertise listening address for client communication.
-advertise-addr = ""
+# set advertise listening address for client communication, if not set, use addr instead.
+#advertise-addr = ""
 # set the path to rocksdb directory.
 store = "/tmp/tikv/store"
+# set attributes about this server, e.g. "zone=us-west-1,disk=ssd".
+labels = ""
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
 # notify capacity, 40960 is suitable for about 7000 regions.
@@ -60,6 +62,13 @@ region-split-check-diff = "8MB"
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
 
+# Interval to check whether start compaction for a region.
+# region-compact-check-interval-secs = 300
+# When delete keys of a region exceeds the size, a compaction will be started.
+# region-compact-delete-keys-count = 200000
+# Interval to check whether start lock compaction for a region.
+# lock-cf-compact-interval-secs = 600
+
 [pd]
 # pd endpoints 
 endpoints = ""
@@ -68,6 +77,9 @@ endpoints = ""
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
 max-background-compactions = 6
+
+# Maximum number of concurrent background flush jobs
+max-background-flushes = 2
 
 # Number of open files that can be used by the DB.  You may need to
 # increase this if your database has a large working set. Value -1 means
