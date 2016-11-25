@@ -181,9 +181,9 @@ fn check_system_config(config: &toml::Value) {
 }
 
 fn check_advertise_address(addr: &str) {
-    util::config::check_addr(addr)
-        .map_err(|e| exit_with_err(format!("{:?}", e)))
-        .unwrap();
+    if let Err(e) = util::config::check_addr(addr) {
+        exit_with_err(format!("{:?}", e));
+    }
 
     // FIXME: Forbidden addresses ending in 0 or 255? Those are not always invalid.
     // See more: https://en.wikipedia.org/wiki/IPv4#Addresses_ending_in_0_or_255
@@ -654,13 +654,14 @@ fn main() {
     check_system_config(&config);
 
     let addr = get_flag_string(&matches, "A").unwrap_or_else(|| {
-        get_toml_string(&config,
-                        "server.addr",
-                        Some(DEFAULT_LISTENING_ADDR.to_owned()))
+        let addr = get_toml_string(&config,
+                                   "server.addr",
+                                   Some(DEFAULT_LISTENING_ADDR.to_owned()));
+        if let Err(e) = util::config::check_addr(&addr) {
+            exit_with_err(format!("{:?}", e));
+        }
+        addr
     });
-    util::config::check_addr(&addr)
-        .map_err(|e| exit_with_err(format!("{:?}", e)))
-        .unwrap();
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 
