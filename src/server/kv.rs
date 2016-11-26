@@ -19,6 +19,7 @@ use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, Cmd
                        CmdBatchRollbackResponse, CmdCleanupResponse, CmdBatchGetResponse,
                        CmdScanLockResponse, CmdResolveLockResponse, CmdGCResponse, Request,
                        Response, MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
+use kvproto::kvrpcpb::{CmdRawGetResponse, CmdRawPutResponse, CmdRawDeleteResponse};
 use kvproto::msgpb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
@@ -190,6 +191,35 @@ impl StoreHandler {
         self.store.async_gc(msg.take_context(), req.get_safe_point(), cb).map_err(Error::Storage)
     }
 
+    fn on_raw_get(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_raw_get_req() {
+            return Err(box_err!("msg doesn't contain a CmdRawGetRequest"));
+        }
+        let mut req = msg.take_cmd_raw_get_req();
+        let cb = self.make_cb(StoreHandler::cmd_raw_get_done, on_resp);
+        self.store.async_raw_get(msg.take_context(), req.take_key(), cb).map_err(Error::Storage)
+    }
+
+    fn on_raw_put(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_raw_put_req() {
+            return Err(box_err!("msg doesn't contain a CmdRawPutRequest"));
+        }
+        let mut req = msg.take_cmd_raw_put_req();
+        let cb = self.make_cb(StoreHandler::cmd_raw_put_done, on_resp);
+        self.store
+            .async_raw_put(msg.take_context(), req.take_key(), req.take_value(), cb)
+            .map_err(Error::Storage)
+    }
+
+    fn on_raw_delete(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_raw_delete_req() {
+            return Err(box_err!("msg doesn't contain a CmdRawDeleteRequest"));
+        }
+        let mut req = msg.take_cmd_raw_delete_req();
+        let cb = self.make_cb(StoreHandler::cmd_raw_delete_done, on_resp);
+        self.store.async_raw_delete(msg.take_context(), req.take_key(), cb).map_err(Error::Storage)
+    }
+
     fn make_cb<T: 'static>(&self,
                            f: fn(StorageResult<T>, &mut Response),
                            on_resp: OnResponse)
@@ -298,6 +328,35 @@ impl StoreHandler {
         resp.set_cmd_gc_resp(gc);
     }
 
+    fn cmd_raw_get_done(r: StorageResult<Option<Vec<u8>>>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdRawGet);
+        let mut raw_get = CmdRawGetResponse::new();
+        match r {
+            Ok(Some(val)) => raw_get.set_value(val),
+            Ok(None) => {}
+            Err(e) => raw_get.set_error(format!("{}", e)),
+        }
+        resp.set_cmd_raw_get_resp(raw_get);
+    }
+
+    fn cmd_raw_put_done(r: StorageResult<()>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdRawPut);
+        let mut raw_put = CmdRawPutResponse::new();
+        if let Err(e) = r {
+            raw_put.set_error(format!("{}", e));
+        }
+        resp.set_cmd_raw_put_resp(raw_put);
+    }
+
+    fn cmd_raw_delete_done(r: StorageResult<()>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdRawPut);
+        let mut raw_delete = CmdRawDeleteResponse::new();
+        if let Err(e) = r {
+            raw_delete.set_error(format!("{}", e));
+        }
+        resp.set_cmd_raw_delete_resp(raw_delete);
+    }
+
     pub fn on_request(&self, req: Request, on_resp: OnResponse) -> Result<()> {
         if let Err(e) = match req.get_field_type() {
             MessageType::CmdGet => self.on_get(req, on_resp),
@@ -310,6 +369,10 @@ impl StoreHandler {
             MessageType::CmdScanLock => self.on_scan_lock(req, on_resp),
             MessageType::CmdResolveLock => self.on_resolve_lock(req, on_resp),
             MessageType::CmdGC => self.on_gc(req, on_resp),
+
+            MessageType::CmdRawGet => self.on_raw_get(req, on_resp),
+            MessageType::CmdRawPut => self.on_raw_put(req, on_resp),
+            MessageType::CmdRawDelete => self.on_raw_delete(req, on_resp),
         } {
             // TODO: should we return an error and tell the client later?
             error!("Some error occur err[{:?}]", e);
