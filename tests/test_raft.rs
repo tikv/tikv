@@ -623,12 +623,12 @@ fn test_leader_cycle(pre_vote: bool) {
         network.send(vec![new_message(campaigner_id, campaigner_id, MessageType::MsgHup, 0)]);
         for sm in network.peers.values() {
             if sm.id == campaigner_id && sm.state != StateRole::Leader {
-                panic!("preVote={}: campaigning node {} state = {:?}, wnat StateLeader",
+                panic!("preVote={}: campaigning node {} state = {:?}, want StateLeader",
                        pre_vote,
                        sm.id,
                        sm.state);
             } else if sm.id != campaigner_id && sm.state != StateRole::Follower {
-                panic!("preVote={}: after campaign of node {}, node {} had state = {:?}, wnat \
+                panic!("preVote={}: after campaign of node {}, node {} had state = {:?}, want \
                         StateFollower",
                        pre_vote,
                        campaigner_id,

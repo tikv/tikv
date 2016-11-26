@@ -378,12 +378,24 @@ impl<T: Storage> Raft<T> {
     // send persists state to stable storage and then sends to its mailbox.
     fn send(&mut self, mut m: Message) {
         m.set_from(self.id);
-        // do not attach term to MsgPropose, MsgReadIndex
-        // proposals are a way to forward to the leader and
-        // should be treated as local message.
-        if m.get_msg_type() != MessageType::MsgPropose &&
-           m.get_msg_type() != MessageType::MsgReadIndex {
-            m.set_term(self.term);
+        if m.get_msg_type() == MessageType::MsgRequestVote ||
+           m.get_msg_type() == MessageType::MsgRequestPreVote {
+            if m.get_term() == 0 {
+                panic!("term should be set when sending {:?}", m.get_msg_type());
+            }
+        } else {
+            if m.get_term() != 0 {
+                panic!("term should not be set when sending {:?} (was {})",
+                       m.get_msg_type(),
+                       m.get_term());
+            }
+            // do not attach term to MsgPropose, MsgReadIndex
+            // proposals are a way to forward to the leader and
+            // should be treated as local message.
+            if m.get_msg_type() != MessageType::MsgPropose &&
+               m.get_msg_type() != MessageType::MsgReadIndex {
+                m.set_term(self.term);
+            }
         }
         self.msgs.push(m);
     }
