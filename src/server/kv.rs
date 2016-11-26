@@ -349,7 +349,7 @@ impl StoreHandler {
     }
 
     fn cmd_raw_delete_done(r: StorageResult<()>, resp: &mut Response) {
-        resp.set_field_type(MessageType::CmdRawPut);
+        resp.set_field_type(MessageType::CmdRawDelete);
         let mut raw_delete = CmdRawDeleteResponse::new();
         if let Err(e) = r {
             raw_delete.set_error(format!("{}", e));
