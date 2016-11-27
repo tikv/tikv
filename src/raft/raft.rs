@@ -857,7 +857,7 @@ impl<T: Storage> Raft<T> {
                         .slice(self.raft_log.applied + 1,
                                self.raft_log.committed + 1,
                                raft_log::NO_LIMIT)
-                        .unwrap();
+                        .expect("unexpected error getting unapplied entries");
                     let n = self.num_pending_conf(&ents[..]);
                     if n != 0 && self.raft_log.committed > self.raft_log.applied {
                         warn!("{} cannot campaign at term {} since there are still {} pending \
