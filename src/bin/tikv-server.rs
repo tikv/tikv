@@ -414,8 +414,11 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     cfg.raft_store.raft_log_gc_threshold =
         get_toml_int(config, "raftstore.raft-log-gc-threshold", Some(50)) as u64;
 
+    let default_size_limit = cfg.raft_store.raft_log_gc_count_limit as i64;
     cfg.raft_store.raft_log_gc_count_limit =
-        get_toml_int(config, "raftstore.raft-log-gc-count-limit", Some(100_000)) as u64;
+        get_toml_int(config,
+                     "raftstore.raft-log-gc-count-limit",
+                     Some(default_size_limit)) as u64;
 
     cfg.raft_store.raft_log_gc_size_limit =
         get_toml_int(config,
