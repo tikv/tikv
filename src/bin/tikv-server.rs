@@ -598,7 +598,14 @@ fn run_raft_server(listener: TcpListener,
     let backup_path = {
         let mut path = get_toml_string(config, "server.backup", Some(String::new()));
         if path.is_empty() {
-            path = store_path;
+            path = store_path.to_owned();
+            loop {
+                if path.ends_with('/') {
+                    path.pop();
+                } else {
+                    break;
+                }
+            }
             path.push_str("_backup");
         }
         info!("backup path: {:?}", path);
