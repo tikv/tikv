@@ -21,9 +21,11 @@ const RAFT_HEARTBEAT_TICKS: usize = 10;
 const RAFT_ELECTION_TIMEOUT_TICKS: usize = 50;
 const RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 const RAFT_MAX_INFLIGHT_MSGS: usize = 256;
-const RAFT_LOG_GC_INTERVAL: u64 = 5000;
+const RAFT_LOG_GC_INTERVAL: u64 = 10000;
 const RAFT_LOG_GC_THRESHOLD: u64 = 50;
-const RAFT_LOG_GC_LIMIT: u64 = 100000;
+// Assume the average size of entries is 1k.
+const RAFT_LOG_GC_COUNT_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4 / 1024;
+const RAFT_LOG_GC_SIZE_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
@@ -66,7 +68,10 @@ pub struct Config {
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
     // When entry count exceed this value, gc will be forced trigger.
-    pub raft_log_gc_limit: u64,
+    pub raft_log_gc_count_limit: u64,
+    // When the approximate size of raft log entries exceed this value,
+    // gc will be forced trigger.
+    pub raft_log_gc_size_limit: u64,
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: u64,
@@ -118,7 +123,8 @@ impl Default for Config {
             raft_max_inflight_msgs: RAFT_MAX_INFLIGHT_MSGS,
             raft_log_gc_tick_interval: RAFT_LOG_GC_INTERVAL,
             raft_log_gc_threshold: RAFT_LOG_GC_THRESHOLD,
-            raft_log_gc_limit: RAFT_LOG_GC_LIMIT,
+            raft_log_gc_count_limit: RAFT_LOG_GC_COUNT_LIMIT,
+            raft_log_gc_size_limit: RAFT_LOG_GC_SIZE_LIMIT,
             split_region_check_tick_interval: SPLIT_REGION_CHECK_TICK_INTERVAL,
             region_max_size: REGION_MAX_SIZE,
             region_split_size: REGION_SPLIT_SIZE,
@@ -149,6 +155,10 @@ impl Config {
         if self.raft_log_gc_threshold < 1 {
             return Err(box_err!("raft log gc threshold must >= 1, not {}",
                                 self.raft_log_gc_threshold));
+        }
+
+        if self.raft_log_gc_size_limit == 0 {
+            return Err(box_err!("raft log gc size limit should large than 0."));
         }
 
         if self.region_max_size < self.region_split_size {

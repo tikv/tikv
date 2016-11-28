@@ -57,138 +57,11 @@ use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
+use super::local_metrics::RaftMetrics;
 
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
-
-/// The buffered metrics counters for raft ready handling.
-#[derive(Debug, Default, Clone)]
-pub struct RaftReadyMetrics {
-    pub message: u64,
-    pub commit: u64,
-    pub append: u64,
-    pub snapshot: u64,
-}
-
-impl RaftReadyMetrics {
-    /// Flushs all metrics
-    fn flush(&mut self) {
-        // reset all buffered metrics once they have been added
-        if self.message > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
-                .inc_by(self.message as f64)
-                .unwrap();
-            self.message = 0;
-        }
-        if self.commit > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
-                .inc_by(self.commit as f64)
-                .unwrap();
-            self.commit = 0;
-        }
-        if self.append > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
-                .inc_by(self.append as f64)
-                .unwrap();
-            self.append = 0;
-        }
-        if self.snapshot > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"]).inc();
-            self.snapshot = 0;
-        }
-    }
-}
-
-/// The buffered metrics counters for raft message.
-#[derive(Debug, Default, Clone)]
-pub struct RaftMessageMetrics {
-    pub append: u64,
-    pub append_resp: u64,
-    pub vote: u64,
-    pub vote_resp: u64,
-    pub snapshot: u64,
-    pub heartbeat: u64,
-    pub heartbeat_resp: u64,
-    pub transfer_leader: u64,
-    pub timeout_now: u64,
-}
-
-impl RaftMessageMetrics {
-    /// Flushs all metrics
-    fn flush(&mut self) {
-        // reset all buffered metrics once they have been added
-        if self.append > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append"])
-                .inc_by(self.append as f64)
-                .unwrap();
-            self.append = 0;
-        }
-        if self.append_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append_resp"])
-                .inc_by(self.append_resp as f64)
-                .unwrap();
-            self.append_resp = 0;
-        }
-        if self.vote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote"])
-                .inc_by(self.vote as f64)
-                .unwrap();
-            self.vote = 0;
-        }
-        if self.vote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote_resp"])
-                .inc_by(self.vote_resp as f64)
-                .unwrap();
-            self.vote_resp = 0;
-        }
-        if self.snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["snapshot"])
-                .inc_by(self.snapshot as f64)
-                .unwrap();
-            self.snapshot = 0;
-        }
-        if self.heartbeat > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat"])
-                .inc_by(self.heartbeat as f64)
-                .unwrap();
-            self.heartbeat = 0;
-        }
-        if self.heartbeat_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat_resp"])
-                .inc_by(self.heartbeat_resp as f64)
-                .unwrap();
-            self.heartbeat_resp = 0;
-        }
-        if self.transfer_leader > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["transfer_leader"])
-                .inc_by(self.transfer_leader as f64)
-                .unwrap();
-            self.transfer_leader = 0;
-        }
-        if self.timeout_now > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["timeout_now"])
-                .inc_by(self.timeout_now as f64)
-                .unwrap();
-            self.timeout_now = 0;
-        }
-    }
-}
-
-/// The buffered metrics counters for raft.
-#[derive(Debug, Default, Clone)]
-pub struct RaftMetrics {
-    pub ready: RaftReadyMetrics,
-    pub message: RaftMessageMetrics,
-}
-
-impl RaftMetrics {
-    /// Flushs all metrics
-    fn flush(&mut self) {
-        self.ready.flush();
-        self.message.flush();
-    }
-}
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
@@ -1025,7 +898,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::ChangePeer { change_type, peer, .. } => {
                     self.on_ready_change_peer(region_id, change_type, peer)
                 }
-                ExecResult::CompactLog { state } => self.on_ready_compact_log(region_id, state),
+                ExecResult::CompactLog { state, .. } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
                 }
@@ -1092,7 +965,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             cb: Some(cb),
             renew_lease_time: None,
         };
-        if peer.propose(pending_cmd, msg, resp) {
+        if peer.propose(pending_cmd, msg, resp, &mut self.raft_metrics.propose) {
             self.pending_raft_groups.insert(region_id);
         }
 
@@ -1143,6 +1016,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
@@ -1171,7 +1045,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let compact_idx;
-            if applied_idx > first_idx && applied_idx - first_idx >= self.cfg.raft_log_gc_limit {
+            if applied_idx > first_idx &&
+               applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit {
+                compact_idx = applied_idx;
+            } else if peer.raft_log_size_hint >= self.cfg.raft_log_gc_size_limit {
                 compact_idx = applied_idx;
             } else if replicated_idx < first_idx ||
                       replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {

@@ -117,7 +117,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     // Disable default max peer count check.
     pd_client.disable_default_rule();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
-    cluster.cfg.raft_store.raft_log_gc_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
 
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));

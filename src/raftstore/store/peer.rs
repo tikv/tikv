@@ -38,7 +38,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::{PdClient, INVALID_ID};
 use storage::{CF_LOCK, CF_RAFT};
-use super::store::{Store, RaftReadyMetrics, RaftMessageMetrics, RaftMetrics};
+use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
 use super::msg::Callback;
@@ -47,6 +47,7 @@ use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
+use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
@@ -88,7 +89,10 @@ pub enum ExecResult {
         peer: metapb::Peer,
         region: metapb::Region,
     },
-    CompactLog { state: RaftTruncatedState },
+    CompactLog {
+        state: RaftTruncatedState,
+        first_index: u64,
+    },
     SplitRegion {
         left: metapb::Region,
         right: metapb::Region,
@@ -202,12 +206,16 @@ pub struct Peer {
     pub tag: String,
 
     pub last_compacted_idx: u64,
+    // Approximate size of logs that is applied but not compacted yet.
+    pub raft_log_size_hint: u64,
 
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
-    leader_lease_expired_time: Option<Timespec>,
+
     leader_missing_time: Option<Instant>,
+
+    leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
 }
 
@@ -300,6 +308,7 @@ impl Peer {
                 index: INVALID_INDEX,
                 hash: vec![],
             },
+            raft_log_size_hint: 0,
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
@@ -617,6 +626,11 @@ impl Peer {
                   apply_result.is_some(),
                   ready.hs.is_some());
 
+        if apply_result.is_some() {
+            // When apply snapshot, there is no log applied but not compacted yet.
+            self.raft_log_size_hint = 0;
+        }
+
         Ok(Some(ReadyResult {
             ready: Some(ready),
             apply_snap_result: apply_result,
@@ -656,7 +670,8 @@ impl Peer {
     pub fn propose(&mut self,
                    mut cmd: PendingCmd,
                    req: RaftCmdRequest,
-                   mut err_resp: RaftCmdResponse)
+                   mut err_resp: RaftCmdResponse,
+                   metrics: &mut RaftProposeMetrics)
                    -> bool {
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
@@ -665,10 +680,10 @@ impl Peer {
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
+        metrics.all += 1;
 
         if self.should_read_local(&req) {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
+            metrics.local_read += 1;
 
             // Execute ready-only commands immediately in leader when doing local reads.
             let mut ctx = ExecContext::new(self, 0, 0, &req);
@@ -682,6 +697,8 @@ impl Peer {
             cmd.call(resp);
             return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
+            metrics.transfer_leader += 1;
+
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
 
@@ -714,7 +731,7 @@ impl Peer {
                 self.notify_not_leader(cmd);
             }
 
-            if let Err(e) = self.propose_conf_change(req) {
+            if let Err(e) = self.propose_conf_change(req, metrics) {
                 cmd_resp::bind_error(&mut err_resp, e);
                 cmd.call(err_resp);
                 return false;
@@ -723,7 +740,7 @@ impl Peer {
             // Try to renew leader lease on every conf change request.
             cmd.renew_lease_time = Some(clocktime::raw_now());
             self.pending_cmds.set_conf_change(cmd);
-        } else if let Err(e) = self.propose_normal(req) {
+        } else if let Err(e) = self.propose_normal(req, metrics) {
             cmd_resp::bind_error(&mut err_resp, e);
             cmd.call(err_resp);
             return false;
@@ -786,13 +803,17 @@ impl Peer {
         cmd.call(resp);
     }
 
-    fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["normal"]).inc();
+    fn propose_normal(&mut self,
+                      mut cmd: RaftCmdRequest,
+                      metrics: &mut RaftProposeMetrics)
+                      -> Result<()> {
+        metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
         try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
 
+        // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let propose_index = self.next_proposal_index();
@@ -807,8 +828,6 @@ impl Peer {
     }
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["transfer_leader"]).inc();
-
         info!("{} transfer leader to {:?}", self.tag, peer);
 
         self.raft_group.transfer_leader(peer.get_id());
@@ -832,11 +851,15 @@ impl Peer {
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
-    fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change"]).inc();
+    fn propose_conf_change(&mut self,
+                           cmd: RaftCmdRequest,
+                           metrics: &mut RaftProposeMetrics)
+                           -> Result<()> {
+        metrics.conf_change += 1;
 
         let data = try!(cmd.write_to_bytes());
 
+        // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
@@ -1026,6 +1049,9 @@ impl Peer {
                        entry.get_index());
             }
 
+            // raft meta is very small, can be ignored.
+            self.raft_log_size_hint += entry.get_data().len() as u64;
+
             let res = try!(match entry.get_entry_type() {
                 eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
                 eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
@@ -1214,7 +1240,7 @@ impl Peer {
             .write(ctx.wb)
             .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
 
-        let mut storage = self.mut_store();
+        let mut storage = self.raft_group.mut_store();
         storage.apply_state = ctx.apply_state;
         storage.applied_index_term = term;
 
@@ -1223,9 +1249,14 @@ impl Peer {
                 ExecResult::ChangePeer { ref region, .. } => {
                     storage.region = region.clone();
                 }
-                ExecResult::CompactLog { .. } |
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } => {}
+                ExecResult::CompactLog { first_index, ref state } => {
+                    let total_cnt = index - first_index;
+                    // the size of current CompactLog command can be ignored.
+                    let remain_cnt = index - state.get_index() - 1;
+                    self.raft_log_size_hint = self.raft_log_size_hint * remain_cnt / total_cnt;
+                }
                 ExecResult::SplitRegion { ref left, .. } => {
                     storage.region = left.clone();
                 }
@@ -1558,7 +1589,10 @@ impl Peer {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
 
         Ok((resp,
-            Some(ExecResult::CompactLog { state: ctx.apply_state.get_truncated_state().clone() })))
+            Some(ExecResult::CompactLog {
+            state: ctx.apply_state.get_truncated_state().clone(),
+            first_index: first_index,
+        })))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
