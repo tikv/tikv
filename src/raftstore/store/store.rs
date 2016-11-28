@@ -43,7 +43,7 @@ use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::rocksdb;
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{ALL_CFS, CF_DEFAULT, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner};
@@ -244,7 +244,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_heartbeat_tick(event_loop);
         self.register_pd_store_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
-        self.register_compact_lock_cf_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -1368,22 +1367,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
     }
 
-    fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
-        // Create a compact lock cf task(compact whole range) and schedule directly.
-        let task = CompactTask {
-            cf_name: String::from(CF_LOCK),
-            start_key: None,
-            end_key: None,
-        };
-        if let Err(e) = self.compact_worker.schedule(task) {
-            error!("{} failed to schedule compact lock cf task: {:?}",
-                   self.tag,
-                   e);
-        }
-
-        self.register_compact_lock_cf_tick(event_loop);
-    }
-
     fn register_pd_store_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::PdStoreHeartbeat,
@@ -1397,14 +1380,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::SnapGc,
                                        self.cfg.snap_mgr_gc_tick_interval) {
             error!("{} register snap mgr gc tick err: {:?}", self.tag, e);
-        }
-    }
-
-    fn register_compact_lock_cf_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(event_loop,
-                                       Tick::CompactLockCf,
-                                       self.cfg.lock_cf_compact_interval_secs * 1000) {
-            error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
 
@@ -1707,7 +1682,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::PdHeartbeat => self.on_pd_heartbeat_tick(event_loop),
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
-            Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);

@@ -76,8 +76,6 @@ max-peer-down-duration = "5m"
 # region-compact-check-interval-secs = 300
 # When delete keys of a region exceeds the size, a compaction will be started.
 # region-compact-delete-keys-count = 200000
-# Interval to check whether start lock compaction for a region.
-# lock-cf-compact-interval-secs = 600
 
 # Interval (s) to check region whether the data are consistent.
 # consistency-check-interval-secs = 0
@@ -178,7 +176,7 @@ target-file-size-base = "16MB"
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read
 block-cache-size = "1GB"
 
-# options for Column Family write
+# Options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
@@ -190,7 +188,7 @@ max-bytes-for-level-base = "64MB"
 target-file-size-base = "16MB"
 block-cache-size = "256MB"
 
-# options for Column Family raft.
+# Options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.
 [rocksdb.raftcf]
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
@@ -201,6 +199,17 @@ min-write-buffer-number-to-merge = 1
 max-bytes-for-level-base = "64MB"
 target-file-size-base = "16MB"
 block-cache-size = "256MB"
+
+# Options for Column Family lock.
+# Column Family lock is used to store internal lock when transaction is processing.
+# Users can only change the value of `write-buffer-size`, `max-bytes-for-level-base`
+# and `block-cache-size` of Column Family lock.
+# Use the default value in most cases, appropriate increase the size when loading huge data.
+# Keep write-buffer-size equal to max-bytes-for-level-base.
+[rocksdb.lockcf]
+write-buffer-size = "32MB"
+max-bytes-for-level-base = "32MB"
+block-cache-size = "32MB"
 
 [storage]
 # notify capacity of scheduler's channel
