@@ -174,7 +174,7 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 fn check_system_config(config: &toml::Value) {
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     if let Err(e) = util::config::check_max_open_fds(max_open_files as u64) {
-        panic!("check rocksdb max open files err {:?}", e)
+        exit_with_err(format!("{:?}", e));
     }
 
     for e in util::config::check_kernel() {
