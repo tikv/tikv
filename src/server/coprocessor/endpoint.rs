@@ -172,9 +172,12 @@ impl BatchRunnable<Task> for Host {
                         continue;
                     }
                     running_count.fetch_add(1, Ordering::SeqCst);
+                    let len = reqs.len() as f64;
+                    COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
                     self.pool.execute(move || {
                         end_point.handle_requests(reqs);
                         running_count.fetch_sub(1, Ordering::SeqCst);
+                        COPR_PENDING_REQS.with_label_values(&["select"]).sub(len);
                     });
                 }
             }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{HistogramVec, CounterVec};
+use prometheus::{HistogramVec, CounterVec, GaugeVec};
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec =
@@ -33,5 +33,12 @@ lazy_static! {
             "tikv_coprocessor_request_error",
             "Total number of push down request error.",
             &["type", "reason"]
+        ).unwrap();
+
+    pub static ref COPR_PENDING_REQS: GaugeVec =
+        register_gauge_vec!(
+            "tikv_coprocessor_pending_request",
+            "Total number of pending push down request.",
+            &["type"]
         ).unwrap();
 }
