@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
+use time::{Timespec, Duration as TimeDuration};
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
@@ -34,7 +35,7 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVAL
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::{escape, SlowTimer, rocksdb};
+use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::{PdClient, INVALID_ID};
 use storage::{CF_LOCK, CF_RAFT};
 use super::store::{Store, RaftReadyMetrics, RaftMessageMetrics, RaftMetrics};
@@ -46,6 +47,7 @@ use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
+
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -60,6 +62,8 @@ pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
     pub cb: Option<Callback>,
+    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
+    pub renew_lease_time: Option<Timespec>,
 }
 
 impl PendingCmd {
@@ -181,9 +185,6 @@ pub struct ConsistencyState {
 pub struct Peer {
     engine: Arc<DB>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
-    // if we remove ourself in ChangePeer remove, we should set this flag, then
-    // any following committed logs in same Ready should be applied failed.
-    pending_remove: bool,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -198,11 +199,16 @@ pub struct Peer {
 
     pub consistency_state: ConsistencyState,
 
-    leader_missing_time: Option<Instant>,
-
     pub tag: String,
 
     pub last_compacted_idx: u64,
+
+    // if we remove ourself in ChangePeer remove, we should set this flag, then
+    // any following committed logs in same Ready should be applied failed.
+    pending_remove: bool,
+    leader_lease_expired_time: Option<Timespec>,
+    leader_missing_time: Option<Instant>,
+    election_timeout: TimeDuration,
 }
 
 impl Peer {
@@ -294,6 +300,9 @@ impl Peer {
                 index: INVALID_INDEX,
                 hash: vec![],
             },
+            leader_lease_expired_time: None,
+            election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
+                              cfg.raft_election_timeout_ticks as i32,
         };
 
         peer.load_all_coprocessors();
@@ -505,6 +514,43 @@ impl Peer {
         StaleState::Valid
     }
 
+    fn next_lease_expired_time(&self, send_to_quorum_ts: Timespec) -> Timespec {
+        // The valid leader lease should be
+        // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
+        // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
+        // which is "send_to_quorum_ts + election_timeout" in short.
+        send_to_quorum_ts + self.election_timeout
+    }
+
+    fn update_leader_lease(&mut self, ready: &Ready) {
+        // Update leader lease when the Raft state changes.
+        if ready.ss.is_some() {
+            let ss = ready.ss.as_ref().unwrap();
+            match ss.raft_state {
+                StateRole::Leader => {
+                    // The local read can only be performed after a new leader has applied
+                    // the first empty entry on its term. After that the lease expiring time
+                    // should be updated to
+                    //   send_to_quorum_ts + election_timeout
+                    // as the comments in `next_lease_expired_time` function explain.
+                    // It is recommended to update the lease expiring time right after
+                    // this peer becomes leader because it's more convenient to do it here and
+                    // it has no impact on the correctness.
+                    self.leader_lease_expired_time =
+                        Some(self.next_lease_expired_time(clocktime::raw_now()));
+                    debug!("{} becomes leader and lease expired time is {:?}",
+                           self.tag,
+                           self.leader_lease_expired_time);
+                }
+                StateRole::Follower => {
+                    self.leader_lease_expired_time = None;
+                }
+                _ => {}
+            }
+        }
+    }
+
+
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   trans: &T,
                                                   metrics: &mut RaftMetrics)
@@ -528,10 +574,12 @@ impl Peer {
 
         let t = SlowTimer::new();
 
+        self.update_leader_lease(&ready);
+
         self.add_ready_metric(&ready, &mut metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
-        // For more details, check raft thesis 10.2.1
+        // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
             self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
                 // We don't care that the message is sent failed, so here just log this error.
@@ -619,12 +667,10 @@ impl Peer {
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
         PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let local_read = self.is_local_read(&req);
-        if local_read {
+        if self.should_read_local(&req) {
             PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
 
-            // for read-only, if we don't care stale read, we can
-            // execute these commands immediately in leader.
+            // Execute ready-only commands immediately in leader when doing local reads.
             let mut ctx = ExecContext::new(self, 0, 0, &req);
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
                 error!("{} execute raft command err: {:?}", self.tag, e);
@@ -674,19 +720,23 @@ impl Peer {
                 return false;
             }
 
+            // Try to renew leader lease on every conf change request.
+            cmd.renew_lease_time = Some(clocktime::raw_now());
             self.pending_cmds.set_conf_change(cmd);
         } else if let Err(e) = self.propose_normal(req) {
             cmd_resp::bind_error(&mut err_resp, e);
             cmd.call(err_resp);
             return false;
         } else {
+            // Try to renew leader lease on every consistent read/write request.
+            cmd.renew_lease_time = Some(clocktime::raw_now());
             self.pending_cmds.append_normal(cmd);
         }
 
         true
     }
 
-    fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
+    fn should_read_local(&mut self, req: &RaftCmdRequest) -> bool {
         if (req.has_header() && req.get_header().get_read_quorum()) ||
            !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
             return false;
@@ -702,6 +752,23 @@ impl Peer {
             if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
                 return false;
             }
+        }
+
+        // If the leader lease has expired, local read should not be performed.
+        if self.leader_lease_expired_time.is_none() {
+            return false;
+        }
+
+        let now = clocktime::raw_now();
+        let expired_time = self.leader_lease_expired_time.unwrap();
+        if now > expired_time {
+            debug!("{} leader lease expired time {:?} is outdated",
+                   self.tag,
+                   self.leader_lease_expired_time);
+            // Reset leader lease expiring time.
+            self.leader_lease_expired_time = None;
+            // Perform a consistent read to Raft quorum and try to renew the leader lease.
+            return false;
         }
 
         true
@@ -1021,11 +1088,15 @@ impl Peer {
         Ok(res)
     }
 
-    fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
+    fn find_cb(&mut self,
+               uuid: Uuid,
+               term: u64,
+               cmd: &RaftCmdRequest)
+               -> Option<(Callback, Timespec)> {
         if get_change_peer_cmd(cmd).is_some() {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some(cmd.cb.take().unwrap());
+                    return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.unwrap()));
                 } else {
                     self.notify_not_leader(cmd);
                 }
@@ -1034,9 +1105,9 @@ impl Peer {
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some(head.cb.take().unwrap());
+                return Some((head.cb.take().unwrap(), head.renew_lease_time.unwrap()));
             }
-            // because of the lack of original RaftCmdRequest, we skip calling
+            // Because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
             // TODO: call coprocessor with uuid instead.
             self.notify_not_leader(head);
@@ -1055,7 +1126,7 @@ impl Peer {
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
-        let cb = self.find_cb(uuid, term, &cmd);
+        let cmd_cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
         let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
         timer.observe_duration();
@@ -1065,11 +1136,37 @@ impl Peer {
                uuid,
                index);
 
-        if cb.is_none() {
+        if cmd_cb.is_none() {
             return exec_result;
         }
 
-        let cb = cb.unwrap();
+        let (cb, lease_renew_time) = cmd_cb.unwrap();
+        // Try to renew the leader lease as this command asks to.
+        if let Some(current_expired_time) = self.leader_lease_expired_time {
+            // This peer is leader and has recorded leader lease.
+            // Calculate the renewed lease for this command. If the renewed lease lives longer
+            // than the current leader lease, update the current leader lease to the renewed lease.
+            let next_expired_time = self.next_lease_expired_time(lease_renew_time);
+            // Use the lease expired timestamp comparison here, so that these codes still
+            // work no matter how the leader changes before applying this command.
+            if current_expired_time < next_expired_time {
+                debug!("{} update leader lease expired time from {:?} to {:?}",
+                       self.tag,
+                       current_expired_time,
+                       next_expired_time);
+                self.leader_lease_expired_time = Some(next_expired_time)
+            }
+        } else if self.is_leader() {
+            // This peer is leader but its leader lease has expired.
+            // Calculate the renewed lease for this command, and update the leader lease
+            // for this peer.
+            let next_expired_time = self.next_lease_expired_time(lease_renew_time);
+            debug!("{} update leader lease expired time from None to {:?}",
+                   self.tag,
+                   self.leader_lease_expired_time);
+            self.leader_lease_expired_time = Some(next_expired_time);
+        }
+        // Involve post apply hook.
         self.coprocessor_host.post_apply(self.raft_group.get_store(), &cmd, &mut resp);
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.

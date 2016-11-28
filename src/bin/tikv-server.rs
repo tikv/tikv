@@ -174,7 +174,7 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 fn check_system_config(config: &toml::Value) {
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     if let Err(e) = util::config::check_max_open_fds(max_open_files as u64) {
-        panic!("check rocksdb max open files err {:?}", e)
+        exit_with_err(format!("{:?}", e));
     }
 
     for e in util::config::check_kernel() {
@@ -182,27 +182,22 @@ fn check_system_config(config: &toml::Value) {
     }
 }
 
-fn listen_address(matches: &Matches, config: &toml::Value) -> String {
-    let addr = get_flag_string(matches, "A").unwrap_or_else(|| {
-        get_toml_string(config,
-                        "server.addr",
-                        Some(DEFAULT_LISTENING_ADDR.to_owned()))
-    });
-    util::config::check_addr(&addr)
-        .map_err(|e| exit_with_err(format!("{:?}", e)))
-        .unwrap();
-
-    let adv_addr = get_flag_string(matches, "advertise-addr")
-        .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.clone())));
-    util::config::check_addr(&adv_addr)
-        .map_err(|e| exit_with_err(format!("{:?}", e)))
-        .unwrap();
-
-    if let Some(_) = adv_addr.find("0.0.0.0") {
-        exit_with_err("0.0.0.0 is not allowed in advertise-addr".to_owned());
+fn check_advertise_address(addr: &str) {
+    if let Err(e) = util::config::check_addr(addr) {
+        exit_with_err(format!("{:?}", e));
     }
 
-    addr
+    // FIXME: Forbidden addresses ending in 0 or 255? Those are not always invalid.
+    // See more: https://en.wikipedia.org/wiki/IPv4#Addresses_ending_in_0_or_255
+    let invalid_patterns = [("0.", 0)]; // Current network is not allowed.
+
+    for &(pat, pos) in &invalid_patterns {
+        if let Some(idx) = addr.find(pat) {
+            if pos == idx {
+                exit_with_err(format!("invalid advertise-addr: {:?}", addr));
+            }
+        }
+    }
 }
 
 fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
@@ -214,7 +209,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let max_background_compactions =
         get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
     opts.set_max_background_compactions(max_background_compactions as i32);
-    opts.set_max_background_flushes(2);
+
+    let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
+    opts.set_max_background_flushes(max_background_flushes as i32);
 
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
@@ -384,6 +381,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     // If no advertise listening address set, use the associated listening address.
     cfg.advertise_addr = get_flag_string(matches, "advertise-addr")
         .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.to_owned())));
+    check_advertise_address(&cfg.advertise_addr);
 
     cfg.send_buffer_size =
         get_toml_int(config, "server.send-buffer-size", Some(128 * 1024)) as usize;
@@ -684,7 +682,15 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    let addr = listen_address(&matches, &config);
+    let addr = get_flag_string(&matches, "A").unwrap_or_else(|| {
+        let addr = get_toml_string(&config,
+                                   "server.addr",
+                                   Some(DEFAULT_LISTENING_ADDR.to_owned()));
+        if let Err(e) = util::config::check_addr(&addr) {
+            exit_with_err(format!("{:?}", e));
+        }
+        addr
+    });
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 

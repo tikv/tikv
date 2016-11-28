@@ -1090,6 +1090,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             uuid: uuid,
             term: term,
             cb: Some(cb),
+            renew_lease_time: None,
         };
         if peer.propose(pending_cmd, msg, resp) {
             self.pending_raft_groups.insert(region_id);
