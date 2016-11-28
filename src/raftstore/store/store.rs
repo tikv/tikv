@@ -1078,6 +1078,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             uuid: uuid,
             term: term,
             cb: Some(cb),
+            renew_lease_time: None,
         };
         if peer.propose(pending_cmd, msg, resp) {
             self.pending_raft_groups.insert(region_id);
@@ -1222,7 +1223,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactCheck,
-                                       self.cfg.region_compact_check_tick_interval) {
+                                       self.cfg.region_compact_check_interval_secs * 1000) {
             error!("{} register compact check tick err: {:?}", self.tag, e);
         };
     }
@@ -1572,11 +1573,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
                                              tick: Tick,
                                              delay: u64)
-                                             -> Result<mio::Timeout> {
+                                             -> Result<()> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
-    event_loop.timeout(tick, Duration::from_millis(delay))
-        .map_err(|e| box_err!("register timer err: {:?}", e))
+    if delay == 0 {
+        // 0 delay means turn off the timer.
+        return Ok(());
+    }
+    box_try!(event_loop.timeout(tick, Duration::from_millis(delay)));
+    Ok(())
 }
 
 fn new_compact_log_request(region_id: u64,

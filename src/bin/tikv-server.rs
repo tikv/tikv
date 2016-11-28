@@ -36,6 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -56,7 +57,8 @@ use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
-const ROCKSDB_STATS_KEY: &'static str = "rocksdb.stats";
+const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
+const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -172,7 +174,7 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 fn check_system_config(config: &toml::Value) {
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     if let Err(e) = util::config::check_max_open_fds(max_open_files as u64) {
-        panic!("check rocksdb max open files err {:?}", e)
+        exit_with_err(format!("{:?}", e));
     }
 
     for e in util::config::check_kernel() {
@@ -180,27 +182,22 @@ fn check_system_config(config: &toml::Value) {
     }
 }
 
-fn listen_address(matches: &Matches, config: &toml::Value) -> String {
-    let addr = get_flag_string(matches, "A").unwrap_or_else(|| {
-        get_toml_string(config,
-                        "server.addr",
-                        Some(DEFAULT_LISTENING_ADDR.to_owned()))
-    });
-    util::config::check_addr(&addr)
-        .map_err(|e| exit_with_err(format!("{:?}", e)))
-        .unwrap();
-
-    let adv_addr = get_flag_string(matches, "advertise-addr")
-        .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.clone())));
-    util::config::check_addr(&adv_addr)
-        .map_err(|e| exit_with_err(format!("{:?}", e)))
-        .unwrap();
-
-    if let Some(_) = adv_addr.find("0.0.0.0") {
-        exit_with_err("0.0.0.0 is not allowed in advertise-addr".to_owned());
+fn check_advertise_address(addr: &str) {
+    if let Err(e) = util::config::check_addr(addr) {
+        exit_with_err(format!("{:?}", e));
     }
 
-    addr
+    // FIXME: Forbidden addresses ending in 0 or 255? Those are not always invalid.
+    // See more: https://en.wikipedia.org/wiki/IPv4#Addresses_ending_in_0_or_255
+    let invalid_patterns = [("0.", 0)]; // Current network is not allowed.
+
+    for &(pat, pos) in &invalid_patterns {
+        if let Some(idx) = addr.find(pat) {
+            if pos == idx {
+                exit_with_err(format!("invalid advertise-addr: {:?}", addr));
+            }
+        }
+    }
 }
 
 fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
@@ -212,7 +209,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let max_background_compactions =
         get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
     opts.set_max_background_compactions(max_background_compactions as i32);
-    opts.set_max_background_flushes(2);
+
+    let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
+    opts.set_max_background_flushes(max_background_flushes as i32);
 
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
@@ -382,6 +381,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
     // If no advertise listening address set, use the associated listening address.
     cfg.advertise_addr = get_flag_string(matches, "advertise-addr")
         .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.to_owned())));
+    check_advertise_address(&cfg.advertise_addr);
 
     cfg.send_buffer_size =
         get_toml_int(config, "server.send-buffer-size", Some(128 * 1024)) as usize;
@@ -404,15 +404,20 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.region-split-check-diff",
                      Some(8 * 1024 * 1024)) as u64;
 
-    cfg.raft_store.region_compact_check_tick_interval =
+    cfg.raft_store.region_compact_check_interval_secs =
         get_toml_int(config,
-                     "raftstore.region-compact-check-tick-interval",
-                     Some(300_000)) as u64;
+                     "raftstore.region-compact-check-interval-secs",
+                     Some(300)) as u64;
 
     cfg.raft_store.region_compact_delete_keys_count =
         get_toml_int(config,
                      "raftstore.region-compact-delete-keys-count",
-                     Some(200_000)) as u64;
+                     Some(1_000_000)) as u64;
+
+    cfg.raft_store.lock_cf_compact_interval_secs =
+        get_toml_int(config,
+                     "raftstore.lock-cf-compact-interval-secs",
+                     Some(300_000)) as u64;
 
     let max_peer_down_millis =
         get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
@@ -492,6 +497,12 @@ fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
     format!("{}", absolute_path.display())
 }
 
+fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
+    let labels = get_flag_string(matches, "labels")
+        .unwrap_or_else(|| get_toml_string(config, "server.labels", Some("".to_owned())));
+    util::config::parse_store_labels(&labels).unwrap()
+}
+
 fn start_server<T, S>(mut server: Server<T, S>,
                       mut el: EventLoop<Server<T, S>>,
                       engine: Arc<DB>,
@@ -531,7 +542,14 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
                 info!("{}", String::from_utf8(buffer).unwrap());
 
                 // Log common rocksdb stats.
-                if let Some(v) = engine.get_property_value(ROCKSDB_STATS_KEY) {
+                for name in engine.cf_names() {
+                    let handler = engine.cf_handle(name).unwrap();
+                    if let Some(v) = engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+                        info!("{}", v)
+                    }
+                }
+
+                if let Some(v) = engine.get_property_value(ROCKSDB_DB_STATS_KEY) {
                     info!("{}", v)
                 }
 
@@ -651,6 +669,10 @@ fn main() {
                 "[deprecated] set which dsn to use, warning: now only support raftkv",
                 "dsn: raftkv");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
+    opts.optopt("",
+                "labels",
+                "attributes about this server",
+                "zone=example-zone,disk=example-disk");
 
     let matches = opts.parse(&args[1..]).expect("opts parse failed");
     if matches.opt_present("h") {
@@ -684,7 +706,15 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    let addr = listen_address(&matches, &config);
+    let addr = get_flag_string(&matches, "A").unwrap_or_else(|| {
+        let addr = get_toml_string(&config,
+                                   "server.addr",
+                                   Some(DEFAULT_LISTENING_ADDR.to_owned()));
+        if let Err(e) = util::config::check_addr(&addr) {
+            exit_with_err(format!("{:?}", e));
+        }
+        addr
+    });
     info!("Start listening on {}...", addr);
     let listener = bind(&addr).unwrap();
 
@@ -703,6 +733,7 @@ fn main() {
                             &config,
                             cluster_id,
                             &format!("{}", listener.local_addr().unwrap()));
+    cfg.labels = get_store_labels(&matches, &config);
     cfg.storage.path = get_store_path(&matches, &config);
 
     if cluster_id == DEFAULT_CLUSTER_ID {
