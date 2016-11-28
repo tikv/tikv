@@ -56,7 +56,7 @@ prepare_rust:
 	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=${RUSTC_DATE} --prefix=~/rust --disable-sudo --channel=nightly
 
 prepare-rustfmt: | prepare_rust
-	cargo install rustfmt || exit 0
+	cargo install --vers =0.6.0 rustfmt || exit 0
 
 prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_rust
 
