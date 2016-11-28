@@ -26,6 +26,7 @@ mod peer_storage;
 mod snap;
 mod worker;
 mod metrics;
+mod local_metrics;
 
 pub use self::msg::{Msg, Callback, Tick};
 pub use self::store::{Store, create_event_loop};
