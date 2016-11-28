@@ -162,6 +162,18 @@ impl AssertionStorage {
     fn gc_ok(&self, safe_point: u64) {
         self.0.gc(Context::new(), safe_point).unwrap();
     }
+
+    fn raw_get_ok(&self, key: Vec<u8>, value: Option<Vec<u8>>) {
+        assert_eq!(self.0.raw_get(Context::new(), key).unwrap(), value);
+    }
+
+    fn raw_put_ok(&self, key: Vec<u8>, value: Vec<u8>) {
+        self.0.raw_put(Context::new(), key, value).unwrap();
+    }
+
+    fn raw_delete_ok(&self, key: Vec<u8>) {
+        self.0.raw_delete(Context::new(), key).unwrap()
+    }
 }
 
 fn new_assertion_storage() -> AssertionStorage {
@@ -549,6 +561,18 @@ fn test_txn_store_gc3() {
     store.get_none(&key, 2000);
     store.gc_ok(2000);
     store.get_none(&key, 3000);
+}
+
+#[test]
+fn test_txn_store_rawkv() {
+    let store = new_assertion_storage();
+    store.raw_get_ok(b"key".to_vec(), None);
+    store.raw_put_ok(b"key".to_vec(), b"value".to_vec());
+    store.raw_get_ok(b"key".to_vec(), Some(b"value".to_vec()));
+    store.raw_put_ok(b"key".to_vec(), b"v2".to_vec());
+    store.raw_get_ok(b"key".to_vec(), Some(b"v2".to_vec()));
+    store.raw_delete_ok(b"key".to_vec());
+    store.raw_get_ok(b"key".to_vec(), None);
 }
 
 struct Oracle {

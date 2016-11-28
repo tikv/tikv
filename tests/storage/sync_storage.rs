@@ -110,6 +110,18 @@ impl SyncStorage {
     pub fn gc(&self, ctx: Context, safe_point: u64) -> Result<()> {
         wait_op!(|cb| self.store.async_gc(ctx, safe_point, cb).unwrap()).unwrap()
     }
+
+    pub fn raw_get(&self, ctx: Context, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
+        wait_op!(|cb| self.store.async_raw_get(ctx, key, cb).unwrap()).unwrap()
+    }
+
+    pub fn raw_put(&self, ctx: Context, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+        wait_op!(|cb| self.store.async_raw_put(ctx, key, value, cb).unwrap()).unwrap()
+    }
+
+    pub fn raw_delete(&self, ctx: Context, key: Vec<u8>) -> Result<()> {
+        wait_op!(|cb| self.store.async_raw_delete(ctx, key, cb).unwrap()).unwrap()
+    }
 }
 
 impl Clone for SyncStorage {
