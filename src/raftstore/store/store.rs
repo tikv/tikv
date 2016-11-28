@@ -1019,7 +1019,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::ChangePeer { change_type, peer, .. } => {
                     self.on_ready_change_peer(region_id, change_type, peer)
                 }
-                ExecResult::CompactLog { state } => self.on_ready_compact_log(region_id, state),
+                ExecResult::CompactLog { state, .. } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
                 }
@@ -1131,6 +1131,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
@@ -1159,7 +1160,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let compact_idx;
-            if applied_idx > first_idx && applied_idx - first_idx >= self.cfg.raft_log_gc_limit {
+            if applied_idx > first_idx &&
+               applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit {
+                compact_idx = applied_idx;
+            } else if peer.raft_log_size_hint >= self.cfg.raft_log_gc_size_limit {
                 compact_idx = applied_idx;
             } else if replicated_idx < first_idx ||
                       replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {

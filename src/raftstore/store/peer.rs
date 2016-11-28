@@ -88,7 +88,10 @@ pub enum ExecResult {
         peer: metapb::Peer,
         region: metapb::Region,
     },
-    CompactLog { state: RaftTruncatedState },
+    CompactLog {
+        state: RaftTruncatedState,
+        first_index: u64,
+    },
     SplitRegion {
         left: metapb::Region,
         right: metapb::Region,
@@ -172,9 +175,6 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
 pub struct Peer {
     engine: Arc<DB>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
-    // if we remove ourself in ChangePeer remove, we should set this flag, then
-    // any following committed logs in same Ready should be applied failed.
-    pending_remove: bool,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -187,12 +187,16 @@ pub struct Peer {
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
 
-    leader_missing_time: Option<Instant>,
-
     pub tag: String,
 
     pub last_compacted_idx: u64,
+    // Approximate size of logs that is applied but not compacted yet.
+    pub raft_log_size_hint: u64,
 
+    // if we remove ourself in ChangePeer remove, we should set this flag, then
+    // any following committed logs in same Ready should be applied failed.
+    pending_remove: bool,
+    leader_missing_time: Option<Instant>,
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
 }
@@ -281,6 +285,7 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
+            raft_log_size_hint: 0,
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
@@ -597,6 +602,11 @@ impl Peer {
                   ready.messages.len(),
                   apply_result.is_some(),
                   ready.hs.is_some());
+
+        if apply_result.is_some() {
+            // When apply snapshot, there is no log applied but not compacted yet.
+            self.raft_log_size_hint = 0;
+        }
 
         Ok(Some(ReadyResult {
             ready: Some(ready),
@@ -1005,6 +1015,9 @@ impl Peer {
                        entry.get_index());
             }
 
+            // raft meta is very small, can be ignored.
+            self.raft_log_size_hint += entry.get_data().len() as u64;
+
             let res = try!(match entry.get_entry_type() {
                 eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
                 eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
@@ -1193,7 +1206,7 @@ impl Peer {
             .write(ctx.wb)
             .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
 
-        let mut storage = self.mut_store();
+        let mut storage = self.raft_group.mut_store();
         storage.apply_state = ctx.apply_state;
         storage.applied_index_term = term;
 
@@ -1202,7 +1215,12 @@ impl Peer {
                 ExecResult::ChangePeer { ref region, .. } => {
                     storage.region = region.clone();
                 }
-                ExecResult::CompactLog { .. } => {}
+                ExecResult::CompactLog { first_index, ref state } => {
+                    let total_cnt = index - first_index;
+                    // the size of current CompactLog command can be ignored.
+                    let remain_cnt = index - state.get_index() - 1;
+                    self.raft_log_size_hint = self.raft_log_size_hint * remain_cnt / total_cnt;
+                }
                 ExecResult::SplitRegion { ref left, .. } => {
                     storage.region = left.clone();
                 }
@@ -1533,7 +1551,10 @@ impl Peer {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
 
         Ok((resp,
-            Some(ExecResult::CompactLog { state: ctx.apply_state.get_truncated_state().clone() })))
+            Some(ExecResult::CompactLog {
+            state: ctx.apply_state.get_truncated_state().clone(),
+            first_index: first_index,
+        })))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
