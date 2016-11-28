@@ -108,7 +108,7 @@ pub struct Config {
 
     pub snap_apply_batch_size: usize,
 
-    // Interval (s) to check region whether the data are consistent.
+    // Interval (s) to check region whether the data is consistent.
     pub consistency_check_tick_interval: u64,
 }
 
