@@ -404,6 +404,23 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.region-split-check-diff",
                      Some(8 * 1024 * 1024)) as u64;
 
+    cfg.raft_store.raft_log_gc_tick_interval =
+        get_toml_int(config, "raftstore.raft-log-gc-tick-interval", Some(10_000)) as u64;
+
+    cfg.raft_store.raft_log_gc_threshold =
+        get_toml_int(config, "raftstore.raft-log-gc-threshold", Some(50)) as u64;
+
+    let default_size_limit = cfg.raft_store.raft_log_gc_count_limit as i64;
+    cfg.raft_store.raft_log_gc_count_limit =
+        get_toml_int(config,
+                     "raftstore.raft-log-gc-count-limit",
+                     Some(default_size_limit)) as u64;
+
+    cfg.raft_store.raft_log_gc_size_limit =
+        get_toml_int(config,
+                     "raftstore.raft-log-gc-size-limit",
+                     Some(48 * 1024 * 1024)) as u64;
+
     cfg.raft_store.region_compact_check_interval_secs =
         get_toml_int(config,
                      "raftstore.region-compact-check-interval-secs",
