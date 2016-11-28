@@ -221,6 +221,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let create_if_missing = get_toml_boolean(config, "rocksdb.create-if-missing", Some(true));
     opts.create_if_missing(create_if_missing);
 
+    let disable_data_sync = get_toml_boolean(config, "rocksdb.disable-data-sync", Some(false));
+    opts.set_disable_data_sync(disable_data_sync);
+
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     opts.set_max_open_files(max_open_files as i32);
 
