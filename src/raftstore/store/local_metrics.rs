@@ -45,7 +45,9 @@ impl RaftReadyMetrics {
             self.append = 0;
         }
         if self.snapshot > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"]).inc();
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"])
+                .inc_by(self.snapshot as f64)
+                .unwrap();
             self.snapshot = 0;
         }
     }
