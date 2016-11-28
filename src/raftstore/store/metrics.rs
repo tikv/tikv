@@ -96,7 +96,7 @@ lazy_static! {
     pub static ref REGION_HASH_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_raftstore_hash_total",
-            "Total number of raftstore has computing.",
+            "Total number of raftstore has computed.",
             &["type", "result"]
         ).unwrap();
 }

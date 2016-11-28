@@ -173,7 +173,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
 
 pub struct ConsistencyState {
     pub last_check_time: Instant,
-    // (computed_result_or_to_be_revified, index, hash)
+    // (computed_result_or_to_be_verified, index, hash)
     pub index: u64,
     pub hash: Vec<u8>,
 }

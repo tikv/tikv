@@ -51,7 +51,7 @@ use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState};
 use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -1581,6 +1581,50 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 }
 
 // Consistency Check implementation.
+
+/// Verify and store the hash to state. return true means the hash has been stored successfully.
+fn verify_and_store_hash(region_id: u64,
+                         state: &mut ConsistencyState,
+                         expected_index: u64,
+                         expected_hash: Vec<u8>)
+                         -> bool {
+    if expected_index < state.index {
+        REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
+        warn!("[region {}] has scheduled a new hash: {} > {}, skip.",
+              region_id,
+              state.index,
+              expected_index);
+        return false;
+    }
+
+    if state.index == expected_index {
+        if state.hash != expected_hash {
+            panic!("[region {}] hash at {} not correct, want {}, got {}!!!",
+                   region_id,
+                   state.index,
+                   escape(&expected_hash),
+                   escape(&state.hash));
+        }
+        REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
+        state.hash = vec![];
+        return false;
+    }
+
+    if state.index != INVALID_INDEX && !state.hash.is_empty() {
+        // Maybe computing is too slow or computed result is dropped due to channel full.
+        // If computing is too slow, miss count will be increased twice.
+        REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
+        warn!("[region {}] hash belongs to index {}, but we want {}, skip.",
+              region_id,
+              state.index,
+              expected_index);
+    }
+
+    state.index = expected_index;
+    state.hash = expected_hash;
+    true
+}
+
 impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_consistency_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
@@ -1612,7 +1656,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             info!("{} scheduling consistent check", peer.tag);
             let msg = Msg::RaftCmd {
-                request: new_compute_hash_request(candidate_id, &peer.peer),
+                request: new_compute_hash_request(candidate_id, peer.peer.clone()),
                 callback: Box::new(|_| {}),
             };
 
@@ -1649,40 +1693,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(p) => &mut p.consistency_state,
         };
 
-        if expected_index < state.index {
-            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
-            warn!("[region {}] has scheduled a new hash: {} > {}, skip.",
-                  region_id,
-                  state.index,
-                  expected_index);
-            return;
-        }
-
-        if state.index == expected_index {
-            if state.hash != expected_hash {
-                panic!("[region {}] hash at {} not correct, want {}, got {}!!!",
-                       region_id,
-                       expected_index,
-                       escape(&expected_hash),
-                       escape(&state.hash));
-            }
-            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
-            state.hash = vec![];
-            return;
-        }
-
-        if state.index != INVALID_INDEX && !state.hash.is_empty() {
-            // Maybe computing is too slow or computed result is dropped due to channel full.
-            // If computing is too slow, miss count will be increased twice.
-            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
-            warn!("[region {}] hash belongs to index {}, but we want {}, skip.",
-                  region_id,
-                  state.index,
-                  expected_index);
-        }
-
-        state.index = expected_index;
-        state.hash = expected_hash;
+        verify_and_store_hash(region_id, state, expected_index, expected_hash);
     }
 
     fn on_hash_computed(&mut self, region_id: u64, index: u64, hash: Vec<u8>) {
@@ -1694,53 +1705,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(p) => (&mut p.consistency_state, &p.peer),
         };
 
-        if index < state.index {
-            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
-            warn!("[region {}] has scheduled a new hash: {} > {}, skip.",
-                  region_id,
-                  state.index,
-                  index);
+        if !verify_and_store_hash(region_id, state, index, hash) {
             return;
         }
-
-        if state.index == index {
-            if state.hash != hash {
-                panic!("[region {}] hash at {} not correct, want {}, got {}!!!",
-                       region_id,
-                       index,
-                       escape(&hash),
-                       escape(&state.hash));
-            }
-            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
-            state.hash = vec![];
-            return;
-        }
-
-        if state.index != INVALID_INDEX && !state.hash.is_empty() {
-            // Maybe hash computed result is discard on leader.
-            REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
-            warn!("[region {}] found stale hash at index {}, expect {}, skip.",
-                  region_id,
-                  state.index,
-                  index);
-        }
-
-        state.index = index;
-        state.hash = hash;
-
-        let mut request = RaftCmdRequest::new();
-        request.mut_header().set_region_id(region_id);
-        request.mut_header().set_peer(peer.clone());
-        request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let mut admin = AdminRequest::new();
-        admin.set_cmd_type(AdminCmdType::VerifyHash);
-        admin.mut_verify_hash().set_index(index);
-        admin.mut_verify_hash().set_hash(state.hash.clone());
-        request.set_admin_request(admin);
 
         let msg = Msg::RaftCmd {
-            request: request,
+            request: new_verify_hash_request(region_id, peer.clone(), state),
             callback: Box::new(|_| {}),
         };
         if let Err(e) = self.sendch.send(msg) {
@@ -1752,11 +1722,30 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
-fn new_compute_hash_request(region_id: u64, peer: &metapb::Peer) -> RaftCmdRequest {
+fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
     let mut request = RaftCmdRequest::new();
     request.mut_header().set_region_id(region_id);
-    request.mut_header().set_peer(peer.clone());
+    request.mut_header().set_peer(peer);
     request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    request
+}
+
+fn new_verify_hash_request(region_id: u64,
+                           peer: metapb::Peer,
+                           state: &ConsistencyState)
+                           -> RaftCmdRequest {
+    let mut request = new_admin_request(region_id, peer);
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::VerifyHash);
+    admin.mut_verify_hash().set_index(state.index);
+    admin.mut_verify_hash().set_hash(state.hash.clone());
+    request.set_admin_request(admin);
+    request
+}
+
+fn new_compute_hash_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
+    let mut request = new_admin_request(region_id, peer);
 
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::ComputeHash);
@@ -1782,10 +1771,7 @@ fn new_compact_log_request(region_id: u64,
                            peer: metapb::Peer,
                            compact_index: u64)
                            -> RaftCmdRequest {
-    let mut request = RaftCmdRequest::new();
-    request.mut_header().set_region_id(region_id);
-    request.mut_header().set_peer(peer);
-    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    let mut request = new_admin_request(region_id, peer);
 
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::CompactLog);
