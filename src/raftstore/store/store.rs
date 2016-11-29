@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
@@ -30,7 +29,7 @@ use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
-use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
+use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
 use pd::PdClient;
@@ -52,7 +51,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState};
-use super::peer_storage::{ApplySnapResult, SnapState};
+use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -252,7 +251,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(self.engine.clone(),
-                                       self.get_sendch(),
                                        self.snap_mgr.clone(),
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
@@ -1436,26 +1434,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.raft_group.report_unreachable(to_peer_id);
         }
     }
-
-    fn on_snap_gen_res(&mut self, region_id: u64, snap: Option<Snapshot>) {
-        let peer = match self.region_peers.get_mut(&region_id) {
-            None => return,
-            Some(peer) => peer,
-        };
-        let mut storage = peer.mut_store();
-        if !storage.is_snap_state(SnapState::Generating) {
-            // snapshot no need anymore.
-            return;
-        }
-        match snap {
-            Some(snap) => {
-                storage.set_snap_state(SnapState::Snap(snap));
-            }
-            None => {
-                storage.set_snap_state(SnapState::Failed);
-            }
-        }
-    }
 }
 
 // Consistency Check implementation.
@@ -1687,9 +1665,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
-            Msg::SnapGenRes { region_id, snap } => {
-                self.on_snap_gen_res(region_id, snap);
-            }
             Msg::ComputeHashResult { region_id, index, hash } => {
                 self.on_hash_computed(region_id, index, hash);
             }
