@@ -23,6 +23,7 @@ use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
+use raftstore::util::*;
 use super::sync_storage::SyncStorage;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
@@ -77,16 +78,20 @@ fn test_engine_leader_change_twice() {
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let engine = cluster.sim.rl().storages[&peers[0].get_id()].clone();
 
+    let term = cluster.request(b"", vec![new_get_cmd(b"")], true, Duration::from_secs(5))
+        .get_header()
+        .get_current_term();
+
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peers[0].clone());
+    ctx.set_term(term);
 
     // Not leader.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     assert!(engine.write(&ctx, vec![]).is_err());
     // Term not match.
-    ctx.set_term(0);
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     assert!(engine.write(&ctx, vec![]).is_err());
 }

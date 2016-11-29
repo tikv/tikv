@@ -1102,7 +1102,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let header = msg.get_header();
         // If header's term is 2 verions behind current term, leadership may have been changed away.
-        if header.has_term() && peer.term() > header.get_term() + 1 {
+        if header.get_term() > 0 && peer.term() > header.get_term() + 1 {
             return Err(Error::StaleCommand);
         }
 
