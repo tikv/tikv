@@ -1755,7 +1755,7 @@ impl Peer {
             Some(ExecResult::ComputeHash {
             region: self.region().clone(),
             index: ctx.index,
-            // This snapshot may be hold for a long time, which may cause too many
+            // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
             // TODO: figure out another way to do consistency check without snapshot
             // or short life snapshot.
