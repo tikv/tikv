@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, GaugeVec, Histogram};
+use prometheus::{CounterVec, GaugeVec, Histogram, exponential_buckets};
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
@@ -28,10 +28,18 @@ lazy_static! {
             &["type", "status"]
         ).unwrap();
 
-    pub static ref PEER_APPLY_LOG_HISTOGRAM: Histogram =
+    pub static ref PEER_READY_APPEND_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_raftstore_apply_log_duration_seconds",
-            "Bucketed histogram of peer applying log duration"
+            "tikv_raftstore_ready_append_duration_seconds",
+            "Bucketed histogram of peer ready append duration",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref PEER_READY_APPLY_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_ready_apply_duration_seconds",
+            "Bucketed histogram of peer ready apply duration",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: CounterVec =
