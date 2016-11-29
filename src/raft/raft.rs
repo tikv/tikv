@@ -323,6 +323,19 @@ impl<T: Storage> Raft<T> {
         self.state == StateRole::Leader && self.check_quorum
     }
 
+    pub fn all_replicated_to(&self, idx: u64) -> bool {
+        if self.state != StateRole::Leader {
+            return false;
+        }
+        let mut count = 0;
+        for p in self.prs.values() {
+            if p.matched >= idx {
+                count += 1;
+            }
+        }
+        count == self.prs.len()
+    }
+
     fn quorum(&self) -> usize {
         self.prs.len() / 2 + 1
     }

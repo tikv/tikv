@@ -205,7 +205,8 @@ pub struct Peer {
 
     pub delete_count: u64,
     merge_state: MergeState,
-    start_merging_time: Option<Instant>,
+    start_merge_time: Option<Instant>,
+    start_merge_index: u64,
 
     pub tag: String,
 
@@ -303,7 +304,8 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             delete_count: 0,
             merge_state: merge_state,
-            start_merging_time: Some(Instant::now()),
+            start_merge_time: Some(Instant::now()),
+            start_merge_index: 0,
             tag: tag,
             last_compacted_idx: 0,
         };
@@ -531,7 +533,8 @@ impl Peer {
                        e);
             }
             self.merge_state = MergeState::NoMerge;
-            self.start_merging_time = None;
+            self.start_merge_time = None;
+            self.start_merge_index = 0;
         }
         Ok(())
     }
@@ -540,21 +543,25 @@ impl Peer {
                                       d: Duration)
                                       -> Option<(metapb::Region, metapb::Region)> {
         if self.merge_state == MergeState::Merging {
-            if let Some(t) = self.start_merging_time {
-                if t.elapsed() >= d {
-                    // Reset `start_merging_time` on retry region merge.
-                    self.start_merging_time = Some(Instant::now());
-                    // Read `from_region` from local region merge state.
-                    let state_key = keys::region_state_key(self.region().get_id());
-                    let region_local_state =
-                        self.engine.get_msg::<RegionLocalState>(&state_key).unwrap().unwrap();
-                    let from_region =
-                        region_local_state.get_merge_state().get_from_region().clone();
-                    return Some((from_region, self.region().clone()));
-                }
+            let t = self.start_merge_time.unwrap();
+            if t.elapsed() >= d {
+                // Reset `start_merging_time` on retry region merge.
+                self.start_merge_time = Some(Instant::now());
+                // Read `from_region` from local region merge state.
+                let state_key = keys::region_state_key(self.region().get_id());
+                let region_local_state =
+                    self.engine.get_msg::<RegionLocalState>(&state_key).unwrap().unwrap();
+                let from_region = region_local_state.get_merge_state().get_from_region().clone();
+                return Some((from_region, self.region().clone()));
             }
         }
         None
+    }
+
+    pub fn is_ready_to_suspend_region(&self) -> bool {
+        // If all peers in `into_region` have replicated to the state `Merging`, start to send
+        // suspend region command to `from_region`. Otherwise, retry later in a specified timeout.
+        self.raft_group.raft.all_replicated_to(self.start_merge_index)
     }
 
     pub fn handle_raft_ready<T: Transport>(&mut self,
@@ -1187,7 +1194,8 @@ impl Peer {
                 }
                 ExecResult::StartMerge { .. } => {
                     self.merge_state = MergeState::Merging;
-                    self.start_merging_time = Some(Instant::now());
+                    self.start_merge_time = Some(Instant::now());
+                    self.start_merge_index = index;
                 }
                 ExecResult::SuspendRegion { .. } => {
                     self.merge_state = MergeState::Suspended;
@@ -1195,7 +1203,8 @@ impl Peer {
                 ExecResult::CommitMerge { ref new, .. } => {
                     self.mut_store().region = new.clone();
                     self.merge_state = MergeState::NoMerge;
-                    self.start_merging_time = None;
+                    self.start_merge_time = None;
+                    self.start_merge_index = 0;
                 }
             }
         }

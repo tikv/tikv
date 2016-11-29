@@ -480,13 +480,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 if let Some((from_region, into_region)) =
                        peer.maybe_region_merge_timeout(self.cfg.region_merge_retry_duration) {
-
-                    // TODO scan the status of from_region
-                    // 1. if from_region is gone, rollback
-                    // 2. if from_region's epoch has changed, rollback
-                    // 3. else retry suspend from_region
-                    // use self.on_ready_rollback_merge(from_region, into_region) to rollback
-
                     region_to_retry_merge.push((from_region, into_region));
                 }
             }
@@ -494,14 +487,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // retry region merge on timeout
         for (from_region, into_region) in region_to_retry_merge {
-            info!("{} retry region merge from region {:?} into region {:?}",
-                  self.tag,
-                  from_region,
-                  into_region);
-            // validate region epoch on retry
-            self.validate_region_epoch(from_region.clone(), into_region.clone());
-            // retry to suspend `from_region`
-            self.on_ready_merge_region(from_region, into_region);
+            self.retry_region_merge(from_region, into_region);
         }
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
@@ -988,106 +974,93 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn validate_region_epoch(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
-        info!("{} detects region merge {:?} pending for a long time. To check the epoch of the \
-               from region {:?} with PD",
-              self.tag,
-              into_region,
-              from_region);
-        let task = PdTask::ValidateMergeRegion {
-            from_region: from_region,
-            into_region_id: into_region.get_id(),
-        };
-        if let Err(e) = self.pd_worker.schedule(task) {
-            error!("{} failed to schedule validate merge region task: {}",
-                   self.tag,
-                   e)
-        }
-    }
-
-    fn on_ready_merge_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
-
-        // TODO if into_peer is not leader, return
-
-        info!("{} handle merge region result from region {:?}, into region {:?}",
-              self.tag,
-              from_region,
-              into_region);
-
-        // TODO check whether all peers in `into_region` have replicated to the state `Merging`.
-        // If not, check it in tick()
-
-        if let Some(from_peer) = self.region_peers.get(&from_region.get_id()) {
-            // Send suspend command to `from_region`.
-            let request = new_suspend_region_request(from_region.clone(),
-                                                     into_region.clone(),
-                                                     from_peer.peer.clone());
-            if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
-                request: request,
-                callback: Box::new(|_| {}),
-            }) {
-                error!("{} failed to send suspend from region {:?} into region {:?}, err {:?}",
-                       self.tag,
-                       from_region,
-                       into_region,
-                       e)
-            }
-            return;
-        }
-
-        warn!("{} has no peer for from region {:?}, rollback region merge for into region {:?}",
-              self.tag,
-              from_region,
-              into_region);
-
-        // If no peer in `self.region_peers` for `from_region`, there could be:
-        // 1. Region merge is done, this merge request is a retry.
-        // 2. Region merge is cancelled due to some conflict, and the peer for `from_region`
-        //    has been moved to another store.
-        // Anyway the merge state of peer in `into_region` would be rollbacked.
-        let into_peer = self.region_peers.get_mut(&into_region.get_id()).unwrap();
-        if let Err(e) = into_peer.rollback_region_merge() {
-            error!("{} fails to rollback region merge into region {:?}, err {:?}",
-                   self.tag,
-                   into_region,
-                   e)
-        }
-    }
-
-    fn on_ready_rollback_merge(&mut self,
-                               from_region: metapb::Region,
-                               into_region: metapb::Region) {
-        info!("{} rollback region merge from region {:?} into region {:?}",
-              self.tag,
-              from_region,
-              into_region);
-
-        let into_peer = match self.region_peers.get_mut(&into_region.get_id()) {
-            Some(peer) => peer,
-            None => {
-                // If no peer in `self.region_peers` for `into_region`, the peer in `from_region`
-                // should be a slow follower.
-                // When it applies the suspend region command, there could be:
-                // 1. There is a conflict for Region merge to carry on, e.g.
-                //    a previous region split has change the region version
-                // 2. Region merge is done
-                // In either case, the peers in regions are not in region merge state any more.
-                // And they could be moved to different stores, so `into_peer` is not
-                // in the same store as `from_peer`.
-                warn!("{} has no peer for region {:?} when region merge rollbacks",
-                      self.tag,
-                      into_region);
+    fn suspend_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
+        {
+            // Do nothing when the peer of `into_region` is not a raft leader.
+            let into_peer = self.region_peers.get_mut(&into_region.get_id()).unwrap();
+            if !into_peer.is_leader() {
                 return;
             }
-        };
 
+            if !into_peer.is_ready_to_suspend_region() {
+                info!("{} into region {:?} is not ready to suspend from region {:?}, retry later",
+                      self.tag,
+                      into_region,
+                      from_region);
+                return;
+            }
+        }
+
+        if let Some(from_peer) = self.region_peers.get(&from_region.get_id()) {
+            let latest_epoch = from_peer.region().get_region_epoch();
+            if util::is_epoch_stale(from_region.get_region_epoch(), latest_epoch) {
+                // The region epoch of `from_region` is outdated. Probably a member change or
+                // a region split has happened. Rollback the ongoing region merge.
+                info!("{} from region epoch outdated for region merge, from region {:?}, \
+                       into region {:?}, latest from region epoch {:?}",
+                      self.tag,
+                      from_region,
+                      into_region,
+                      latest_epoch);
+            } else {
+                // Send suspend command to `from_region`.
+                let request = new_suspend_region_request(from_region.clone(),
+                                                         into_region.clone(),
+                                                         from_peer.peer.clone());
+                if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
+                    request: request,
+                    callback: Box::new(|_| {}),
+                }) {
+                    error!("{} failed to send suspend command, from region {:?}, into region {:?},\
+                            err {:?}",
+                           self.tag,
+                           from_region,
+                           into_region,
+                           e)
+                }
+                return;
+            }
+        } else {
+            // If no peer in `self.region_peers` for `from_region`, there could be:
+            // 1. Region merge is done, this merge request is a retry.
+            // 2. Region merge is cancelled due to some conflict, and the peer for `from_region`
+            //    has been moved to another store.
+            // Anyway the merge state of peer in `into_region` would be rollbacked.
+            warn!("{} has no peer for from region {:?}, rollback region merge for into region \
+                   {:?}",
+                  self.tag,
+                  from_region,
+                  into_region);
+        }
+
+        // Rollback region merge due to `from_region` missing or region epoch conflict.
+        let into_peer = self.region_peers.get_mut(&into_region.get_id()).unwrap();
         if let Err(e) = into_peer.rollback_region_merge() {
-            error!("{} fails to rollback region merge from region {:?} into region {:?}, err {:?}",
+            error!("{} failed to rollback region merge, from region {:?}, into region {:?}, \
+                    err {:?}",
                    self.tag,
                    from_region,
                    into_region,
                    e)
         }
+    }
+
+    fn retry_region_merge(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
+        info!("{} retry merge region from region {:?} into region {:?}",
+              self.tag,
+              from_region,
+              into_region);
+
+        self.suspend_region(from_region, into_region);
+    }
+
+    fn on_ready_start_merge(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
+        info!("{} handle merge region result from region {:?}, into region {:?}",
+              self.tag,
+              from_region,
+              into_region);
+
+        self.suspend_region(from_region, into_region);
     }
 
     fn on_ready_suspend_region(&mut self,
@@ -1267,7 +1240,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     self.on_ready_split_region(region_id, left, right)
                 }
                 ExecResult::StartMerge { from_region, into_region } => {
-                    self.on_ready_merge_region(from_region, into_region)
+                    self.on_ready_start_merge(from_region, into_region)
                 }
                 ExecResult::SuspendRegion { from_region, into_region } => {
                     self.on_ready_suspend_region(from_region, into_region)

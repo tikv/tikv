@@ -54,10 +54,6 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
     },
-    ValidateMergeRegion {
-        from_region: metapb::Region,
-        into_region_id: u64,
-    },
 }
 
 
@@ -83,12 +79,6 @@ impl Display for Task {
             }
             Task::ValidatePeer { ref region, ref peer } => {
                 write!(f, "validate peer {:?} with region {:?}", peer, region)
-            }
-            Task::ValidateMergeRegion { ref from_region, ref into_region_id } => {
-                write!(f,
-                       "validate merge region {:?} for region id {}",
-                       from_region,
-                       into_region_id)
             }
         }
     }
@@ -321,44 +311,6 @@ impl<T: PdClient> Runner<T> {
             Err(e) => error!("get region failed {:?}", e),
         }
     }
-
-    fn handle_validate_merge_region(&self, from_region: metapb::Region, into_region_id: u64) {
-        PD_REQ_COUNTER_VEC.with_label_values(&["get region", "all"]).inc();
-        match self.pd_client.get_region_by_id(from_region.get_id()) {
-            Ok(Some(region)) => {
-                if is_epoch_stale(from_region.get_region_epoch(), region.get_region_epoch()) {
-                    // Local region info is outdated. Probably a member change or a region split
-                    // has happened. Rollback the ongoing region merge.
-                    if let Err(e) = self.ch
-                        .try_send(Msg::RollbackRegionMerge { into_region_id: into_region_id }) {
-                        error!("[region {}] send validate merge region result err {:?}",
-                               into_region_id,
-                               e);
-                    }
-                }
-            }
-            Ok(None) => {
-                // The `from_region` info is missing from PD, there could be:
-                // 1. A region split is ongoing, the info for `from_region` is missing due to
-                //    late split report or region heartbeat after split.
-                // 2. The info for `from_region` is deleted due to a couple times of
-                //    region split and region merge happened on `from_region`.
-                // In either case, `from_region` is not good for region merge anymore.
-                // The underlying region merge should be rollbacked.
-                if let Err(e) = self.ch
-                    .try_send(Msg::RollbackRegionMerge { into_region_id: into_region_id }) {
-                    error!("[region {}] send validate merge region result err {:?}",
-                           into_region_id,
-                           e);
-                }
-            }
-            Err(e) => {
-                error!("get region by id {} fail, err {:?}",
-                       from_region.get_id(),
-                       e)
-            }
-        }
-    }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
@@ -376,9 +328,6 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
             Task::ReportSplit { left, right } => self.handle_report_split(left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
-            Task::ValidateMergeRegion { from_region, into_region_id } => {
-                self.handle_validate_merge_region(from_region, into_region_id)
-            }
         };
     }
 }
