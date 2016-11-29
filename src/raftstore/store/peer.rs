@@ -596,6 +596,7 @@ impl Peer {
             })
         }
 
+        let timer = PEER_READY_APPEND_HISTOGRAM.start_timer();
         let apply_result = match self.mut_store().handle_raft_ready(&ready) {
             Ok(r) => r,
             Err(e) => {
@@ -610,6 +611,7 @@ impl Peer {
                 return Err(e);
             }
         };
+        timer.observe_duration();
 
         if !self.is_leader() {
             self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
@@ -657,6 +659,7 @@ impl Peer {
             }
             vec![]
         } else {
+            let _timer = PEER_READY_APPLY_HISTOGRAM.start_timer();
             try!(self.handle_raft_commit_entries(&ready.committed_entries))
         };
 
@@ -1153,9 +1156,7 @@ impl Peer {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cmd_cb = self.find_cb(uuid, term, &cmd);
-        let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
         let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
-        timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
                self.tag,
