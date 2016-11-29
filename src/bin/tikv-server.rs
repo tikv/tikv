@@ -654,10 +654,6 @@ fn main() {
                 "capacity",
                 "set the store capacity",
                 "default: 0 (unlimited)");
-    opts.optopt("S",
-                "dsn",
-                "[deprecated] set which dsn to use, warning: now only support raftkv",
-                "dsn: raftkv");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
     opts.optopt("",
                 "labels",
