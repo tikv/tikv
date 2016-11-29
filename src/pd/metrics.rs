@@ -16,10 +16,8 @@ use prometheus::{Histogram, exponential_buckets};
 lazy_static! {
     pub static ref PD_SEND_MSG_HISTOGRAM: Histogram =
         register_histogram!(
-            histogram_opts!{
-                "tikv_pd_msg_send_duration_seconds",
-                "Bucketed histogram of PD message send duration",
-                [ exponential_buckets(0.0005, 10.0, 7).unwrap() ]
-            }
+            "tikv_pd_msg_send_duration_seconds",
+            "Bucketed histogram of PD message send duration",
+             exponential_buckets(0.0005, 10.0, 7).unwrap()
         ).unwrap();
 }
