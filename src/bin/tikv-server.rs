@@ -479,22 +479,39 @@ fn build_raftkv(config: &toml::Value,
      engine)
 }
 
-fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
-    let path = get_flag_string(matches, "s")
-        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
-    if path == TEMP_DIR {
-        return path;
+fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
+    fn canonicalize_path(path: &str) -> String {
+        let p = Path::new(path);
+        if p.exists() && p.is_file() {
+            exit_with_err(format!("{} is not a directory!", path));
+        }
+        if !p.exists() {
+            fs::create_dir_all(p).unwrap();
+        }
+        format!("{}", p.canonicalize().unwrap().display())
     }
 
-    let p = Path::new(&path);
-    if p.exists() && p.is_file() {
-        panic!("{} is not a directory!", path);
+    // Store path
+    let store_path = get_flag_string(matches, "s")
+        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
+    let store_abs_path = if store_path == TEMP_DIR {
+        store_path.to_owned()
+    } else {
+        canonicalize_path(&store_path)
+    };
+
+    // Backup path
+    let mut backup_path = get_toml_string(config, "server.backup", Some(String::new()));
+    if backup_path.is_empty() {
+        backup_path = store_abs_path.clone();
+        if !backup_path.ends_with('/') {
+            backup_path.push('/');
+        }
+        backup_path.push_str("backup");
     }
-    if !p.exists() {
-        fs::create_dir_all(p).unwrap();
-    }
-    let absolute_path = p.canonicalize().unwrap();
-    format!("{}", absolute_path.display())
+    let backup_abs_path = canonicalize_path(&backup_path);
+
+    (store_abs_path, backup_abs_path)
 }
 
 fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
@@ -576,16 +593,16 @@ fn handle_signal(ch: SendCh<Msg>) {}
 
 fn run_raft_server(listener: TcpListener,
                    pd_client: RpcClient,
-                   matches: &Matches,
-                   config: &toml::Value,
-                   cfg: &Config) {
+                   cfg: &Config,
+                   backup_path: &str,
+                   config: &toml::Value) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
-    let store_path = get_store_path(matches, config);
-    let mut lock_path = Path::new(&store_path).to_path_buf();
+    let store_path = &cfg.storage.path;
+    let mut lock_path = Path::new(store_path).to_path_buf();
     lock_path.push("LOCK");
     let f = File::create(lock_path).unwrap();
     if f.try_lock_exclusive().is_err() {
@@ -612,24 +629,7 @@ fn run_raft_server(listener: TcpListener,
                           resolver,
                           snap_mgr)
         .unwrap();
-
-    let backup_path = {
-        let mut path = get_toml_string(config, "server.backup", Some(String::new()));
-        if path.is_empty() {
-            path = store_path.to_owned();
-            loop {
-                if path.ends_with('/') {
-                    path.pop();
-                } else {
-                    break;
-                }
-            }
-            path.push_str("_backup");
-        }
-        info!("backup path: {:?}", path);
-        path
-    };
-    start_server(svr, event_loop, engine, &backup_path);
+    start_server(svr, event_loop, engine, backup_path);
     node.stop().unwrap();
 }
 
@@ -734,11 +734,12 @@ fn main() {
                             cluster_id,
                             &format!("{}", listener.local_addr().unwrap()));
     cfg.labels = get_store_labels(&matches, &config);
-    cfg.storage.path = get_store_path(&matches, &config);
+    let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
+    cfg.storage.path = store_path;
 
     if cluster_id == DEFAULT_CLUSTER_ID {
         panic!("in raftkv, cluster_id must greater than 0");
     }
     let _m = TimeMonitor::default();
-    run_raft_server(listener, pd_client, &matches, &config, &cfg);
+    run_raft_server(listener, pd_client, &cfg, &backup_path, &config);
 }

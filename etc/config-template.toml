@@ -29,8 +29,8 @@ end-point-concurrency = 8
 # set store capacity, if no set, use unlimited or disk size later.
 # capacity = 0 # 0 is unlimited.
 
-# set backup path, if not set, use `store` with a suffix "_backup".
-backup = "/tmp/tikv/backup"
+# set backup path, if not set, use "backup" under store path.
+backup = "/tmp/tikv/store/backup"
 
 [metric]
 # the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
