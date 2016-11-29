@@ -13,6 +13,7 @@
 
 use std::option::Option;
 use std::sync::Arc;
+use std::fmt::{self, Debug, Formatter};
 
 use rocksdb::{DB, Writable, DBIterator, DBVector, WriteBatch, ReadOptions, CFHandle};
 use rocksdb::rocksdb_options::UnsafeSnap;
@@ -48,6 +49,12 @@ impl Snapshot {
 
     pub fn cf_handle(&self, cf: &str) -> Result<&CFHandle> {
         rocksdb::get_cf_handle(&self.db, cf).map_err(Error::from)
+    }
+}
+
+impl Debug for Snapshot {
+    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+        write!(fmt, "Engine Snapshot Impl")
     }
 }
 

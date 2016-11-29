@@ -448,6 +448,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.pd-store-heartbeat-tick-interval",
                      Some(10_000)) as u64;
 
+    cfg.raft_store.consistency_check_tick_interval =
+        get_toml_int(config, "raftstore.consistency-check-interval-secs", Some(0)) as u64;
+
     cfg.storage.sched_notify_capacity =
         get_toml_int(config, "storage.scheduler-notify-capacity", Some(10240)) as usize;
     cfg.storage.sched_msg_per_tick =
