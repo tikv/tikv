@@ -48,12 +48,13 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     for _ in 0..cfs.len() {
         cfs_opts.push(Options::new());
     }
-    new_engine_opt(opts, path, cfs, cfs_opts)
+    new_engine_opt(opts, path, cfs, cfs_opts, &[])
 }
 
 fn check_column_families(path: &str,
                          needed_cfs: &[&str],
-                         cfs_opts: &[&Options])
+                         cfs_opts: &[&Options],
+                         cfs_need_compacted: &[&str])
                          -> Result<(), String> {
     // If db not exist, create it.
     if !db_exist(path) {
@@ -108,18 +109,24 @@ fn check_column_families(path: &str,
         try!(db.create_cf(cf, &opts));
     }
 
+    for cf in cfs_need_compacted {
+        let cf = try!(get_cf_handle(&db, cf));
+        db.compact_range_cf(cf, None, None);
+    }
+
     Ok(())
 }
 
 pub fn new_engine_opt(mut opts: Options,
                       path: &str,
                       cfs: &[&str],
-                      cfs_opts: Vec<Options>)
+                      cfs_opts: Vec<Options>,
+                      cfs_need_compacted: &[&str] /* cfs that need compacted before open */)
                       -> Result<DB, String> {
     // Drop discarded column families and create new needed column families not exist yet.
     // If db not exist check_column_families will create it.
     let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
-    try!(check_column_families(path, cfs, &cfs_ref_opts));
+    try!(check_column_families(path, cfs, &cfs_ref_opts, cfs_need_compacted));
 
     // opts is used as Rocksdb's DBOptions when call DB::open_cf
     opts.create_if_missing(false);
@@ -152,19 +159,19 @@ mod tests {
         let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
 
         // create db when db not exist
-        check_column_families(path_str, &["default"], &cfs_ref_opts[..1]).unwrap();
+        check_column_families(path_str, &["default"], &cfs_ref_opts[..1], &[]).unwrap();
         column_families_must_eq(path_str, &["default"]);
 
         // add cf1.
-        check_column_families(path_str, &["default", "cf1"], &cfs_ref_opts).unwrap();
+        check_column_families(path_str, &["default", "cf1"], &cfs_ref_opts, &[]).unwrap();
         column_families_must_eq(path_str, &["default", "cf1"]);
 
         // drop cf1.
-        check_column_families(path_str, &["default"], &cfs_ref_opts[..1]).unwrap();
+        check_column_families(path_str, &["default"], &cfs_ref_opts[..1], &[]).unwrap();
         column_families_must_eq(path_str, &["default"]);
 
         // never drop default cf
-        check_column_families(path_str, &[], &[]).unwrap();
+        check_column_families(path_str, &[], &[], &[]).unwrap();
         column_families_must_eq(path_str, &["default"]);
     }
 
