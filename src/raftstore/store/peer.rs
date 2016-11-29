@@ -97,6 +97,12 @@ pub enum ExecResult {
         left: metapb::Region,
         right: metapb::Region,
     },
+    ComputeHash {
+        region: metapb::Region,
+        index: u64,
+        snap: Snapshot,
+    },
+    VerifyHash { index: u64, hash: Vec<u8> },
 }
 
 // When we apply commands in handing ready, we should also need a way to
@@ -173,6 +179,13 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     cmd.call(resp);
 }
 
+pub struct ConsistencyState {
+    pub last_check_time: Instant,
+    // (computed_result_or_to_be_verified, index, hash)
+    pub index: u64,
+    pub hash: Vec<u8>,
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
@@ -188,6 +201,8 @@ pub struct Peer {
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
 
+    pub consistency_state: ConsistencyState,
+
     pub tag: String,
 
     pub last_compacted_idx: u64,
@@ -197,7 +212,9 @@ pub struct Peer {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
+
     leader_missing_time: Option<Instant>,
+
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
 }
@@ -286,6 +303,11 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
+            consistency_state: ConsistencyState {
+                last_check_time: Instant::now(),
+                index: INVALID_INDEX,
+                hash: vec![],
+            },
             raft_log_size_hint: 0,
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
@@ -868,7 +890,9 @@ impl Peer {
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
-                AdminCmdType::InvalidAdmin => {}
+                AdminCmdType::InvalidAdmin |
+                AdminCmdType::ComputeHash |
+                AdminCmdType::VerifyHash => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
                 AdminCmdType::TransferLeader => {
@@ -1225,6 +1249,8 @@ impl Peer {
                 ExecResult::ChangePeer { ref region, .. } => {
                     storage.region = region.clone();
                 }
+                ExecResult::ComputeHash { .. } |
+                ExecResult::VerifyHash { .. } => {}
                 ExecResult::CompactLog { first_index, ref state } => {
                     let total_cnt = index - first_index;
                     // the size of current CompactLog command can be ignored.
@@ -1345,6 +1371,8 @@ impl Peer {
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
+            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
+            AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
@@ -1714,4 +1742,39 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
+}
+
+// Consistency Check
+impl Peer {
+    fn exec_compute_hash(&self,
+                         ctx: &ExecContext,
+                         _: &AdminRequest)
+                         -> Result<(AdminResponse, Option<ExecResult>)> {
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::ComputeHash {
+            region: self.region().clone(),
+            index: ctx.index,
+            // This snapshot may be held for a long time, which may cause too many
+            // open files in rocksdb.
+            // TODO: figure out another way to do consistency check without snapshot
+            // or short life snapshot.
+            snap: Snapshot::new(self.engine.clone()),
+        })))
+    }
+
+    fn exec_verify_hash(&self,
+                        _: &ExecContext,
+                        req: &AdminRequest)
+                        -> Result<(AdminResponse, Option<ExecResult>)> {
+        let verify_req = req.get_verify_hash();
+        let index = verify_req.get_index();
+        let hash = verify_req.get_hash().to_vec();
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::VerifyHash {
+            index: index,
+            hash: hash,
+        })))
+    }
 }

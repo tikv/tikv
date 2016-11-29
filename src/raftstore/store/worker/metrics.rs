@@ -68,4 +68,10 @@ lazy_static! {
             "Bucketed histogram of compact range for cf execution",
             &["cf"]
         ).unwrap();
+
+    pub static ref REGION_HASH_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_hash_duration_seconds",
+            "Bucketed histogram of raftstore hash compution duration"
+        ).unwrap();
 }
