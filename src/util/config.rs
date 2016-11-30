@@ -14,9 +14,11 @@
 use std::str::FromStr;
 use std::mem;
 use std::net::{SocketAddrV4, SocketAddrV6};
+use std::collections::HashMap;
 
 use url;
 use rocksdb::{DBCompressionType, DBRecoveryMode};
+use regex::Regex;
 
 quick_error! {
     #[derive(Debug)]
@@ -28,6 +30,10 @@ quick_error! {
             display("{}", msg)
         }
         Address(msg: String) {
+            description(&msg)
+            display("{}", msg)
+        }
+        StoreLabels(msg: String) {
             description(&msg)
             display("{}", msg)
         }
@@ -128,6 +134,34 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
 
         _ => Err(ConfigError::ReadableNumber),
     }
+}
+
+pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, ConfigError> {
+    let mut map = HashMap::new();
+
+    let re = Regex::new(r"^[a-z0-9]([a-z0-9-._]*[a-z0-9])?$").unwrap();
+    for label in labels.split(',') {
+        if label.is_empty() {
+            continue;
+        }
+        let label = label.to_lowercase();
+        let kv: Vec<_> = label.split('=').collect();
+        match kv[..] {
+            [k, v] => {
+                if !re.is_match(k) || !re.is_match(v) {
+                    return Err(ConfigError::StoreLabels(format!("invalid label {}", label)));
+                }
+                if map.insert(k.to_owned(), v.to_owned()).is_some() {
+                    return Err(ConfigError::StoreLabels(format!("duplicated label {}", label)));
+                }
+            }
+            _ => {
+                return Err(ConfigError::StoreLabels(format!("invalid label {}", label)));
+            }
+        }
+    }
+
+    Ok(map)
 }
 
 #[cfg(unix)]
@@ -413,5 +447,41 @@ mod test {
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
         }
+    }
+
+    #[test]
+    fn test_store_labels() {
+        let cases = vec![
+            "abc",
+            "abc=",
+            "abc.012",
+            "abc,012",
+            "abc=123*",
+            ".123=-abc",
+            "abc,123=123.abc",
+            "abc=123,abc=abc",
+        ];
+
+        for case in cases {
+            assert!(parse_store_labels(case).is_err());
+        }
+
+        let map = parse_store_labels("").unwrap();
+        assert!(map.is_empty());
+
+        let map = parse_store_labels("a=0").unwrap();
+        assert_eq!(map.get("a").unwrap(), "0");
+
+        let map = parse_store_labels("a.1-2=b_1.2").unwrap();
+        assert_eq!(map.get("a.1-2").unwrap(), "b_1.2");
+
+        let map = parse_store_labels("a.1-2=b_1.2,cab-012=3ac.8b2").unwrap();
+        assert_eq!(map.get("a.1-2").unwrap(), "b_1.2");
+        assert_eq!(map.get("cab-012").unwrap(), "3ac.8b2");
+
+        let map = parse_store_labels("zone=us-west-1,disk=ssd,Test=Test").unwrap();
+        assert_eq!(map.get("zone").unwrap(), "us-west-1");
+        assert_eq!(map.get("disk").unwrap(), "ssd");
+        assert_eq!(map.get("test").unwrap(), "test");
     }
 }

@@ -14,9 +14,10 @@
 use std::usize;
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
-use std::time::Instant;
-use std::boxed::FnBox;
+use std::time::{Instant, Duration};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
@@ -25,10 +26,11 @@ use tipb::expression::{Expr, ExprType};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use threadpool::ThreadPool;
-
-use storage::{Engine, SnapshotStore};
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
+use kvproto::errorpb::{self, ServerIsBusy};
+
+use storage::{Engine, SnapshotStore};
 use storage::{engine, Snapshot, Key, ScanMode};
 use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
@@ -47,9 +49,20 @@ pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
 pub const BATCH_ROW_COUNT: usize = 64;
 
+// If a request has been handled for more than 60 seconds, the client should
+// be timeout already, so it can be safely aborted.
+const REQUEST_MAX_HANDLE_SECS: u64 = 60;
+const REQUEST_CHECKPOINT: usize = 255;
+// Assume a batch can be finished in 0.1ms, a batch at position x will wait about 0.0001 * x secs
+// to be actual started. Hence the queue should have at most REQUEST_MAX_HANDLE_SECS / 0.0001
+// batches.
+const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = REQUEST_MAX_HANDLE_SECS as usize * 10_000;
+
 const DEFAULT_ERROR_CODE: i32 = 1;
 
 pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
+
+const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
 pub struct Host {
     engine: Box<Engine>,
@@ -57,6 +70,9 @@ pub struct Host {
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
     pool: ThreadPool,
+    max_running_task_count: usize,
+    // count the tasks that have been scheduled to pool but not finished yet.
+    running_count: Arc<AtomicUsize>,
 }
 
 impl Host {
@@ -66,7 +82,9 @@ impl Host {
             sched: scheduler,
             reqs: HashMap::new(),
             last_req_id: 0,
+            max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
             pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), concurrency),
+            running_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -87,13 +105,17 @@ impl Display for Task {
 
 pub struct RequestTask {
     req: Request,
+    // The deadline before which the task should be responded.
+    deadline: Instant,
     on_resp: OnResponse,
 }
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
+        let deadline = Instant::now() + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         RequestTask {
             req: req,
+            deadline: deadline,
             on_resp: on_resp,
         }
     }
@@ -114,9 +136,15 @@ impl BatchRunnable<Task> for Host {
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
+        let now = Instant::now();
         for task in tasks.drain(..) {
             match task {
                 Task::Request(req) => {
+                    if req.deadline <= now {
+                        on_error(Error::Outdated(req.deadline, now, req.req.get_tp()),
+                                 req.on_resp);
+                        continue;
+                    }
                     let key = {
                         let ctx = req.req.get_context();
                         (ctx.get_region_id(),
@@ -133,12 +161,24 @@ impl BatchRunnable<Task> for Host {
                     let snap = match snap_res {
                         Ok(s) => s,
                         Err(e) => {
-                            on_snap_failed(e, reqs);
+                            notify_batch_failed(e, reqs);
                             continue;
                         }
                     };
                     let end_point = TiDbEndPoint::new(snap);
-                    self.pool.execute(move || end_point.handle_requests(reqs));
+                    let running_count = self.running_count.clone();
+                    if running_count.load(Ordering::SeqCst) >= self.max_running_task_count {
+                        notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
+                        continue;
+                    }
+                    running_count.fetch_add(1, Ordering::SeqCst);
+                    let len = reqs.len() as f64;
+                    COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
+                    self.pool.execute(move || {
+                        end_point.handle_requests(reqs);
+                        running_count.fetch_sub(1, Ordering::SeqCst);
+                        COPR_PENDING_REQS.with_label_values(&["select"]).sub(len);
+                    });
                 }
             }
         }
@@ -151,7 +191,7 @@ impl BatchRunnable<Task> for Host {
                                                            sched.schedule(Task::SnapRes(id, res))
                                                                .unwrap()
                                                        }) {
-                on_snap_failed(e, reqs);
+                notify_batch_failed(e, reqs);
                 continue;
             }
             self.reqs.insert(id, reqs);
@@ -159,29 +199,69 @@ impl BatchRunnable<Task> for Host {
     }
 }
 
-type ResponseHandler = Box<FnBox(Response) -> ()>;
-
-fn on_error(e: Error, cb: ResponseHandler) {
+fn on_error(e: Error, cb: OnResponse) {
     let mut resp = Response::new();
     match e {
-        Error::Region(e) => resp.set_region_error(e),
-        Error::Locked(info) => resp.set_locked(info),
-        Error::Other(_) => resp.set_other_error(format!("{}", e)),
+        Error::Region(e) => {
+            COPR_REQ_ERROR.with_label_values(&["select", "region"]).inc();
+            resp.set_region_error(e);
+        }
+        Error::Locked(info) => {
+            resp.set_locked(info);
+            COPR_REQ_ERROR.with_label_values(&["select", "lock"]).inc();
+        }
+        Error::Other(_) => {
+            resp.set_other_error(format!("{}", e));
+            COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
+        }
+        Error::Outdated(deadline, now, tp) => {
+            let t = get_req_type_str(tp);
+            let elapsed = now.duration_since(deadline) +
+                          Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+            COPR_REQ_ERROR.with_label_values(&["select", "outdated"]).inc();
+            OUTDATED_REQ_WAIT_TIME.with_label_values(&["select", t])
+                .observe(elapsed.as_secs() as f64);
+
+            if cfg!(test) {
+                resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
+            } else {
+                return;
+            }
+        }
+        Error::Full(allow) => {
+            COPR_REQ_ERROR.with_label_values(&["select", "full"]).inc();
+            let mut errorpb = errorpb::Error::new();
+            errorpb.set_message(format!("running batches reach limit {}", allow));
+            errorpb.set_server_is_busy(ServerIsBusy::new());
+            resp.set_region_error(errorpb);
+        }
     }
-    cb(resp)
+    respond(resp, cb);
 }
 
-fn on_snap_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
-    error!("failed to get snapshot: {:?}", e);
+fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
+    debug!("failed to handle batch request: {:?}", e);
     on_error(e.into(),
-             box move |r| {
-        let mut resp_msg = Message::new();
-        resp_msg.set_msg_type(MessageType::CopResp);
-        resp_msg.set_cop_resp(r);
-        for t in reqs {
-            t.on_resp.call_box((resp_msg.clone(),));
-        }
-    });
+             box move |resp_msg: Message| {
+                 for t in reqs {
+                     (t.on_resp)(resp_msg.clone());
+                 }
+             });
+}
+
+fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
+    let now = Instant::now();
+    if deadline <= now {
+        return Err(Error::Outdated(deadline, now, tp));
+    }
+    Ok(())
+}
+
+fn respond(resp: Response, on_resp: OnResponse) {
+    let mut resp_msg = Message::new();
+    resp_msg.set_msg_type(MessageType::CopResp);
+    resp_msg.set_cop_resp(resp);
+    on_resp.call_box((resp_msg,));
 }
 
 pub struct TiDbEndPoint {
@@ -197,34 +277,38 @@ impl TiDbEndPoint {
 impl TiDbEndPoint {
     fn handle_requests(&self, reqs: Vec<RequestTask>) {
         for t in reqs {
-            self.handle_request(t.req, t.on_resp);
+            let now = Instant::now();
+            if t.deadline <= now {
+                on_error(Error::Outdated(t.deadline, now, t.req.get_tp()), t.on_resp);
+            } else {
+                self.handle_request(t.req, t.deadline, t.on_resp);
+            }
         }
     }
 
-    fn handle_request(&self, req: Request, on_resp: OnResponse) {
-        let cb = box move |r| {
-            let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CopResp);
-            resp_msg.set_cop_resp(r);
-            on_resp.call_box((resp_msg,));
-        };
-        match req.get_tp() {
+    fn handle_request(&self, req: Request, deadline: Instant, on_resp: OnResponse) {
+        let tp = req.get_tp();
+        match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
                 let mut sel = SelectRequest::new();
                 if let Err(e) = sel.merge_from_bytes(req.get_data()) {
-                    on_error(box_err!(e), cb);
+                    on_error(box_err!(e), on_resp);
                     return;
                 }
-                match self.handle_select(req, sel) {
-                    Ok(r) => cb(r),
-                    Err(e) => on_error(e, cb),
+                match self.handle_select(req, deadline, sel) {
+                    Ok(r) => respond(r, on_resp),
+                    Err(e) => on_error(e, on_resp),
                 }
             }
-            t => on_error(box_err!("unsupported tp {}", t), cb),
+            t => on_error(box_err!("unsupported tp {}", t), on_resp),
         }
     }
 
-    pub fn handle_select(&self, mut req: Request, sel: SelectRequest) -> Result<Response> {
+    pub fn handle_select(&self,
+                         mut req: Request,
+                         deadline: Instant,
+                         sel: SelectRequest)
+                         -> Result<Response> {
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap));
         let mut range = req.take_ranges().into_vec();
@@ -244,9 +328,9 @@ impl TiDbEndPoint {
         let select_timer = select_histogram.start_timer();
 
         let res = if req.get_tp() == REQ_TYPE_SELECT {
-            ctx.get_rows_from_sel(range, limit, desc)
+            ctx.get_rows_from_sel(range, limit, desc, deadline)
         } else {
-            ctx.get_rows_from_idx(range, limit, desc)
+            ctx.get_rows_from_idx(range, limit, desc, deadline)
         };
 
         select_timer.observe_duration();
@@ -594,18 +678,24 @@ impl<'a> SelectContext<'a> {
         })
     }
 
-    fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
+    fn get_rows_from_sel(&mut self,
+                         ranges: Vec<KeyRange>,
+                         limit: usize,
+                         desc: bool,
+                         deadline: Instant)
+                         -> Result<()> {
         let mut collected = 0;
         for ran in ranges {
             if collected >= limit {
                 break;
             }
             let timer = Instant::now();
-            let row_cnt = try!(self.get_rows_from_range(ran, limit, desc));
+            let row_cnt = try!(self.get_rows_from_range(ran, limit, desc, deadline));
             debug!("fetch {} rows takes {} ms",
                    row_cnt,
                    duration_to_ms(timer.elapsed()));
             collected += row_cnt;
+            try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
         }
         if self.core.aggr {
             self.core.aggr_rows()
@@ -621,7 +711,12 @@ impl<'a> SelectContext<'a> {
         }
     }
 
-    fn get_rows_from_range(&mut self, range: KeyRange, limit: usize, desc: bool) -> Result<usize> {
+    fn get_rows_from_range(&mut self,
+                           range: KeyRange,
+                           limit: usize,
+                           desc: bool,
+                           deadline: Instant)
+                           -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
             let value = match try!(self.snap.get(&Key::from_raw(range.get_start()))) {
@@ -647,6 +742,9 @@ impl<'a> SelectContext<'a> {
                                                      },
                                                      self.key_only()));
             while limit > row_count {
+                if row_count & REQUEST_CHECKPOINT == 0 {
+                    try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
+                }
                 let kv = if desc {
                     try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
                 } else {
@@ -679,13 +777,19 @@ impl<'a> SelectContext<'a> {
         Ok(row_count)
     }
 
-    fn get_rows_from_idx(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
+    fn get_rows_from_idx(&mut self,
+                         ranges: Vec<KeyRange>,
+                         limit: usize,
+                         desc: bool,
+                         deadline: Instant)
+                         -> Result<()> {
         let mut collected = 0;
         for r in ranges {
             if collected >= limit {
                 break;
             }
-            collected += try!(self.get_idx_row_from_range(r, limit, desc));
+            collected += try!(self.get_idx_row_from_range(r, limit, desc, deadline));
+            try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
         }
         if self.core.aggr {
             self.core.aggr_rows()
@@ -694,7 +798,12 @@ impl<'a> SelectContext<'a> {
         }
     }
 
-    fn get_idx_row_from_range(&mut self, r: KeyRange, limit: usize, desc: bool) -> Result<usize> {
+    fn get_idx_row_from_range(&mut self,
+                              r: KeyRange,
+                              limit: usize,
+                              desc: bool,
+                              deadline: Instant)
+                              -> Result<usize> {
         let mut row_cnt = 0;
         let mut seek_key = if desc {
             r.get_end().to_vec()
@@ -708,6 +817,9 @@ impl<'a> SelectContext<'a> {
                                                  },
                                                  self.key_only()));
         while row_cnt < limit {
+            if row_cnt & REQUEST_CHECKPOINT == 0 {
+                try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
+            }
             let nk = if desc {
                 try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
             } else {
@@ -759,10 +871,70 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
 mod tests {
     use super::*;
 
+    use util::worker::Worker;
+    use storage::engine::{self, TEMP_DIR};
+
+    use kvproto::coprocessor::Request;
+    use kvproto::msgpb::MessageType;
+
+    use std::sync::*;
+    use std::thread;
+    use std::time::Duration;
+
     #[test]
     fn test_get_req_type_str() {
         assert_eq!(get_req_type_str(REQ_TYPE_SELECT), STR_REQ_TYPE_SELECT);
         assert_eq!(get_req_type_str(REQ_TYPE_INDEX), STR_REQ_TYPE_INDEX);
         assert_eq!(get_req_type_str(0), STR_REQ_TYPE_UNKNOWN);
+    }
+
+    #[test]
+    fn test_req_outdated() {
+        let mut worker = Worker::new("test-endpoint");
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let end_point = Host::new(engine, worker.scheduler(), 1);
+        worker.start_batch(end_point, 30).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut task = RequestTask::new(Request::new(),
+                                        box move |msg| {
+                                            tx.send(msg).unwrap();
+                                        });
+        task.deadline -= Duration::from_secs(super::REQUEST_MAX_HANDLE_SECS);
+        worker.schedule(Task::Request(task)).unwrap();
+        let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(resp.get_msg_type(), MessageType::CopResp);
+        let copr_resp = resp.get_cop_resp();
+        assert!(copr_resp.has_other_error());
+        assert_eq!(copr_resp.get_other_error(), super::OUTDATED_ERROR_MSG);
+    }
+
+    #[test]
+    fn test_too_many_reqs() {
+        let mut worker = Worker::new("test-endpoint");
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let mut end_point = Host::new(engine, worker.scheduler(), 1);
+        end_point.max_running_task_count = 3;
+        worker.start_batch(end_point, 30).unwrap();
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..30 * 4 {
+            let tx = tx.clone();
+            let task = RequestTask::new(Request::new(),
+                                        box move |msg| {
+                                            thread::sleep(Duration::from_millis(100));
+                                            let _ = tx.send(msg);
+                                        });
+            worker.schedule(Task::Request(task)).unwrap();
+        }
+        for _ in 0..120 {
+            let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(resp.get_msg_type(), MessageType::CopResp);
+            let copr_resp = resp.get_cop_resp();
+            if !copr_resp.has_region_error() {
+                continue;
+            }
+            assert!(copr_resp.get_region_error().has_server_is_busy());
+            return;
+        }
+        panic!("suppose to get ServerIsBusy error.");
     }
 }

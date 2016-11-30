@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{Histogram, exponential_buckets};
+use prometheus::GaugeVec;
 
 lazy_static! {
-    pub static ref PD_SEND_MSG_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_pd_msg_send_duration_seconds",
-            "Bucketed histogram of PD message send duration",
-             exponential_buckets(0.0005, 10.0, 7).unwrap()
+    pub static ref PENDING_TASKS: GaugeVec =
+        register_gauge_vec!(
+            "tikv_worker_pending_task_total",
+            "Pending task count of a worker.",
+            &["name"]
         ).unwrap();
 }

@@ -23,11 +23,10 @@ lazy_static! {
 
     pub static ref ASYNC_REQUESTS_DURATIONS_VEC: HistogramVec =
         register_histogram_vec!(
-            histogram_opts!(
-                "tikv_storage_engine_async_request_duration_seconds",
-                "Bucketed histogram of processing successful asynchronous requests.",
-                [exponential_buckets(0.0005, 2.0, 13).unwrap()]),
-            &["type"]
+            "tikv_storage_engine_async_request_duration_seconds",
+            "Bucketed histogram of processing successful asynchronous requests.",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref CURSOR_OVER_SEEK_BOUND_COUNTER: Counter =
