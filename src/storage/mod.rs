@@ -536,7 +536,7 @@ impl Storage {
                          -> Result<()> {
         self.engine
             .async_snapshot(&ctx,
-                            box move |res: engine::Result<_>| {
+                            box move |(_, res): (_, engine::Result<_>)| {
                                 callback(res.and_then(|snap: Box<Snapshot>| {
                                         snap.get(&Key::from_encoded(key))
                                     })
@@ -554,7 +554,7 @@ impl Storage {
         self.engine
             .async_write(&ctx,
                          vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
-                         box |res: engine::Result<_>| callback(res.map_err(Error::from)))
+                         box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)))
             .map_err(Error::from)
     }
 
@@ -566,7 +566,7 @@ impl Storage {
         self.engine
             .async_write(&ctx,
                          vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
-                         box |res: engine::Result<_>| callback(res.map_err(Error::from)))
+                         box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)))
             .map_err(Error::from)
     }
 }
