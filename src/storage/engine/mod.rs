@@ -16,10 +16,11 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
+use std::default::Default;
 
 use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, CfName, CF_DEFAULT};
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, UpdatedRegion};
 use kvproto::errorpb::Error as ErrorHeader;
 
 mod rocksdb;
@@ -37,11 +38,15 @@ pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 
 pub struct CbContext {
     pub term: Option<u64>,
+    pub updated_regions: Vec<UpdatedRegion>,
 }
 
-impl CbContext {
-    fn new() -> CbContext {
-        CbContext { term: None }
+impl Default for CbContext {
+    fn default() -> CbContext {
+        CbContext {
+            term: None,
+            updated_regions: vec![],
+        }
     }
 }
 

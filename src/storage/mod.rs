@@ -30,11 +30,11 @@ mod metrics;
 
 pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cursor,
-                       Error as EngineError, ScanMode};
+                       Error as EngineError, ScanMode, CbContext};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
 pub use self::types::{Key, Value, KvPair, make_key};
-pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
+pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 
 pub type CfName = &'static str;
 pub const CF_DEFAULT: CfName = "default";
@@ -256,6 +256,32 @@ impl Command {
             Command::ScanLock { ref mut ctx, .. } |
             Command::ResolveLock { ref mut ctx, .. } |
             Command::Gc { ref mut ctx, .. } => ctx,
+        }
+    }
+
+    pub fn key_range(&self) -> Option<(Key, Key)> {
+        match *self {
+            Command::Get { ref key, .. } |
+            Command::Cleanup { ref key, .. } => Some((key.to_owned(), key.to_owned())),
+            Command::BatchGet { ref keys, .. } |
+            Command::Rollback { ref keys, .. } |
+            Command::Commit { ref keys, .. } => {
+                if keys.is_empty() {
+                    return None;
+                }
+                Some((keys.iter().min().unwrap().to_owned(), keys.iter().max().unwrap().to_owned()))
+            }
+            Command::Prewrite { ref mutations, .. } => {
+                if mutations.is_empty() {
+                    return None;
+                }
+                Some((mutations.iter().map(|x| x.key()).min().unwrap().to_owned(),
+                      mutations.iter().map(|x| x.key()).max().unwrap().to_owned()))
+            }
+            Command::Scan { .. } |
+            Command::ScanLock { .. } |
+            Command::ResolveLock { .. } |
+            Command::Gc { .. } => None,
         }
     }
 }
@@ -536,12 +562,11 @@ impl Storage {
                          -> Result<()> {
         self.engine
             .async_snapshot(&ctx,
-                            box move |(_, res): (_, engine::Result<_>)| {
-                                callback(res.and_then(|snap: Box<Snapshot>| {
-                                        snap.get(&Key::from_encoded(key))
-                                    })
-                                    .map_err(Error::from))
-                            })
+                            box move |(cb_ctx, res): (_, engine::Result<_>)| {
+                callback((cb_ctx,
+                          res.and_then(|snap: Box<Snapshot>| snap.get(&Key::from_encoded(key)))
+                    .map_err(Error::from)))
+            })
             .map_err(Error::from)
     }
 
@@ -554,7 +579,9 @@ impl Storage {
         self.engine
             .async_write(&ctx,
                          vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
-                         box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)))
+                         box |(cb_ctx, res): (_, engine::Result<_>)| {
+                             callback((cb_ctx, res.map_err(Error::from)))
+                         })
             .map_err(Error::from)
     }
 
@@ -566,7 +593,9 @@ impl Storage {
         self.engine
             .async_write(&ctx,
                          vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
-                         box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)))
+                         box |(cb_ctx, res): (_, engine::Result<_>)| {
+                             callback((cb_ctx, res.map_err(Error::from)))
+                         })
             .map_err(Error::from)
     }
 }
@@ -632,35 +661,35 @@ mod tests {
     use kvproto::kvrpcpb::Context;
 
     fn expect_get_none(done: Sender<i32>) -> Callback<Option<Value>> {
-        Box::new(move |x: Result<Option<Value>>| {
+        Box::new(move |(_, x): (CbContext, Result<Option<Value>>)| {
             assert_eq!(x.unwrap(), None);
             done.send(1).unwrap();
         })
     }
 
     fn expect_get_val(done: Sender<i32>, v: Vec<u8>) -> Callback<Option<Value>> {
-        Box::new(move |x: Result<Option<Value>>| {
+        Box::new(move |(_, x): (CbContext, Result<Option<Value>>)| {
             assert_eq!(x.unwrap().unwrap(), v);
             done.send(1).unwrap();
         })
     }
 
     fn expect_ok<T>(done: Sender<i32>) -> Callback<T> {
-        Box::new(move |x: Result<T>| {
+        Box::new(move |(_, x): (CbContext, Result<T>)| {
             assert!(x.is_ok());
             done.send(1).unwrap();
         })
     }
 
     fn expect_fail<T>(done: Sender<i32>) -> Callback<T> {
-        Box::new(move |x: Result<T>| {
+        Box::new(move |(_, x): (CbContext, Result<T>)| {
             assert!(x.is_err());
             done.send(1).unwrap();
         })
     }
 
     fn expect_too_busy<T>(done: Sender<i32>) -> Callback<T> {
-        Box::new(move |x: Result<T>| {
+        Box::new(move |(_, x): (CbContext, Result<T>)| {
             assert!(x.is_err());
             match x {
                 Err(Error::SchedTooBusy) => {}
@@ -671,7 +700,7 @@ mod tests {
     }
 
     fn expect_scan(done: Sender<i32>, pairs: Vec<Option<KvPair>>) -> Callback<Vec<Result<KvPair>>> {
-        Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
+        Box::new(move |(_, rlt): (CbContext, Result<Vec<Result<KvPair>>>)| {
             let rlt: Vec<Option<KvPair>> = rlt.unwrap()
                 .into_iter()
                 .map(Result::ok)
@@ -684,7 +713,7 @@ mod tests {
     fn expect_batch_get_vals(done: Sender<i32>,
                              pairs: Vec<Option<KvPair>>)
                              -> Callback<Vec<Result<KvPair>>> {
-        Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
+        Box::new(move |(_, rlt): (CbContext, Result<Vec<Result<KvPair>>>)| {
             let rlt: Vec<Option<KvPair>> = rlt.unwrap()
                 .into_iter()
                 .map(Result::ok)

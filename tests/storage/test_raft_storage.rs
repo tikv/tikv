@@ -18,7 +18,7 @@ use std::time::Duration;
 use std::thread;
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Engine, Snapshot, Modify, Mutation, make_key, ALL_CFS};
-use tikv::storage::engine::{self, Callback, Result};
+use tikv::storage::engine::{self, Callback, Result, CbContext};
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
 use raftstore::cluster::Cluster;
@@ -131,7 +131,7 @@ fn test_scheduler_leader_change_twice() {
                         b"k".to_vec(),
                         10,
                         0,
-                        box move |res: storage::Result<_>| {
+                        box move |(_, res): (CbContext, storage::Result<_>)| {
             if let storage::Error::Engine(engine::Error::Request(ref e)) = *res.as_ref()
                 .err()
                 .unwrap() {
