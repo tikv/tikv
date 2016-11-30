@@ -145,9 +145,12 @@ pub fn backup(db: &DB, path: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{DB, Options};
+    use std::str;
+
+    use rocksdb::{DB, Options, BackupEngine, RestoreOptions, Writable};
     use tempdir::TempDir;
-    use super::check_column_families;
+
+    use super::{check_column_families, backup};
 
     #[test]
     fn test_check_column_families() {
@@ -182,5 +185,35 @@ mod tests {
         cfs_existed.sort();
         cfs_excepted.sort();
         assert_eq!(cfs_existed, cfs_excepted);
+    }
+
+    #[test]
+    fn test_backup() {
+        let key = b"foo";
+        let value = b"bar";
+
+        let db_dir = TempDir::new("_util_rust_rocksdb_backuptest").unwrap();
+        let db = DB::open_default(db_dir.path().to_str().unwrap()).unwrap();
+        let p = db.put(key, value);
+        assert!(p.is_ok());
+
+        // Make a backup.
+        let backup_dir = TempDir::new("_util_rust_rocksdb_backuptest_backup").unwrap();
+        let r = backup(&db, backup_dir.path().to_str().unwrap());
+        assert!(r.is_ok());
+
+        // Restore it.
+        let backup_engine = BackupEngine::new(Options::new(), backup_dir.path().to_str().unwrap())
+            .unwrap();
+        let restore_dir = TempDir::new("_util_rust_rocksdb_backuptest_restore").unwrap();
+        let ropts = RestoreOptions::new();
+        let r = backup_engine.restore_db_from_latest_backup(restore_dir.path().to_str().unwrap(),
+                                                            restore_dir.path().to_str().unwrap(),
+                                                            &ropts);
+        assert!(r.is_ok());
+
+        let restored_db = DB::open_default(restore_dir.path().to_str().unwrap()).unwrap();
+        let r = restored_db.get(key);
+        assert!(r.unwrap().unwrap().to_utf8().unwrap() == str::from_utf8(value).unwrap());
     }
 }
