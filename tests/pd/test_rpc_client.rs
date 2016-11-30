@@ -75,5 +75,5 @@ fn test_rpc_client_safely_new() {
     };
     let endpoints = [endpoints_1, endpoints_2];
 
-    assert_eq!(RpcClient::validate_endpoints(&endpoints).is_err(), true);
+    RpcClient::validate_endpoints(&endpoints).unwrap();
 }
