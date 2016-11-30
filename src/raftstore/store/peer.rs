@@ -1067,7 +1067,7 @@ impl Peer {
         }
 
         slow_log!(t,
-                  "{} handle {} committed entries",
+                  "{} handle ready {} committed entries",
                   self.tag,
                   committed_count);
         Ok(results)
