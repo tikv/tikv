@@ -415,7 +415,7 @@ impl PeerStorage {
                     return Ok(s);
                 }
             }
-            warn!("{} snapshot generating failed at {} tried times",
+            warn!("{} snapshot generating failed at {} try time",
                   self.tag,
                   *tried_cnt);
         }
