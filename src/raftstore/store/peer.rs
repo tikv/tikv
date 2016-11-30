@@ -579,7 +579,9 @@ impl Peer {
 
         debug!("{} handle raft ready", self.tag);
 
+        let ready_timer = PEER_GET_READY_HISTOGRAM.start_timer();
         let mut ready = self.raft_group.ready();
+        ready_timer.observe_duration();
 
         let t = SlowTimer::new();
 
@@ -596,6 +598,7 @@ impl Peer {
             })
         }
 
+        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let apply_result = match self.mut_store().handle_raft_ready(&ready) {
             Ok(r) => r,
             Err(e) => {
@@ -610,6 +613,7 @@ impl Peer {
                 return Err(e);
             }
         };
+        append_timer.observe_duration();
 
         if !self.is_leader() {
             self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
@@ -1063,7 +1067,7 @@ impl Peer {
         }
 
         slow_log!(t,
-                  "{} handle {} committed entries",
+                  "{} handle ready {} committed entries",
                   self.tag,
                   committed_count);
         Ok(results)
