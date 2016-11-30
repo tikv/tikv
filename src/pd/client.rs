@@ -39,77 +39,6 @@ const PD_RPC_PREFIX: &'static str = "/pd/rpc";
 const VALIDATE_MSG_ID: u64 = 0;
 const VALIDATE_CLUSTER_ID: u64 = 0;
 
-// `validate_endpoints` validates pd members, make sure they are in the same cluster.
-// It returns a cluster ID.
-// Notice that it ignores failed pd nodes.
-fn validate_endpoints(endpoints: &[String]) -> Result<u64> {
-    if endpoints.is_empty() {
-        return Err(box_err!("empty PD endpoints"));
-    }
-
-    let len = endpoints.len();
-    let mut endpoints_set = HashSet::with_capacity(len);
-
-    let mut cluster_id = None;
-    let mut sample_members = None;
-    for ep in endpoints {
-        if !endpoints_set.insert(ep) {
-            return Err(box_err!("a duplicate PD url {}", ep));
-        }
-
-        let mut stream = match rpc_connect(ep.as_str()) {
-            Ok(stream) => stream,
-            // Ignore failed pd node.
-            Err(_) => continue,
-        };
-
-        let mut req = protocol::new_request(VALIDATE_CLUSTER_ID, pdpb::CommandType::GetPDMembers);
-        req.set_get_pd_members(pdpb::GetPDMembersRequest::new());
-        let (mid, mut resp) = match send_msg(&mut stream, VALIDATE_MSG_ID, &req) {
-            Ok((mid, resp)) => (mid, resp),
-            // Ignore failed pd node.
-            Err(_) => continue,
-        };
-
-        if mid != VALIDATE_MSG_ID {
-            return Err(box_err!("PD response msg_id mismatch, want {}, got {}",
-                                VALIDATE_MSG_ID,
-                                mid));
-        }
-
-        // Check cluster ID.
-        let cid = resp.take_header().get_cluster_id();
-        if let Some(sample) = cluster_id {
-            if sample != cid {
-                return Err(box_err!("PD response cluster_id mismatch, want {}, got {}",
-                                    sample,
-                                    cid));
-            }
-        } else {
-            cluster_id = Some(cid);
-        }
-
-        // Check all fields.
-        let mut members = resp.take_get_pd_members().take_members().into_vec();
-        if members.len() < len {
-            return Err(box_err!("inconsistent PD endpoints, there is an invalid PD url"));
-        }
-
-        members.sort_by(|a, b| a.get_name().cmp(b.get_name()));
-        if let Some(ref sample) = sample_members {
-            if *sample != members {
-                return Err(box_err!("inconsistent PD endpoints, expect: {:?}, got: {:?}",
-                                    sample,
-                                    members));
-            }
-        } else {
-            sample_members = Some(members);
-        }
-    }
-
-    cluster_id.ok_or(box_err!("PD cluster stop responding"))
-}
-
 #[derive(Debug)]
 struct RpcClientCore {
     endpoints: Vec<String>,
@@ -239,7 +168,7 @@ impl RpcClient {
 
         let mut cluster_id = VALIDATE_CLUSTER_ID;
         for _ in 0..MAX_PD_SEND_RETRY_COUNT {
-            match validate_endpoints(&endpoints) {
+            match Self::validate_endpoints(&endpoints) {
                 Ok(id) => {
                     cluster_id = id;
                     break;
@@ -270,5 +199,61 @@ impl RpcClient {
 
     fn alloc_msg_id(&self) -> u64 {
         self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
+    }
+
+    /// `validate_endpoints` validates pd members, make sure they are in the same cluster.
+    /// It returns a cluster ID.
+    /// Notice that it ignores failed pd nodes.
+    /// Export for tests.
+    pub fn validate_endpoints(endpoints: &[String]) -> Result<u64> {
+        if endpoints.is_empty() {
+            return Err(box_err!("empty PD endpoints"));
+        }
+
+        let len = endpoints.len();
+        let mut endpoints_set = HashSet::with_capacity(len);
+
+        let mut cluster_id = None;
+        for ep in endpoints {
+            if !endpoints_set.insert(ep) {
+                return Err(box_err!("a duplicate PD url {}", ep));
+            }
+
+            let mut stream = match rpc_connect(ep.as_str()) {
+                Ok(stream) => stream,
+                // Ignore failed pd node.
+                Err(_) => continue,
+            };
+
+            let mut req = protocol::new_request(VALIDATE_CLUSTER_ID,
+                                                pdpb::CommandType::GetPDMembers);
+            req.set_get_pd_members(pdpb::GetPDMembersRequest::new());
+            let (mid, resp) = match send_msg(&mut stream, VALIDATE_MSG_ID, &req) {
+                Ok((mid, resp)) => (mid, resp),
+                // Ignore failed pd node.
+                Err(_) => continue,
+            };
+
+            if mid != VALIDATE_MSG_ID {
+                return Err(box_err!("PD response msg_id mismatch, want {}, got {}",
+                                    VALIDATE_MSG_ID,
+                                    mid));
+            }
+
+            // Check cluster ID.
+            let cid = resp.get_header().get_cluster_id();
+            if let Some(sample) = cluster_id {
+                if sample != cid {
+                    return Err(box_err!("PD response cluster_id mismatch, want {}, got {}",
+                                        sample,
+                                        cid));
+                }
+            } else {
+                cluster_id = Some(cid);
+            }
+            // TODO: check all fields later?
+        }
+
+        cluster_id.ok_or(box_err!("PD cluster stop responding"))
     }
 }
