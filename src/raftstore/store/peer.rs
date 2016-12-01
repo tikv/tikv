@@ -26,9 +26,10 @@ use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, SplitRequest,
-                          MergeRequest, SuspendRegionRequest, ShutdownRegionRequest, CmdType,
-                          AdminCmdType, Request, Response, AdminRequest, AdminResponse,
-                          TransferLeaderRequest, TransferLeaderResponse, MergeResponse};
+                          MergeRequest, SuspendRegionRequest, CommitMergeRequest,
+                          ShutdownRegionRequest, CmdType, AdminCmdType, Request, Response,
+                          AdminRequest, AdminResponse, TransferLeaderRequest,
+                          TransferLeaderResponse, MergeResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              MergeState, RegionMergeState, RegionLocalState};
 use kvproto::pdpb::PeerStats;
@@ -680,6 +681,10 @@ impl Peer {
             return false;
         }
 
+        if is_region_merge_cmd(&req) {
+            debug!("{} propose region merge command {:?}", self.tag, req);
+        }
+
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
             cmd.call(err_resp);
@@ -1268,7 +1273,12 @@ fn get_split_cmd(msg: &RaftCmdRequest) -> Option<&SplitRequest> {
     Some(req.get_split())
 }
 
-fn get_merge_cmd(msg: &RaftCmdRequest) -> Option<&MergeRequest> {
+pub fn is_region_merge_cmd(msg: &RaftCmdRequest) -> bool {
+    get_merge_cmd(msg).is_some() || get_suspend_region_cmd(msg).is_some() ||
+    get_commit_merge_cmd(msg).is_some() || get_shutdown_region_cmd(msg).is_some()
+}
+
+pub fn get_merge_cmd(msg: &RaftCmdRequest) -> Option<&MergeRequest> {
     if !msg.has_admin_request() {
         return None;
     }
@@ -1290,6 +1300,18 @@ pub fn get_suspend_region_cmd(msg: &RaftCmdRequest) -> Option<&SuspendRegionRequ
     }
 
     Some(req.get_suspend_region())
+}
+
+pub fn get_commit_merge_cmd(msg: &RaftCmdRequest) -> Option<&CommitMergeRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_suspend_region() {
+        return None;
+    }
+
+    Some(req.get_commit_merge())
 }
 
 pub fn get_shutdown_region_cmd(msg: &RaftCmdRequest) -> Option<&ShutdownRegionRequest> {
@@ -1614,7 +1636,7 @@ impl Peer {
                 // a pending region split or member change is applied and
                 // the region epoch has changed.
                 // Ignore this merge request.
-                info!("{} into region epoch is outdated. ignore merge command, from region: \
+                info!("{} into region epoch is outdated. Ignore merge command, from region: \
                        {:?}, into region {:?}, latest epoch {:?}",
                       self.tag,
                       merge_req.get_from_region(),

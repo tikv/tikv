@@ -199,11 +199,12 @@ impl<T: PdClient> Runner<T> {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge region"]).inc();
 
                     let mut merge_region = resp.take_merge_region();
-                    info!("[region {}] try to merge region {:?} into {:?}",
+                    info!("[region {}] try to merge from region {:?} into region {:?}",
                           region.get_id(),
                           merge_region.get_from_region(),
-                          region);
-                    let req = new_merge_region_request(merge_region.take_from_region());
+                          merge_region.get_into_region());
+                    let req = new_merge_region_request(merge_region.get_from_region().clone(),
+                                                       merge_region.get_into_region().clone());
                     self.send_admin_request(merge_region.take_into_region(), peer, req);
                 } else if resp.has_shutdown_region() {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["shutdown region"]).inc();
@@ -359,10 +360,13 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     req
 }
 
-fn new_merge_region_request(from_region: metapb::Region) -> AdminRequest {
+fn new_merge_region_request(from_region: metapb::Region,
+                            into_region: metapb::Region)
+                            -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::Merge);
     req.mut_merge().set_from_region(from_region);
+    req.mut_merge().set_into_region(into_region);
     req
 }
 
