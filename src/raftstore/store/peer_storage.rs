@@ -851,7 +851,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     let mut snap_file = try!(mgr.rl().get_snap_file(&key, true));
     if snap_file.exists() {
-        if let Err(e) = snap_file.validate() {
+        if let Err(e) = snap_file.reader().and_then(|mut r| r.validate()) {
             error!("[region {}] file {} is invalid, will regenerate: {:?}",
                    region_id,
                    snap_file.path().display(),
@@ -1226,7 +1226,7 @@ mod test {
         let mut f = File::open(source_snap.path()).unwrap();
         dst_snap.encode_u64(0).unwrap();
         io::copy(&mut f, &mut dst_snap).unwrap();
-        dst_snap.save().unwrap();
+        dst_snap.raw_save().unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(sched, &td2);

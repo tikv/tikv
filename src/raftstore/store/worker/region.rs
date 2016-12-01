@@ -14,7 +14,6 @@
 
 use std::fmt::{self, Formatter, Display};
 use std::error;
-use std::fs::File;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -29,7 +28,7 @@ use util::{escape, HandyRwLock, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot, Iterable};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
-use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
+use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable, util};
 use storage::CF_RAFT;
 
 use super::metrics::*;
@@ -209,8 +208,9 @@ impl<T: MsgSender> Runner<T> {
         };
 
         // clear up origin data.
-        let start_key = keys::enc_start_key(region_state.get_region());
-        let end_key = keys::enc_end_key(region_state.get_region());
+        let region = region_state.get_region().clone();
+        let start_key = keys::enc_start_key(&region);
+        let end_key = keys::enc_end_key(&region);
         box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
 
         let state_key = keys::apply_state_key(region_id);
@@ -230,8 +230,7 @@ impl<T: MsgSender> Runner<T> {
             return Err(box_err!("missing snap file {}", snap_file.path().display()));
         }
         try!(check_abort(&abort));
-        box_try!(snap_file.validate());
-        let mut reader = box_try!(File::open(snap_file.path()));
+        let mut reader = box_try!(snap_file.reader());
 
         let timer = Instant::now();
         // Write the snapshot into the region.
@@ -253,6 +252,7 @@ impl<T: MsgSender> Runner<T> {
                     box_try!(self.db.write(wb));
                     break;
                 }
+                box_try!(util::check_key_in_region(keys::origin_key(&key), &region));
                 batch_size += key.len();
                 let value = box_try!(reader.decode_compact_bytes());
                 batch_size += value.len();
@@ -264,6 +264,7 @@ impl<T: MsgSender> Runner<T> {
                 }
             }
         }
+        box_try!(reader.validate());
 
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));

@@ -1,5 +1,6 @@
-use std::io::{self, Write, ErrorKind, Seek, SeekFrom, Read};
+use std::io::{self, Write, ErrorKind, Read};
 use std::fmt::{self, Formatter, Display};
+use std::cmp;
 use std::fs::{self, File, OpenOptions, Metadata};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -120,33 +121,9 @@ impl SnapFile {
         self.file.metadata()
     }
 
-    /// Validate whether current file is broken.
-    pub fn validate(&self) -> io::Result<()> {
-        let mut reader = try!(File::open(self.path()));
-        let mut digest = Digest::new(crc32::IEEE);
-        let len = try!(reader.metadata()).len();
-        if len < 4 {
-            return Err(io::Error::new(ErrorKind::InvalidInput, format!("file length {} < 4", len)));
-        }
-        let to_read = len as usize - 4;
-        let mut total_read = 0;
-        let mut buffer = vec![0; 4098];
-        loop {
-            let read = try!(reader.read(&mut buffer));
-            if total_read + read >= to_read {
-                digest.write(&buffer[..to_read - total_read]);
-                try!(reader.seek(SeekFrom::End(-4)));
-                break;
-            }
-            digest.write(&buffer);
-            total_read += read;
-        }
-        let sum = try!(reader.read_u32::<BigEndian>());
-        if sum != digest.sum32() {
-            return Err(io::Error::new(ErrorKind::InvalidData,
-                                      format!("crc not correct: {} != {}", sum, digest.sum32())));
-        }
-        Ok(())
+    /// Get a validation reader.
+    pub fn reader(&self) -> io::Result<SnapValidationReader> {
+        SnapValidationReader::open(self.path())
     }
 
     pub fn exists(&self) -> bool {
@@ -171,13 +148,25 @@ impl SnapFile {
         Ok(())
     }
 
+    /// Same as `raw_save`, but will automatically append the checksum to
+    /// the end of file.
+    pub fn save(&mut self) -> io::Result<()> {
+        self.save_impl(true)
+    }
+
     /// Use the content in temporary files replace the target file.
     ///
     /// Please note that this method can only be called once.
-    pub fn save(&mut self) -> io::Result<()> {
+    pub fn raw_save(&mut self) -> io::Result<()> {
+        self.save_impl(false)
+    }
+
+    fn save_impl(&mut self, append_checksum: bool) -> io::Result<()> {
         debug!("saving to {}", self.file.as_path().display());
         if let Some((mut f, path)) = self.tmp_file.take() {
-            try!(f.write_u32::<BigEndian>(self.digest.sum32()));
+            if append_checksum {
+                try!(f.write_u32::<BigEndian>(self.digest.sum32()));
+            }
             try!(f.flush());
             let file_len = try!(fs::metadata(&path)).len();
             let mut size_track = self.size_track.wl();
@@ -218,6 +207,74 @@ impl Drop for SnapFile {
                 warn!("failed to delete temporary file {}: {:?}", path, e);
             }
         }
+    }
+}
+
+/// A reader that calculate checksum and verify it without read
+/// it from the beginning again.
+pub struct SnapValidationReader {
+    reader: File,
+    digest: Digest,
+    left: usize,
+    res: Option<u32>,
+}
+
+impl SnapValidationReader {
+    /// Open the snap file located at specified path.
+    fn open<P: AsRef<Path>>(path: P) -> io::Result<SnapValidationReader> {
+        let reader = try!(File::open(path.as_ref()));
+        let digest = Digest::new(crc32::IEEE);
+        let len = try!(reader.metadata()).len();
+        if len < 4 {
+            return Err(io::Error::new(ErrorKind::InvalidInput, format!("file length {} < 4", len)));
+        }
+        let left = len as usize - 4;
+        Ok(SnapValidationReader {
+            reader: reader,
+            digest: digest,
+            left: left,
+            res: None,
+        })
+    }
+
+    /// Validate the file
+    ///
+    /// If the reader will be comsumed after calling this method, no further data can be
+    /// read from this reader again.
+    pub fn validate(&mut self) -> io::Result<()> {
+        if self.res.is_none() {
+            if self.left > 0 {
+                let cap = cmp::min(self.left, 4096);
+                let mut buf = vec![0; cap];
+                while self.left > 0 {
+                    try!(self.read(&mut buf));
+                }
+            }
+            self.res = Some(try!(self.reader.read_u32::<BigEndian>()));
+        }
+        if self.res.unwrap() != self.digest.sum32() {
+            let msg = format!("crc not correct: {} != {}",
+                              self.res.unwrap(),
+                              self.digest.sum32());
+            return Err(io::Error::new(ErrorKind::InvalidData, msg));
+        }
+        Ok(())
+    }
+}
+
+impl Read for SnapValidationReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.left == 0 {
+            return Ok(0);
+        }
+        let read = if buf.len() < self.left {
+            try!(self.reader.read(buf))
+        } else {
+            try!(self.reader.read(&mut buf[..self.left]))
+        };
+        self.digest.write(&buf[..read]);
+        self.left -= read;
+        Ok(read)
     }
 }
 
@@ -416,8 +473,8 @@ pub fn new_snap_mgr<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapMa
 #[cfg(test)]
 mod test {
     use std::path::Path;
-    use std::fs::File;
-    use std::io::Write;
+    use std::fs::{File, OpenOptions};
+    use std::io::*;
     use std::sync::*;
 
     use tempdir::TempDir;
@@ -507,5 +564,34 @@ mod test {
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
         f4.save().unwrap();
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
+    }
+
+    #[test]
+    fn test_snap_validate() {
+        let path = TempDir::new("test-snap-mgr").unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let key1 = SnapKey::new(1, 1, 1);
+        let size_track = Arc::new(RwLock::new(0));
+        let mut f1 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
+        f1.write_all(b"testdata").unwrap();
+        f1.save().unwrap();
+        let mut reader = f1.reader().unwrap();
+        reader.validate().unwrap();
+
+        // partial read should not affect validation.
+        reader = f1.reader().unwrap();
+        reader.read(&mut [0, 0]).unwrap();
+        reader.validate().unwrap();
+
+        // fully read should not affect validation.
+        reader = f1.reader().unwrap();
+        while reader.read(&mut [0, 0]).unwrap() != 0 {}
+        reader.validate().unwrap();
+
+        let mut f = OpenOptions::new().write(true).open(f1.path()).unwrap();
+        f.write_all(b"et").unwrap();
+        reader = f1.reader().unwrap();
+        reader.validate().unwrap_err();
     }
 }
