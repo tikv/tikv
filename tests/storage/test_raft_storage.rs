@@ -149,7 +149,7 @@ fn test_scheduler_leader_change_twice() {
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     block.store(false, Ordering::SeqCst);
 
-    rx.recv().unwrap();
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
 #[derive(Debug)]
