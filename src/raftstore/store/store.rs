@@ -28,7 +28,7 @@ use uuid::Uuid;
 use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
-                             PeerState};
+                             PeerState, MergeState};
 use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer, duration_to_nanos};
@@ -50,7 +50,8 @@ use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, get_suspend_region_cmd,
+                  get_shutdown_region_cmd};
 use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -992,8 +993,42 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if let Some(from_peer) = self.region_peers.get(&from_region.get_id()) {
+            let epoch = from_region.get_region_epoch().clone();
             let latest_epoch = from_peer.region().get_region_epoch();
-            if util::is_epoch_stale(from_region.get_region_epoch(), latest_epoch) {
+            if epoch.get_conf_ver() == latest_epoch.get_conf_ver() &&
+               epoch.get_version() + 1 == latest_epoch.get_version() &&
+               from_peer.merge_state == MergeState::Suspended {
+                // The `from_peer` has been suspended already. Go to next step to commit merge.
+                info!("{} from region has been suspended already, from region {:?}, \
+                       into region {:?}",
+                      self.tag,
+                      from_region,
+                      into_region);
+                self.commit_merge(from_region, into_region);
+                return;
+            } else if epoch.get_version() >= latest_epoch.get_version() &&
+                      epoch.get_conf_ver() >= latest_epoch.get_conf_ver() {
+                // send suspend command to `from_region`.
+                info!("{} send suspend region request to from region {:?}, into region {:?}",
+                      self.tag,
+                      from_region,
+                      into_region);
+                let request = new_suspend_region_request(from_region.clone(),
+                                                         into_region.clone(),
+                                                         from_peer.peer.clone());
+                if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
+                    request: request,
+                    callback: Box::new(|_| {}),
+                }) {
+                    error!("{} failed to send suspend command, from region {:?}, into region \
+                            {:?},err {:?}",
+                           self.tag,
+                           from_region,
+                           into_region,
+                           e)
+                }
+                return;
+            } else {
                 // The region epoch of `from_region` is outdated. Probably a member change or
                 // a region split has happened. Rollback the ongoing region merge.
                 info!("{} from region epoch outdated for region merge, from region {:?}, \
@@ -1002,23 +1037,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                       from_region,
                       into_region,
                       latest_epoch);
-            } else {
-                // Send suspend command to `from_region`.
-                let request = new_suspend_region_request(from_region.clone(),
-                                                         into_region.clone(),
-                                                         from_peer.peer.clone());
-                if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
-                    request: request,
-                    callback: Box::new(|_| {}),
-                }) {
-                    error!("{} failed to send suspend command, from region {:?}, into region {:?},\
-                            err {:?}",
-                           self.tag,
-                           from_region,
-                           into_region,
-                           e)
-                }
-                return;
             }
         } else {
             // If no peer in `self.region_peers` for `from_region`, there could be:
@@ -1063,34 +1081,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.suspend_region(from_region, into_region);
     }
 
-    fn on_ready_suspend_region(&mut self,
-                               from_region: metapb::Region,
-                               into_region: metapb::Region) {
-
-        info!("{} handle suspend region result from region {:?} into region {:?}",
+    fn commit_merge(&self, from_region: metapb::Region, into_region: metapb::Region) {
+        info!("{} send commit merge request into region {:?}, from region {:?}",
               self.tag,
-              from_region,
-              into_region);
+              into_region,
+              from_region);
 
-        let into_peer = match self.region_peers.get(&into_region.get_id()) {
-            Some(peer) => peer,
-            None => {
-                // If no peer in `self.region_peers` for `into_region`, the peer in `from_region`
-                // should be a slow follower.
-                // When it applies the suspend region command, there could be:
-                // 1. Region merge is done
-                // Those peers in regions are not in region merge state any more.
-                // And they could be moved to different stores, so `into_peer` is not
-                // in the same store as `from_peer`.
-                warn!("{} has no peer for into region {:?} when handling the result of \
-                       suspending form region {:?}",
-                      self.tag,
-                      into_region,
-                      from_region);
-                return;
-            }
-        };
-
+        let into_peer = self.region_peers.get(&into_region.get_id()).unwrap();
         let request = new_commit_merge_request(from_region.clone(),
                                                into_region.clone(),
                                                into_peer.peer.clone());
@@ -1106,6 +1103,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn on_ready_suspend_region(&mut self,
+                               from_region: metapb::Region,
+                               into_region: metapb::Region) {
+        info!("{} handle suspend region result from region {:?} into region {:?}",
+              self.tag,
+              from_region,
+              into_region);
+
+        if self.region_peers.contains_key(&into_region.get_id()) {
+            self.commit_merge(from_region, into_region);
+        } else {
+            // If no peer in `self.region_peers` for `into_region`, the peer in `from_region`
+            // should be a slow follower.
+            // When it applies the suspend region command, the corresponding region merge is done.
+            // Those peers in regions are not in region merge state any more. And they are
+            // relocated to different stores, so `into_peer` is not in the same store
+            // as `from_peer`.
+            warn!("{} has no peer for into region {:?} when handling the result of suspending \
+                   from region {:?}",
+                  self.tag,
+                  into_region,
+                  from_region);
+        }
+    }
+
     fn on_ready_commit_merge(&mut self,
                              new: metapb::Region,
                              old: metapb::Region,
@@ -1117,29 +1139,45 @@ impl<T: Transport, C: PdClient> Store<T, C> {
               old,
               new);
 
-        if self.region_ranges.remove(&enc_end_key(&old)).is_none() {
-            panic!("{} has no into region {:?} when committing region merge",
-                   self.tag,
-                   old);
-        }
-        self.region_ranges.insert(enc_end_key(&new), new.get_id());
-        if self.region_ranges.remove(&enc_end_key(&to_shutdown)).is_none() {
-            // If no peer in the `self.region_peers` for `from_region`, the peer in `into_region`
-            // should be a slow follower.
-            // When it applies the commit merge command, there could be:
-            // 1. Region merge is done
-            // Those peers in regions are not in region merge state any more.
-            // And they could be moved to different stores, so `from_peer` is not
-            // in the same store as `into_peer`.
-            warn!("{} has no region {:?} to shutdown when committing region merge",
-                  self.tag,
-                  to_shutdown);
-        } else {
+        if self.region_peers.contains_key(&to_shutdown.get_id()) {
+            let mut destroy = false;
+            let to_shutdown_peer_info;
+            let merge_state;
+            {
+                let to_shutdown_peer = self.region_peers.get(&to_shutdown.get_id()).unwrap();
+                to_shutdown_peer_info = to_shutdown_peer.peer.clone();
+                merge_state = to_shutdown_peer.merge_state;
+                if to_shutdown_peer.merge_state != MergeState::Suspended {
+                    // If the merge state of `from_region` is not `Suspended`,
+                    // `from_region` is a slow follower. Both peers in `from_region` and
+                    // `into_region` need to be destroyed, in order to ensure the data consistency
+                    // of the region merge procedure.
+                    destroy = true;
+                }
+            }
+            if destroy {
+                warn!("{} destroy peers in from region {:?} and into region {:?} when \
+                       committing merge, because peer in from region is in merge state {:?}, \
+                       which may corrupt consistency.",
+                      self.tag,
+                      to_shutdown,
+                      old,
+                      merge_state);
+                self.destroy_peer(to_shutdown.get_id(), to_shutdown_peer_info);
+                let old_peer_info;
+                {
+                    let old_peer = self.region_peers.get(&old.get_id()).unwrap();
+                    old_peer_info = old_peer.peer.clone();
+                }
+                self.destroy_peer(old.get_id(), old_peer_info);
+                return;
+            }
+
             // Move the range of the `to_shutdown` region to `region_ranges_to_shutdown`.
+            self.region_ranges.remove(&enc_end_key(&to_shutdown)).unwrap();
             self.region_ranges_to_shutdown.insert(enc_end_key(&to_shutdown), to_shutdown.get_id());
             // Send a shutdown command to the `to_shutdown_peer`.
-            let to_shutdown_peer = self.region_peers.get(&to_shutdown.get_id()).unwrap();
-            let request = new_shutdown_region_request(to_shutdown, to_shutdown_peer.peer.clone());
+            let request = new_shutdown_region_request(to_shutdown, to_shutdown_peer_info);
             if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
                 callback: Box::new(|_| {}),
@@ -1148,8 +1186,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                        self.store_id(),
                        e)
             }
+        } else {
+            // If no peer in the `self.region_peers` for `from_region`, the peer in `into_region`
+            // should be a slow follower.
+            // When it applies the commit merge command, the region merge is done.
+            // Those peers in `from_region` are not in region merge state any more,
+            // and they could be moved to different stores. So `from_peer` is not
+            // in the same store as `into_peer`.
+            warn!("{} has no region {:?} to shutdown when committing region merge",
+                  self.tag,
+                  to_shutdown);
         }
 
+        // Update region info for `new`.
+        if self.region_ranges.remove(&enc_end_key(&old)).is_none() {
+            panic!("{} has no into region {:?} when committing region merge",
+                   self.tag,
+                   old);
+        }
+        self.region_ranges.insert(enc_end_key(&new), new.get_id());
         let peer = self.region_peers.get(&new.get_id()).unwrap();
         if peer.is_leader() {
             // Send region heartbeat to notify PD that the region merge is done.
@@ -1325,7 +1380,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Some(peer) => peer,
             None => return Err(Error::RegionNotFound(region_id)),
         };
-        if !peer.is_leader() {
+        // Propose suspend region command even if this peer is not a Raft leader.
+        // In that case, the suspend region request would be forwarded to the leader by
+        // follower in Raft implementation.
+        if !peer.is_leader() && get_suspend_region_cmd(msg).is_none() &&
+           get_shutdown_region_cmd(msg).is_none() {
             return Err(Error::NotLeader(region_id, peer.get_peer_from_cache(peer.leader_id())));
         }
         if peer.peer_id() != peer_id {

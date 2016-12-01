@@ -26,9 +26,9 @@ use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, SplitRequest,
-                          MergeRequest, CmdType, AdminCmdType, Request, Response, AdminRequest,
-                          AdminResponse, TransferLeaderRequest, TransferLeaderResponse,
-                          MergeResponse};
+                          MergeRequest, SuspendRegionRequest, ShutdownRegionRequest, CmdType,
+                          AdminCmdType, Request, Response, AdminRequest, AdminResponse,
+                          TransferLeaderRequest, TransferLeaderResponse, MergeResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              MergeState, RegionMergeState, RegionLocalState};
 use kvproto::pdpb::PeerStats;
@@ -204,7 +204,7 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
 
     pub delete_count: u64,
-    merge_state: MergeState,
+    pub merge_state: MergeState,
     start_merge_time: Option<Instant>,
     start_merge_index: u64,
 
@@ -1280,6 +1280,30 @@ fn get_merge_cmd(msg: &RaftCmdRequest) -> Option<&MergeRequest> {
     Some(req.get_merge())
 }
 
+pub fn get_suspend_region_cmd(msg: &RaftCmdRequest) -> Option<&SuspendRegionRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_suspend_region() {
+        return None;
+    }
+
+    Some(req.get_suspend_region())
+}
+
+pub fn get_shutdown_region_cmd(msg: &RaftCmdRequest) -> Option<&ShutdownRegionRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_shutdown_region() {
+        return None;
+    }
+
+    Some(req.get_shutdown_region())
+}
+
 struct ExecContext<'a> {
     pub snap: Snapshot,
     pub apply_state: RaftApplyState,
@@ -1590,6 +1614,12 @@ impl Peer {
                 // a pending region split or member change is applied and
                 // the region epoch has changed.
                 // Ignore this merge request.
+                info!("{} into region epoch is outdated. ignore merge command, from region: \
+                       {:?}, into region {:?}, latest epoch {:?}",
+                      self.tag,
+                      merge_req.get_from_region(),
+                      merge_req.get_into_region(),
+                      latest_epoch);
                 return Ok((resp, None));
             }
         }
@@ -1647,16 +1677,22 @@ impl Peer {
                 // The region epoch in this request is outdated, because
                 // a pending region split, member change or region merge is applied and
                 // the region epoch has changed.
-                // The `into_region` will notice this region epoch change and
-                // rollback the region merge, when it scans the `from_region` info periodically.
+                // Ignore this suspend region request. The `into_region` will notice
+                // this region epoch change and rollback the region merge,
+                // when it retries region merge periodically.
+                info!("{} from region epoch is outdated. Ignore suspend region command, \
+                       from region {:?}, into region {:?}, latest epoch {:?}",
+                      self.tag,
+                      suspend_region.get_from_region(),
+                      suspend_region.get_into_region(),
+                      latest_epoch);
                 return Ok((resp, None));
             }
         }
 
         if self.merge_state != MergeState::Suspended {
-            // If the following `ExecResult::SuspendRegion` is lost due to a node crash,
-            // this suspend region command will be retried by the leader of `into_region`
-            // in a region merge procedure.
+            // If suspend region command is lost or has not been applied, it will be retried by
+            // the leader if `into_region`.
             // Skip to write the `Suspended` state to hard driver when the command is a retry.
             let mut merge_state = RegionMergeState::new();
             merge_state.set_state(MergeState::Suspended);
@@ -1693,8 +1729,8 @@ impl Peer {
         let resp = AdminResponse::new();
 
         if self.merge_state != MergeState::Merging {
-            // Just ignore this command since it's a retry of previous region merge command.
-            info!("{} not in region merge Merging state, ignore commit merge {:?}",
+            // Just ignore this command since it's a retry of previous commit merge command.
+            info!("{} not in region merge Merging state, ignore retry commit merge {:?}",
                   self.tag,
                   commit_merge);
             Ok((resp, None))
@@ -1712,7 +1748,7 @@ impl Peer {
             let to_shutdown = commit_merge.get_from_region().clone();
             let old_region = self.region().clone();
             let mut new_region = old_region.clone();
-            // The ranges in r1, r2 should be adjacent.
+            // The ranges in `from_region`, `into_region` should be adjacent.
             // TODO add checking for that relationship
             if to_shutdown.get_start_key() < old_region.get_start_key() {
                 // The range of r1 is ahead of the range of r2
