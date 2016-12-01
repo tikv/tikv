@@ -791,7 +791,7 @@ impl Peer {
         true
     }
 
-    /// Call the callback of `cmd` that is stale.
+    /// Call the callback of `cmd` when it can not be continue processed.
     fn notify_stale_command(&self, mut cmd: PendingCmd) {
         let resp = cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, self.term());
         info!("{} command {} is stale, skip", self.tag, cmd.uuid);

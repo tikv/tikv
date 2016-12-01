@@ -93,7 +93,12 @@ fn test_engine_leader_change_twice() {
     assert!(engine.write(&ctx, vec![]).is_err());
     // Term not match.
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
-    assert!(engine.write(&ctx, vec![]).is_err());
+    let res = engine.write(&ctx, vec![]);
+    if let engine::Error::Request(ref e) = *res.as_ref().err().unwrap() {
+        assert!(e.has_stale_command());
+    } else {
+        panic!("expect stale command, but got {:?}", res);
+    }
 }
 
 #[test]
