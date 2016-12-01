@@ -160,6 +160,8 @@ impl Runner {
                           end_key: Vec<u8>,
                           engine: Arc<DB>) {
         REGION_CHECK_COUNTER_VEC.with_label_values(&["merge", "all"]).inc();
+        info!("[region {}] scan db size to check whether to do region merge",
+              region_id);
 
         let mut size = 0;
         let histogram = REGION_CHECK_HISTOGRAM.with_label_values(&["merge"]);
@@ -185,6 +187,11 @@ impl Runner {
             REGION_CHECK_COUNTER_VEC.with_label_values(&["merge", "ignore"]).inc();
             return;
         }
+
+        info!("[region {}] db size {} < preset size {}, about to send merge check result",
+              region_id,
+              size,
+              self.merge_size);
 
         let res = self.ch.try_send(new_merge_check_result(region_id, epoch));
         if let Err(e) = res {
