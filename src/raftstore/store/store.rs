@@ -24,6 +24,7 @@ use std::{cmp, u64};
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
+use fs2;
 use uuid::Uuid;
 use time::{self, Timespec};
 
@@ -31,7 +32,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState, MergeState};
 use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, duration_to_nanos};
+use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -41,154 +42,27 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::get_disk_stat;
 use util::rocksdb;
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{region_check, RegionCheckRunner, RegionTask, RegionRunner, CompactTask,
-                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask};
+                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
+                    ConsistencyCheckTask, ConsistencyCheckRunner};
 use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
-use super::engine::{Iterable, Peekable, delete_all_in_range};
+use super::engine::{Iterable, Peekable, delete_all_in_range, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, get_suspend_region_cmd,
-                  get_shutdown_region_cmd};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState,
+                  get_suspend_region_cmd, get_shutdown_region_cmd};
 use super::peer_storage::{ApplySnapResult, SnapState};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
+use super::local_metrics::RaftMetrics;
 
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
-
-/// The buffered metrics counters for raft ready handling.
-#[derive(Debug, Default, Clone)]
-pub struct RaftReadyMetrics {
-    pub message: u64,
-    pub commit: u64,
-    pub append: u64,
-    pub snapshot: u64,
-}
-
-impl RaftReadyMetrics {
-    /// Flushs all metrics
-    fn flush(&mut self) {
-        // reset all buffered metrics once they have been added
-        if self.message > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["message"])
-                .inc_by(self.message as f64)
-                .unwrap();
-            self.message = 0;
-        }
-        if self.commit > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["commit"])
-                .inc_by(self.commit as f64)
-                .unwrap();
-            self.commit = 0;
-        }
-        if self.append > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["append"])
-                .inc_by(self.append as f64)
-                .unwrap();
-            self.append = 0;
-        }
-        if self.snapshot > 0 {
-            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["snapshot"]).inc();
-            self.snapshot = 0;
-        }
-    }
-}
-
-/// The buffered metrics counters for raft message.
-#[derive(Debug, Default, Clone)]
-pub struct RaftMessageMetrics {
-    pub append: u64,
-    pub append_resp: u64,
-    pub vote: u64,
-    pub vote_resp: u64,
-    pub snapshot: u64,
-    pub heartbeat: u64,
-    pub heartbeat_resp: u64,
-    pub transfer_leader: u64,
-    pub timeout_now: u64,
-}
-
-impl RaftMessageMetrics {
-    /// Flushs all metrics
-    fn flush(&mut self) {
-        // reset all buffered metrics once they have been added
-        if self.append > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append"])
-                .inc_by(self.append as f64)
-                .unwrap();
-            self.append = 0;
-        }
-        if self.append_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["append_resp"])
-                .inc_by(self.append_resp as f64)
-                .unwrap();
-            self.append_resp = 0;
-        }
-        if self.vote > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote"])
-                .inc_by(self.vote as f64)
-                .unwrap();
-            self.vote = 0;
-        }
-        if self.vote_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["vote_resp"])
-                .inc_by(self.vote_resp as f64)
-                .unwrap();
-            self.vote_resp = 0;
-        }
-        if self.snapshot > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["snapshot"])
-                .inc_by(self.snapshot as f64)
-                .unwrap();
-            self.snapshot = 0;
-        }
-        if self.heartbeat > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat"])
-                .inc_by(self.heartbeat as f64)
-                .unwrap();
-            self.heartbeat = 0;
-        }
-        if self.heartbeat_resp > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["heartbeat_resp"])
-                .inc_by(self.heartbeat_resp as f64)
-                .unwrap();
-            self.heartbeat_resp = 0;
-        }
-        if self.transfer_leader > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["transfer_leader"])
-                .inc_by(self.transfer_leader as f64)
-                .unwrap();
-            self.transfer_leader = 0;
-        }
-        if self.timeout_now > 0 {
-            STORE_RAFT_SENT_MESSAGE_COUNTER_VEC.with_label_values(&["timeout_now"])
-                .inc_by(self.timeout_now as f64)
-                .unwrap();
-            self.timeout_now = 0;
-        }
-    }
-}
-
-/// The buffered metrics counters for raft.
-#[derive(Debug, Default, Clone)]
-pub struct RaftMetrics {
-    pub ready: RaftReadyMetrics,
-    pub message: RaftMessageMetrics,
-}
-
-impl RaftMetrics {
-    /// Flushs all metrics
-    fn flush(&mut self) {
-        self.ready.flush();
-        self.message.flush();
-    }
-}
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
@@ -208,6 +82,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: Worker<PdTask>,
+    consistency_check_worker: Worker<ConsistencyCheckTask>,
 
     trans: T,
     pd_client: Arc<C>,
@@ -264,6 +139,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: Worker::new("pd worker"),
+            consistency_check_worker: Worker::new("consistency check worker"),
             region_ranges: BTreeMap::new(),
             region_ranges_to_shutdown: BTreeMap::new(),
             pending_regions: vec![],
@@ -394,6 +270,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
+
+        let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
+        box_try!(self.consistency_check_worker.start(consistency_check_runner));
 
         try!(event_loop.run(self));
         Ok(())
@@ -805,40 +684,44 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self) -> Result<()> {
+    fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
+        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(ids.len());
         for region_id in ids {
-            let mut ready_result = None;
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready(&self.trans, &mut self.raft_metrics) {
+                match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
-                        error!("{} handle raft ready err: {:?}", peer.tag, e);
-                        return Err(e);
+                        error!("{} handle raft ready append err: {:?}", peer.tag, e);
+                        continue;
                     }
-                    Ok(ready) => ready_result = ready,
+                    Ok(Some(res)) => ready_results.push((region_id, res)),
+                    Ok(None) => {}
                 }
             }
+        }
 
-            if let Some(ready_result) = ready_result {
-                if let Err(e) = self.on_ready_result(region_id, ready_result) {
-                    error!("[region {}] handle raft ready result err: {:?}",
-                           region_id,
-                           e);
-                    return Err(e);
+        for (region_id, mut res) in ready_results {
+            {
+                let peer = self.region_peers.get_mut(&region_id).unwrap();
+
+                if let Err(e) = peer.handle_raft_ready_apply(&mut res) {
+                    // TODO: should we panic or shutdown the store?
+                    error!("{} handle raft ready err: {:?}", peer.tag, e);
+                    continue;
                 }
-            }
+            };
+
+            self.on_ready_result(region_id, res)
         }
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
             .inc_by(duration_to_nanos(t.elapsed()) as f64)
             .unwrap();
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
-
-        Ok(())
     }
 
     fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
@@ -1277,7 +1160,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) -> Result<()> {
+    fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) {
         if let Some(apply_result) = ready_result.apply_snap_result {
             self.on_ready_apply_snapshot(apply_result);
         }
@@ -1290,9 +1173,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::ChangePeer { change_type, peer, .. } => {
                     self.on_ready_change_peer(region_id, change_type, peer)
                 }
-                ExecResult::CompactLog { state } => self.on_ready_compact_log(region_id, state),
+                ExecResult::CompactLog { state, .. } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
+                }
+                ExecResult::ComputeHash { region, index, snap } => {
+                    self.on_ready_compute_hash(region, index, snap)
+                }
+                ExecResult::VerifyHash { index, hash } => {
+                    self.on_ready_verify_hash(region_id, index, hash)
                 }
                 ExecResult::StartMerge { from_region, into_region } => {
                     self.on_ready_start_merge(from_region, into_region)
@@ -1312,8 +1201,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   "[region {}] on ready {} results",
                   region_id,
                   result_count);
-
-        Ok(())
     }
 
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
@@ -1363,8 +1250,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             uuid: uuid,
             term: term,
             cb: Some(cb),
+            renew_lease_time: None,
         };
-        if peer.propose(pending_cmd, msg, resp) {
+        if peer.propose(pending_cmd, msg, resp, &mut self.raft_metrics.propose) {
             self.pending_raft_groups.insert(region_id);
         }
 
@@ -1419,6 +1307,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
@@ -1447,7 +1336,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let compact_idx;
-            if applied_idx > first_idx && applied_idx - first_idx >= self.cfg.raft_log_gc_limit {
+            if applied_idx > first_idx &&
+               applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit {
+                compact_idx = applied_idx;
+            } else if peer.raft_log_size_hint >= self.cfg.raft_log_gc_size_limit {
                 compact_idx = applied_idx;
             } else if replicated_idx < first_idx ||
                       replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
@@ -1553,7 +1445,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactCheck,
-                                       self.cfg.region_compact_check_tick_interval) {
+                                       self.cfg.region_compact_check_interval_secs * 1000) {
             error!("{} register compact check tick err: {:?}", self.tag, e);
         };
     }
@@ -1711,17 +1603,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
-        let disk_stat = match get_disk_stat(self.engine.path()) {
-            Ok(disk_stat) => disk_stat,
-            Err(_) => {
-                error!("{} get disk stat for rocksdb {} failed",
+        let disk_stats = match fs2::statvfs(self.engine.path()) {
+            Err(e) => {
+                error!("{} get disk stat for rocksdb {} failed: {}",
                        self.tag,
-                       self.engine.path());
+                       self.engine.path(),
+                       e);
                 return;
             }
+            Ok(stats) => stats,
         };
 
-        let capacity = cmp::min(disk_stat.capacity, self.cfg.capacity);
+        let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
 
         stats.set_capacity(capacity);
 
@@ -1751,8 +1644,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // We only care rocksdb SST file size, so we should
         // check disk available here.
-        if available > disk_stat.available {
-            available = disk_stat.available
+        if available > disk_stats.free_space() {
+            available = disk_stats.free_space();
         }
 
         stats.set_store_id(self.store_id());
@@ -1944,25 +1837,198 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 }
 
+// Consistency Check implementation.
+
+/// Verify and store the hash to state. return true means the hash has been stored successfully.
+fn verify_and_store_hash(region_id: u64,
+                         state: &mut ConsistencyState,
+                         expected_index: u64,
+                         expected_hash: Vec<u8>)
+                         -> bool {
+    if expected_index < state.index {
+        REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
+        warn!("[region {}] has scheduled a new hash: {} > {}, skip.",
+              region_id,
+              state.index,
+              expected_index);
+        return false;
+    }
+
+    if state.index == expected_index {
+        if state.hash != expected_hash {
+            panic!("[region {}] hash at {} not correct, want {}, got {}!!!",
+                   region_id,
+                   state.index,
+                   escape(&expected_hash),
+                   escape(&state.hash));
+        }
+        REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "matched"]).inc();
+        state.hash = vec![];
+        return false;
+    }
+
+    if state.index != INVALID_INDEX && !state.hash.is_empty() {
+        // Maybe computing is too slow or computed result is dropped due to channel full.
+        // If computing is too slow, miss count will be increased twice.
+        REGION_HASH_COUNTER_VEC.with_label_values(&["verify", "miss"]).inc();
+        warn!("[region {}] hash belongs to index {}, but we want {}, skip.",
+              region_id,
+              state.index,
+              expected_index);
+    }
+
+    state.index = expected_index;
+    state.hash = expected_hash;
+    true
+}
+
+impl<T: Transport, C: PdClient> Store<T, C> {
+    fn register_consistency_check_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::ConsistencyCheck,
+                                       self.cfg.consistency_check_tick_interval * 1000) {
+            error!("{} register consistency check tick err: {:?}", self.tag, e);
+        };
+    }
+
+    fn on_consistency_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if self.consistency_check_worker.is_busy() {
+            // To avoid frequent scan, schedule new check only when all the
+            // scheduled check is done.
+            return;
+        }
+        let (mut candidate_id, mut candidate_check_time) = (0, Instant::now());
+        for (&region_id, peer) in &mut self.region_peers {
+            if !peer.is_leader() {
+                continue;
+            }
+            if peer.consistency_state.last_check_time < candidate_check_time {
+                candidate_id = region_id;
+                candidate_check_time = peer.consistency_state.last_check_time;
+            }
+        }
+
+        if candidate_id != 0 {
+            let peer = self.region_peers.get(&candidate_id).unwrap();
+
+            info!("{} scheduling consistent check", peer.tag);
+            let msg = Msg::RaftCmd {
+                request: new_compute_hash_request(candidate_id, peer.peer.clone()),
+                callback: Box::new(|_| {}),
+            };
+
+            if let Err(e) = self.sendch.send(msg) {
+                error!("{} failed to schedule split check: {:?}", peer.tag, e);
+            }
+        }
+
+        self.register_consistency_check_tick(event_loop);
+    }
+
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+        let region_id = region.get_id();
+        self.region_peers.get_mut(&region_id).unwrap().consistency_state.last_check_time =
+            Instant::now();
+        let task = ConsistencyCheckTask::compute_hash(region, index, snap);
+        info!("[region {}] schedule {}", region_id, task);
+        if let Err(e) = self.consistency_check_worker.schedule(task) {
+            error!("[region {}] schedule failed: {:?}", region_id, e);
+        }
+    }
+
+    fn on_ready_verify_hash(&mut self,
+                            region_id: u64,
+                            expected_index: u64,
+                            expected_hash: Vec<u8>) {
+        let state = match self.region_peers.get_mut(&region_id) {
+            None => {
+                warn!("receive stale hash [region {}, index {}]",
+                      region_id,
+                      expected_index);
+                return;
+            }
+            Some(p) => &mut p.consistency_state,
+        };
+
+        verify_and_store_hash(region_id, state, expected_index, expected_hash);
+    }
+
+    fn on_hash_computed(&mut self, region_id: u64, index: u64, hash: Vec<u8>) {
+        let (state, peer) = match self.region_peers.get_mut(&region_id) {
+            None => {
+                warn!("receive stale hash [region {}, index {}]", region_id, index);
+                return;
+            }
+            Some(p) => (&mut p.consistency_state, &p.peer),
+        };
+
+        if !verify_and_store_hash(region_id, state, index, hash) {
+            return;
+        }
+
+        let msg = Msg::RaftCmd {
+            request: new_verify_hash_request(region_id, peer.clone(), state),
+            callback: Box::new(|_| {}),
+        };
+        if let Err(e) = self.sendch.send(msg) {
+            error!("[region {}] failed to schedule verify command for index {}: {:?}",
+                   region_id,
+                   index,
+                   e);
+        }
+    }
+}
+
+fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
+    request.mut_header().set_region_id(region_id);
+    request.mut_header().set_peer(peer);
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    request
+}
+
+fn new_verify_hash_request(region_id: u64,
+                           peer: metapb::Peer,
+                           state: &ConsistencyState)
+                           -> RaftCmdRequest {
+    let mut request = new_admin_request(region_id, peer);
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::VerifyHash);
+    admin.mut_verify_hash().set_index(state.index);
+    admin.mut_verify_hash().set_hash(state.hash.clone());
+    request.set_admin_request(admin);
+    request
+}
+
+fn new_compute_hash_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
+    let mut request = new_admin_request(region_id, peer);
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::ComputeHash);
+    request.set_admin_request(admin);
+    request
+}
 
 fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
                                              tick: Tick,
                                              delay: u64)
-                                             -> Result<mio::Timeout> {
+                                             -> Result<()> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
-    event_loop.timeout(tick, Duration::from_millis(delay))
-        .map_err(|e| box_err!("register timer err: {:?}", e))
+    if delay == 0 {
+        // 0 delay means turn off the timer.
+        return Ok(());
+    }
+    box_try!(event_loop.timeout(tick, Duration::from_millis(delay)));
+    Ok(())
 }
 
 fn new_compact_log_request(region_id: u64,
                            peer: metapb::Peer,
                            compact_index: u64)
                            -> RaftCmdRequest {
-    let mut request = RaftCmdRequest::new();
-    request.mut_header().set_region_id(region_id);
-    request.mut_header().set_peer(peer);
-    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    let mut request = new_admin_request(region_id, peer);
 
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::CompactLog);
@@ -2061,6 +2127,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SnapGenRes { region_id, snap } => {
                 self.on_snap_gen_res(region_id, snap);
             }
+            Msg::ComputeHashResult { region_id, index, hash } => {
+                self.on_hash_computed(region_id, index, hash);
+            }
         }
         slow_log!(t, "{} handle {}", self.tag, msg_str);
     }
@@ -2077,6 +2146,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(event_loop),
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
+            Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
@@ -2089,7 +2159,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                                        (self.raftlog_gc_worker.stop(),
                                         self.raftlog_gc_worker.name()),
                                        (self.compact_worker.stop(), self.compact_worker.name()),
-                                       (self.pd_worker.stop(), self.pd_worker.name())] {
+                                       (self.pd_worker.stop(), self.pd_worker.name()),
+                                       (self.consistency_check_worker.stop(),
+                                        self.consistency_check_worker.name())] {
                 if let Some(Err(e)) = handle.map(|h| h.join()) {
                     error!("{} failed to stop {}: {:?}", self.tag, name, e);
                 }
@@ -2102,10 +2174,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         // We handle raft ready in event loop.
-        if let Err(e) = self.on_raft_ready() {
-            // TODO: should we panic here or shutdown the store?
-            error!("{} handle raft ready err: {:?}", self.tag, e);
-        }
+        self.on_raft_ready();
         self.pending_regions.clear();
     }
 }

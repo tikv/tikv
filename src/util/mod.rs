@@ -35,15 +35,14 @@ pub mod codec;
 pub mod xeval;
 pub mod rocksdb;
 pub mod config;
-pub mod fs;
 pub mod buf;
 pub mod sockopt;
 pub mod transport;
 pub mod time_monitor;
 pub mod file_log;
+pub mod clocktime;
 pub mod metrics;
 
-pub use self::fs::{DiskStat, get_disk_stat};
 pub use log::LogLevelFilter;
 
 pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {

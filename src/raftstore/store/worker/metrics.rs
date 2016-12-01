@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, HistogramVec};
+use prometheus::{CounterVec, HistogramVec, Histogram};
 
 lazy_static! {
     pub static ref PD_REQ_COUNTER_VEC: CounterVec =
@@ -68,5 +68,11 @@ lazy_static! {
             "tikv_compact_range_cf_duration_seconds",
             "Bucketed histogram of compact range for cf execution",
             &["cf"]
+        ).unwrap();
+
+    pub static ref REGION_HASH_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_hash_duration_seconds",
+            "Bucketed histogram of raftstore hash compution duration"
         ).unwrap();
 }

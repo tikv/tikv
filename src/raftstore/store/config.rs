@@ -21,9 +21,11 @@ const RAFT_HEARTBEAT_TICKS: usize = 10;
 const RAFT_ELECTION_TIMEOUT_TICKS: usize = 50;
 const RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 const RAFT_MAX_INFLIGHT_MSGS: usize = 256;
-const RAFT_LOG_GC_INTERVAL: u64 = 5000;
+const RAFT_LOG_GC_INTERVAL: u64 = 10000;
 const RAFT_LOG_GC_THRESHOLD: u64 = 50;
-const RAFT_LOG_GC_LIMIT: u64 = 100000;
+// Assume the average size of entries is 1k.
+const RAFT_LOG_GC_COUNT_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4 / 1024;
+const RAFT_LOG_GC_SIZE_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 const MERGE_REGION_CHECK_TICK_INTERVAL: u64 = 600000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
@@ -38,7 +40,7 @@ const REGION_MERGE_CHECK_ON_DELETE_COUNT: u64 = 10000;
 // the leader peer of this region will request PD to perform a region merge action.
 const REGION_MERGE_SIZE: u64 = 10 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
-const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 300_000;
+const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 300;
 const REGION_COMPACT_DELETE_KEYS_COUNT: u64 = 1_000_000;
 const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 10000;
@@ -53,6 +55,9 @@ const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
+// Disable consistency check by default as it will hurt performance.
+// We should turn on this only in our tests.
+const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 0;
 const DEFAULT_REGION_MERGE_RETRY_DURATION_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]
@@ -74,7 +79,10 @@ pub struct Config {
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
     // When entry count exceed this value, gc will be forced trigger.
-    pub raft_log_gc_limit: u64,
+    pub raft_log_gc_count_limit: u64,
+    // When the approximate size of raft log entries exceed this value,
+    // gc will be forced trigger.
+    pub raft_log_gc_size_limit: u64,
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: u64,
@@ -95,8 +103,8 @@ pub struct Config {
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_check_size_diff: u64,
-    /// Interval (ms) to check whether start compaction for a region.
-    pub region_compact_check_tick_interval: u64,
+    /// Interval to check whether start compaction for a region.
+    pub region_compact_check_interval_secs: u64,
     /// When delete keys of a region exceeds the size, a compaction will
     /// be started.
     pub region_compact_delete_keys_count: u64,
@@ -120,6 +128,8 @@ pub struct Config {
 
     pub snap_apply_batch_size: usize,
 
+    // Interval (s) to check region whether the data is consistent.
+    pub consistency_check_tick_interval: u64,
     /// If the region merge could not succeed over the time specified in
     /// `region_merge_retry_duration` (probably due to admin command lost),
     /// the peer in "the into region" (also known as "the control region") will
@@ -139,7 +149,8 @@ impl Default for Config {
             raft_max_inflight_msgs: RAFT_MAX_INFLIGHT_MSGS,
             raft_log_gc_tick_interval: RAFT_LOG_GC_INTERVAL,
             raft_log_gc_threshold: RAFT_LOG_GC_THRESHOLD,
-            raft_log_gc_limit: RAFT_LOG_GC_LIMIT,
+            raft_log_gc_count_limit: RAFT_LOG_GC_COUNT_LIMIT,
+            raft_log_gc_size_limit: RAFT_LOG_GC_SIZE_LIMIT,
             split_region_check_tick_interval: SPLIT_REGION_CHECK_TICK_INTERVAL,
             merge_region_check_tick_interval: MERGE_REGION_CHECK_TICK_INTERVAL,
             region_max_size: REGION_MAX_SIZE,
@@ -147,18 +158,19 @@ impl Default for Config {
             region_merge_check_on_delete_count: REGION_MERGE_CHECK_ON_DELETE_COUNT,
             region_merge_size: REGION_MERGE_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
-            region_compact_check_tick_interval: REGION_COMPACT_CHECK_TICK_INTERVAL,
+            region_compact_check_interval_secs: REGION_COMPACT_CHECK_TICK_INTERVAL,
             region_compact_delete_keys_count: REGION_COMPACT_DELETE_KEYS_COUNT,
             pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
             pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
-            lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
+            lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
+            consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS,
             region_merge_retry_duration:
                 Duration::from_secs(DEFAULT_REGION_MERGE_RETRY_DURATION_SECS),
         }
@@ -174,6 +186,10 @@ impl Config {
         if self.raft_log_gc_threshold < 1 {
             return Err(box_err!("raft log gc threshold must >= 1, not {}",
                                 self.raft_log_gc_threshold));
+        }
+
+        if self.raft_log_gc_size_limit == 0 {
+            return Err(box_err!("raft log gc size limit should large than 0."));
         }
 
         if self.region_max_size < self.region_split_size {
