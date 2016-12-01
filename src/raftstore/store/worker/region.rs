@@ -26,8 +26,6 @@ use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
-use util::transport::SendCh;
-use raftstore;
 use raftstore::store::engine::{Mutable, Snapshot, Iterable};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
@@ -35,6 +33,7 @@ use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekabl
 use storage::CF_RAFT;
 
 use super::metrics::*;
+use super::MsgSender;
 
 /// region related task.
 pub enum Task {
@@ -92,16 +91,6 @@ quick_error! {
             description(err.description())
             display("snap failed {:?}", err)
         }
-    }
-}
-
-pub trait MsgSender {
-    fn send(&self, msg: Msg) -> raftstore::Result<()>;
-}
-
-impl MsgSender for SendCh<Msg> {
-    fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
     }
 }
 

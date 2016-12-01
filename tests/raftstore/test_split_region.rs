@@ -318,7 +318,7 @@ fn test_server_split_overlap_snapshot() {
 fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
-    cluster.cfg.raft_store.raft_log_gc_limit = 5;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
     cluster.cfg.raft_store.raft_log_gc_threshold = 5;
 
     // We use three nodes([1, 2, 3]) for this test.

@@ -498,6 +498,47 @@ impl Storage {
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
+
+    pub fn async_raw_get(&self,
+                         ctx: Context,
+                         key: Vec<u8>,
+                         callback: Callback<Option<Vec<u8>>>)
+                         -> Result<()> {
+        self.engine
+            .async_snapshot(&ctx,
+                            box move |res: engine::Result<_>| {
+                                callback(res.and_then(|snap: Box<Snapshot>| {
+                                        snap.get(&Key::from_encoded(key))
+                                    })
+                                    .map_err(Error::from))
+                            })
+            .map_err(Error::from)
+    }
+
+    pub fn async_raw_put(&self,
+                         ctx: Context,
+                         key: Vec<u8>,
+                         value: Vec<u8>,
+                         callback: Callback<()>)
+                         -> Result<()> {
+        self.engine
+            .async_write(&ctx,
+                         vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
+                         box |res: engine::Result<_>| callback(res.map_err(Error::from)))
+            .map_err(Error::from)
+    }
+
+    pub fn async_raw_delete(&self,
+                            ctx: Context,
+                            key: Vec<u8>,
+                            callback: Callback<()>)
+                            -> Result<()> {
+        self.engine
+            .async_write(&ctx,
+                         vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
+                         box |res: engine::Result<_>| callback(res.map_err(Error::from)))
+            .map_err(Error::from)
+    }
 }
 
 impl Clone for Storage {

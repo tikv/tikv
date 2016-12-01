@@ -18,7 +18,7 @@ mod write;
 mod metrics;
 
 use std::io;
-pub use self::txn::MvccTxn;
+pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::reader::MvccReader;
 pub use self::lock::{Lock, LockType};
 pub use self::write::{Write, WriteType};

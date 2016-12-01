@@ -60,6 +60,8 @@ extern crate prometheus;
 extern crate lazy_static;
 extern crate backtrace;
 extern crate url;
+extern crate fs2;
+extern crate regex;
 
 #[macro_use]
 pub mod util;

@@ -20,6 +20,7 @@ use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::{Mutation, Key, KvPair, make_key};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
+use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 
 #[derive(Clone)]
 struct AssertionStorage(SyncStorage);
@@ -160,6 +161,18 @@ impl AssertionStorage {
 
     fn gc_ok(&self, safe_point: u64) {
         self.0.gc(Context::new(), safe_point).unwrap();
+    }
+
+    fn raw_get_ok(&self, key: Vec<u8>, value: Option<Vec<u8>>) {
+        assert_eq!(self.0.raw_get(Context::new(), key).unwrap(), value);
+    }
+
+    fn raw_put_ok(&self, key: Vec<u8>, value: Vec<u8>) {
+        self.0.raw_put(Context::new(), key, value).unwrap();
+    }
+
+    fn raw_delete_ok(&self, key: Vec<u8>) {
+        self.0.raw_delete(Context::new(), key).unwrap()
     }
 }
 
@@ -467,19 +480,20 @@ fn test_txn_store_resolve_lock() {
     store.scan_lock_ok(30, vec![]);
 }
 
-fn test_txn_store_resolve_lock_batch(n: usize) {
+fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
+    let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
+    let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
+
     let store = new_assertion_storage();
-    for i in 0..n {
-        let key = format!("k{}", i);
-        store.prewrite_ok(vec![Mutation::Put((make_key(&key.as_bytes()), b"v".to_vec()))],
+    for k in &keys {
+        store.prewrite_ok(vec![Mutation::Put((make_key(&k.as_bytes()), b"v".to_vec()))],
                           b"k1",
                           5);
     }
     store.resolve_lock_ok(5, Some(10));
-    for i in 0..n {
-        let key = format!("k{}", i);
-        store.get_ok(key.as_bytes(), 30, b"v");
-        store.get_none(key.as_bytes(), 8);
+    for k in &keys {
+        store.get_ok(k.as_bytes(), 30, b"v");
+        store.get_none(k.as_bytes(), 8);
     }
 }
 
@@ -491,7 +505,11 @@ fn test_txn_store_resolve_lock2() {
                 RESOLVE_LOCK_BATCH_SIZE,
                 RESOLVE_LOCK_BATCH_SIZE + 1,
                 RESOLVE_LOCK_BATCH_SIZE * 2] {
-        test_txn_store_resolve_lock_batch(i);
+        test_txn_store_resolve_lock_batch(1, i);
+    }
+
+    for &i in &[1, MAX_TXN_WRITE_SIZE / 2, MAX_TXN_WRITE_SIZE + 1] {
+        test_txn_store_resolve_lock_batch(i, 3);
     }
 }
 
@@ -505,20 +523,56 @@ fn test_txn_store_gc() {
     store.get_ok(b"k", 25, b"v2");
 }
 
-fn test_txn_store_gc_multiple_keys(n: usize) {
+fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
+    let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
+    let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
+
     let store = new_assertion_storage();
-    for i in 0..n {
-        let key = format!("k{}", i);
-        store.put_ok(key.as_bytes(), b"value", 5, 10);
+    for k in &keys {
+        store.put_ok(k.as_bytes(), b"v1", 5, 10);
+        store.put_ok(k.as_bytes(), b"v2", 15, 20);
     }
-    store.gc_ok(20);
+    store.gc_ok(30);
+    for k in &keys {
+        store.get_none(k.as_bytes(), 15);
+    }
 }
 
 #[test]
 fn test_txn_store_gc2() {
     for &i in &[0, 1, GC_BATCH_SIZE - 1, GC_BATCH_SIZE, GC_BATCH_SIZE + 1, GC_BATCH_SIZE * 2] {
-        test_txn_store_gc_multiple_keys(i);
+        test_txn_store_gc_multiple_keys(1, i);
     }
+
+    for &i in &[1, MAX_TXN_WRITE_SIZE / 2, MAX_TXN_WRITE_SIZE + 1] {
+        test_txn_store_gc_multiple_keys(i, 3);
+    }
+}
+
+#[test]
+fn test_txn_store_gc3() {
+    let key_len = 10_000;
+    let key = vec![b'k'; 10_000];
+    let store = new_assertion_storage();
+    for k in 1u64..(MAX_TXN_WRITE_SIZE / key_len * 2) as u64 {
+        store.put_ok(&key, b"", k * 10, k * 10 + 5);
+    }
+    store.delete_ok(&key, 1000, 1050);
+    store.get_none(&key, 2000);
+    store.gc_ok(2000);
+    store.get_none(&key, 3000);
+}
+
+#[test]
+fn test_txn_store_rawkv() {
+    let store = new_assertion_storage();
+    store.raw_get_ok(b"key".to_vec(), None);
+    store.raw_put_ok(b"key".to_vec(), b"value".to_vec());
+    store.raw_get_ok(b"key".to_vec(), Some(b"value".to_vec()));
+    store.raw_put_ok(b"key".to_vec(), b"v2".to_vec());
+    store.raw_get_ok(b"key".to_vec(), Some(b"v2".to_vec()));
+    store.raw_delete_ok(b"key".to_vec());
+    store.raw_get_ok(b"key".to_vec(), None);
 }
 
 struct Oracle {

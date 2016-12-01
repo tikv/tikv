@@ -16,20 +16,16 @@ use prometheus::{Histogram, exponential_buckets};
 lazy_static! {
     pub static ref MVCC_VERSIONS_HISTOGRAM: Histogram =
         register_histogram!(
-            histogram_opts!{
-                "tikv_storage_mvcc_versions",
-                "Histogram of versions for each key",
-                [ vec![1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 50.0, 100.0,
-                       500.0, 1000.0, 5000.0, 10000.0, 50000.0, 100000.0] ]
-            }
+            "tikv_storage_mvcc_versions",
+            "Histogram of versions for each key",
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 50.0, 100.0,
+                   500.0, 1000.0, 5000.0, 10000.0, 50000.0, 100000.0]
         ).unwrap();
 
     pub static ref GC_DELETE_VERSIONS_HISTOGRAM: Histogram =
         register_histogram!(
-            histogram_opts!{
-                "tikv_storage_mvcc_gc_delete_versions",
-                "Histogram of versions deleted by gc for each key",
-                [ exponential_buckets(1.0, 2.0, 10).unwrap() ]
-            }
+            "tikv_storage_mvcc_gc_delete_versions",
+            "Histogram of versions deleted by gc for each key",
+             exponential_buckets(1.0, 2.0, 10).unwrap()
         ).unwrap();
 }

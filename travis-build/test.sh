@@ -27,9 +27,18 @@ trap 'kill $(jobs -p) &> /dev/null || true' EXIT
 # start pd
 which pd-server
 if [ $? -eq 0 ]; then
-    pd-server &
+    # Separate PD clusters.
+    pd-server --name="pd1" \
+        --data-dir="default.pd1" \
+        --client-urls="http://:12379" \
+        --peer-urls="http://:12380" &
+    pd-server --name="pd2" \
+        --data-dir="default.pd2" \
+        --client-urls="http://:22379" \
+        --peer-urls="http://:22380" &
     sleep 3s
-    export PD_ENDPOINTS=127.0.0.1:2379
+    export PD_ENDPOINTS=127.0.0.1:12379
+    export PD_ENDPOINTS_SEP=127.0.0.1:22379
 fi
 
 if [[ "$ENABLE_FEATURES" = "" ]]; then

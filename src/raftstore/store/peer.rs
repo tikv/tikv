@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
+use time::{Timespec, Duration as TimeDuration};
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
@@ -34,10 +35,10 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVAL
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::{escape, SlowTimer, rocksdb};
+use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::{PdClient, INVALID_ID};
 use storage::{CF_LOCK, CF_RAFT};
-use super::store::{Store, RaftReadyMetrics, RaftMessageMetrics, RaftMetrics};
+use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
 use super::util;
 use super::msg::Callback;
@@ -46,6 +47,8 @@ use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
+use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
+
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -60,6 +63,8 @@ pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
     pub cb: Option<Callback>,
+    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
+    pub renew_lease_time: Option<Timespec>,
 }
 
 impl PendingCmd {
@@ -84,11 +89,20 @@ pub enum ExecResult {
         peer: metapb::Peer,
         region: metapb::Region,
     },
-    CompactLog { state: RaftTruncatedState },
+    CompactLog {
+        state: RaftTruncatedState,
+        first_index: u64,
+    },
     SplitRegion {
         left: metapb::Region,
         right: metapb::Region,
     },
+    ComputeHash {
+        region: metapb::Region,
+        index: u64,
+        snap: Snapshot,
+    },
+    VerifyHash { index: u64, hash: Vec<u8> },
 }
 
 // When we apply commands in handing ready, we should also need a way to
@@ -96,6 +110,7 @@ pub enum ExecResult {
 // We can save these intermediate results in ready result.
 // We only need to care administration commands now.
 pub struct ReadyResult {
+    pub ready: Option<Ready>,
     // We can execute multi commands like 1, conf change, 2 split region, ...
     // in one ready, and outer store should handle these results sequentially too.
     pub exec_results: Vec<ExecResult>,
@@ -164,12 +179,16 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     cmd.call(resp);
 }
 
+pub struct ConsistencyState {
+    pub last_check_time: Instant,
+    // (computed_result_or_to_be_verified, index, hash)
+    pub index: u64,
+    pub hash: Vec<u8>,
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
-    // if we remove ourself in ChangePeer remove, we should set this flag, then
-    // any following committed logs in same Ready should be applied failed.
-    pending_remove: bool,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -182,11 +201,22 @@ pub struct Peer {
     /// delete keys' count since last reset.
     pub delete_keys_hint: u64,
 
-    leader_missing_time: Option<Instant>,
+    pub consistency_state: ConsistencyState,
 
     pub tag: String,
 
     pub last_compacted_idx: u64,
+    // Approximate size of logs that is applied but not compacted yet.
+    pub raft_log_size_hint: u64,
+
+    // if we remove ourself in ChangePeer remove, we should set this flag, then
+    // any following committed logs in same Ready should be applied failed.
+    pending_remove: bool,
+
+    leader_missing_time: Option<Instant>,
+
+    leader_lease_expired_time: Option<Timespec>,
+    election_timeout: TimeDuration,
 }
 
 impl Peer {
@@ -273,6 +303,15 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
+            consistency_state: ConsistencyState {
+                last_check_time: Instant::now(),
+                index: INVALID_INDEX,
+                hash: vec![],
+            },
+            raft_log_size_hint: 0,
+            leader_lease_expired_time: None,
+            election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
+                              cfg.raft_election_timeout_ticks as i32,
         };
 
         peer.load_all_coprocessors();
@@ -283,6 +322,11 @@ impl Peer {
         }
 
         Ok(peer)
+    }
+
+    #[inline]
+    fn next_proposal_index(&self) -> u64 {
+        self.raft_group.raft.raft_log.last_index() + 1
     }
 
     pub fn destroy(&mut self) -> Result<()> {
@@ -479,10 +523,47 @@ impl Peer {
         StaleState::Valid
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self,
-                                           trans: &T,
-                                           metrics: &mut RaftMetrics)
-                                           -> Result<Option<ReadyResult>> {
+    fn next_lease_expired_time(&self, send_to_quorum_ts: Timespec) -> Timespec {
+        // The valid leader lease should be
+        // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
+        // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
+        // which is "send_to_quorum_ts + election_timeout" in short.
+        send_to_quorum_ts + self.election_timeout
+    }
+
+    fn update_leader_lease(&mut self, ready: &Ready) {
+        // Update leader lease when the Raft state changes.
+        if ready.ss.is_some() {
+            let ss = ready.ss.as_ref().unwrap();
+            match ss.raft_state {
+                StateRole::Leader => {
+                    // The local read can only be performed after a new leader has applied
+                    // the first empty entry on its term. After that the lease expiring time
+                    // should be updated to
+                    //   send_to_quorum_ts + election_timeout
+                    // as the comments in `next_lease_expired_time` function explain.
+                    // It is recommended to update the lease expiring time right after
+                    // this peer becomes leader because it's more convenient to do it here and
+                    // it has no impact on the correctness.
+                    self.leader_lease_expired_time =
+                        Some(self.next_lease_expired_time(clocktime::raw_now()));
+                    debug!("{} becomes leader and lease expired time is {:?}",
+                           self.tag,
+                           self.leader_lease_expired_time);
+                }
+                StateRole::Follower => {
+                    self.leader_lease_expired_time = None;
+                }
+                _ => {}
+            }
+        }
+    }
+
+
+    pub fn handle_raft_ready_append<T: Transport>(&mut self,
+                                                  trans: &T,
+                                                  metrics: &mut RaftMetrics)
+                                                  -> Result<Option<ReadyResult>> {
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
@@ -498,18 +579,26 @@ impl Peer {
 
         debug!("{} handle raft ready", self.tag);
 
+        let ready_timer = PEER_GET_READY_HISTOGRAM.start_timer();
         let mut ready = self.raft_group.ready();
+        ready_timer.observe_duration();
 
         let t = SlowTimer::new();
+
+        self.update_leader_lease(&ready);
 
         self.add_ready_metric(&ready, &mut metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
-        // For more details, check raft thesis 10.2.1
+        // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
-            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
+            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
+                // We don't care that the message is sent failed, so here just log this error.
+                warn!("{} leader send messages err {:?}", self.tag, e);
+            })
         }
 
+        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let apply_result = match self.mut_store().handle_raft_ready(&ready) {
             Ok(r) => r,
             Err(e) => {
@@ -524,10 +613,39 @@ impl Peer {
                 return Err(e);
             }
         };
+        append_timer.observe_duration();
 
         if !self.is_leader() {
-            try!(self.send(trans, ready.messages.drain(..), &mut metrics.message));
+            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
+                warn!("{} follower send messages err {:?}", self.tag, e);
+            })
         }
+
+        slow_log!(t,
+                  "{} handle ready, entries {}, messages \
+                   {}, snapshot {}, hard state changed {}",
+                  self.tag,
+                  ready.entries.len(),
+                  ready.messages.len(),
+                  apply_result.is_some(),
+                  ready.hs.is_some());
+
+        if apply_result.is_some() {
+            // When apply snapshot, there is no log applied but not compacted yet.
+            self.raft_log_size_hint = 0;
+        }
+
+        Ok(Some(ReadyResult {
+            ready: Some(ready),
+            apply_snap_result: apply_result,
+            exec_results: vec![],
+        }))
+    }
+
+    pub fn handle_raft_ready_apply(&mut self, ready_result: &mut ReadyResult) -> Result<()> {
+        let mut ready = ready_result.ready.take().unwrap_or_else(|| {
+            panic!("{} must have a ready in ReadyResult", self.tag);
+        });
 
         // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
@@ -536,7 +654,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        let exec_results = if self.is_applying() {
+        ready_result.exec_results = if self.is_applying() {
             if let Some(ref mut hs) = ready.hs {
                 // Snapshot's metadata has been applied.
                 hs.set_commit(self.get_store().truncated_index());
@@ -546,21 +664,8 @@ impl Peer {
             try!(self.handle_raft_commit_entries(&ready.committed_entries))
         };
 
-        slow_log!(t,
-                  "{} handle ready, entries {}, committed entries {}, messages \
-                   {}, snapshot {}, hard state changed {}",
-                  self.tag,
-                  ready.entries.len(),
-                  ready.committed_entries.len(),
-                  ready.messages.len(),
-                  apply_result.is_some(),
-                  ready.hs.is_some());
-
         self.raft_group.advance(ready);
-        Ok(Some(ReadyResult {
-            apply_snap_result: apply_result,
-            exec_results: exec_results,
-        }))
+        Ok(())
     }
 
     /// Propose a request.
@@ -569,7 +674,8 @@ impl Peer {
     pub fn propose(&mut self,
                    mut cmd: PendingCmd,
                    req: RaftCmdRequest,
-                   mut err_resp: RaftCmdResponse)
+                   mut err_resp: RaftCmdResponse,
+                   metrics: &mut RaftProposeMetrics)
                    -> bool {
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
@@ -578,14 +684,12 @@ impl Peer {
         }
 
         debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["all"]).inc();
+        metrics.all += 1;
 
-        let local_read = self.is_local_read(&req);
-        if local_read {
-            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["local_read"]).inc();
+        if self.should_read_local(&req) {
+            metrics.local_read += 1;
 
-            // for read-only, if we don't care stale read, we can
-            // execute these commands immediately in leader.
+            // Execute ready-only commands immediately in leader when doing local reads.
             let mut ctx = ExecContext::new(self, 0, 0, &req);
             let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
                 error!("{} execute raft command err: {:?}", self.tag, e);
@@ -597,6 +701,8 @@ impl Peer {
             cmd.call(resp);
             return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
+            metrics.transfer_leader += 1;
+
             let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
             let peer = transfer_leader.get_peer();
 
@@ -629,25 +735,29 @@ impl Peer {
                 self.notify_not_leader(cmd);
             }
 
-            if let Err(e) = self.propose_conf_change(req) {
+            if let Err(e) = self.propose_conf_change(req, metrics) {
                 cmd_resp::bind_error(&mut err_resp, e);
                 cmd.call(err_resp);
                 return false;
             }
 
+            // Try to renew leader lease on every conf change request.
+            cmd.renew_lease_time = Some(clocktime::raw_now());
             self.pending_cmds.set_conf_change(cmd);
-        } else if let Err(e) = self.propose_normal(req) {
+        } else if let Err(e) = self.propose_normal(req, metrics) {
             cmd_resp::bind_error(&mut err_resp, e);
             cmd.call(err_resp);
             return false;
         } else {
+            // Try to renew leader lease on every consistent read/write request.
+            cmd.renew_lease_time = Some(clocktime::raw_now());
             self.pending_cmds.append_normal(cmd);
         }
 
         true
     }
 
-    fn is_local_read(&self, req: &RaftCmdRequest) -> bool {
+    fn should_read_local(&mut self, req: &RaftCmdRequest) -> bool {
         if (req.has_header() && req.get_header().get_read_quorum()) ||
            !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
             return false;
@@ -665,6 +775,23 @@ impl Peer {
             }
         }
 
+        // If the leader lease has expired, local read should not be performed.
+        if self.leader_lease_expired_time.is_none() {
+            return false;
+        }
+
+        let now = clocktime::raw_now();
+        let expired_time = self.leader_lease_expired_time.unwrap();
+        if now > expired_time {
+            debug!("{} leader lease expired time {:?} is outdated",
+                   self.tag,
+                   self.leader_lease_expired_time);
+            // Reset leader lease expiring time.
+            self.leader_lease_expired_time = None;
+            // Perform a consistent read to Raft quorum and try to renew the leader lease.
+            return false;
+        }
+
         true
     }
 
@@ -680,22 +807,31 @@ impl Peer {
         cmd.call(resp);
     }
 
-    fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["normal"]).inc();
+    fn propose_normal(&mut self,
+                      mut cmd: RaftCmdRequest,
+                      metrics: &mut RaftProposeMetrics)
+                      -> Result<()> {
+        metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
         try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
         let data = try!(cmd.write_to_bytes());
 
+        // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
+        let propose_index = self.next_proposal_index();
         try!(self.raft_group.propose(data));
+        if self.next_proposal_index() == propose_index {
+            // The message is dropped silently, this usually due to leader absence
+            // or transferring leader. Both cases can be considered as NotLeader error.
+            return Err(Error::NotLeader(self.region_id, None));
+        }
+
         Ok(())
     }
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["transfer_leader"]).inc();
-
         info!("{} transfer leader to {:?}", self.tag, peer);
 
         self.raft_group.transfer_leader(peer.get_id());
@@ -719,11 +855,15 @@ impl Peer {
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
-    fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
-        PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["conf_change"]).inc();
+    fn propose_conf_change(&mut self,
+                           cmd: RaftCmdRequest,
+                           metrics: &mut RaftProposeMetrics)
+                           -> Result<()> {
+        metrics.conf_change += 1;
 
         let data = try!(cmd.write_to_bytes());
 
+        // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
@@ -738,7 +878,15 @@ impl Peer {
               cc.get_change_type(),
               cc.get_node_id());
 
-        self.raft_group.propose_conf_change(cc).map_err(From::from)
+        let propose_index = self.next_proposal_index();
+        try!(self.raft_group.propose_conf_change(cc));
+        if self.next_proposal_index() == propose_index {
+            // The message is dropped silently, this usually due to leader absence
+            // or transferring leader. Both cases can be considered as NotLeader error.
+            return Err(Error::NotLeader(self.region_id, None));
+        }
+
+        Ok(())
     }
 
     pub fn check_epoch(&self, req: &RaftCmdRequest) -> Result<()> {
@@ -746,7 +894,9 @@ impl Peer {
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog |
-                AdminCmdType::InvalidAdmin => {}
+                AdminCmdType::InvalidAdmin |
+                AdminCmdType::ComputeHash |
+                AdminCmdType::VerifyHash => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
                 AdminCmdType::TransferLeader => {
@@ -810,7 +960,6 @@ impl Peer {
         send_msg.set_region_id(self.region_id);
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-        let mut unreachable = false;
 
         let from_peer = match self.get_peer_from_cache(msg.get_from()) {
             Some(p) => p,
@@ -869,12 +1018,8 @@ impl Peer {
                   to_store_id,
                   e);
 
-            unreachable = true;
-        }
-
-        if unreachable {
+            // unreachable store
             self.raft_group.report_unreachable(to_peer_id);
-
             if msg_type == eraftpb::MessageType::MsgSnapshot {
                 self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
@@ -908,6 +1053,9 @@ impl Peer {
                        entry.get_index());
             }
 
+            // raft meta is very small, can be ignored.
+            self.raft_log_size_hint += entry.get_data().len() as u64;
+
             let res = try!(match entry.get_entry_type() {
                 eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
                 eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
@@ -919,7 +1067,7 @@ impl Peer {
         }
 
         slow_log!(t,
-                  "{} handle {} committed entries",
+                  "{} handle ready {} committed entries",
                   self.tag,
                   committed_count);
         Ok(results)
@@ -970,11 +1118,15 @@ impl Peer {
         Ok(res)
     }
 
-    fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
+    fn find_cb(&mut self,
+               uuid: Uuid,
+               term: u64,
+               cmd: &RaftCmdRequest)
+               -> Option<(Callback, Timespec)> {
         if get_change_peer_cmd(cmd).is_some() {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some(cmd.cb.take().unwrap());
+                    return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.unwrap()));
                 } else {
                     self.notify_not_leader(cmd);
                 }
@@ -983,9 +1135,9 @@ impl Peer {
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some(head.cb.take().unwrap());
+                return Some((head.cb.take().unwrap(), head.renew_lease_time.unwrap()));
             }
-            // because of the lack of original RaftCmdRequest, we skip calling
+            // Because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
             // TODO: call coprocessor with uuid instead.
             self.notify_not_leader(head);
@@ -1004,7 +1156,7 @@ impl Peer {
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
-        let cb = self.find_cb(uuid, term, &cmd);
+        let cmd_cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
         let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
         timer.observe_duration();
@@ -1014,11 +1166,37 @@ impl Peer {
                uuid,
                index);
 
-        if cb.is_none() {
+        if cmd_cb.is_none() {
             return exec_result;
         }
 
-        let cb = cb.unwrap();
+        let (cb, lease_renew_time) = cmd_cb.unwrap();
+        // Try to renew the leader lease as this command asks to.
+        if let Some(current_expired_time) = self.leader_lease_expired_time {
+            // This peer is leader and has recorded leader lease.
+            // Calculate the renewed lease for this command. If the renewed lease lives longer
+            // than the current leader lease, update the current leader lease to the renewed lease.
+            let next_expired_time = self.next_lease_expired_time(lease_renew_time);
+            // Use the lease expired timestamp comparison here, so that these codes still
+            // work no matter how the leader changes before applying this command.
+            if current_expired_time < next_expired_time {
+                debug!("{} update leader lease expired time from {:?} to {:?}",
+                       self.tag,
+                       current_expired_time,
+                       next_expired_time);
+                self.leader_lease_expired_time = Some(next_expired_time)
+            }
+        } else if self.is_leader() {
+            // This peer is leader but its leader lease has expired.
+            // Calculate the renewed lease for this command, and update the leader lease
+            // for this peer.
+            let next_expired_time = self.next_lease_expired_time(lease_renew_time);
+            debug!("{} update leader lease expired time from None to {:?}",
+                   self.tag,
+                   self.leader_lease_expired_time);
+            self.leader_lease_expired_time = Some(next_expired_time);
+        }
+        // Involve post apply hook.
         self.coprocessor_host.post_apply(self.raft_group.get_store(), &cmd, &mut resp);
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
@@ -1066,7 +1244,7 @@ impl Peer {
             .write(ctx.wb)
             .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
 
-        let mut storage = self.mut_store();
+        let mut storage = self.raft_group.mut_store();
         storage.apply_state = ctx.apply_state;
         storage.applied_index_term = term;
 
@@ -1075,7 +1253,14 @@ impl Peer {
                 ExecResult::ChangePeer { ref region, .. } => {
                     storage.region = region.clone();
                 }
-                ExecResult::CompactLog { .. } => {}
+                ExecResult::ComputeHash { .. } |
+                ExecResult::VerifyHash { .. } => {}
+                ExecResult::CompactLog { first_index, ref state } => {
+                    let total_cnt = index - first_index;
+                    // the size of current CompactLog command can be ignored.
+                    let remain_cnt = index - state.get_index() - 1;
+                    self.raft_log_size_hint = self.raft_log_size_hint * remain_cnt / total_cnt;
+                }
                 ExecResult::SplitRegion { ref left, .. } => {
                     storage.region = left.clone();
                 }
@@ -1190,6 +1375,8 @@ impl Peer {
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
+            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
+            AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
@@ -1406,7 +1593,10 @@ impl Peer {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
 
         Ok((resp,
-            Some(ExecResult::CompactLog { state: ctx.apply_state.get_truncated_state().clone() })))
+            Some(ExecResult::CompactLog {
+            state: ctx.apply_state.get_truncated_state().clone(),
+            first_index: first_index,
+        })))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
@@ -1556,4 +1746,39 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
+}
+
+// Consistency Check
+impl Peer {
+    fn exec_compute_hash(&self,
+                         ctx: &ExecContext,
+                         _: &AdminRequest)
+                         -> Result<(AdminResponse, Option<ExecResult>)> {
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::ComputeHash {
+            region: self.region().clone(),
+            index: ctx.index,
+            // This snapshot may be held for a long time, which may cause too many
+            // open files in rocksdb.
+            // TODO: figure out another way to do consistency check without snapshot
+            // or short life snapshot.
+            snap: Snapshot::new(self.engine.clone()),
+        })))
+    }
+
+    fn exec_verify_hash(&self,
+                        _: &ExecContext,
+                        req: &AdminRequest)
+                        -> Result<(AdminResponse, Option<ExecResult>)> {
+        let verify_req = req.get_verify_hash();
+        let index = verify_req.get_index();
+        let hash = verify_req.get_hash().to_vec();
+        let resp = AdminResponse::new();
+        Ok((resp,
+            Some(ExecResult::VerifyHash {
+            index: index,
+            hash: hash,
+        })))
+    }
 }
