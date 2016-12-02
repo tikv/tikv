@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{DB, Options, BackupEngine};
+use rocksdb::{DB, Options};
 pub use rocksdb::CFHandle;
 use std::collections::HashSet;
 use std::path::Path;
@@ -138,19 +138,14 @@ fn db_exist(path: &str) -> bool {
     fs::read_dir(&path).unwrap().next().is_some()
 }
 
-pub fn backup(db: &DB, path: &str) -> Result<(), String> {
-    let be = try!(BackupEngine::new(Options::default(), path));
-    be.create_new_backup(db)
-}
-
 #[cfg(test)]
 mod tests {
     use std::str;
 
-    use rocksdb::{DB, Options, BackupEngine, RestoreOptions, Writable};
+    use rocksdb::{DB, Options};
     use tempdir::TempDir;
 
-    use super::{check_column_families, backup};
+    use super::check_column_families;
 
     #[test]
     fn test_check_column_families() {
@@ -185,35 +180,5 @@ mod tests {
         cfs_existed.sort();
         cfs_excepted.sort();
         assert_eq!(cfs_existed, cfs_excepted);
-    }
-
-    #[test]
-    fn test_backup() {
-        let key = b"foo";
-        let value = b"bar";
-
-        let db_dir = TempDir::new("_util_rust_rocksdb_backuptest").unwrap();
-        let db = DB::open_default(db_dir.path().to_str().unwrap()).unwrap();
-        let p = db.put(key, value);
-        assert!(p.is_ok());
-
-        // Make a backup.
-        let backup_dir = TempDir::new("_util_rust_rocksdb_backuptest_backup").unwrap();
-        let r = backup(&db, backup_dir.path().to_str().unwrap());
-        assert!(r.is_ok());
-
-        // Restore it.
-        let backup_engine = BackupEngine::new(Options::new(), backup_dir.path().to_str().unwrap())
-            .unwrap();
-        let restore_dir = TempDir::new("_util_rust_rocksdb_backuptest_restore").unwrap();
-        let ropts = RestoreOptions::new();
-        let r = backup_engine.restore_db_from_latest_backup(restore_dir.path().to_str().unwrap(),
-                                                            restore_dir.path().to_str().unwrap(),
-                                                            &ropts);
-        assert!(r.is_ok());
-
-        let restored_db = DB::open_default(restore_dir.path().to_str().unwrap()).unwrap();
-        let r = restored_db.get(key);
-        assert!(r.unwrap().unwrap().to_utf8().unwrap() == str::from_utf8(value).unwrap());
     }
 }

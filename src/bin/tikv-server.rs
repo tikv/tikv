@@ -577,7 +577,7 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
             }
             SIGUSR2 => {
                 info!("backup db to {}", backup_path);
-                if let Err(e) = util::rocksdb::backup(&engine, backup_path) {
+                if let Err(e) = engine.backup_at(backup_path) {
                     error!("fail to backup: {}", e);
                 }
                 info!("backup done");
