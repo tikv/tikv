@@ -26,8 +26,6 @@ machine:
 
 dependencies:
   cache_directories:
-    # NOTE: it's bad idea to cache .multirust
-    #       since it'll increase cache restore time
     - ~/.multirust
     - ~/.cargo
     - ~/.local
@@ -42,7 +40,7 @@ dependencies:
       else
         rustup default "nightly-${RUSTC_DATE}";
       fi
-    - test ! -e $HOME/.cargo/bin/cargo-fmt || cargo install rustfmt || true
+    - test ! -e $HOME/.cargo/bin/cargo-fmt || cargo install --force --vers 0.6.0 rustfmt || true
     - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         (cd /tmp && \
