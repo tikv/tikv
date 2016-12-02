@@ -223,11 +223,6 @@ pub struct Peer {
 
     pub consistency_state: ConsistencyState,
 
-    pub delete_count: u64,
-    pub merge_state: MergeState,
-    start_merge_time: Option<Instant>,
-    start_merge_index: u64,
-
     pub tag: String,
 
     pub last_compacted_idx: u64,
@@ -242,6 +237,11 @@ pub struct Peer {
 
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
+
+    pub delete_count: u64,
+    pub merge_state: MergeState,
+    start_merge_time: Option<Instant>,
+    start_merge_index: u64,
 }
 
 impl Peer {
@@ -333,10 +333,6 @@ impl Peer {
             delete_keys_hint: 0,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
-            delete_count: 0,
-            merge_state: merge_state,
-            start_merge_time: Some(Instant::now()),
-            start_merge_index: 0,
             tag: tag,
             last_compacted_idx: 0,
             consistency_state: ConsistencyState {
@@ -348,6 +344,10 @@ impl Peer {
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
+            delete_count: 0,
+            merge_state: merge_state,
+            start_merge_time: Some(Instant::now()),
+            start_merge_index: 0,
         };
 
         peer.load_all_coprocessors();
@@ -601,12 +601,6 @@ impl Peer {
             }
         }
         None
-    }
-
-    pub fn is_ready_to_suspend_region(&self) -> bool {
-        // If all peers in `into_region` have replicated to the state `Merging`, start to send
-        // suspend region command to `from_region`. Otherwise, retry later in a specified timeout.
-        self.raft_group.raft.all_replicated_to(self.start_merge_index)
     }
 
     fn next_lease_expired_time(&self, send_to_quorum_ts: Timespec) -> Timespec {

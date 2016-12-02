@@ -130,6 +130,7 @@ pub struct Config {
 
     // Interval (s) to check region whether the data is consistent.
     pub consistency_check_tick_interval: u64,
+
     /// If the region merge could not succeed over the time specified in
     /// `region_merge_retry_duration` (probably due to admin command lost),
     /// the peer in "the into region" (also known as "the control region") will

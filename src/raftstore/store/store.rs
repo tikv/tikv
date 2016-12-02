@@ -865,14 +865,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if !into_peer.is_leader() {
                 return;
             }
-
-            if !into_peer.is_ready_to_suspend_region() {
-                info!("{} into region {:?} is not ready to suspend from region {:?}, retry later",
-                      self.tag,
-                      into_region,
-                      from_region);
-                return;
-            }
         }
 
         if let Some(from_peer) = self.region_peers.get(&from_region.get_id()) {
@@ -1546,21 +1538,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_rollback_region_merge(&mut self, into_region_id: u64) {
-        info!("{} rollbacks region merge for region id {}",
-              self.tag,
-              into_region_id);
-
-        if let Some(into_peer) = self.region_peers.get_mut(&into_region_id) {
-            if let Err(e) = into_peer.rollback_region_merge() {
-                error!("{} fails to rollback region merge for region id {}, err {:?}",
-                       self.tag,
-                       into_region_id,
-                       e);
-            }
-        }
-    }
-
     fn heartbeat_pd(&self, peer: &Peer) {
         let task = PdTask::Heartbeat {
             region: peer.region().clone(),
@@ -2113,9 +2090,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::MergeCheckResult { region_id, epoch } => {
                 info!("[region {}] merge check complete.", region_id);
                 self.on_merge_check_result(region_id, epoch);
-            }
-            Msg::RollbackRegionMerge { into_region_id } => {
-                self.on_rollback_region_merge(into_region_id);
             }
             Msg::ReportSnapshot { region_id, to_peer_id, status } => {
                 self.on_report_snapshot(region_id, to_peer_id, status);
