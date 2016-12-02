@@ -21,7 +21,7 @@ use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
 use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, TEMP_DIR,
-            ScanMode, Result, Error};
+            ScanMode, Result, Error, CbContext};
 use tempdir::TempDir;
 
 enum Task {
@@ -43,8 +43,10 @@ struct Runner(Arc<DB>);
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
-            Task::Write(modifies, cb) => cb(write_modifies(&self.0, modifies)),
-            Task::Snapshot(cb) => cb(Ok(box RocksSnapshot::new(self.0.clone()))),
+            Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
+            Task::Snapshot(cb) => {
+                cb((CbContext::new(), Ok(box RocksSnapshot::new(self.0.clone()))))
+            }
         }
     }
 }
