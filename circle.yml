@@ -75,6 +75,6 @@ test:
   pre:
     - docker run -d --name pd-test -p 2379:2379 pingcap/pd --client-urls=http://0.0.0.0:2379
   override:
-#    - make format && git diff-index --quiet HEAD -- || (echo please make format before creating a pr!; exit 1)
+    - make format && git diff-index --quiet HEAD -- || (echo please make format before creating a pr!; exit 1)
     - cargo test --features "default" -- --nocapture
     - cargo test --features "default" --bench benches -- --nocapture
