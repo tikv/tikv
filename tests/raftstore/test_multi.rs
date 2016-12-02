@@ -435,7 +435,7 @@ fn test_node_leader_change_with_log_overlap() {
                       box move |resp: RaftCmdResponse| {
                           called_.store(true, Ordering::SeqCst);
                           assert!(resp.get_header().has_error());
-                          assert!(resp.get_header().get_error().has_not_leader());
+                          assert!(resp.get_header().get_error().has_stale_command());
                       })
         .unwrap();
 
