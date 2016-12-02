@@ -206,6 +206,11 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
+    let max_total_wal_size = get_toml_int(config,
+                                          "rocksdb.max-total-wal-size",
+                                          Some(4 * 1024 * 1024 * 1024));
+    opts.set_max_total_wal_size(max_total_wal_size as u64);
+
     let max_background_compactions =
         get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
     opts.set_max_background_compactions(max_background_compactions as i32);
