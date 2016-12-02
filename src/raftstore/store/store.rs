@@ -988,6 +988,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Err(box_err!("mismatch peer id {} != {}", peer.peer_id(), peer_id));
         }
 
+        let header = msg.get_header();
+        // If header's term is 2 verions behind current term, leadership may have been changed away.
+        if header.get_term() > 0 && peer.term() > header.get_term() + 1 {
+            return Err(Error::StaleCommand);
+        }
+
         let res = peer.check_epoch(msg);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
             // Attach the next region which might be split from the current region. But it doesn't
