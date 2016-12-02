@@ -18,6 +18,8 @@ use util::transport::SendCh;
 use util::HandyRwLock;
 
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
+const CRC32_BYTES_COUNT: usize = 4;
+const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SnapKey {
@@ -225,10 +227,11 @@ impl SnapValidationReader {
         let reader = try!(File::open(path.as_ref()));
         let digest = Digest::new(crc32::IEEE);
         let len = try!(reader.metadata()).len();
-        if len < 4 {
-            return Err(io::Error::new(ErrorKind::InvalidInput, format!("file length {} < 4", len)));
+        if len < CRC32_BYTES_COUNT as u64 {
+            return Err(io::Error::new(ErrorKind::InvalidInput,
+                                      format!("file length {} < {}", len, CRC32_BYTES_COUNT)));
         }
-        let left = len as usize - 4;
+        let left = len as usize - CRC32_BYTES_COUNT;
         Ok(SnapValidationReader {
             reader: reader,
             digest: digest,
@@ -244,7 +247,7 @@ impl SnapValidationReader {
     pub fn validate(&mut self) -> io::Result<()> {
         if self.res.is_none() {
             if self.left > 0 {
-                let cap = cmp::min(self.left, 4096);
+                let cap = cmp::min(self.left, DEFAULT_READ_BUFFER_SIZE);
                 let mut buf = vec![0; cap];
                 while self.left > 0 {
                     try!(self.read(&mut buf));
@@ -535,7 +538,7 @@ mod test {
 
         let key1 = SnapKey::new(1, 1, 1);
         let test_data = b"test_data";
-        let exp_len = test_data.len() as u64 + 4; // 4 is the crc32 sum's len
+        let exp_len = (test_data.len() + super::CRC32_BYTES_COUNT) as u64;
         let size_track = Arc::new(RwLock::new(0));
         let mut f1 = SnapFile::new(path_str, size_track.clone(), true, &key1).unwrap();
         let mut f2 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
