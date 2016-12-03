@@ -392,6 +392,10 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
         get_toml_int(config, "raftstore.notify-capacity", Some(40960)) as usize;
     cfg.raft_store.messages_per_tick =
         get_toml_int(config, "raftstore.messages-per-tick", Some(4096)) as usize;
+    let interval = get_toml_int(config,
+                                "raftstore.split-region-check-tick-interval",
+                                Some(10000));
+    cfg.raft_store.split_region_check_tick_interval = interval as u64;
     cfg.raft_store.region_split_size =
         get_toml_int(config,
                      "raftstore.region-split-size",
