@@ -24,8 +24,9 @@ machine:
       sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
       sudo apt-get update -y;
       sudo apt-get install -y g++-4.8 zlib1g-dev libbz2-dev libsnappy-dev curl libdw-dev libelf-dev elfutils binutils-dev
-  # post:
-  #   - sed -i 's/github/git-non-exist-hub/g' ~/.gitconfig
+  post:
+    # Fixes: cargo under CircleCI
+    - sed -i 's/github/git-non-exist-hub/g' ~/.gitconfig
 
 dependencies:
   cache_directories:
@@ -43,7 +44,7 @@ dependencies:
       else
         rustup default "nightly-${RUSTC_DATE}";
       fi
-    - test ! -e $HOME/.cargo/bin/cargo-fmt || cargo install --force --vers =0.6.0 rustfmt || true
+    - test -e $HOME/.cargo/bin/cargo-fmt || cargo install --force --vers =0.6.0 rustfmt || true
     - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         cd /tmp && \
