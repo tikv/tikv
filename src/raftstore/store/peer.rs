@@ -27,10 +27,11 @@ use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, SplitRequest,
-                          MergeRequest, SuspendRegionRequest, CommitMergeRequest,
-                          ShutdownRegionRequest, CmdType, AdminCmdType, Request, Response,
-                          AdminRequest, AdminResponse, TransferLeaderRequest,
-                          TransferLeaderResponse, MergeResponse};
+                          MergeRequest, MergeResponse, SuspendRegionRequest,
+                          SuspendRegionResponse, CommitMergeRequest, CommitMergeResponse,
+                          ShutdownRegionRequest, ShutdownRegionResponse, RollbackMergeResponse,
+                          CmdType, AdminCmdType, Request, Response, AdminRequest, AdminResponse,
+                          TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
                              MergeState, RegionMergeState, RegionLocalState};
 use kvproto::pdpb::PeerStats;
@@ -122,6 +123,10 @@ pub enum ExecResult {
     ShutdownRegion {
         region: metapb::Region,
         peer: metapb::Peer,
+    },
+    RollbackMerge {
+        from_region: metapb::Region,
+        into_region: metapb::Region,
     },
 }
 
@@ -1035,7 +1040,8 @@ impl Peer {
                 AdminCmdType::Merge |
                 AdminCmdType::SuspendRegion |
                 AdminCmdType::CommitMerge |
-                AdminCmdType::ShutdownRegion => {
+                AdminCmdType::ShutdownRegion |
+                AdminCmdType::RollbackMerge => {
                     check_ver = true;
                     check_conf_ver = true;
                 }
@@ -1425,6 +1431,11 @@ impl Peer {
                     self.start_merge_time = None;
                     self.start_merge_index = 0;
                 }
+                ExecResult::RollbackMerge { .. } => {
+                    self.merge_state = MergeState::NoMerge;
+                    self.start_merge_time = None;
+                    self.start_merge_index = 0;
+                }
             }
         }
 
@@ -1599,14 +1610,15 @@ impl Peer {
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
-            AdminCmdType::Merge => self.exec_merge(ctx, request),
-            AdminCmdType::SuspendRegion => self.exec_suspend_region(ctx, request),
-            AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
-            AdminCmdType::ShutdownRegion => self.exec_shutdown_region(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
+            AdminCmdType::Merge => self.exec_merge(ctx, request),
+            AdminCmdType::SuspendRegion => self.exec_suspend_region(ctx, request),
+            AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
+            AdminCmdType::ShutdownRegion => self.exec_shutdown_region(ctx, request),
+            AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
@@ -1905,7 +1917,8 @@ impl Peer {
               suspend_region.get_from_region(),
               suspend_region.get_into_region());
 
-        let resp = AdminResponse::new();
+        let mut resp = AdminResponse::new();
+        resp.set_suspend_region(SuspendRegionResponse::new());
 
         {
             // Ensure the region epoch in suspend command is not outdated.
@@ -1978,7 +1991,8 @@ impl Peer {
               commit_merge.get_from_region(),
               self.region());
 
-        let resp = AdminResponse::new();
+        let mut resp = AdminResponse::new();
+        resp.set_commit_merge(CommitMergeResponse::new());
 
         if self.merge_state != MergeState::Merging {
             // Just ignore this command since it's a retry of previous commit merge command.
@@ -2051,7 +2065,8 @@ impl Peer {
 
         // TODO check region == self.region()
 
-        let resp = AdminResponse::new();
+        let mut resp = AdminResponse::new();
+        resp.set_shutdown_region(ShutdownRegionResponse::new());
 
         // If this peer is in the region which is asked to shutdown, it will destroy itself.
         let peer_id = self.peer_id();
@@ -2063,6 +2078,50 @@ impl Peer {
             })))
         } else {
             Ok((resp, None))
+        }
+    }
+
+    fn exec_rollback_merge(&mut self,
+                           ctx: &ExecContext,
+                           req: &AdminRequest)
+                           -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["rollback merge", "all"]).inc();
+
+        let rollback_merge = req.get_rollback_merge();
+        info!("{} rollback merge, from region {:?}, into_region {:?}",
+              self.tag,
+              rollback_merge.get_from_region(),
+              rollback_merge.get_into_region());
+
+        let mut resp = AdminResponse::new();
+        resp.set_rollback_merge(RollbackMergeResponse::new());
+
+        if self.merge_state != MergeState::Merging {
+            info!("{} not in merge state, currunt state {:?}, ignore rollback merge request {:?}",
+                  self.tag,
+                  self.merge_state,
+                  rollback_merge);
+            Ok((resp, None))
+        } else {
+            // TODO check from_region in `rollback_merge` is the same with
+            // the one in merge local state
+
+            // Update peer local state.
+            let mut merge_state = RegionMergeState::new();
+            merge_state.set_state(MergeState::NoMerge);
+            self.set_peer_merge_state(&ctx.wb, merge_state.clone()).unwrap_or_else(|e| {
+                panic!("{} failed to set peer merge state {:?}: {:?}",
+                       self.tag,
+                       merge_state,
+                       e);
+            });
+
+            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["rollback merge", "success"]).inc();
+            Ok((resp,
+                Some(ExecResult::RollbackMerge {
+                from_region: rollback_merge.get_from_region().clone(),
+                into_region: self.region().clone(),
+            })))
         }
     }
 

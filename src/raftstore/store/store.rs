@@ -880,6 +880,29 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
+    fn rollback_region_merge(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
+        info!("{} rollback region merge, from region {:?}, into region {:?}",
+              self.tag,
+              from_region,
+              into_region);
+        let mut region_peers = self.region_peers.borrow_mut();
+        let into_peer = region_peers.get_mut(&into_region.get_id()).unwrap();
+        let request = new_rollback_merge_request(from_region.clone(),
+                                                 into_region.clone(),
+                                                 into_peer.peer.clone());
+        if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
+            request: request,
+            callback: Box::new(|_| {}),
+        }) {
+            error!("{} failed to rollback region merge, from region {:?}, into region {:?}, err \
+                    {:?}",
+                   self.tag,
+                   from_region,
+                   into_region,
+                   e)
+        }
+    }
+
     fn suspend_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
         {
             // Do nothing when the peer of `into_region` is not a raft leader.
@@ -950,16 +973,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // Rollback region merge due to `from_region` missing or region epoch conflict.
-        let mut region_peers = self.region_peers.borrow_mut();
-        let into_peer = region_peers.get_mut(&into_region.get_id()).unwrap();
-        if let Err(e) = into_peer.rollback_region_merge() {
-            error!("{} failed to rollback region merge, from region {:?}, into region {:?}, \
-                    err {:?}",
-                   self.tag,
-                   from_region,
-                   into_region,
-                   e)
-        }
+        self.rollback_region_merge(from_region, into_region);
     }
 
     fn retry_region_merge(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
@@ -1210,6 +1224,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 ExecResult::ShutdownRegion { region, peer } => {
                     self.on_ready_shutdown_region(region, peer)
+                }
+                ExecResult::RollbackMerge { .. } => {
+                    // Nothing to do in store to rollback region merge.
                 }
             }
         }
@@ -2098,6 +2115,24 @@ fn new_shutdown_region_request(from_region: metapb::Region,
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::ShutdownRegion);
     admin.mut_shutdown_region().set_region(from_region);
+    request.set_admin_request(admin);
+    request
+}
+
+fn new_rollback_merge_request(from_region: metapb::Region,
+                              into_region: metapb::Region,
+                              into_peer: metapb::Peer)
+                              -> RaftCmdRequest {
+    let mut request = RaftCmdRequest::new();
+    request.mut_header().set_region_id(into_region.get_id());
+    request.mut_header().set_region_epoch(into_region.get_region_epoch().clone());
+    request.mut_header().set_peer(into_peer);
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+    let mut admin = AdminRequest::new();
+    admin.set_cmd_type(AdminCmdType::RollbackMerge);
+    admin.mut_rollback_merge().set_from_region(from_region);
+    admin.mut_rollback_merge().set_into_region(into_region);
     request.set_admin_request(admin);
     request
 }
