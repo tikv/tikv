@@ -341,6 +341,11 @@ impl PeerStorage {
     }
 
     #[inline]
+    pub fn committed_index(&self) -> u64 {
+        self.raft_state.get_hard_state().get_commit()
+    }
+
+    #[inline]
     pub fn applied_index(&self) -> u64 {
         self.apply_state.get_applied_index()
     }

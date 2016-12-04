@@ -71,7 +71,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     sendch: SendCh<Msg>,
 
     // region_id -> peers
-    region_peers: HashMap<u64, Peer>,
+    region_peers: Rc<RefCell<HashMap<u64, Peer>>>,
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
@@ -132,7 +132,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             store: meta,
             engine: engine,
             sendch: sendch,
-            region_peers: HashMap::new(),
+            region_peers: Rc::new(RefCell::new(HashMap::new())),
             pending_raft_groups: HashSet::new(),
             region_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
@@ -201,7 +201,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_ranges.insert(enc_end_key(region), region_id);
             // No need to check duplicated here, because we use region id as the key
             // in DB.
-            self.region_peers.insert(region_id, peer);
+            self.region_peers.borrow_mut().insert(region_id, peer);
             Ok(true)
         }));
 
@@ -223,7 +223,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
-            let region = self.region_peers[region_id].region();
+            let region_peers = self.region_peers.borrow();
+            let region = region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
             try!(delete_all_in_range(&self.engine, &last_start_key, &start_key));
             last_start_key = keys::enc_end_key(region);
@@ -303,6 +304,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &self.cfg
     }
 
+    pub fn region_peers(&self) -> Rc<RefCell<HashMap<u64, Peer>>> {
+        self.region_peers.clone()
+    }
+
     pub fn peer_cache(&self) -> Rc<RefCell<HashMap<u64, metapb::Peer>>> {
         self.peer_cache.clone()
     }
@@ -318,7 +323,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let t = Instant::now();
         let mut region_to_retry_merge = vec![];
-        for (&region_id, peer) in &mut self.region_peers {
+        for (&region_id, peer) in self.region_peers.borrow_mut().iter_mut() {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
 
@@ -389,7 +394,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // current peer is stale, then we should remove current peer
         let mut has_peer = false;
         let mut stale_peer = None;
-        if let Some(p) = self.region_peers.get_mut(&region_id) {
+        if let Some(p) = self.region_peers.borrow_mut().get_mut(&region_id) {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
@@ -432,7 +437,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some((_, &exist_region_id)) = self.region_ranges
             .range(Excluded(&start_key), Unbounded::<&Key>)
             .next() {
-            let exist_region = self.region_peers[&exist_region_id].region();
+            let region_peers = self.region_peers.borrow();
+            let exist_region = region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
                 debug!("msg {:?} is overlapped with region {:?}, ignored",
                        msg,
@@ -444,7 +450,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let peer = try!(Peer::replicate(self, region_id, target.get_id()));
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
-        self.region_peers.insert(region_id, peer);
+        self.region_peers.borrow_mut().insert(region_id, peer);
         Ok(true)
     }
 
@@ -478,7 +484,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.insert_peer_cache(msg.take_from_peer());
         self.insert_peer_cache(msg.take_to_peer());
 
-        let peer = self.region_peers.get_mut(&region_id).unwrap();
+        let mut region_peers = self.region_peers.borrow_mut();
+        let peer = region_peers.get_mut(&region_id).unwrap();
         let timer = SlowTimer::new();
         try!(peer.step(msg.take_message()));
         slow_log!(timer, "{} raft step", peer.tag);
@@ -542,7 +549,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         //  unlike case e, 2 will be stale forever.
         // TODO: for case f, if 2 is stale for a long time, 2 will communicate with pd and pd will
         // tell 2 is stale, so 2 can remove itself.
-        if let Some(peer) = self.region_peers.get(&region_id) {
+        if let Some(peer) = self.region_peers.borrow().get(&region_id) {
             let region = &peer.get_store().region;
             let epoch = region.get_region_epoch();
 
@@ -620,7 +627,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
 
         let mut need_remove = false;
-        if let Some(peer) = self.region_peers.get(&region_id) {
+        if let Some(peer) = self.region_peers.borrow().get(&region_id) {
             // TODO: need checking peer id changed?
             let from_epoch = msg.get_region_epoch();
             if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
@@ -641,7 +648,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_region_id();
 
         // Check if we can accept the snapshot
-        if self.region_peers[&region_id].get_store().is_initialized() ||
+        if self.region_peers.borrow()[&region_id].get_store().is_initialized() ||
            !msg.get_message().has_snapshot() {
             return Ok(true);
         }
@@ -660,7 +667,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some((_, &exist_region_id)) = self.region_ranges
             .range(Excluded(&enc_start_key(&snap_region)), Unbounded::<&Key>)
             .next() {
-            let exist_region = self.region_peers[&exist_region_id].region();
+            let region_peers = self.region_peers.borrow();
+            let exist_region = region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
                 info!("region overlapped {:?}, {:?}", exist_region, snap_region);
                 return Ok(false);
@@ -691,7 +699,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(ids.len());
         for region_id in ids {
-            if let Some(peer) = self.region_peers.get_mut(&region_id) {
+            let mut region_peers = self.region_peers.borrow_mut();
+            if let Some(peer) = region_peers.get_mut(&region_id) {
                 match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
@@ -706,11 +715,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         for (region_id, mut res) in ready_results {
             {
-                let peer = self.region_peers.get_mut(&region_id).unwrap();
+                let mut peer;
+                {
+                    let mut region_peers = self.region_peers.borrow_mut();
+                    peer = region_peers.remove(&region_id).unwrap();
+                }
 
+                let mut continue_loop = false;
                 if let Err(e) = peer.handle_raft_ready_apply(&mut res) {
                     // TODO: should we panic or shutdown the store?
                     error!("{} handle raft ready err: {:?}", peer.tag, e);
+                    continue_loop = true;
+                }
+
+                let mut region_peers = self.region_peers.borrow_mut();
+                region_peers.insert(region_id, peer);
+                if continue_loop {
                     continue;
                 }
             };
@@ -728,7 +748,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("[region {}] destroy peer {:?}", region_id, peer);
         // TODO: should we check None here?
         // Can we destroy it in another thread later?
-        let mut p = self.region_peers.remove(&region_id).unwrap();
+        let mut p = self.region_peers.borrow_mut().remove(&region_id).unwrap();
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying());
 
@@ -763,7 +783,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             change_type: ConfChangeType,
                             peer: metapb::Peer) {
         let mut peer_id = 0;
-        if let Some(p) = self.region_peers.get(&region_id) {
+        if let Some(p) = self.region_peers.borrow().get(&region_id) {
             if p.is_leader() {
                 // Notify pd immediately.
                 info!("{} notify pd with change peer region {:?}",
@@ -785,7 +805,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_compact_log(&mut self, region_id: u64, state: RaftTruncatedState) {
-        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+        let mut region_peers = self.region_peers.borrow_mut();
+        let mut peer = region_peers.get_mut(&region_id).unwrap();
         let task = RaftlogGcTask {
             engine: peer.get_store().get_engine().clone(),
             region_id: peer.get_store().get_region_id(),
@@ -805,7 +826,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              left: metapb::Region,
                              right: metapb::Region) {
         let new_region_id = right.get_id();
-        if let Some(peer) = self.region_peers.get(&new_region_id) {
+        if let Some(peer) = self.region_peers.borrow().get(&new_region_id) {
             // If the store received a raft msg with the new region raft group
             // before splitting, it will creates a uninitialized peer.
             // We can remove this uninitialized peer directly.
@@ -824,7 +845,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // If the peer for the region before split is leader,
                 // we can force the new peer for the new split region to campaign
                 // to become the leader too.
-                let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
+                let mut region_peers = self.region_peers.borrow_mut();
+                let is_leader = region_peers.get(&region_id).unwrap().is_leader();
                 if is_leader && right.get_peers().len() > 1 {
                     if let Err(e) = new_peer.raft_group.campaign() {
                         error!("[region {}] peer {:?} campaigns  err {:?}",
@@ -836,7 +858,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 if is_leader {
                     // Notify pd immediately to let it update the region meta.
-                    let left = self.region_peers.get(&region_id).unwrap();
+                    let left = region_peers.get(&region_id).unwrap();
                     self.report_split_pd(left, &new_peer);
                 }
 
@@ -853,7 +875,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("region should exist, {:?}", right);
                 }
                 new_peer.size_diff_hint = self.cfg.region_check_size_diff;
-                self.region_peers.insert(new_region_id, new_peer);
+                region_peers.insert(new_region_id, new_peer);
             }
         }
     }
@@ -861,13 +883,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn suspend_region(&mut self, from_region: metapb::Region, into_region: metapb::Region) {
         {
             // Do nothing when the peer of `into_region` is not a raft leader.
-            let into_peer = self.region_peers.get_mut(&into_region.get_id()).unwrap();
+            let mut region_peers = self.region_peers.borrow_mut();
+            let into_peer = region_peers.get_mut(&into_region.get_id()).unwrap();
             if !into_peer.is_leader() {
                 return;
             }
         }
 
-        if let Some(from_peer) = self.region_peers.get(&from_region.get_id()) {
+        if let Some(from_peer) = self.region_peers.borrow().get(&from_region.get_id()) {
             let epoch = from_region.get_region_epoch().clone();
             let latest_epoch = from_peer.region().get_region_epoch();
             if epoch.get_conf_ver() == latest_epoch.get_conf_ver() &&
@@ -927,7 +950,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         // Rollback region merge due to `from_region` missing or region epoch conflict.
-        let into_peer = self.region_peers.get_mut(&into_region.get_id()).unwrap();
+        let mut region_peers = self.region_peers.borrow_mut();
+        let into_peer = region_peers.get_mut(&into_region.get_id()).unwrap();
         if let Err(e) = into_peer.rollback_region_merge() {
             error!("{} failed to rollback region merge, from region {:?}, into region {:?}, \
                     err {:?}",
@@ -962,7 +986,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
               into_region,
               from_region);
 
-        let into_peer = self.region_peers.get(&into_region.get_id()).unwrap();
+        let region_peers = self.region_peers.borrow();
+        let into_peer = region_peers.get(&into_region.get_id()).unwrap();
         let request = new_commit_merge_request(from_region.clone(),
                                                into_region.clone(),
                                                into_peer.peer.clone());
@@ -986,7 +1011,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
               from_region,
               into_region);
 
-        if self.region_peers.contains_key(&into_region.get_id()) {
+        if self.region_peers.borrow().contains_key(&into_region.get_id()) {
             self.commit_merge(from_region, into_region);
         } else {
             // If no peer in `self.region_peers` for `into_region`, the peer in `from_region`
@@ -1014,19 +1039,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
               old,
               new);
 
-        if self.region_peers.contains_key(&to_shutdown.get_id()) {
+        if self.region_peers.borrow().contains_key(&to_shutdown.get_id()) {
             let mut destroy = false;
             let to_shutdown_peer_info;
             let merge_state;
             {
-                let to_shutdown_peer = self.region_peers.get(&to_shutdown.get_id()).unwrap();
+                let region_peers = self.region_peers.borrow();
+                let to_shutdown_peer = region_peers.get(&to_shutdown.get_id()).unwrap();
                 to_shutdown_peer_info = to_shutdown_peer.peer.clone();
                 merge_state = to_shutdown_peer.merge_state;
                 if to_shutdown_peer.merge_state != MergeState::Suspended {
-                    // If the merge state of `from_region` is not `Suspended`,
-                    // `from_region` is a slow follower. Both peers in `from_region` and
-                    // `into_region` need to be destroyed, in order to ensure the data consistency
-                    // of the region merge procedure.
                     destroy = true;
                 }
             }
@@ -1041,7 +1063,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.destroy_peer(to_shutdown.get_id(), to_shutdown_peer_info);
                 let old_peer_info;
                 {
-                    let old_peer = self.region_peers.get(&old.get_id()).unwrap();
+                    let region_peers = self.region_peers.borrow();
+                    let old_peer = region_peers.get(&old.get_id()).unwrap();
                     old_peer_info = old_peer.peer.clone();
                 }
                 self.destroy_peer(old.get_id(), old_peer_info);
@@ -1080,7 +1103,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                    old);
         }
         self.region_ranges.insert(enc_end_key(&new), new.get_id());
-        let peer = self.region_peers.get(&new.get_id()).unwrap();
+        let region_peers = self.region_peers.borrow();
+        let peer = region_peers.get(&new.get_id()).unwrap();
         if peer.is_leader() {
             // Send region heartbeat to notify PD that the region merge is done.
             self.heartbeat_pd(peer);
@@ -1091,7 +1115,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("{} destroy region {:?} on shutdown region command",
               self.tag,
               region);
-        if self.region_peers.contains_key(&region.get_id()) {
+        if self.region_peers.borrow().contains_key(&region.get_id()) {
             // Destroy the specified peer from this store.
             self.destroy_peer(region.get_id(), peer);
         }
@@ -1235,7 +1259,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // command log entry can't be committed.
 
         let region_id = msg.get_header().get_region_id();
-        let mut peer = self.region_peers.get_mut(&region_id).unwrap();
+        let mut region_peers = self.region_peers.borrow_mut();
+        let mut peer = region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
         let pending_cmd = PendingCmd {
@@ -1256,7 +1281,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let region_id = msg.get_header().get_region_id();
         let peer_id = msg.get_header().get_peer().get_id();
 
-        let peer = match self.region_peers.get(&region_id) {
+        let region_peers = self.region_peers.borrow();
+        let peer = match region_peers.get(&region_id) {
             Some(peer) => peer,
             None => return Err(Error::RegionNotFound(region_id)),
         };
@@ -1280,7 +1306,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if let Some((_, &next_region_id)) = self.region_ranges
                 .range(Excluded(&enc_end_key(peer.region())), Unbounded::<&Key>)
                 .next() {
-                let next_region = self.region_peers[&next_region_id].region();
+                let region_peers = self.region_peers.borrow();
+                let next_region = region_peers[&next_region_id].region();
                 new_regions.push(next_region.to_owned());
             }
             return Err(Error::StaleEpoch(msg, new_regions));
@@ -1301,7 +1328,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (&region_id, peer) in &mut self.region_peers {
+        for (&region_id, peer) in self.region_peers.borrow_mut().iter() {
             if !peer.is_leader() {
                 continue;
             }
@@ -1370,7 +1397,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.register_split_region_check_tick(event_loop);
             return;
         }
-        for (_, peer) in &mut self.region_peers {
+        for (_, peer) in self.region_peers.borrow_mut().iter_mut() {
             if !peer.is_leader() {
                 continue;
             }
@@ -1412,7 +1439,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.register_merge_region_check_tick(event_loop);
             return;
         }
-        for (_, peer) in &mut self.region_peers {
+        for (_, peer) in self.region_peers.borrow_mut().iter_mut() {
             if !peer.is_leader() {
                 continue;
             }
@@ -1443,7 +1470,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (_, peer) in &mut self.region_peers {
+        for (_, peer) in self.region_peers.borrow_mut().iter_mut() {
             if peer.delete_keys_hint < self.cfg.region_compact_delete_keys_count {
                 continue;
             }
@@ -1472,7 +1499,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             error!("[region {}] split key should not be empty!!!", region_id);
             return;
         }
-        let p = self.region_peers.get(&region_id);
+        let region_peers = self.region_peers.borrow();
+        let p = region_peers.get(&region_id);
         if p.is_none() || !p.unwrap().is_leader() {
             // region on this store is no longer leader, skipped.
             info!("[region {}] region on {} doesn't exist or is not leader, skip.",
@@ -1508,7 +1536,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_merge_check_result(&mut self, region_id: u64, epoch: metapb::RegionEpoch) {
-        let p = self.region_peers.get(&region_id);
+        let region_peers = self.region_peers.borrow();
+        let p = region_peers.get(&region_id);
         if p.is_none() || !p.unwrap().is_leader() {
             // Peer for the specified region is gone from this store or
             // it is no longer the leader. Just ignore this merge check result.
@@ -1550,12 +1579,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for peer in self.region_peers.values_mut() {
+        for peer in self.region_peers.borrow_mut().values_mut() {
             peer.check_peers();
         }
 
         let mut leader_count = 0;
-        for peer in self.region_peers.values() {
+        for peer in self.region_peers.borrow().values() {
             if peer.is_leader() {
                 leader_count += 1;
                 self.heartbeat_pd(peer);
@@ -1564,7 +1593,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["leader"]).set(leader_count as f64);
         STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["region"])
-            .set(self.region_peers.len() as f64);
+            .set(self.region_peers.borrow().len() as f64);
 
         self.register_pd_heartbeat_tick(event_loop);
     }
@@ -1627,7 +1656,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         stats.set_store_id(self.store_id());
         stats.set_available(available);
-        stats.set_region_count(self.region_peers.len() as u32);
+        stats.set_region_count(self.region_peers.borrow().len() as u32);
 
         let snap_stats = self.snap_mgr.rl().stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
@@ -1642,7 +1671,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .set(snap_stats.receiving_count as f64);
 
         let mut apply_snapshot_count = 0;
-        for peer in self.region_peers.values_mut() {
+        for peer in self.region_peers.borrow_mut().values_mut() {
             if peer.mut_store().check_applying_snap() {
                 apply_snapshot_count += 1;
             }
@@ -1678,7 +1707,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             if last_region_id != key.region_id {
                 last_region_id = key.region_id;
-                match self.region_peers.get(&key.region_id) {
+                match self.region_peers.borrow().get(&key.region_id) {
                     None => {
                         // region is deleted
                         compacted_idx = u64::MAX;
@@ -1765,7 +1794,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
-        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+        if let Some(mut peer) = self.region_peers.borrow_mut().get_mut(&region_id) {
             // The peer must exist in peer_cache.
             let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
                 Some(peer) => peer,
@@ -1788,13 +1817,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
-        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+        if let Some(mut peer) = self.region_peers.borrow_mut().get_mut(&region_id) {
             peer.raft_group.report_unreachable(to_peer_id);
         }
     }
 
     fn on_snap_gen_res(&mut self, region_id: u64, snap: Option<Snapshot>) {
-        let peer = match self.region_peers.get_mut(&region_id) {
+        let mut region_peers = self.region_peers.borrow_mut();
+        let peer = match region_peers.get_mut(&region_id) {
             None => return,
             Some(peer) => peer,
         };
@@ -1875,7 +1905,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
         let (mut candidate_id, mut candidate_check_time) = (0, Instant::now());
-        for (&region_id, peer) in &mut self.region_peers {
+        for (&region_id, peer) in self.region_peers.borrow_mut().iter() {
             if !peer.is_leader() {
                 continue;
             }
@@ -1885,8 +1915,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        let region_peers = self.region_peers.borrow();
         if candidate_id != 0 {
-            let peer = self.region_peers.get(&candidate_id).unwrap();
+            let peer = region_peers.get(&candidate_id).unwrap();
 
             info!("{} scheduling consistent check", peer.tag);
             let msg = Msg::RaftCmd {
@@ -1904,8 +1935,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
         let region_id = region.get_id();
-        self.region_peers.get_mut(&region_id).unwrap().consistency_state.last_check_time =
-            Instant::now();
+        self.region_peers
+            .borrow_mut()
+            .get_mut(&region_id)
+            .unwrap()
+            .consistency_state
+            .last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!("[region {}] schedule {}", region_id, task);
         if let Err(e) = self.consistency_check_worker.schedule(task) {
@@ -1917,7 +1952,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             region_id: u64,
                             expected_index: u64,
                             expected_hash: Vec<u8>) {
-        let state = match self.region_peers.get_mut(&region_id) {
+        let mut region_peers = self.region_peers.borrow_mut();
+        let state = match region_peers.get_mut(&region_id) {
             None => {
                 warn!("receive stale hash [region {}, index {}]",
                       region_id,
@@ -1931,7 +1967,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_hash_computed(&mut self, region_id: u64, index: u64, hash: Vec<u8>) {
-        let (state, peer) = match self.region_peers.get_mut(&region_id) {
+        let mut region_peers = self.region_peers.borrow_mut();
+        let (state, peer) = match region_peers.get_mut(&region_id) {
             None => {
                 warn!("receive stale hash [region {}, index {}]", region_id, index);
                 return;
@@ -2140,7 +2177,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("{} failed to stop {}: {:?}", self.tag, name, e);
                 }
             }
-            for peer in self.region_peers.values_mut() {
+            for peer in self.region_peers.borrow_mut().values_mut() {
                 peer.clear_pending_commands();
             }
 
@@ -2154,14 +2191,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
-    /// load the target peer of request as mutable borrow.
-    fn mut_target_peer(&mut self, request: &RaftCmdRequest) -> Result<&mut Peer> {
-        let region_id = request.get_header().get_region_id();
-        match self.region_peers.get_mut(&region_id) {
-            None => Err(Error::RegionNotFound(region_id)),
-            Some(peer) => Ok(peer),
-        }
-    }
+    // TODO Currently mut_target_peer() is removed due to compile error.
+    // Restore it when that compile error is solved before merging these code into branch mastere
 
     // Handle status commands here, separate the logic, maybe we can move it
     // to another file later.
@@ -2181,14 +2212,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut resp = RaftCmdResponse::new();
         resp.set_status_response(response);
         // Bind peer current term here.
-        if let Some(peer) = self.region_peers.get(&region_id) {
+        if let Some(peer) = self.region_peers.borrow().get(&region_id) {
             bind_term(&mut resp, peer.term());
         }
         Ok(resp)
     }
 
     fn execute_region_leader(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
-        let peer = try!(self.mut_target_peer(&request));
+        let mut region_peers = self.region_peers.borrow_mut();
+        let region_id = request.get_header().get_region_id();
+        let peer = match region_peers.get_mut(&region_id) {
+            None => return Err(Error::RegionNotFound(region_id)),
+            Some(peer) => peer,
+        };
 
         let mut resp = StatusResponse::new();
         if let Some(leader) = peer.get_peer_from_cache(peer.leader_id()) {
@@ -2199,7 +2235,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn execute_region_detail(&mut self, request: RaftCmdRequest) -> Result<StatusResponse> {
-        let peer = try!(self.mut_target_peer(&request));
+        let mut region_peers = self.region_peers.borrow_mut();
+        let region_id = request.get_header().get_region_id();
+        let peer = match region_peers.get_mut(&region_id) {
+            None => return Err(Error::RegionNotFound(region_id)),
+            Some(peer) => peer,
+        };
+
         if !peer.get_store().is_initialized() {
             let region_id = request.get_header().get_region_id();
             return Err(Error::RegionNotInitialized(region_id));

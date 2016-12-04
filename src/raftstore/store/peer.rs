@@ -242,6 +242,8 @@ pub struct Peer {
     pub merge_state: MergeState,
     start_merge_time: Option<Instant>,
     start_merge_index: u64,
+    region_peers: Rc<RefCell<HashMap<u64, Peer>>>,
+    apply_delayed: bool,
 }
 
 impl Peer {
@@ -348,6 +350,8 @@ impl Peer {
             merge_state: merge_state,
             start_merge_time: Some(Instant::now()),
             start_merge_index: 0,
+            region_peers: store.region_peers(),
+            apply_delayed: false,
         };
 
         peer.load_all_coprocessors();
@@ -443,6 +447,14 @@ impl Peer {
 
     pub fn is_applying(&self) -> bool {
         self.get_store().is_applying()
+    }
+
+    pub fn is_apply_delayed(&self) -> bool {
+        self.apply_delayed
+    }
+
+    pub fn reset_apply_delayed(&mut self) {
+        self.apply_delayed = false;
     }
 
     pub fn is_in_region_merge(&self) -> bool {
@@ -740,8 +752,20 @@ impl Peer {
                 hs.set_commit(self.get_store().truncated_index());
             }
             vec![]
+        } else if self.is_apply_delayed() {
+            if let Some(ref mut hs) = ready.hs {
+                // Delay apply committed entries in this ready
+                hs.set_commit(self.get_store().committed_index());
+            }
+            vec![]
         } else {
-            try!(self.handle_raft_commit_entries(&ready.committed_entries))
+            let v = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+            if self.apply_delayed {
+                if let Some(ref mut hs) = ready.hs {
+                    hs.set_commit(self.get_store().applied_index());
+                }
+            }
+            v
         };
 
         self.raft_group.advance(ready);
@@ -1176,6 +1200,10 @@ impl Peer {
             if let Some(res) = res {
                 results.push(res);
             }
+
+            if self.is_apply_delayed() {
+                break;
+            }
         }
 
         slow_log!(t,
@@ -1271,6 +1299,9 @@ impl Peer {
         let cmd_cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
         let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
+        if self.apply_delayed {
+            return exec_result;
+        }
         timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
@@ -1343,6 +1374,10 @@ impl Peer {
             error!("{} execute raft command err: {:?}", self.tag, e);
             (cmd_resp::new_error(e), None)
         });
+
+        if self.apply_delayed {
+            return (resp, exec_result);
+        }
 
         ctx.apply_state.set_applied_index(index);
         if !self.pending_remove {
@@ -1916,6 +1951,20 @@ impl Peer {
         })))
     }
 
+    fn should_delay_commit_merge(&self, from_region: metapb::Region) -> bool {
+        if let Some(peer) = self.region_peers.borrow().get(&from_region.get_id()) {
+            if peer.merge_state != MergeState::Suspended {
+                // If the merge state of `from_region` is not `Suspended`,
+                // `from_region` is a slow follower. The peer of `into_region` should wait
+                // for the `from_region` to be replicated to `Suspended` merge state
+                // before it apply commit merge command and the later Raft log entries.
+                // This ensures data consistency of the region merge procedure.
+                return true;
+            }
+        }
+        false
+    }
+
     fn exec_commit_merge(&mut self,
                          ctx: &ExecContext,
                          req: &AdminRequest)
@@ -1938,6 +1987,12 @@ impl Peer {
                   commit_merge);
             Ok((resp, None))
         } else {
+            if self.should_delay_commit_merge(commit_merge.get_from_region().clone()) {
+                self.apply_delayed = true;
+                return Err(box_err!("skip to apply commit merge command because another region \
+                                     has not been suspended"));
+            }
+
             let state_key = keys::region_state_key(self.region().get_id());
             let mut region_local_state = self.engine
                 .get_msg::<RegionLocalState>(&state_key)
