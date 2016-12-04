@@ -14,7 +14,6 @@
 use std::boxed::{Box, FnBox};
 use std::fmt;
 
-use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
@@ -64,10 +63,6 @@ pub enum Msg {
 
     // For snapshot stats.
     SnapshotStats,
-    SnapGenRes {
-        region_id: u64,
-        snap: Option<Snapshot>,
-    },
 
     // For consistency check
     ComputeHashResult {
@@ -98,12 +93,6 @@ impl fmt::Debug for Msg {
                        region_id)
             }
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
-            Msg::SnapGenRes { region_id, ref snap } => {
-                write!(fmt,
-                       "SnapGenRes [region_id: {}, is_success: {}]",
-                       region_id,
-                       snap.is_some())
-            }
             Msg::ComputeHashResult { region_id, index, ref hash } => {
                 write!(fmt,
                        "ComputeHashResult [region_id: {}, index: {}, hash: {}]",
