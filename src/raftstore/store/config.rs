@@ -27,8 +27,18 @@ const RAFT_LOG_GC_THRESHOLD: u64 = 50;
 const RAFT_LOG_GC_COUNT_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4 / 1024;
 const RAFT_LOG_GC_SIZE_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
+const MERGE_REGION_CHECK_TICK_INTERVAL: u64 = 600000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
+// When the db size of a region goes beyond `REGION_MAX_SIZE`,
+// the leader peer of this region will request PD to perform a region split action.
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
+// When the count of delete happened a region goes beyond
+// `REGION_MERGE_CHECK_ON_DELETE_COUNT`, the leader peer of this region will check
+// whether it's necessary to perform a region merge action.
+const REGION_MERGE_CHECK_ON_DELETE_COUNT: u64 = 10000;
+// When the db size of a region goes below `REGION_MERGE_SIZE`,
+// the leader peer of this region will request PD to perform a region merge action.
+const REGION_MERGE_SIZE: u64 = 10 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 300;
 const REGION_COMPACT_DELETE_KEYS_COUNT: u64 = 1_000_000;
@@ -41,13 +51,14 @@ const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
-// If the leader missing for over 2 hours,
+// If the leader is missing for over 2 hours,
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // Disable consistency check by default as it will hurt performance.
 // We should turn on this only in our tests.
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 0;
+const DEFAULT_REGION_MERGE_RETRY_DURATION_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -75,11 +86,20 @@ pub struct Config {
 
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: u64,
+    // Interval (ms) to check region whether it's necessary to perform region merge.
+    pub merge_region_check_tick_interval: u64,
     /// When region [a, b) size meets region_max_size, it will be split
     /// into two region into [a, c), [c, b). And the size of [a, c) will
     /// be region_split_size (or a little bit smaller).
     pub region_max_size: u64,
     pub region_split_size: u64,
+    // When the count of delete happened a region goes beyond
+    // `region_merge_check_on_delete_count`, the leader peer of this region will check
+    // whether it's necessary to perform a region merge action.
+    pub region_merge_check_on_delete_count: u64,
+    // When the db size of a region goes below `region_merge_size`,
+    // the leader peer of this region will request PD to perform a region merge action.
+    pub region_merge_size: u64,
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_check_size_diff: u64,
@@ -110,6 +130,13 @@ pub struct Config {
 
     // Interval (s) to check region whether the data is consistent.
     pub consistency_check_tick_interval: u64,
+
+    /// If the region merge could not succeed over the time specified in
+    /// `region_merge_retry_duration` (probably due to admin command lost),
+    /// the peer in "the into region" (also known as "the control region") will
+    /// try to validate the epoch of "the from region" and retry the region merge procedure.
+    /// If that epoch has changed, region merge will be rollbacked.
+    pub region_merge_retry_duration: Duration,
 }
 
 impl Default for Config {
@@ -126,8 +153,11 @@ impl Default for Config {
             raft_log_gc_count_limit: RAFT_LOG_GC_COUNT_LIMIT,
             raft_log_gc_size_limit: RAFT_LOG_GC_SIZE_LIMIT,
             split_region_check_tick_interval: SPLIT_REGION_CHECK_TICK_INTERVAL,
+            merge_region_check_tick_interval: MERGE_REGION_CHECK_TICK_INTERVAL,
             region_max_size: REGION_MAX_SIZE,
             region_split_size: REGION_SPLIT_SIZE,
+            region_merge_check_on_delete_count: REGION_MERGE_CHECK_ON_DELETE_COUNT,
+            region_merge_size: REGION_MERGE_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
             region_compact_check_interval_secs: REGION_COMPACT_CHECK_TICK_INTERVAL,
             region_compact_delete_keys_count: REGION_COMPACT_DELETE_KEYS_COUNT,
@@ -142,6 +172,8 @@ impl Default for Config {
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS,
+            region_merge_retry_duration:
+                Duration::from_secs(DEFAULT_REGION_MERGE_RETRY_DURATION_SECS),
         }
     }
 }

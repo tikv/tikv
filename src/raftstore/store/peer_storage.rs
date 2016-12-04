@@ -341,6 +341,11 @@ impl PeerStorage {
     }
 
     #[inline]
+    pub fn committed_index(&self) -> u64 {
+        self.raft_state.get_hard_state().get_commit()
+    }
+
+    #[inline]
     pub fn applied_index(&self) -> u64 {
         self.apply_state.get_applied_index()
     }
@@ -357,6 +362,10 @@ impl PeerStorage {
 
     pub fn get_region(&self) -> &metapb::Region {
         &self.region
+    }
+
+    pub fn set_region(&mut self, region: &metapb::Region) {
+        self.region = region.clone()
     }
 
     pub fn raw_snapshot(&self) -> DbSnapshot {

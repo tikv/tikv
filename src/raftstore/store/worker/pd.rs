@@ -25,19 +25,21 @@ use kvproto::pdpb;
 use util::worker::Runnable;
 use util::escape;
 use util::transport::SendCh;
-use pd::PdClient;
+use pd::{Error, PdClient};
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
 
 use super::metrics::*;
 
 // Use an asynchronous thread to tell pd something.
+#[derive(Clone)]
 pub enum Task {
     AskSplit {
         region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
     },
+    AskMerge { region: metapb::Region },
     Heartbeat {
         region: metapb::Region,
         peer: metapb::Peer,
@@ -64,6 +66,7 @@ impl Display for Task {
                        region.get_id(),
                        escape(&split_key))
             }
+            Task::AskMerge { ref region, .. } => write!(f, "ask merge region {}", region.get_id()),
             Task::Heartbeat { ref region, ref peer, .. } => {
                 write!(f,
                        "heartbeat for region {:?}, leader {}",
@@ -140,6 +143,25 @@ impl<T: PdClient> Runner<T> {
         }
     }
 
+    fn handle_ask_merge(&self, region: metapb::Region) {
+        PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "all"]).inc();
+
+        match self.pd_client.ask_merge(region.clone()) {
+            Ok(resp) => {
+                info!("[region {}] PD permits ask merge request. Later this region will be \
+                       merged into region {:?}",
+                      region.get_id(),
+                      resp.get_into_region());
+                PD_REQ_COUNTER_VEC.with_label_values(&["ask merge", "success"]).inc();
+            }
+            Err(e) => {
+                debug!("[region {}] failed to ask merge, error: {:?}",
+                       region.get_id(),
+                       e)
+            }
+        }
+    }
+
     fn handle_heartbeat(&self,
                         region: metapb::Region,
                         peer: metapb::Peer,
@@ -173,6 +195,26 @@ impl<T: PdClient> Runner<T> {
                           transfer_leader.get_peer());
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     self.send_admin_request(region, peer, req)
+                } else if resp.has_merge_region() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge region"]).inc();
+
+                    let mut merge_region = resp.take_merge_region();
+                    info!("[region {}] try to merge from region {:?} into region {:?}",
+                          region.get_id(),
+                          merge_region.get_from_region(),
+                          merge_region.get_into_region());
+                    let req = new_merge_region_request(merge_region.get_from_region().clone(),
+                                                       merge_region.get_into_region().clone());
+                    self.send_admin_request(merge_region.take_into_region(), peer, req);
+                } else if resp.has_shutdown_region() {
+                    PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["shutdown region"]).inc();
+
+                    let mut shutdown_region = resp.take_shutdown_region();
+                    info!("[region {}] try to shutdown region {:?} after region merge",
+                          region.get_id(),
+                          shutdown_region.get_region());
+                    let req = new_shutdown_region_request(shutdown_region.take_region());
+                    self.send_admin_request(region, peer, req);
                 }
             }
             Err(e) => {
@@ -259,6 +301,14 @@ impl<T: PdClient> Runner<T> {
                 // split region has not yet report to pd.
                 // TODO: handle merge
             }
+            Err(Error::RegionIsShutdown) => {
+                // The region for this peer is shutdown. This peer needs to be destroyed.
+                info!("[region {}] is shutdown. Peer {:?} is about to be destroyed",
+                      local_region.get_id(),
+                      peer);
+                PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region shutdown"]).inc();
+                self.send_destroy_peer_message(local_region.clone(), peer, local_region);
+            }
             Err(e) => error!("get region failed {:?}", e),
         }
     }
@@ -272,6 +322,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::AskSplit { region, split_key, peer } => {
                 self.handle_ask_split(region, split_key, peer)
             }
+            Task::AskMerge { region } => self.handle_ask_merge(region),
             Task::Heartbeat { region, peer, down_peers } => {
                 self.handle_heartbeat(region, peer, down_peers)
             }
@@ -306,5 +357,22 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::TransferLeader);
     req.mut_transfer_leader().set_peer(peer);
+    req
+}
+
+fn new_merge_region_request(from_region: metapb::Region,
+                            into_region: metapb::Region)
+                            -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::Merge);
+    req.mut_merge().set_from_region(from_region);
+    req.mut_merge().set_into_region(into_region);
+    req
+}
+
+fn new_shutdown_region_request(region: metapb::Region) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::ShutdownRegion);
+    req.mut_shutdown_region().set_region(region);
     req
 }

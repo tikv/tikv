@@ -42,11 +42,11 @@ lazy_static! {
             &["type", "status"]
         ).unwrap();
 
-    pub static ref CHECK_SPILT_COUNTER_VEC: CounterVec =
+    pub static ref REGION_CHECK_COUNTER_VEC: CounterVec =
         register_counter_vec!(
-            "tikv_raftstore_check_split_total",
+            "tikv_raftstore_region_check_total",
             "Total number of raftstore split check.",
-            &["type"]
+            &["type", "status"]
         ).unwrap();
 
     pub static ref SNAP_HISTOGRAM: HistogramVec =
@@ -56,10 +56,11 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref CHECK_SPILT_HISTOGRAM: Histogram =
-        register_histogram!(
+    pub static ref REGION_CHECK_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
             "tikv_raftstore_check_split_duration_seconds",
-            "Bucketed histogram of raftstore split check duration"
+            "Bucketed histogram of raftstore split check duration",
+            &["type"]
         ).unwrap();
 
     pub static ref COMPACT_RANGE_CF: HistogramVec =

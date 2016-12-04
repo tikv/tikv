@@ -91,8 +91,11 @@ pub trait PdClient: Send + Sync {
                         down_peers: Vec<pdpb::PeerStats>)
                         -> Result<pdpb::RegionHeartbeatResponse>;
 
-    // Ask pd for split, pd will returns the new split region id.
+    // Ask pd for split, pd will return the new split region id.
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse>;
+
+    // Ask PD for merge, PD will return the another region id to merged.
+    fn ask_merge(&self, region: metapb::Region) -> Result<pdpb::AskMergeResponse>;
 
     // Send store statistics regularly.
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()>;

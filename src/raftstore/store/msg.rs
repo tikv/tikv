@@ -29,6 +29,7 @@ pub enum Tick {
     Raft,
     RaftLogGc,
     SplitRegionCheck,
+    MergeRegionCheck,
     CompactCheck,
     PdHeartbeat,
     PdStoreHeartbeat,
@@ -53,6 +54,8 @@ pub enum Msg {
         epoch: RegionEpoch,
         split_key: Vec<u8>,
     },
+
+    MergeCheckResult { region_id: u64, epoch: RegionEpoch },
 
     ReportSnapshot {
         region_id: u64,
@@ -84,6 +87,7 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
+            Msg::MergeCheckResult { .. } => write!(fmt, "Merge Check Result"),
             Msg::ReportSnapshot { ref region_id, ref to_peer_id, ref status } => {
                 write!(fmt,
                        "Send snapshot to {} for region {} {:?}",

@@ -26,10 +26,14 @@ use uuid::Uuid;
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
-                          AdminCmdType, Request, Response, AdminRequest, AdminResponse,
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, SplitRequest,
+                          MergeRequest, MergeResponse, SuspendRegionRequest,
+                          SuspendRegionResponse, CommitMergeRequest, CommitMergeResponse,
+                          ShutdownRegionRequest, ShutdownRegionResponse, RollbackMergeResponse,
+                          CmdType, AdminCmdType, Request, Response, AdminRequest, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
+use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState,
+                             MergeState, RegionMergeState, RegionLocalState};
 use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX};
 use raftstore::{Result, Error};
@@ -103,6 +107,27 @@ pub enum ExecResult {
         snap: Snapshot,
     },
     VerifyHash { index: u64, hash: Vec<u8> },
+    StartMerge {
+        from_region: metapb::Region,
+        into_region: metapb::Region,
+    },
+    SuspendRegion {
+        from_region: metapb::Region,
+        into_region: metapb::Region,
+    },
+    CommitMerge {
+        new: metapb::Region,
+        old: metapb::Region,
+        to_shutdown: metapb::Region,
+    },
+    ShutdownRegion {
+        region: metapb::Region,
+        peer: metapb::Peer,
+    },
+    RollbackMerge {
+        from_region: metapb::Region,
+        into_region: metapb::Region,
+    },
 }
 
 // When we apply commands in handing ready, we should also need a way to
@@ -217,6 +242,13 @@ pub struct Peer {
 
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
+
+    pub delete_count: u64,
+    pub merge_state: MergeState,
+    start_merge_time: Option<Instant>,
+    start_merge_index: u64,
+    region_peers: Rc<RefCell<HashMap<u64, Peer>>>,
+    apply_delayed: bool,
 }
 
 impl Peer {
@@ -271,6 +303,13 @@ impl Peer {
 
         let ps = try!(PeerStorage::new(store.engine(), &region, sched, tag.clone()));
 
+        let region_local_state = try!(store.engine()
+            .get_msg::<RegionLocalState>(&keys::region_state_key(region.get_id())));
+        let merge_state = match region_local_state {
+            Some(s) => s.get_merge_state().get_state(),
+            None => MergeState::NoMerge,
+        };
+
         let applied_index = ps.applied_index();
 
         let raft_cfg = raft::Config {
@@ -312,6 +351,12 @@ impl Peer {
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
+            delete_count: 0,
+            merge_state: merge_state,
+            start_merge_time: Some(Instant::now()),
+            start_merge_index: 0,
+            region_peers: store.region_peers(),
+            apply_delayed: false,
         };
 
         peer.load_all_coprocessors();
@@ -407,6 +452,18 @@ impl Peer {
 
     pub fn is_applying(&self) -> bool {
         self.get_store().is_applying()
+    }
+
+    pub fn is_apply_delayed(&self) -> bool {
+        self.apply_delayed
+    }
+
+    pub fn reset_apply_delayed(&mut self) {
+        self.apply_delayed = false;
+    }
+
+    pub fn is_in_region_merge(&self) -> bool {
+        self.merge_state != MergeState::NoMerge
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
@@ -521,6 +578,46 @@ impl Peer {
             return StaleState::ToValidate;
         }
         StaleState::Valid
+    }
+
+    pub fn rollback_region_merge(&mut self) -> Result<()> {
+        if self.merge_state == MergeState::Merging {
+            info!("{} rollback region merge", self.tag);
+            let state_key = keys::region_state_key(self.region().get_id());
+            let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+                .unwrap();
+            let mut merge_state = RegionMergeState::new();
+            merge_state.set_state(MergeState::NoMerge);
+            region_local_state.set_merge_state(merge_state);
+            if let Err(e) = self.engine.put_msg(&state_key, &region_local_state) {
+                panic!("{} failed to persist rollbacked region merge state to db, err {:?}",
+                       self.tag,
+                       e);
+            }
+            self.merge_state = MergeState::NoMerge;
+            self.start_merge_time = None;
+            self.start_merge_index = 0;
+        }
+        Ok(())
+    }
+
+    pub fn maybe_region_merge_timeout(&mut self,
+                                      d: Duration)
+                                      -> Option<(metapb::Region, metapb::Region)> {
+        if self.merge_state == MergeState::Merging {
+            let t = self.start_merge_time.unwrap();
+            if t.elapsed() >= d {
+                // Reset `start_merging_time` on retry region merge.
+                self.start_merge_time = Some(Instant::now());
+                // Read `from_region` from local region merge state.
+                let state_key = keys::region_state_key(self.region().get_id());
+                let region_local_state =
+                    self.engine.get_msg::<RegionLocalState>(&state_key).unwrap().unwrap();
+                let from_region = region_local_state.get_merge_state().get_from_region().clone();
+                return Some((from_region, self.region().clone()));
+            }
+        }
+        None
     }
 
     fn next_lease_expired_time(&self, send_to_quorum_ts: Timespec) -> Timespec {
@@ -660,8 +757,20 @@ impl Peer {
                 hs.set_commit(self.get_store().truncated_index());
             }
             vec![]
+        } else if self.is_apply_delayed() {
+            if let Some(ref mut hs) = ready.hs {
+                // Delay apply committed entries in this ready
+                hs.set_commit(self.get_store().committed_index());
+            }
+            vec![]
         } else {
-            try!(self.handle_raft_commit_entries(&ready.committed_entries))
+            let v = try!(self.handle_raft_commit_entries(&ready.committed_entries));
+            if self.apply_delayed {
+                if let Some(ref mut hs) = ready.hs {
+                    hs.set_commit(self.get_store().applied_index());
+                }
+            }
+            v
         };
 
         self.raft_group.advance(ready);
@@ -677,6 +786,34 @@ impl Peer {
                    mut err_resp: RaftCmdResponse,
                    metrics: &mut RaftProposeMetrics)
                    -> bool {
+        if self.merge_state == MergeState::Suspended &&
+           (req.get_requests().len() != 0 || get_split_cmd(&req).is_some() ||
+            get_merge_cmd(&req).is_some() || get_change_peer_cmd(&req).is_some()) {
+            // When in `MergeState::Suspended` state, reject
+            // 1. data read/write requests from client.
+            // 2. region split, region merge, member change commands
+            debug!("{} suspended region rejects data read/write requests and region split, \
+                    region merge, member change commands",
+                   self.tag);
+            cmd_resp::bind_error(&mut err_resp, box_err!("region suspended"));
+            cmd.call(err_resp);
+            return false;
+        } else if self.merge_state == MergeState::Merging &&
+                  (get_split_cmd(&req).is_some() || get_merge_cmd(&req).is_some() ||
+                   get_change_peer_cmd(&req).is_some()) {
+            // When in `MergeState::Merging` state, reject
+            // 1. region split, region merge, member change commands
+            debug!("{} merging region rejects region split, region merge, member change commands",
+                   self.tag);
+            cmd_resp::bind_error(&mut err_resp, box_err!("region merging"));
+            cmd.call(err_resp);
+            return false;
+        }
+
+        if is_region_merge_cmd(&req) {
+            debug!("{} propose region merge command {:?}", self.tag, req);
+        }
+
         if self.pending_cmds.contains(&cmd.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
             cmd.call(err_resp);
@@ -894,7 +1031,12 @@ impl Peer {
                 AdminCmdType::VerifyHash => {}
                 AdminCmdType::Split => check_ver = true,
                 AdminCmdType::ChangePeer => check_conf_ver = true,
-                AdminCmdType::TransferLeader => {
+                AdminCmdType::TransferLeader |
+                AdminCmdType::Merge |
+                AdminCmdType::SuspendRegion |
+                AdminCmdType::CommitMerge |
+                AdminCmdType::ShutdownRegion |
+                AdminCmdType::RollbackMerge => {
                     check_ver = true;
                     check_conf_ver = true;
                 }
@@ -1059,6 +1201,10 @@ impl Peer {
             if let Some(res) = res {
                 results.push(res);
             }
+
+            if self.is_apply_delayed() {
+                break;
+            }
         }
 
         slow_log!(t,
@@ -1154,6 +1300,9 @@ impl Peer {
         let cmd_cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
         let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
+        if self.apply_delayed {
+            return exec_result;
+        }
         timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
@@ -1227,6 +1376,10 @@ impl Peer {
             (cmd_resp::new_error(e), None)
         });
 
+        if self.apply_delayed {
+            return (resp, exec_result);
+        }
+
         ctx.apply_state.set_applied_index(index);
         if !self.pending_remove {
             ctx.save(self.region_id)
@@ -1239,17 +1392,17 @@ impl Peer {
             .write(ctx.wb)
             .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
 
-        let mut storage = self.raft_group.mut_store();
-        storage.apply_state = ctx.apply_state;
-        storage.applied_index_term = term;
+        self.mut_store().apply_state = ctx.apply_state;
+        self.mut_store().applied_index_term = term;
 
         if let Some(ref exec_result) = exec_result {
             match *exec_result {
                 ExecResult::ChangePeer { ref region, .. } => {
-                    storage.region = region.clone();
+                    self.mut_store().region = region.clone();
                 }
                 ExecResult::ComputeHash { .. } |
-                ExecResult::VerifyHash { .. } => {}
+                ExecResult::VerifyHash { .. } |
+                ExecResult::ShutdownRegion { .. } => {}
                 ExecResult::CompactLog { first_index, ref state } => {
                     let total_cnt = index - first_index;
                     // the size of current CompactLog command can be ignored.
@@ -1257,7 +1410,26 @@ impl Peer {
                     self.raft_log_size_hint = self.raft_log_size_hint * remain_cnt / total_cnt;
                 }
                 ExecResult::SplitRegion { ref left, .. } => {
-                    storage.region = left.clone();
+                    self.mut_store().region = left.clone();
+                }
+                ExecResult::StartMerge { .. } => {
+                    self.merge_state = MergeState::Merging;
+                    self.start_merge_time = Some(Instant::now());
+                    self.start_merge_index = index;
+                }
+                ExecResult::SuspendRegion { .. } => {
+                    self.merge_state = MergeState::Suspended;
+                }
+                ExecResult::CommitMerge { ref new, .. } => {
+                    self.mut_store().region = new.clone();
+                    self.merge_state = MergeState::NoMerge;
+                    self.start_merge_time = None;
+                    self.start_merge_index = 0;
+                }
+                ExecResult::RollbackMerge { .. } => {
+                    self.merge_state = MergeState::NoMerge;
+                    self.start_merge_time = None;
+                    self.start_merge_index = 0;
                 }
             }
         }
@@ -1307,6 +1479,71 @@ fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
     }
 
     Some(req.get_change_peer())
+}
+
+fn get_split_cmd(msg: &RaftCmdRequest) -> Option<&SplitRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_split() {
+        return None;
+    }
+
+    Some(req.get_split())
+}
+
+pub fn is_region_merge_cmd(msg: &RaftCmdRequest) -> bool {
+    get_merge_cmd(msg).is_some() || get_suspend_region_cmd(msg).is_some() ||
+    get_commit_merge_cmd(msg).is_some() || get_shutdown_region_cmd(msg).is_some()
+}
+
+pub fn get_merge_cmd(msg: &RaftCmdRequest) -> Option<&MergeRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_merge() {
+        return None;
+    }
+
+    Some(req.get_merge())
+}
+
+pub fn get_suspend_region_cmd(msg: &RaftCmdRequest) -> Option<&SuspendRegionRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_suspend_region() {
+        return None;
+    }
+
+    Some(req.get_suspend_region())
+}
+
+pub fn get_commit_merge_cmd(msg: &RaftCmdRequest) -> Option<&CommitMergeRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_suspend_region() {
+        return None;
+    }
+
+    Some(req.get_commit_merge())
+}
+
+pub fn get_shutdown_region_cmd(msg: &RaftCmdRequest) -> Option<&ShutdownRegionRequest> {
+    if !msg.has_admin_request() {
+        return None;
+    }
+    let req = msg.get_admin_request();
+    if !req.has_shutdown_region() {
+        return None;
+    }
+
+    Some(req.get_shutdown_region())
 }
 
 struct ExecContext<'a> {
@@ -1372,6 +1609,11 @@ impl Peer {
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
+            AdminCmdType::Merge => self.exec_merge(ctx, request),
+            AdminCmdType::SuspendRegion => self.exec_suspend_region(ctx, request),
+            AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
+            AdminCmdType::ShutdownRegion => self.exec_shutdown_region(ctx, request),
+            AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         });
         response.set_cmd_type(cmd_type);
@@ -1395,6 +1637,15 @@ impl Peer {
               self.tag,
               util::conf_change_type_str(&change_type),
               region.get_region_epoch());
+
+        // Skip applying change peer command when this region is in region merge procedure.
+        if self.is_in_region_merge() {
+            info!("{} ignore change peer request: {:?}, since it's in region merge procedure",
+                  self.tag,
+                  request);
+            return Err(box_err!("ignore change peer request: {:?} when region is in region merge",
+                                request));
+        }
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
         let exists = util::find_peer(&region, store_id).is_some();
@@ -1507,6 +1758,16 @@ impl Peer {
               escape(split_key),
               region);
 
+        // Skip applying region split command when this region is in region merge procedure.
+        if self.is_in_region_merge() {
+            info!("{} ignore region split request at key: {}, since it's in region merge \
+                   procedure",
+                  self.tag,
+                  escape(split_key));
+            return Err(box_err!("ignore split request: {:?} when region is in region merge",
+                                split_req));
+        }
+
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();
 
@@ -1562,6 +1823,301 @@ impl Peer {
             left: region,
             right: new_region,
         })))
+    }
+
+    fn set_peer_merge_state<T: Mutable>(&mut self, w: &T, state: RegionMergeState) -> Result<()> {
+        let state_key = keys::region_state_key(self.region().get_id());
+        let mut region_local_state = try!(self.engine.get_msg::<RegionLocalState>(&state_key))
+            .unwrap();
+
+        region_local_state.set_merge_state(state);
+        try!(w.put_msg(&state_key, &region_local_state));
+        Ok(())
+    }
+
+    fn exec_merge(&mut self,
+                  ctx: &ExecContext,
+                  req: &AdminRequest)
+                  -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["start merge", "all"]).inc();
+
+        let merge_req = req.get_merge();
+        info!("{} merge from region {:?} into region {:?}",
+              self.tag,
+              merge_req.get_from_region(),
+              self.region());
+
+        let mut resp = AdminResponse::new();
+        resp.set_merge(MergeResponse::new());
+
+        {
+            // Ensure the into_region epoch is not outdated.
+            let epoch = merge_req.get_into_region().get_region_epoch();
+            let latest_epoch = self.region().get_region_epoch();
+            if util::is_epoch_stale(epoch, latest_epoch) {
+                // The region epoch in this merge request is outdated, because
+                // a pending region split or member change is applied and
+                // the region epoch has changed.
+                // Ignore this merge request.
+                info!("{} into region epoch is outdated. Ignore merge command, from region: \
+                       {:?}, into region {:?}, latest epoch {:?}",
+                      self.tag,
+                      merge_req.get_from_region(),
+                      merge_req.get_into_region(),
+                      latest_epoch);
+                return Ok((resp, None));
+            }
+        }
+
+        if self.merge_state != MergeState::NoMerge {
+            // Just ignore this region merge command since this peer is already
+            // in `Merging` or `Suspended` state.
+            info!("{} already in merge state {:?}, ignore region merge request {:?}",
+                  self.tag,
+                  self.merge_state,
+                  merge_req);
+            Ok((resp, None))
+        } else {
+            // Update peer local state.
+            let mut merge_state = RegionMergeState::new();
+            merge_state.set_state(MergeState::Merging);
+            merge_state.set_from_region(merge_req.get_from_region().clone());
+            self.set_peer_merge_state(&ctx.wb, merge_state.clone()).unwrap_or_else(|e| {
+                panic!("{} failed to set peer merge state {:?}: {:?}",
+                       self.tag,
+                       merge_state,
+                       e);
+            });
+
+            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["start merge", "success"]).inc();
+
+            Ok((resp,
+                Some(ExecResult::StartMerge {
+                from_region: merge_req.get_from_region().clone(),
+                into_region: self.region().clone(),
+            })))
+        }
+    }
+
+    fn exec_suspend_region(&mut self,
+                           ctx: &ExecContext,
+                           req: &AdminRequest)
+                           -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["suspend", "all"]).inc();
+
+        let suspend_region = req.get_suspend_region();
+
+        info!("{} suspend from region {:?} by into region {:?}",
+              self.tag,
+              suspend_region.get_from_region(),
+              suspend_region.get_into_region());
+
+        let mut resp = AdminResponse::new();
+        resp.set_suspend_region(SuspendRegionResponse::new());
+
+        {
+            // Ensure the region epoch in suspend command is not outdated.
+            let epoch = suspend_region.get_from_region().get_region_epoch();
+            let latest_epoch = self.region().get_region_epoch();
+            if util::is_epoch_stale(epoch, latest_epoch) {
+                // The region epoch in this request is outdated, because
+                // a pending region split, member change or region merge is applied and
+                // the region epoch has changed.
+                // Ignore this suspend region request. The `into_region` will notice
+                // this region epoch change and rollback the region merge,
+                // when it retries region merge periodically.
+                info!("{} from region epoch is outdated. Ignore suspend region command, \
+                       from region {:?}, into region {:?}, latest epoch {:?}",
+                      self.tag,
+                      suspend_region.get_from_region(),
+                      suspend_region.get_into_region(),
+                      latest_epoch);
+                return Ok((resp, None));
+            }
+        }
+
+        if self.merge_state != MergeState::Suspended {
+            // If suspend region command is lost or has not been applied, it will be retried by
+            // the leader if `into_region`.
+            // Skip to write the `Suspended` state to hard driver when the command is a retry.
+            let mut merge_state = RegionMergeState::new();
+            merge_state.set_state(MergeState::Suspended);
+            self.set_peer_merge_state(&ctx.wb, merge_state.clone()).unwrap_or_else(|e| {
+                panic!("{} failed to set peer merge state {:?}: {:?}",
+                       self.tag,
+                       merge_state,
+                       e);
+            });
+        }
+
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["suspend", "success"]).inc();
+
+        Ok((resp,
+            Some(ExecResult::SuspendRegion {
+            from_region: suspend_region.get_from_region().clone(),
+            into_region: suspend_region.get_into_region().clone(),
+        })))
+    }
+
+    fn should_delay_commit_merge(&self, from_region: metapb::Region) -> bool {
+        if let Some(peer) = self.region_peers.borrow().get(&from_region.get_id()) {
+            if peer.merge_state != MergeState::Suspended {
+                // If the merge state of `from_region` is not `Suspended`,
+                // `from_region` is a slow follower. The peer of `into_region` should wait
+                // for the `from_region` to be replicated to `Suspended` merge state
+                // before it apply commit merge command and the later Raft log entries.
+                // This ensures data consistency of the region merge procedure.
+                return true;
+            }
+        }
+        false
+    }
+
+    fn exec_commit_merge(&mut self,
+                         ctx: &ExecContext,
+                         req: &AdminRequest)
+                         -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["commit merge", "all"]).inc();
+
+        let commit_merge = req.get_commit_merge();
+
+        info!("{} commit region merge from region {:?} into region {:?}",
+              self.tag,
+              commit_merge.get_from_region(),
+              self.region());
+
+        let mut resp = AdminResponse::new();
+        resp.set_commit_merge(CommitMergeResponse::new());
+
+        if self.merge_state != MergeState::Merging {
+            // Just ignore this command since it's a retry of previous commit merge command.
+            info!("{} not in region merge Merging state, ignore retry commit merge {:?}",
+                  self.tag,
+                  commit_merge);
+            Ok((resp, None))
+        } else {
+            if self.should_delay_commit_merge(commit_merge.get_from_region().clone()) {
+                self.apply_delayed = true;
+                return Err(box_err!("skip to apply commit merge command because another region \
+                                     has not been suspended"));
+            }
+
+            let state_key = keys::region_state_key(self.region().get_id());
+            let mut region_local_state = self.engine
+                .get_msg::<RegionLocalState>(&state_key)
+                .unwrap()
+                .unwrap();
+            let mut merge_state = RegionMergeState::new();
+            // Update region's merge state
+            merge_state.set_state(MergeState::NoMerge);
+            region_local_state.set_merge_state(merge_state);
+            // Merge region range
+            let to_shutdown = commit_merge.get_from_region().clone();
+            let old_region = self.region().clone();
+            let mut new_region = old_region.clone();
+            // The ranges in `from_region`, `into_region` should be adjacent.
+            // TODO add checking for that relationship
+            if to_shutdown.get_start_key() < old_region.get_start_key() {
+                // The range of r1 is ahead of the range of r2
+                new_region.set_start_key(to_shutdown.get_start_key().to_vec());
+                new_region.set_end_key(old_region.get_end_key().to_vec());
+            } else {
+                // The range of r2 is ahead of the range of r1
+                new_region.set_start_key(old_region.get_start_key().to_vec());
+                new_region.set_end_key(to_shutdown.get_end_key().to_vec());
+            }
+            // Update region epoch version.
+            let region_version = old_region.get_region_epoch().get_version() + 1;
+            new_region.mut_region_epoch().set_version(region_version);
+            region_local_state.set_region(new_region.clone());
+            // Persist peer local state
+            ctx.wb.put_msg(&state_key, &region_local_state.clone()).unwrap_or_else(|e| {
+                panic!("{} failed to set peer state {:?}: {:?}",
+                       self.tag,
+                       region_local_state,
+                       e);
+            });
+
+            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["commit merge", "success"]).inc();
+
+            Ok((resp,
+                Some(ExecResult::CommitMerge {
+                new: new_region,
+                old: old_region,
+                to_shutdown: commit_merge.get_from_region().clone(),
+            })))
+        }
+    }
+
+    fn exec_shutdown_region(&mut self,
+                            _ctx: &ExecContext,
+                            req: &AdminRequest)
+                            -> Result<(AdminResponse, Option<ExecResult>)> {
+        let shutdown_region = req.get_shutdown_region();
+        let region = shutdown_region.get_region();
+
+        info!("{} shutdown region {:?}", self.tag, region);
+
+        // TODO check region == self.region()
+
+        let mut resp = AdminResponse::new();
+        resp.set_shutdown_region(ShutdownRegionResponse::new());
+
+        // If this peer is in the region which is asked to shutdown, it will destroy itself.
+        let peer_id = self.peer_id();
+        if region.get_peers().iter().any(|p| p.get_id() == peer_id) {
+            Ok((resp,
+                Some(ExecResult::ShutdownRegion {
+                region: self.region().clone(),
+                peer: self.peer.clone(),
+            })))
+        } else {
+            Ok((resp, None))
+        }
+    }
+
+    fn exec_rollback_merge(&mut self,
+                           ctx: &ExecContext,
+                           req: &AdminRequest)
+                           -> Result<(AdminResponse, Option<ExecResult>)> {
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["rollback merge", "all"]).inc();
+
+        let rollback_merge = req.get_rollback_merge();
+        info!("{} rollback merge, from region {:?}, into_region {:?}",
+              self.tag,
+              rollback_merge.get_from_region(),
+              rollback_merge.get_into_region());
+
+        let mut resp = AdminResponse::new();
+        resp.set_rollback_merge(RollbackMergeResponse::new());
+
+        if self.merge_state != MergeState::Merging {
+            info!("{} not in merge state, currunt state {:?}, ignore rollback merge request {:?}",
+                  self.tag,
+                  self.merge_state,
+                  rollback_merge);
+            Ok((resp, None))
+        } else {
+            // TODO check from_region in `rollback_merge` is the same with
+            // the one in merge local state
+
+            // Update peer local state.
+            let mut merge_state = RegionMergeState::new();
+            merge_state.set_state(MergeState::NoMerge);
+            self.set_peer_merge_state(&ctx.wb, merge_state.clone()).unwrap_or_else(|e| {
+                panic!("{} failed to set peer merge state {:?}: {:?}",
+                       self.tag,
+                       merge_state,
+                       e);
+            });
+
+            PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["rollback merge", "success"]).inc();
+            Ok((resp,
+                Some(ExecResult::RollbackMerge {
+                from_region: rollback_merge.get_from_region().clone(),
+                into_region: self.region().clone(),
+            })))
+        }
     }
 
     fn exec_compact_log(&mut self,
@@ -1704,6 +2260,7 @@ impl Peer {
         } else {
             self.size_diff_hint = 0;
         }
+        self.delete_count += 1;
         let resp = Response::new();
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();

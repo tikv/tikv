@@ -209,6 +209,9 @@ mod tests {
         fn ask_split(&self, _: metapb::Region) -> Result<pdpb::AskSplitResponse> {
             unimplemented!();
         }
+        fn ask_merge(&self, _: metapb::Region) -> Result<pdpb::AskMergeResponse> {
+            unimplemented!();
+        }
         fn store_heartbeat(&self, _: pdpb::StoreStats) -> Result<()> {
             unimplemented!();
         }

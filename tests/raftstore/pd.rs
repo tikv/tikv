@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
-use std::collections::Bound::{Excluded, Unbounded};
+use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -26,6 +26,8 @@ use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
 use super::util::*;
+
+pub const ALLOC_BASE_ID: usize = 1000;
 
 // Rule is just for special test which we want do more accurate control
 // instead of origin max_peer_count check.
@@ -53,6 +55,10 @@ struct Cluster {
     split_count: usize,
 
     down_peers: HashMap<u64, pdpb::PeerStats>,
+
+    merging_region_ids: HashMap<u64, u64>,
+    shutdown_region_ids: HashSet<u64>,
+    merge_count: usize,
 }
 
 impl Cluster {
@@ -66,11 +72,14 @@ impl Cluster {
             stores: HashMap::new(),
             regions: BTreeMap::new(),
             region_id_keys: HashMap::new(),
-            base_id: AtomicUsize::new(1000),
+            base_id: AtomicUsize::new(ALLOC_BASE_ID),
             rule: None,
             store_stats: HashMap::new(),
             split_count: 0,
             down_peers: HashMap::new(),
+            merging_region_ids: HashMap::new(),
+            shutdown_region_ids: HashSet::new(),
+            merge_count: 0,
         }
     }
 
@@ -115,6 +124,28 @@ impl Cluster {
             .map(|(_, region)| region.clone())
     }
 
+    fn get_idle_neighbour_region(&self, region: &metapb::Region) -> Option<metapb::Region> {
+        let end_key = enc_end_key(region);
+        if let Some(r) = self.regions
+            .range::<Key, Key>(Excluded(&end_key), Unbounded)
+            .next()
+            .map(|(_, region)| region.clone()) {
+            if self.is_merging_region(&r).is_none() {
+                return Some(r);
+            }
+        }
+        let start_key = enc_start_key(region);
+        if let Some(r) = self.regions
+            .range::<Key, Key>(Unbounded, Included(&start_key))
+            .last()
+            .map(|(_, region)| region.clone()) {
+            if self.is_merging_region(&r).is_none() {
+                return Some(r);
+            }
+        }
+        None
+    }
+
     fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
         Ok(self.region_id_keys.get(&region_id).and_then(|k| self.regions.get(k).cloned()))
     }
@@ -133,6 +164,134 @@ impl Cluster {
         let end_key = enc_end_key(region);
         assert!(self.regions.remove(&end_key).is_some());
         assert!(self.region_id_keys.remove(&region.get_id()).is_some());
+    }
+
+    fn add_region_merge(&mut self, into_region: &metapb::Region, from_region: &metapb::Region) {
+        self.merging_region_ids.insert(into_region.get_id(), from_region.get_id());
+    }
+
+    fn is_merging_region(&self, region: &metapb::Region) -> Option<(u64, u64)> {
+        let region_id = region.get_id();
+        match self.merging_region_ids
+            .iter()
+            .find(move |&(&k, &v)| k == region_id || v == region_id) {
+            Some((&k, &v)) => Some((k, v)),
+            None => None,
+        }
+    }
+
+    fn handle_heartbeat_merge(&mut self,
+                              region: metapb::Region,
+                              into_region_id: u64,
+                              from_region_id: u64)
+                              -> Result<pdpb::RegionHeartbeatResponse> {
+        let cur_region = try!(self.get_region_by_id(region.get_id())).unwrap();
+        let version = region.get_region_epoch().get_version();
+        let cur_version = cur_region.get_region_epoch().get_version();
+        let mut resp = pdpb::RegionHeartbeatResponse::new();
+        if version > cur_version {
+            if region.get_id() == into_region_id {
+                // region merge is committed
+                // remove the from region
+                let from_region = try!(self.get_region_by_id(from_region_id)).unwrap();
+                self.remove_region(&from_region);
+                // clear down_peers
+                for peer in from_region.get_peers() {
+                    self.down_peers.remove(&peer.get_id());
+                }
+                // mark from region as shutdown
+                self.shutdown_region_ids.insert(from_region_id);
+                self.merge_count += 1;
+            }
+            // There are two possible cases:
+            // 1. region merge is done
+            // 2. region merge is cancelled or rollbacked
+            // In either case, PD should update the corresponding region info and
+            // exit region merge procedure.
+            self.remove_region(&cur_region);
+            self.add_region(&region);
+            self.merging_region_ids.remove(&into_region_id);
+            return Ok(resp);
+        }
+
+        // update region info in PD
+        self.remove_region(&cur_region);
+        self.add_region(&region);
+
+        if region.get_id() == from_region_id {
+            // migrate data in `from_region` to `into_region` if necessary
+            let into_region = try!(self.get_region_by_id(into_region_id)).unwrap();
+            let mut into_store_ids = HashSet::new();
+            let mut into_store_peers = HashMap::new();
+            for p in into_region.get_peers() {
+                into_store_ids.insert(p.get_store_id());
+                into_store_peers.insert(p.get_store_id(), p.get_id());
+            }
+            let mut from_store_ids = HashSet::new();
+            let mut from_store_peers = HashMap::new();
+            for p in region.get_peers() {
+                from_store_ids.insert(p.get_store_id());
+                from_store_peers.insert(p.get_store_id(), p.get_id());
+            }
+            if from_store_peers.len() <= into_store_peers.len() {
+                let diff = &into_store_ids - &from_store_ids;
+                if diff.is_empty() {
+                    // all peers in line
+                    return Ok(resp);
+                }
+                let store_id = diff.iter().next().unwrap();
+                let new_peer_id = self.alloc_id().unwrap();
+                let to_add = new_peer(*store_id, new_peer_id);
+                // add a peer
+                let mut change_peer = pdpb::ChangePeer::new();
+                change_peer.set_change_type(eraftpb::ConfChangeType::AddNode);
+                change_peer.set_peer(to_add);
+                resp.set_change_peer(change_peer);
+                Ok(resp)
+            } else {
+                let diff = &from_store_ids - &into_store_ids;
+                let store_id = diff.iter().next().unwrap();
+                let peer_id = from_store_peers.get(store_id).unwrap();
+                let to_remove = new_peer(*store_id, *peer_id);
+                // remove a peer
+                let mut change_peer = pdpb::ChangePeer::new();
+                change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode);
+                change_peer.set_peer(to_remove);
+                resp.set_change_peer(change_peer);
+                Ok(resp)
+            }
+        } else {
+            let from_region = match try!(self.get_region_by_id(from_region_id)) {
+                Some(r) => r,
+                None => return Ok(resp),
+            };
+            // check whether the data migration is finished
+            let mut into_store_ids = HashSet::new();
+            let mut into_store_peers = HashMap::new();
+            for p in region.get_peers() {
+                into_store_ids.insert(p.get_store_id());
+                into_store_peers.insert(p.get_store_id(), p.get_id());
+            }
+            let mut from_store_ids = HashSet::new();
+            let mut from_store_peers = HashMap::new();
+            for p in from_region.get_peers() {
+                from_store_ids.insert(p.get_store_id());
+                from_store_peers.insert(p.get_store_id(), p.get_id());
+            }
+            if from_store_peers.len() == into_store_peers.len() {
+                let diff = &into_store_ids - &from_store_ids;
+                if diff.is_empty() {
+                    // start to merge meta-data and peers
+                    let mut merge_region = pdpb::MergeRegion::new();
+                    merge_region.set_from_region(from_region.clone());
+                    merge_region.set_into_region(region);
+                    resp.set_merge_region(merge_region);
+                    return Ok(resp);
+                }
+            }
+            // wait for the data migration
+            Ok(resp)
+        }
     }
 
     fn handle_heartbeat_version(&mut self, region: metapb::Region) -> Result<()> {
@@ -277,6 +436,13 @@ impl Cluster {
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
+        if self.shutdown_region_ids.contains(&region.get_id()) {
+            let mut resp = pdpb::RegionHeartbeatResponse::new();
+            let mut shutdown_region = pdpb::ShutdownRegion::new();
+            shutdown_region.set_region(region);
+            resp.set_shutdown_region(shutdown_region);
+            return Ok(resp);
+        }
         for peer in &down_peers {
             self.down_peers.insert(peer.get_peer().get_id(), peer.clone());
         }
@@ -289,8 +455,12 @@ impl Cluster {
             self.down_peers.remove(&peer.get_id());
         }
 
-        try!(self.handle_heartbeat_version(region.clone()));
-        self.handle_heartbeat_conf_ver(region, leader)
+        if let Some((into_region_id, from_region_id)) = self.is_merging_region(&region) {
+            self.handle_heartbeat_merge(region, into_region_id, from_region_id)
+        } else {
+            try!(self.handle_heartbeat_version(region.clone()));
+            self.handle_heartbeat_conf_ver(region, leader)
+        }
     }
 }
 
@@ -465,12 +635,36 @@ impl TestPdClient {
         true
     }
 
+    pub fn check_merge(&self, region: &metapb::Region) -> bool {
+        if let Ok(r) = self.get_region(region.get_start_key()) {
+            if r.get_start_key() < region.get_start_key() {
+                return true;
+            }
+        }
+        if let Ok(r) = self.get_region(region.get_end_key()) {
+            if region.get_end_key().is_empty() {
+                return false;
+            }
+            if r.get_end_key().is_empty() {
+                return true;
+            }
+            if r.get_end_key() > region.get_end_key() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn get_store_stats(&self, store_id: u64) -> Option<pdpb::StoreStats> {
         self.cluster.rl().store_stats.get(&store_id).cloned()
     }
 
     pub fn get_split_count(&self) -> usize {
         self.cluster.rl().split_count
+    }
+
+    pub fn get_merge_count(&self) -> usize {
+        self.cluster.rl().merge_count
     }
 
     pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
@@ -546,6 +740,8 @@ impl PdClient for TestPdClient {
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
         try!(self.check_bootstrap());
 
+        // TODO reject split request if this region is in region merge
+
         // Must ConfVer and Version be same?
         let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap().unwrap();
         try!(check_stale_region(&cur_region, &region));
@@ -559,6 +755,20 @@ impl PdClient for TestPdClient {
         resp.set_new_peer_ids(peer_ids);
 
         Ok(resp)
+    }
+
+    fn ask_merge(&self, region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
+        try!(self.check_bootstrap());
+        let mut resp = pdpb::AskMergeResponse::new();
+        let neighbour = self.cluster.rl().get_idle_neighbour_region(&region);
+        match neighbour {
+            Some(into_region) => {
+                self.cluster.wl().add_region_merge(&into_region, &region);
+                resp.set_into_region(into_region);
+                Ok(resp)
+            }
+            None => Err(Error::Other(box_err!("no proper neighbour region to merge"))),
+        }
     }
 
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {

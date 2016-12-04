@@ -150,6 +150,18 @@ impl super::PdClient for RpcClient {
         Ok(resp.take_ask_split())
     }
 
+    fn ask_merge(&self, region: metapb::Region) -> Result<pdpb::AskMergeResponse> {
+        let mut ask_merge = pdpb::AskMergeRequest::new();
+        ask_merge.set_from_region(region);
+
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::AskMerge);
+        req.set_ask_merge(ask_merge);
+
+        let mut resp = try!(self.send(&req));
+        try!(check_resp(&resp));
+        Ok(resp.take_ask_merge())
+    }
+
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
         let mut heartbeat = pdpb::StoreHeartbeatRequest::new();
         heartbeat.set_stats(stats);
@@ -196,6 +208,8 @@ fn check_resp(resp: &pdpb::Response) -> Result<()> {
     // TODO: translate more error types
     if error.has_bootstrapped() {
         Err(Error::ClusterBootstrapped(header.get_cluster_id()))
+    } else if error.has_is_shutdown() {
+        Err(Error::RegionIsShutdown)
     } else {
         Err(box_err!(error.get_message()))
     }
