@@ -322,7 +322,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let t = Instant::now();
-        let mut region_to_retry_merge = vec![];
+        let mut merge_timeout_region = vec![];
         for (&region_id, peer) in self.region_peers.borrow_mut().iter_mut() {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
@@ -365,13 +365,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 if let Some((from_region, into_region)) =
                        peer.maybe_region_merge_timeout(self.cfg.region_merge_retry_duration) {
-                    region_to_retry_merge.push((from_region, into_region));
+                    merge_timeout_region.push((from_region, into_region));
                 }
             }
         }
 
         // retry region merge on timeout
-        for (from_region, into_region) in region_to_retry_merge {
+        for (from_region, into_region) in merge_timeout_region {
             self.retry_region_merge(from_region, into_region);
         }
 
@@ -1000,8 +1000,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
               into_region,
               from_region);
 
-        let region_peers = self.region_peers.borrow();
-        let into_peer = region_peers.get(&into_region.get_id()).unwrap();
+        let mut region_peers = self.region_peers.borrow_mut();
+        let into_peer = region_peers.get_mut(&into_region.get_id()).unwrap();
+
+        // Reset the apply_delayed status.
+        into_peer.reset_apply_delayed();
+        // Send commit merge command.
         let request = new_commit_merge_request(from_region.clone(),
                                                into_region.clone(),
                                                into_peer.peer.clone());
