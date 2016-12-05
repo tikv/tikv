@@ -394,6 +394,11 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let err = resp.get_header().get_error();
+        if err.has_stale_command() {
+            // command got truncated, leadership may have changed.
+            self.reset_leader_of_region(region_id);
+            return true;
+        }
         if !err.has_not_leader() {
             return false;
         }
