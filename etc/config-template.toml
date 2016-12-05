@@ -120,6 +120,9 @@ create-if-missing = true
 # 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 wal-recovery-mode = 2
 
+# rocksdb max total wal size
+# max-total-wal-size = "4GB"
+
 # Rocksdb Statistics provides cumulative stats over time.
 # Set it ture only when debugging performance, because it will introduce overhead.
 enable-statistics = false
