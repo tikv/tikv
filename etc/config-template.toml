@@ -57,6 +57,8 @@ region-split-size = "64MB"
 # When region size changes exceeds region-split-check-diff, we should check 
 # whether the region should be split or not. 
 region-split-check-diff = "8MB"
+# Interval to check region whether need to be split or not.
+split-region-check-tick-interval = "5s"
 
 # Interval to gc unnecessary raft log.
 # raft-log-gc-tick-interval = "10s"
