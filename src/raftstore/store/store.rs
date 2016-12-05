@@ -1068,52 +1068,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
               old,
               new);
 
-        if self.region_peers.borrow().contains_key(&to_shutdown.get_id()) {
-            let mut destroy = false;
-            let to_shutdown_peer_info;
-            let merge_state;
-            {
-                let region_peers = self.region_peers.borrow();
-                let to_shutdown_peer = region_peers.get(&to_shutdown.get_id()).unwrap();
-                to_shutdown_peer_info = to_shutdown_peer.peer.clone();
-                merge_state = to_shutdown_peer.merge_state;
-                if to_shutdown_peer.merge_state != MergeState::Suspended {
-                    destroy = true;
-                }
-            }
-            if destroy {
-                warn!("{} destroy peers in from region {:?} and into region {:?} when \
-                       committing merge, because peer in from region is in merge state {:?}, \
-                       which may corrupt consistency.",
-                      self.tag,
-                      to_shutdown,
-                      old,
-                      merge_state);
-                self.destroy_peer(to_shutdown.get_id(), to_shutdown_peer_info);
-                let old_peer_info;
-                {
-                    let region_peers = self.region_peers.borrow();
-                    let old_peer = region_peers.get(&old.get_id()).unwrap();
-                    old_peer_info = old_peer.peer.clone();
-                }
-                self.destroy_peer(old.get_id(), old_peer_info);
-                return;
-            }
 
-            // Move the range of the `to_shutdown` region to `region_ranges_to_shutdown`.
-            self.region_ranges.remove(&enc_end_key(&to_shutdown)).unwrap();
-            self.region_ranges_to_shutdown.insert(enc_end_key(&to_shutdown), to_shutdown.get_id());
-            // Send a shutdown command to the `to_shutdown_peer`.
-            let request = new_shutdown_region_request(to_shutdown, to_shutdown_peer_info);
-            if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
-                request: request,
-                callback: Box::new(|_| {}),
-            }) {
-                error!("store {} failed to send suspend region, err {:?}",
-                       self.store_id(),
-                       e)
-            }
-        } else {
+        let region_peers = self.region_peers.borrow();
+        let peer = region_peers.get(&new.get_id()).unwrap();
+
+        // Mark region range of region `to_shutdown` to be shutdown.
+        if self.region_ranges.remove(&enc_end_key(&to_shutdown)).is_none() {
             // If no peer in the `self.region_peers` for `from_region`, the peer in `into_region`
             // should be a slow follower.
             // When it applies the commit merge command, the region merge is done.
@@ -1123,17 +1083,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             warn!("{} has no region {:?} to shutdown when committing region merge",
                   self.tag,
                   to_shutdown);
+        } else {
+            // Move the range of the `to_shutdown` region to `region_ranges_to_shutdown`.
+            self.region_ranges_to_shutdown.insert(enc_end_key(&to_shutdown), to_shutdown.get_id());
+            if peer.is_leader() {
+                // Send a shutdown command to the region `to_shutdown`.
+                let to_shutdown_peer = region_peers.get(&to_shutdown.get_id()).unwrap();
+                let request = new_shutdown_region_request(to_shutdown,
+                                                          to_shutdown_peer.peer.clone());
+                if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
+                    request: request,
+                    callback: Box::new(|_| {}),
+                }) {
+                    error!("store {} failed to send suspend region, err {:?}",
+                           self.store_id(),
+                           e)
+                }
+            }
         }
 
-        // Update region info for `new`.
+        // Update region info for region `new`.
         if self.region_ranges.remove(&enc_end_key(&old)).is_none() {
             panic!("{} has no into region {:?} when committing region merge",
                    self.tag,
                    old);
         }
         self.region_ranges.insert(enc_end_key(&new), new.get_id());
-        let region_peers = self.region_peers.borrow();
-        let peer = region_peers.get(&new.get_id()).unwrap();
+
         if peer.is_leader() {
             // Send region heartbeat to notify PD that the region merge is done.
             self.heartbeat_pd(peer);
