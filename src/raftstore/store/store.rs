@@ -323,9 +323,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let t = Instant::now();
         let mut merge_timeout_region = vec![];
+        let mut shutdown_region = vec![];
         for (&region_id, peer) in self.region_peers.borrow_mut().iter_mut() {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
+
+                if peer.check_defer_shutdown_timeout(self.cfg.defer_shutdown_duration) {
+                    shutdown_region.push((peer.region().clone(), peer.peer.clone()));
+                    continue;
+                }
+
+                if let Some((from_region, into_region)) =
+                       peer.check_region_merge_timeout(self.cfg.region_merge_timeout_duration) {
+                    merge_timeout_region.push((from_region, into_region));
+                }
 
                 // If this peer detects the leader is missing for a long long time,
                 // it should consider itself as a stale peer which is removed from
@@ -362,12 +373,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         self.pending_raft_groups.insert(region_id);
                     }
                 }
-
-                if let Some((from_region, into_region)) =
-                       peer.check_region_merge_timeout(self.cfg.region_merge_timeout_duration) {
-                    merge_timeout_region.push((from_region, into_region));
-                }
             }
+        }
+
+        // shutdown region
+        for (region, peer) in shutdown_region {
+            self.shutdown_region(region, peer);
         }
 
         // retry region merge on timeout
@@ -1129,9 +1140,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_shutdown_region(&mut self, region: metapb::Region, peer: metapb::Peer) {
-        info!("{} destroy region {:?} on shutdown region command",
+    fn shutdown_region(&mut self, region: metapb::Region, peer: metapb::Peer) {
+        info!("{} destroy peer {:?} to shutdown region {:?}",
               self.tag,
+              peer,
               region);
         if self.region_peers.borrow().contains_key(&region.get_id()) {
             // Destroy the specified peer from this store.
@@ -1226,11 +1238,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::CommitMerge { new, old, to_shutdown } => {
                     self.on_ready_commit_merge(new, old, to_shutdown)
                 }
-                ExecResult::ShutdownRegion { region, peer } => {
-                    self.on_ready_shutdown_region(region, peer)
-                }
+                ExecResult::ShutdownRegion { .. } |
                 ExecResult::RollbackMerge { .. } => {
-                    // Nothing to do in store to rollback region merge.
+                    // Nothing to do in store
                 }
             }
         }

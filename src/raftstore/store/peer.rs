@@ -243,12 +243,12 @@ pub struct Peer {
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
 
+    region_peers: Rc<RefCell<HashMap<u64, Peer>>>,
     pub delete_count: u64,
     pub merge_state: MergeState,
     start_merge_time: Option<Instant>,
-    start_merge_index: u64,
-    region_peers: Rc<RefCell<HashMap<u64, Peer>>>,
     apply_delayed: bool,
+    shutdown_time: Option<Instant>,
 }
 
 impl Peer {
@@ -354,9 +354,9 @@ impl Peer {
             delete_count: 0,
             merge_state: merge_state,
             start_merge_time: Some(Instant::now()),
-            start_merge_index: 0,
             region_peers: store.region_peers(),
             apply_delayed: false,
+            shutdown_time: Some(Instant::now()),
         };
 
         peer.load_all_coprocessors();
@@ -596,7 +596,6 @@ impl Peer {
             }
             self.merge_state = MergeState::NoMerge;
             self.start_merge_time = None;
-            self.start_merge_index = 0;
         }
         Ok(())
     }
@@ -618,6 +617,16 @@ impl Peer {
             }
         }
         None
+    }
+
+    pub fn check_defer_shutdown_timeout(&mut self, d: Duration) -> bool {
+        if self.merge_state == MergeState::Shutdown {
+            let t = self.shutdown_time.unwrap();
+            if t.elapsed() >= d {
+                return true;
+            }
+        }
+        false
     }
 
     fn next_lease_expired_time(&self, send_to_quorum_ts: Timespec) -> Timespec {
@@ -1406,8 +1415,7 @@ impl Peer {
                     self.mut_store().region = region.clone();
                 }
                 ExecResult::ComputeHash { .. } |
-                ExecResult::VerifyHash { .. } |
-                ExecResult::ShutdownRegion { .. } => {}
+                ExecResult::VerifyHash { .. } => {}
                 ExecResult::CompactLog { first_index, ref state } => {
                     let total_cnt = index - first_index;
                     // the size of current CompactLog command can be ignored.
@@ -1420,7 +1428,6 @@ impl Peer {
                 ExecResult::StartMerge { .. } => {
                     self.merge_state = MergeState::Merging;
                     self.start_merge_time = Some(Instant::now());
-                    self.start_merge_index = index;
                 }
                 ExecResult::SuspendRegion { .. } => {
                     self.merge_state = MergeState::Suspended;
@@ -1429,12 +1436,14 @@ impl Peer {
                     self.mut_store().region = new.clone();
                     self.merge_state = MergeState::NoMerge;
                     self.start_merge_time = None;
-                    self.start_merge_index = 0;
+                }
+                ExecResult::ShutdownRegion { .. } => {
+                    self.shutdown_time = Some(Instant::now());
+                    self.merge_state = MergeState::Shutdown;
                 }
                 ExecResult::RollbackMerge { .. } => {
                     self.merge_state = MergeState::NoMerge;
                     self.start_merge_time = None;
-                    self.start_merge_index = 0;
                 }
             }
         }
@@ -2055,7 +2064,7 @@ impl Peer {
     }
 
     fn exec_shutdown_region(&mut self,
-                            _ctx: &ExecContext,
+                            ctx: &ExecContext,
                             req: &AdminRequest)
                             -> Result<(AdminResponse, Option<ExecResult>)> {
         let shutdown_region = req.get_shutdown_region();
@@ -2069,15 +2078,34 @@ impl Peer {
         resp.set_shutdown_region(ShutdownRegionResponse::new());
 
         // If this peer is in the region which is asked to shutdown, it will destroy itself.
-        let peer_id = self.peer_id();
-        if region.get_peers().iter().any(|p| p.get_id() == peer_id) {
-            Ok((resp,
-                Some(ExecResult::ShutdownRegion {
-                region: self.region().clone(),
-                peer: self.peer.clone(),
-            })))
-        } else {
+        if self.merge_state != MergeState::Suspended {
+            info!("{} no in suspended state, currunt state {:?}, ignore shutdown region request \
+                   {:?}",
+                  self.tag,
+                  self.merge_state,
+                  shutdown_region);
             Ok((resp, None))
+        } else {
+            let peer_id = self.peer_id();
+            if region.get_peers().iter().any(|p| p.get_id() == peer_id) {
+                // Update peer local state.
+                let mut merge_state = RegionMergeState::new();
+                merge_state.set_state(MergeState::Shutdown);
+                self.set_peer_merge_state(&ctx.wb, merge_state.clone()).unwrap_or_else(|e| {
+                    panic!("{} failed to set peer merge state {:?}: {:?}",
+                           self.tag,
+                           merge_state,
+                           e);
+                });
+
+                Ok((resp,
+                    Some(ExecResult::ShutdownRegion {
+                    region: self.region().clone(),
+                    peer: self.peer.clone(),
+                })))
+            } else {
+                Ok((resp, None))
+            }
         }
     }
 

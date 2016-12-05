@@ -59,6 +59,7 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // We should turn on this only in our tests.
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 0;
 const DEFAULT_REGION_MERGE_TIMEOUT_DURATION_SECS: u64 = 5;
+const DEFAULT_DEFER_SHUTDOWN_DURATION_SECS: u64 = 60 * 10;   // 10 min
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -137,6 +138,10 @@ pub struct Config {
     /// try to validate the epoch of "the from region" and retry the region merge procedure.
     /// If that epoch has changed, region merge will be rollbacked.
     pub region_merge_timeout_duration: Duration,
+
+    /// After appling a region shutdown command, a peer will defer the shutdown and destroy action
+    /// util later the time `defer_shutdown_duration` has passed.
+    pub defer_shutdown_duration: Duration,
 }
 
 impl Default for Config {
@@ -174,6 +179,7 @@ impl Default for Config {
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS,
             region_merge_timeout_duration:
                 Duration::from_secs(DEFAULT_REGION_MERGE_TIMEOUT_DURATION_SECS),
+            defer_shutdown_duration: Duration::from_secs(DEFAULT_DEFER_SHUTDOWN_DURATION_SECS),
         }
     }
 }
