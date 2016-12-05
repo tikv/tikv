@@ -111,6 +111,13 @@ max-manifest-file-size = "20MB"
 # If true, the database will be created if it is missing.
 create-if-missing = true
 
+# This specifies the info LOG dir.
+# If it is empty, the log files will be in the same dir as data.
+# If it is non empty, the log files will be in the specified dir,
+# and the db data dir's absolute path will be used as the log file
+# name's prefix.
+log-dir = ""
+
 # rocksdb wal recovery mode
 # 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
 # 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;

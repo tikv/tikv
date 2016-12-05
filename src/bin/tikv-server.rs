@@ -221,6 +221,14 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let create_if_missing = get_toml_boolean(config, "rocksdb.create-if-missing", Some(true));
     opts.create_if_missing(create_if_missing);
 
+    let log_dir = get_toml_string(config, "rocksdb.log-dir", Some(String::new()));
+    if !log_dir.is_empty() {
+        if let Err(e) = fs::create_dir_all(&log_dir) {
+            exit_with_err(format!("{:?}", e));
+        }
+        opts.set_db_log_dir(&log_dir);
+    }
+
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     opts.set_max_open_files(max_open_files as i32);
 
