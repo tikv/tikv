@@ -93,6 +93,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     tag: String,
 
     start_time: Timespec,
+    is_busy: bool,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -146,6 +147,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             raft_metrics: RaftMetrics::default(),
             tag: tag,
             start_time: time::get_time(),
+            is_busy: false,
         };
         try!(s.init());
         Ok(s)
@@ -700,8 +702,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.on_ready_result(region_id, res)
         }
 
+        let dur = duration_to_nanos(t.elapsed());
+        if dur >= self.cfg.raft_base_tick_interval * self.cfg.raft_election_timeout_ticks as u64 {
+            self.is_busy = true;
+        }
+
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
-            .inc_by(duration_to_nanos(t.elapsed()) as f64)
+            .inc_by(dur as f64)
             .unwrap();
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
@@ -1301,6 +1308,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .set(apply_snapshot_count as f64);
 
         stats.set_start_time(self.start_time.sec as u32);
+
+        stats.set_is_busy(self.is_busy);
+        self.is_busy = false;
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("{} failed to notify pd: {}", self.tag, e);
