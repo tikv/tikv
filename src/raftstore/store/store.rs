@@ -244,6 +244,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_store_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
+        self.register_consistency_check_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
