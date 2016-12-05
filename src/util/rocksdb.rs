@@ -140,11 +140,8 @@ fn db_exist(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::str;
-
     use rocksdb::{DB, Options};
     use tempdir::TempDir;
-
     use super::check_column_families;
 
     #[test]
