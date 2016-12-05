@@ -21,7 +21,7 @@ use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
 
 fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.lock_cf_compact_interval_secs = 1;
+    cluster.cfg.raft_store.lock_cf_compact_interval = 1000;
     cluster.run();
 
     for i in 1..9 {
