@@ -425,20 +425,18 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.raft-log-gc-size-limit",
                      Some(48 * 1024 * 1024)) as u64;
 
-    cfg.raft_store.region_compact_check_interval_secs =
+    cfg.raft_store.region_compact_check_interval =
         get_toml_int(config,
-                     "raftstore.region-compact-check-interval-secs",
-                     Some(300)) as u64;
+                     "raftstore.region-compact-check-interval",
+                     Some(300_000)) as u64;
 
     cfg.raft_store.region_compact_delete_keys_count =
         get_toml_int(config,
                      "raftstore.region-compact-delete-keys-count",
                      Some(1_000_000)) as u64;
 
-    cfg.raft_store.lock_cf_compact_interval_secs =
-        get_toml_int(config,
-                     "raftstore.lock-cf-compact-interval-secs",
-                     Some(300_000)) as u64;
+    cfg.raft_store.lock_cf_compact_interval =
+        get_toml_int(config, "raftstore.lock-cf-compact-interval", Some(600_000)) as u64;
 
     let max_peer_down_millis =
         get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
@@ -453,7 +451,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      Some(10_000)) as u64;
 
     cfg.raft_store.consistency_check_tick_interval =
-        get_toml_int(config, "raftstore.consistency-check-interval-secs", Some(0)) as u64;
+        get_toml_int(config, "raftstore.consistency-check-interval", Some(0)) as u64;
 
     cfg.storage.sched_notify_capacity =
         get_toml_int(config, "storage.scheduler-notify-capacity", Some(10240)) as usize;
