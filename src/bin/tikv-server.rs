@@ -45,7 +45,7 @@ use mio::EventLoop;
 use fs2::FileExt;
 use prometheus::{Encoder, TextEncoder};
 
-use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
+use tikv::storage::{Storage, TEMP_DIR, ALL_CFS, CF_LOCK};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config, bind,
@@ -337,20 +337,34 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
     get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false)
 }
 
-fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
+fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(16 * 1024);
-    block_base_opts.set_lru_cache(32 * 1024 * 1024);
+    let block_cache_size = get_toml_int(config,
+                                        "rocksdb.lockcf.block-cache-size",
+                                        Some(32 * 1024 * 1024));
+    block_base_opts.set_lru_cache(block_cache_size as usize);
     block_base_opts.set_bloom_filter(10, false);
     opts.set_block_based_table_factory(&block_base_opts);
 
-    let cpl = "no:no:no:no:no:no:no".to_owned();
+    // set num level = 3, this will cause compaction more frequently,
+    // this is usefull for lock cf.
+    opts.set_num_levels(3);
+
+    let cpl = "no:no:no".to_owned();
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
-    opts.set_write_buffer_size(32 * 1024 * 1024);
+    let write_buffer_size = get_toml_int(config,
+                                         "rocksdb.lockcf.write-buffer-size",
+                                         Some(32 * 1024 * 1024));
+    opts.set_write_buffer_size(write_buffer_size as u64);
     opts.set_max_write_buffer_number(5);
-    opts.set_max_bytes_for_level_base(32 * 1024 * 1024);
+
+    let max_bytes_for_level_base = get_toml_int(config,
+                                                "rocksdb.lockcf.max-bytes-for-level-base",
+                                                Some(32 * 1024 * 1024));
+    opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
     opts.set_target_file_size_base(32 * 1024 * 1024);
 
     // set level0_file_num_compaction_trigger = 1 is very important,
@@ -440,11 +454,6 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.region-compact-delete-keys-count",
                      Some(1_000_000)) as u64;
 
-    cfg.raft_store.lock_cf_compact_interval_secs =
-        get_toml_int(config,
-                     "raftstore.lock-cf-compact-interval-secs",
-                     Some(300_000)) as u64;
-
     let max_peer_down_millis =
         get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
     cfg.raft_store.max_peer_down_duration = Duration::from_millis(max_peer_down_millis);
@@ -481,14 +490,17 @@ fn build_raftkv(config: &toml::Value,
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_db_option(config);
     let cfs_opts = vec![get_rocksdb_default_cf_option(config),
-                        get_rocksdb_lock_cf_option(),
+                        get_rocksdb_lock_cf_option(config),
                         get_rocksdb_write_cf_option(config),
                         get_rocksdb_raftlog_cf_option(config)];
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine =
-        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), ALL_CFS, cfs_opts)
-            .unwrap());
+    let engine = Arc::new(rocksdb_util::new_engine_opt(opts,
+                                                       db_path.to_str().unwrap(),
+                                                       ALL_CFS,
+                                                       cfs_opts,
+                                                       &[CF_LOCK])
+        .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
     let mut node = Node::new(&mut event_loop, cfg, pd_client);

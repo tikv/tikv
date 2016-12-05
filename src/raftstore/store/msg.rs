@@ -32,7 +32,6 @@ pub enum Tick {
     PdHeartbeat,
     PdStoreHeartbeat,
     SnapGc,
-    CompactLockCf,
     ConsistencyCheck,
 }
 
