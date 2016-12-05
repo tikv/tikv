@@ -601,7 +601,7 @@ impl Peer {
         Ok(())
     }
 
-    pub fn maybe_region_merge_timeout(&mut self,
+    pub fn check_region_merge_timeout(&mut self,
                                       d: Duration)
                                       -> Option<(metapb::Region, metapb::Region)> {
         if self.merge_state == MergeState::Merging {

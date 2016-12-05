@@ -58,7 +58,7 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // Disable consistency check by default as it will hurt performance.
 // We should turn on this only in our tests.
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 0;
-const DEFAULT_REGION_MERGE_RETRY_DURATION_SECS: u64 = 5;
+const DEFAULT_REGION_MERGE_TIMEOUT_DURATION_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -132,11 +132,11 @@ pub struct Config {
     pub consistency_check_tick_interval: u64,
 
     /// If the region merge could not succeed over the time specified in
-    /// `region_merge_retry_duration` (probably due to admin command lost),
+    /// `region_merge_timeout_duration` (probably due to admin command lost),
     /// the peer in "the into region" (also known as "the control region") will
     /// try to validate the epoch of "the from region" and retry the region merge procedure.
     /// If that epoch has changed, region merge will be rollbacked.
-    pub region_merge_retry_duration: Duration,
+    pub region_merge_timeout_duration: Duration,
 }
 
 impl Default for Config {
@@ -172,8 +172,8 @@ impl Default for Config {
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS,
-            region_merge_retry_duration:
-                Duration::from_secs(DEFAULT_REGION_MERGE_RETRY_DURATION_SECS),
+            region_merge_timeout_duration:
+                Duration::from_secs(DEFAULT_REGION_MERGE_TIMEOUT_DURATION_SECS),
         }
     }
 }

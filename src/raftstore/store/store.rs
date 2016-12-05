@@ -364,7 +364,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
 
                 if let Some((from_region, into_region)) =
-                       peer.maybe_region_merge_timeout(self.cfg.region_merge_retry_duration) {
+                       peer.check_region_merge_timeout(self.cfg.region_merge_timeout_duration) {
                     merge_timeout_region.push((from_region, into_region));
                 }
             }
