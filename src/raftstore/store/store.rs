@@ -702,13 +702,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.on_ready_result(region_id, res)
         }
 
-        let dur = duration_to_nanos(t.elapsed());
-        if dur >= self.cfg.raft_base_tick_interval * self.cfg.raft_election_timeout_ticks as u64 {
-            self.is_busy = true;
+        let dur = t.elapsed();
+        if !self.is_busy {
+            let election_timeout =
+                Duration::from_millis(self.cfg.raft_base_tick_interval *
+                                      self.cfg.raft_election_timeout_ticks as u64);
+            if dur >= election_timeout {
+                self.is_busy = true;
+            }
         }
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
-            .inc_by(dur as f64)
+            .inc_by(duration_to_nanos(dur) as f64)
             .unwrap();
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
