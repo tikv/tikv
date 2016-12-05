@@ -597,11 +597,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             if let Err(e) = self.store.stop() {
                 error!("failed to stop store: {:?}", e);
             }
-            if let Some(Err(e)) = end_point_handle.map(|h| h.join()) {
-                error!("failed to stop end point: {:?}", e);
-            }
-            if let Some(Err(e)) = snap_handle.map(|h| h.join()) {
-                error!("failed to stop snap handler: {:?}", e);
+            if cfg!(test) {
+                if let Some(Err(e)) = end_point_handle.map(|h| h.join()) {
+                    error!("failed to stop end point: {:?}", e);
+                }
+                if let Some(Err(e)) = snap_handle.map(|h| h.join()) {
+                    error!("failed to stop snap handler: {:?}", e);
+                }
             }
         }
     }
