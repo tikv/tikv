@@ -116,7 +116,7 @@ create-if-missing = true
 # If it is non empty, the log files will be in the specified dir,
 # and the db data dir's absolute path will be used as the log file
 # name's prefix.
-log-dir = ""
+# log-dir = "/path/to/log-dir"
 
 # rocksdb wal recovery mode
 # 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
