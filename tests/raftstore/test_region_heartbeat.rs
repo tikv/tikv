@@ -1,13 +1,16 @@
 use std::thread::sleep;
+use std::sync::mpsc;
 use std::time::{Instant, Duration};
 
 use rand::random;
 use kvproto::pdpb;
+use tikv::util::HandyRwLock;
 
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::cluster::{Cluster, Simulator};
-use super::transport_simulate::IsolationFilterFactory;
+use super::transport_simulate::*;
+use super::util::*;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
     let begin = Instant::now();
@@ -144,4 +147,65 @@ fn test_node_down_peers() {
 fn test_server_down_peers() {
     let mut cluster = new_server_cluster(0, 5);
     test_down_peers(&mut cluster, 5);
+}
+
+fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+
+    let region_id = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+
+    let (tx, _) = mpsc::channel();
+    cluster.sim.wl().add_recv_filter(2, box DropSnapshotFilter::new(tx));
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+
+    let mut tried_times = 0;
+    loop {
+        tried_times += 1;
+        if tried_times > 100 {
+            panic!("can't get pending peer after {} tries.", tried_times);
+        }
+        let pending_peers = cluster.pd_client.get_pending_peers();
+        if pending_peers.is_empty() {
+            sleep(Duration::from_millis(100));
+        } else {
+            assert_eq!(pending_peers[&2], new_peer(2, 2));
+            break;
+        }
+    }
+
+    cluster.sim.wl().clear_recv_filters(2);
+    cluster.must_put(b"k2", b"v2");
+
+    tried_times = 0;
+    loop {
+        tried_times += 1;
+        let pending_peers = cluster.pd_client.get_pending_peers();
+        if !pending_peers.is_empty() {
+            sleep(Duration::from_millis(100));
+        } else {
+            return;
+        }
+        if tried_times > 100 {
+            panic!("pending peer {:?} still exists after {} tries.",
+                   pending_peers,
+                   tried_times);
+        }
+    }
+}
+
+#[test]
+fn test_node_pending_peers() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_pending_peers(&mut cluster);
+}
+
+#[test]
+fn test_server_pending_peers() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_pending_peers(&mut cluster);
 }

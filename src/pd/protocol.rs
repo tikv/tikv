@@ -123,12 +123,14 @@ impl super::PdClient for RpcClient {
     fn region_heartbeat(&self,
                         region: metapb::Region,
                         leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>)
+                        down_peers: Vec<pdpb::PeerStats>,
+                        pending_peers: Vec<metapb::Peer>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         let mut heartbeat = pdpb::RegionHeartbeatRequest::new();
         heartbeat.set_region(region);
         heartbeat.set_leader(leader);
         heartbeat.set_down_peers(RepeatedField::from_vec(down_peers));
+        heartbeat.set_pending_peers(RepeatedField::from_vec(pending_peers));
 
         let mut req = new_request(self.cluster_id, pdpb::CommandType::RegionHeartbeat);
         req.set_region_heartbeat(heartbeat);
