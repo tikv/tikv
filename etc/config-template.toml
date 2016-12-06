@@ -60,17 +60,32 @@ region-split-size = "64MB"
 # When region size changes exceeds region-split-check-diff, we should check 
 # whether the region should be split or not. 
 region-split-check-diff = "8MB"
+# Interval to check region whether need to be split or not.
+split-region-check-tick-interval = "5s"
+
+# Interval to gc unnecessary raft log.
+# raft-log-gc-tick-interval = "10s"
+# A threshold to gc stale raft log, must >= 1.
+# raft-log-gc-threshold = 50
+# When entry count exceed this value, gc will be forced trigger.
+# raft-log-gc-count-limit = 48000
+# When the approximate size of raft log entries exceed this value, gc will be forced trigger.
+# It's recommanded to set it to 3/4 of region-split-size.
+# raft-log-gc-size-limit = "48MB"
 
 # When a peer hasn't been active for max-peer-down-duration,
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
 
 # Interval to check whether start compaction for a region.
-# region-compact-check-interval-secs = 300
+# region-compact-check-interval = "5m"
 # When delete keys of a region exceeds the size, a compaction will be started.
 # region-compact-delete-keys-count = 200000
 # Interval to check whether start lock compaction for a region.
-# lock-cf-compact-interval-secs = 600
+# lock-cf-compact-interval = "10m"
+
+# Interval (s) to check region whether the data are consistent.
+# consistency-check-interval = 0
 
 [pd]
 # pd endpoints 
@@ -107,6 +122,9 @@ create-if-missing = true
 # 2 : PointInTimeRecovery, Recover to point-in-time consistency;
 # 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 wal-recovery-mode = 2
+
+# rocksdb max total wal size
+# max-total-wal-size = "4GB"
 
 # Rocksdb Statistics provides cumulative stats over time.
 # Set it ture only when debugging performance, because it will introduce overhead.

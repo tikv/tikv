@@ -16,6 +16,8 @@ use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
@@ -24,10 +26,11 @@ use tipb::expression::{Expr, ExprType};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use threadpool::ThreadPool;
-
-use storage::{Engine, SnapshotStore};
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
+use kvproto::errorpb::{self, ServerIsBusy};
+
+use storage::{Engine, SnapshotStore};
 use storage::{engine, Snapshot, Key, ScanMode};
 use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
@@ -50,6 +53,10 @@ pub const BATCH_ROW_COUNT: usize = 64;
 // be timeout already, so it can be safely aborted.
 const REQUEST_MAX_HANDLE_SECS: u64 = 60;
 const REQUEST_CHECKPOINT: usize = 255;
+// Assume a batch can be finished in 0.1ms, a batch at position x will wait about 0.0001 * x secs
+// to be actual started. Hence the queue should have at most REQUEST_MAX_HANDLE_SECS / 0.0001
+// batches.
+const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = REQUEST_MAX_HANDLE_SECS as usize * 10_000;
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
@@ -63,6 +70,9 @@ pub struct Host {
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
     pool: ThreadPool,
+    max_running_task_count: usize,
+    // count the tasks that have been scheduled to pool but not finished yet.
+    running_count: Arc<AtomicUsize>,
 }
 
 impl Host {
@@ -72,7 +82,9 @@ impl Host {
             sched: scheduler,
             reqs: HashMap::new(),
             last_req_id: 0,
+            max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
             pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), concurrency),
+            running_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -149,12 +161,24 @@ impl BatchRunnable<Task> for Host {
                     let snap = match snap_res {
                         Ok(s) => s,
                         Err(e) => {
-                            on_snap_failed(e, reqs);
+                            notify_batch_failed(e, reqs);
                             continue;
                         }
                     };
                     let end_point = TiDbEndPoint::new(snap);
-                    self.pool.execute(move || end_point.handle_requests(reqs));
+                    let running_count = self.running_count.clone();
+                    if running_count.load(Ordering::SeqCst) >= self.max_running_task_count {
+                        notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
+                        continue;
+                    }
+                    running_count.fetch_add(1, Ordering::SeqCst);
+                    let len = reqs.len() as f64;
+                    COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
+                    self.pool.execute(move || {
+                        end_point.handle_requests(reqs);
+                        running_count.fetch_sub(1, Ordering::SeqCst);
+                        COPR_PENDING_REQS.with_label_values(&["select"]).sub(len);
+                    });
                 }
             }
         }
@@ -163,11 +187,11 @@ impl BatchRunnable<Task> for Host {
             let id = self.last_req_id;
             let sched = self.sched.clone();
             if let Err(e) = self.engine.async_snapshot(reqs[0].req.get_context(),
-                                                       box move |res| {
+                                                       box move |(_, res)| {
                                                            sched.schedule(Task::SnapRes(id, res))
                                                                .unwrap()
                                                        }) {
-                on_snap_failed(e, reqs);
+                notify_batch_failed(e, reqs);
                 continue;
             }
             self.reqs.insert(id, reqs);
@@ -178,13 +202,23 @@ impl BatchRunnable<Task> for Host {
 fn on_error(e: Error, cb: OnResponse) {
     let mut resp = Response::new();
     match e {
-        Error::Region(e) => resp.set_region_error(e),
-        Error::Locked(info) => resp.set_locked(info),
-        Error::Other(_) => resp.set_other_error(format!("{}", e)),
+        Error::Region(e) => {
+            COPR_REQ_ERROR.with_label_values(&["select", "region"]).inc();
+            resp.set_region_error(e);
+        }
+        Error::Locked(info) => {
+            resp.set_locked(info);
+            COPR_REQ_ERROR.with_label_values(&["select", "lock"]).inc();
+        }
+        Error::Other(_) => {
+            resp.set_other_error(format!("{}", e));
+            COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
+        }
         Error::Outdated(deadline, now, tp) => {
             let t = get_req_type_str(tp);
             let elapsed = now.duration_since(deadline) +
                           Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+            COPR_REQ_ERROR.with_label_values(&["select", "outdated"]).inc();
             OUTDATED_REQ_WAIT_TIME.with_label_values(&["select", t])
                 .observe(elapsed.as_secs() as f64);
 
@@ -194,12 +228,19 @@ fn on_error(e: Error, cb: OnResponse) {
                 return;
             }
         }
+        Error::Full(allow) => {
+            COPR_REQ_ERROR.with_label_values(&["select", "full"]).inc();
+            let mut errorpb = errorpb::Error::new();
+            errorpb.set_message(format!("running batches reach limit {}", allow));
+            errorpb.set_server_is_busy(ServerIsBusy::new());
+            resp.set_region_error(errorpb);
+        }
     }
     respond(resp, cb);
 }
 
-fn on_snap_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
-    error!("failed to get snapshot: {:?}", e);
+fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
+    debug!("failed to handle batch request: {:?}", e);
     on_error(e.into(),
              box move |resp_msg: Message| {
                  for t in reqs {
@@ -837,6 +878,7 @@ mod tests {
     use kvproto::msgpb::MessageType;
 
     use std::sync::*;
+    use std::thread;
     use std::time::Duration;
 
     #[test]
@@ -864,5 +906,35 @@ mod tests {
         let copr_resp = resp.get_cop_resp();
         assert!(copr_resp.has_other_error());
         assert_eq!(copr_resp.get_other_error(), super::OUTDATED_ERROR_MSG);
+    }
+
+    #[test]
+    fn test_too_many_reqs() {
+        let mut worker = Worker::new("test-endpoint");
+        let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
+        let mut end_point = Host::new(engine, worker.scheduler(), 1);
+        end_point.max_running_task_count = 3;
+        worker.start_batch(end_point, 30).unwrap();
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..30 * 4 {
+            let tx = tx.clone();
+            let task = RequestTask::new(Request::new(),
+                                        box move |msg| {
+                                            thread::sleep(Duration::from_millis(100));
+                                            let _ = tx.send(msg);
+                                        });
+            worker.schedule(Task::Request(task)).unwrap();
+        }
+        for _ in 0..120 {
+            let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(resp.get_msg_type(), MessageType::CopResp);
+            let copr_resp = resp.get_cop_resp();
+            if !copr_resp.has_region_error() {
+                continue;
+            }
+            assert!(copr_resp.get_region_error().has_server_is_busy());
+            return;
+        }
+        panic!("suppose to get ServerIsBusy error.");
     }
 }

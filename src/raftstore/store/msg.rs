@@ -14,11 +14,12 @@
 use std::boxed::{Box, FnBox};
 use std::fmt;
 
-use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::RegionEpoch;
 use raft::SnapshotStatus;
+
+use util::escape;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 
@@ -32,6 +33,7 @@ pub enum Tick {
     PdStoreHeartbeat,
     SnapGc,
     CompactLockCf,
+    ConsistencyCheck,
 }
 
 pub enum Msg {
@@ -61,9 +63,12 @@ pub enum Msg {
 
     // For snapshot stats.
     SnapshotStats,
-    SnapGenRes {
+
+    // For consistency check
+    ComputeHashResult {
         region_id: u64,
-        snap: Option<Snapshot>,
+        index: u64,
+        hash: Vec<u8>,
     },
 }
 
@@ -88,11 +93,12 @@ impl fmt::Debug for Msg {
                        region_id)
             }
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
-            Msg::SnapGenRes { region_id, ref snap } => {
+            Msg::ComputeHashResult { region_id, index, ref hash } => {
                 write!(fmt,
-                       "SnapGenRes [region_id: {}, is_success: {}]",
+                       "ComputeHashResult [region_id: {}, index: {}, hash: {}]",
                        region_id,
-                       snap.is_some())
+                       index,
+                       escape(&hash))
             }
         }
     }

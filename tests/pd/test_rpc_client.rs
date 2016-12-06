@@ -62,3 +62,18 @@ fn test_rpc_client() {
         prev_id = alloc_id;
     }
 }
+
+#[test]
+fn test_rpc_client_safely_new() {
+    let endpoints_1 = match env::var("PD_ENDPOINTS") {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let endpoints_2 = match env::var("PD_ENDPOINTS_SEP") {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let endpoints = [endpoints_1, endpoints_2];
+
+    assert!(RpcClient::validate_endpoints(&endpoints).is_err());
+}

@@ -206,6 +206,11 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
+    let max_total_wal_size = get_toml_int(config,
+                                          "rocksdb.max-total-wal-size",
+                                          Some(4 * 1024 * 1024 * 1024));
+    opts.set_max_total_wal_size(max_total_wal_size as u64);
+
     let max_background_compactions =
         get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
     opts.set_max_background_compactions(max_background_compactions as i32);
@@ -392,6 +397,10 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
         get_toml_int(config, "raftstore.notify-capacity", Some(40960)) as usize;
     cfg.raft_store.messages_per_tick =
         get_toml_int(config, "raftstore.messages-per-tick", Some(4096)) as usize;
+    let interval = get_toml_int(config,
+                                "raftstore.split-region-check-tick-interval",
+                                Some(10000));
+    cfg.raft_store.split_region_check_tick_interval = interval as u64;
     cfg.raft_store.region_split_size =
         get_toml_int(config,
                      "raftstore.region-split-size",
@@ -404,20 +413,35 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.region-split-check-diff",
                      Some(8 * 1024 * 1024)) as u64;
 
-    cfg.raft_store.region_compact_check_interval_secs =
+    cfg.raft_store.raft_log_gc_tick_interval =
+        get_toml_int(config, "raftstore.raft-log-gc-tick-interval", Some(10_000)) as u64;
+
+    cfg.raft_store.raft_log_gc_threshold =
+        get_toml_int(config, "raftstore.raft-log-gc-threshold", Some(50)) as u64;
+
+    let default_size_limit = cfg.raft_store.raft_log_gc_count_limit as i64;
+    cfg.raft_store.raft_log_gc_count_limit =
         get_toml_int(config,
-                     "raftstore.region-compact-check-interval-secs",
-                     Some(300)) as u64;
+                     "raftstore.raft-log-gc-count-limit",
+                     Some(default_size_limit)) as u64;
+
+    cfg.raft_store.raft_log_gc_size_limit =
+        get_toml_int(config,
+                     "raftstore.raft-log-gc-size-limit",
+                     Some(48 * 1024 * 1024)) as u64;
+
+    cfg.raft_store.region_compact_check_interval =
+        get_toml_int(config,
+                     "raftstore.region-compact-check-interval",
+                     Some(300_000)) as u64;
 
     cfg.raft_store.region_compact_delete_keys_count =
         get_toml_int(config,
                      "raftstore.region-compact-delete-keys-count",
                      Some(1_000_000)) as u64;
 
-    cfg.raft_store.lock_cf_compact_interval_secs =
-        get_toml_int(config,
-                     "raftstore.lock-cf-compact-interval-secs",
-                     Some(300_000)) as u64;
+    cfg.raft_store.lock_cf_compact_interval =
+        get_toml_int(config, "raftstore.lock-cf-compact-interval", Some(600_000)) as u64;
 
     let max_peer_down_millis =
         get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
@@ -430,6 +454,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
         get_toml_int(config,
                      "raftstore.pd-store-heartbeat-tick-interval",
                      Some(10_000)) as u64;
+
+    cfg.raft_store.consistency_check_tick_interval =
+        get_toml_int(config, "raftstore.consistency-check-interval", Some(0)) as u64;
 
     cfg.storage.sched_notify_capacity =
         get_toml_int(config, "storage.scheduler-notify-capacity", Some(10240)) as usize;
@@ -671,10 +698,6 @@ fn main() {
                 "capacity",
                 "set the store capacity",
                 "default: 0 (unlimited)");
-    opts.optopt("S",
-                "dsn",
-                "[deprecated] set which dsn to use, warning: now only support raftkv",
-                "dsn: raftkv");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
     opts.optopt("",
                 "labels",

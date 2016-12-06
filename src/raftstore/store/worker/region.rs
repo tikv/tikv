@@ -16,29 +16,32 @@ use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::fs::File;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::str;
 
 use rocksdb::{DB, Writable, WriteBatch};
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
+use kvproto::eraftpb::Snapshot as RaftSnapshot;
 
 use util::worker::Runnable;
 use util::codec::bytes::CompactBytesDecoder;
 use util::{escape, HandyRwLock, rocksdb};
-use util::transport::SendCh;
-use raftstore;
 use raftstore::store::engine::{Mutable, Snapshot, Iterable};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
-use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, Msg, keys, Peekable};
+use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, keys, Peekable};
 use storage::CF_RAFT;
 
 use super::metrics::*;
 
 /// region related task.
 pub enum Task {
-    Gen { region_id: u64 },
+    Gen {
+        region_id: u64,
+        notifier: SyncSender<RaftSnapshot>,
+    },
     Apply {
         region_id: u64,
         status: Arc<AtomicUsize>,
@@ -95,16 +98,6 @@ quick_error! {
     }
 }
 
-pub trait MsgSender {
-    fn send(&self, msg: Msg) -> raftstore::Result<()>;
-}
-
-impl MsgSender for SendCh<Msg> {
-    fn send(&self, msg: Msg) -> raftstore::Result<()> {
-        SendCh::send(self, msg).map_err(|e| box_err!("{:?}", e))
-    }
-}
-
 #[inline]
 fn check_abort(status: &AtomicUsize) -> Result<(), Error> {
     if status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING {
@@ -114,51 +107,45 @@ fn check_abort(status: &AtomicUsize) -> Result<(), Error> {
 }
 
 // TODO: use threadpool to do task concurrently
-pub struct Runner<T: MsgSender> {
+pub struct Runner {
     db: Arc<DB>,
     batch_size: usize,
-    ch: T,
     mgr: SnapManager,
 }
 
-impl<T: MsgSender> Runner<T> {
-    pub fn new(db: Arc<DB>, ch: T, mgr: SnapManager, batch_size: usize) -> Runner<T> {
+impl Runner {
+    pub fn new(db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
         Runner {
             db: db,
-            ch: ch,
             mgr: mgr,
             batch_size: batch_size,
         }
     }
 
-    fn generate_snap(&self, region_id: u64) -> Result<(), Error> {
+    fn generate_snap(&self,
+                     region_id: u64,
+                     notifier: SyncSender<RaftSnapshot>)
+                     -> Result<(), Error> {
         // do we need to check leader here?
         let raw_snap = Snapshot::new(self.db.clone());
 
         let snap = box_try!(store::do_snapshot(self.mgr.clone(), &raw_snap, region_id));
-        let msg = Msg::SnapGenRes {
-            region_id: region_id,
-            snap: Some(snap),
-        };
-        if let Err(e) = self.ch.send(msg) {
-            error!("failed to notify snap result of {}: {:?}", region_id, e);
+        if let Err(e) = notifier.try_send(snap) {
+            info!("[region {}] failed to notify snap result, maybe leadership has changed, \
+                   ignore: {:?}",
+                  region_id,
+                  e);
         }
         Ok(())
     }
 
-    fn handle_gen(&self, region_id: u64) {
+    fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
         SNAP_COUNTER_VEC.with_label_values(&["generate", "all"]).inc();
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_timer();
 
-        if let Err(e) = self.generate_snap(region_id) {
-            if let Err(e) = self.ch.send(Msg::SnapGenRes {
-                region_id: region_id,
-                snap: None,
-            }) {
-                panic!("failed to notify snap result of {}: {:?}", region_id, e);
-            }
-            error!("failed to generate snap: {:?}!!!", e);
+        if let Err(e) = self.generate_snap(region_id, notifier) {
+            error!("[region {}] failed to generate snap: {:?}!!!", region_id, e);
             return;
         }
 
@@ -327,10 +314,10 @@ impl<T: MsgSender> Runner<T> {
     }
 }
 
-impl<T: MsgSender> Runnable<Task> for Runner<T> {
+impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Gen { region_id } => self.handle_gen(region_id),
+            Task::Gen { region_id, notifier } => self.handle_gen(region_id, notifier),
             Task::Apply { region_id, status } => self.handle_apply(region_id, status),
             Task::Destroy { region_id, start_key, end_key } => {
                 self.handle_destroy(region_id, start_key, end_key)
