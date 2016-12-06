@@ -479,39 +479,41 @@ fn build_raftkv(config: &toml::Value,
      engine)
 }
 
-fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
-    fn canonicalize_path(path: &str) -> String {
-        let p = Path::new(path);
-        if p.exists() && p.is_file() {
-            exit_with_err(format!("{} is not a directory!", path));
-        }
-        if !p.exists() {
-            fs::create_dir_all(p).unwrap();
-        }
-        format!("{}", p.canonicalize().unwrap().display())
+fn canonicalize_path(path: &str) -> String {
+    let p = Path::new(path);
+    if p.exists() && p.is_file() {
+        exit_with_err(format!("{} is not a directory!", path));
     }
+    if !p.exists() {
+        fs::create_dir_all(p).unwrap();
+    }
+    format!("{}", p.canonicalize().unwrap().display())
+}
 
+fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
     // Store path
     let store_path = get_flag_string(matches, "s")
         .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
     let store_abs_path = if store_path == TEMP_DIR {
-        store_path.to_owned()
+        TEMP_DIR.to_owned()
     } else {
         canonicalize_path(&store_path)
     };
 
     // Backup path
     let mut backup_path = get_toml_string(config, "server.backup", Some(String::new()));
-    if backup_path.is_empty() {
-        backup_path = store_abs_path.clone();
-        if !backup_path.ends_with('/') {
-            backup_path.push('/');
-        }
-        backup_path.push_str("backup");
+    if backup_path.is_empty() && !store_abs_path.is_empty() {
+        backup_path = format!("{}", Path::new(&store_abs_path).join("backup").display())
     }
-    let backup_abs_path = canonicalize_path(&backup_path);
 
-    (store_abs_path, backup_abs_path)
+    if backup_path.is_empty() {
+        info!("empty backup path, backup is diabled");
+        (store_abs_path, backup_path)
+    } else {
+        let backup_abs_path = canonicalize_path(&backup_path);
+        info!("backup path: {}", backup_abs_path);
+        (store_abs_path, backup_abs_path)
+    }
 }
 
 fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
@@ -576,6 +578,11 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
                 }
             }
             SIGUSR2 => {
+                if backup_path.is_empty() {
+                    info!("empty backup path, backup is diabled");
+                    continue;
+                }
+
                 info!("backup db to {}", backup_path);
                 if let Err(e) = engine.backup_at(backup_path) {
                     error!("fail to backup: {}", e);
@@ -589,7 +596,7 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
 }
 
 #[cfg(not(unix))]
-fn handle_signal(ch: SendCh<Msg>) {}
+fn handle_signal(_: SendCh<Msg>, _: Arc<DB>, _: &str) {}
 
 fn run_raft_server(listener: TcpListener,
                    pd_client: RpcClient,
