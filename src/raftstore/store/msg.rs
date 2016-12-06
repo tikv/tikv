@@ -53,6 +53,11 @@ pub enum Msg {
         split_key: Vec<u8>,
     },
 
+    /// To build a reliable message tunnel for snapshot reporting in real production,
+    /// the `ReportSnapshot` message is sent to raftstore through mpsc channel
+    /// instead of the instance of trait `Transport`.
+    /// The `ReportSnapshot` struct is still defined as a field of `Msg` here,
+    /// so that it's easy to write the filters for simulative transport in test code.
     ReportSnapshot {
         region_id: u64,
         to_peer_id: u64,
