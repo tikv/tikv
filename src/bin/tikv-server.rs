@@ -534,7 +534,7 @@ fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String
     }
 
     if backup_path.is_empty() {
-        info!("empty backup path, backup is diabled");
+        info!("empty backup path, backup is disabled");
         (store_abs_path, backup_path)
     } else {
         let backup_abs_path = canonicalize_path(&backup_path);
@@ -606,7 +606,7 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
             }
             SIGUSR2 => {
                 if backup_path.is_empty() {
-                    info!("empty backup path, backup is diabled");
+                    info!("empty backup path, backup is disabled");
                     continue;
                 }
 
