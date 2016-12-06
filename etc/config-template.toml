@@ -75,14 +75,14 @@ split-region-check-tick-interval = "5s"
 max-peer-down-duration = "5m"
 
 # Interval to check whether start compaction for a region.
-# region-compact-check-interval-secs = 300
+# region-compact-check-interval = "5m"
 # When delete keys of a region exceeds the size, a compaction will be started.
 # region-compact-delete-keys-count = 200000
 # Interval to check whether start lock compaction for a region.
-# lock-cf-compact-interval-secs = 600
+# lock-cf-compact-interval = "10m"
 
 # Interval (s) to check region whether the data are consistent.
-# consistency-check-interval-secs = 0
+# consistency-check-interval = 0
 
 [pd]
 # pd endpoints 
@@ -119,6 +119,9 @@ create-if-missing = true
 # 2 : PointInTimeRecovery, Recover to point-in-time consistency;
 # 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 wal-recovery-mode = 2
+
+# rocksdb max total wal size
+# max-total-wal-size = "4GB"
 
 # Rocksdb Statistics provides cumulative stats over time.
 # Set it ture only when debugging performance, because it will introduce overhead.
