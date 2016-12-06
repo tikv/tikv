@@ -323,6 +323,16 @@ impl<T: Storage> Raft<T> {
         self.state == StateRole::Leader && self.check_quorum
     }
 
+    pub fn uptodate(&self) -> Vec<u64> {
+        let mut nodes = Vec::with_capacity(self.prs.len());
+        for (id, pr) in &self.prs {
+            if pr.matched > self.raft_log.first_index() {
+                nodes.push(*id);
+            }
+        }
+        nodes
+    }
+
     fn quorum(&self) -> usize {
         self.prs.len() / 2 + 1
     }

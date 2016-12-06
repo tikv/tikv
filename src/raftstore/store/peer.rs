@@ -735,6 +735,12 @@ impl Peer {
                 self.notify_stale_command(cmd);
             }
 
+            if let Err(e) = self.check_conf_change(&req) {
+                cmd_resp::bind_error(&mut err_resp, e);
+                cmd.call(err_resp);
+                return false;
+            }
+
             if let Err(e) = self.propose_conf_change(req, metrics) {
                 cmd_resp::bind_error(&mut err_resp, e);
                 cmd.call(err_resp);
@@ -800,6 +806,67 @@ impl Peer {
         let resp = cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, self.term());
         info!("{} command {} is stale, skip", self.tag, cmd.uuid);
         cmd.call(resp);
+    }
+
+    /// Check whether it's safe to propose the specified conf change request.
+    /// It's safe iff at least the quorum of the Raft group is still up to date
+    /// right after the specified conf change is applied.
+    /// Define the total number of nodes in current Raft cluster to be `total`.
+    /// To ensure the above safety, if the cmd is
+    /// 1. A `AddNode` request
+    ///    Then at least '(total + 1)/2 + 1' nodes need to be up to date for now.
+    /// 2. A `RemoveNode` request
+    ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
+    ///    need to be up to date for now.
+    fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
+        let change_peer = get_change_peer_cmd(cmd).unwrap();
+
+        let change_type = change_peer.get_change_type();
+        let peer = change_peer.get_peer().clone();
+
+        let total = self.raft_group.raft.nodes().len();
+        let uptodate_ids = self.raft_group.raft.uptodate();
+        let mut uptodate = uptodate_ids.len();
+        let quorum_after_change;
+        match change_type {
+            ConfChangeType::AddNode => {
+                quorum_after_change = util::calc_quorum(total + 1);
+                if quorum_after_change > total {
+                    // Add one peer into a cluster that has only one peer.
+                    return Ok(());
+                }
+                if uptodate >= quorum_after_change {
+                    return Ok(());
+                }
+            }
+            ConfChangeType::RemoveNode => {
+                quorum_after_change = util::calc_quorum(total - 1);
+                // Exclude the node about to be removed if it's in `uptodate_ids`.
+                for id in uptodate_ids {
+                    if id == peer.get_id() {
+                        uptodate -= 1;
+                        break;
+                    }
+                }
+                if uptodate >= quorum_after_change {
+                    return Ok(());
+                }
+            }
+        }
+
+        info!("{} rejects unsafe conf change request {:?}, total {}, uptodate {},  \
+               quorum after change {}",
+              self.tag,
+              change_peer,
+              total,
+              uptodate,
+              quorum_after_change);
+        Err(box_err!("unsafe to perform conf change {:?}, total {}, uptodate {}, quorum after \
+                      change {}",
+                     change_peer,
+                     total,
+                     uptodate,
+                     quorum_after_change))
     }
 
     fn propose_normal(&mut self,
