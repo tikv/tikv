@@ -182,6 +182,7 @@ impl Simulator for ServerCluster {
                                      listener,
                                      store,
                                      sim_router.clone(),
+                                     node.get_snapshot_tx(),
                                      resolver,
                                      snap_mgr)
             .unwrap();

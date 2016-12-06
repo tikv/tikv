@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::option::Option;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
 
@@ -28,7 +29,7 @@ use super::{Result, OnResponse, Config};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
-use raftstore::store::SnapManager;
+use raftstore::store::{Msg as StoreMsg, SnapManager};
 use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
@@ -79,6 +80,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     store_resolving: HashSet<u64>,
 
     raft_router: T,
+    snapshot_report_tx: Sender<StoreMsg>,
 
     store: StoreHandler,
     end_point_worker: Worker<EndPointTask>,
@@ -97,11 +99,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // address in Node before creating the Server, so we first
     // create the listener outer, get the real listening address for
     // Node and then pass it here.
+    #[allow(too_many_arguments)]
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
                listener: TcpListener,
                storage: Storage,
                raft_router: T,
+               tx: Sender<StoreMsg>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
@@ -123,6 +127,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store_tokens: HashMap::new(),
             store_resolving: HashSet::new(),
             raft_router: raft_router,
+            snapshot_report_tx: tx,
             store: store_handler,
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
@@ -489,13 +494,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         self.write_data(event_loop, token, data)
     }
 
-    fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter<T> {
+    fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter {
         let region_id = data.msg.get_raft().get_region_id();
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
         let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
 
         SnapshotReporter {
-            router: self.raft_router.clone(),
+            tx: self.snapshot_report_tx.clone(),
             region_id: region_id,
             to_peer_id: to_peer_id,
             to_store_id: to_store_id,
@@ -607,8 +612,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     }
 }
 
-struct SnapshotReporter<T: RaftStoreRouter + 'static> {
-    router: T,
+struct SnapshotReporter {
+    tx: Sender<StoreMsg>,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
@@ -616,7 +621,7 @@ struct SnapshotReporter<T: RaftStoreRouter + 'static> {
     reported: AtomicBool,
 }
 
-impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
+impl SnapshotReporter {
     pub fn report(&self, status: SnapshotStatus) {
         // return directly if already reported.
         if self.reported.compare_and_swap(false, true, Ordering::Relaxed) {
@@ -628,9 +633,11 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
                self.region_id,
                status);
 
-
-        if let Err(e) = self.router
-            .report_snapshot(self.region_id, self.to_peer_id, self.to_store_id, status) {
+        if let Err(e) = self.tx.send(StoreMsg::ReportSnapshot {
+            region_id: self.region_id,
+            to_peer_id: self.to_peer_id,
+            status: status,
+        }) {
             error!("report snapshot to peer {} in store {} with region {} err {:?}",
                    self.to_peer_id,
                    self.to_store_id,
@@ -730,11 +737,14 @@ mod tests {
         let router = TestRaftStoreRouter::new(tx);
         let report_unreachable_count = router.report_unreachable_count.clone();
 
+        let (snapshot_tx, _) = mpsc::channel();
+
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
                                      storage,
                                      router,
+                                     snapshot_tx,
                                      resolver,
                                      store::new_snap_mgr("", None))
             .unwrap();

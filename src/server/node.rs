@@ -13,6 +13,7 @@
 
 use std::thread;
 use std::sync::{Arc, mpsc};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use mio::EventLoop;
@@ -49,6 +50,7 @@ pub struct Node<C: PdClient + 'static> {
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh<Msg>,
+    snapshot_tx: Option<Sender<Msg>>,
 
     pd_client: Arc<C>,
 }
@@ -87,6 +89,7 @@ impl<C> Node<C>
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
+            snapshot_tx: None,
         }
     }
 
@@ -133,6 +136,10 @@ impl<C> Node<C>
 
     pub fn get_sendch(&self) -> SendCh<Msg> {
         self.ch.clone()
+    }
+
+    pub fn get_snapshot_tx(&self) -> Sender<Msg> {
+        self.snapshot_tx.clone().unwrap()
     }
 
     // check store, return store id for the engine.
@@ -238,12 +245,15 @@ impl<C> Node<C>
         let ch = event_loop.channel();
 
         let (tx, rx) = mpsc::channel();
+        let (snapshot_tx, snapshot_rx) = mpsc::channel();
+        self.snapshot_tx = Some(snapshot_tx);
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
-            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
-            };
+            let mut store =
+                match Store::new(ch, snapshot_rx, store, cfg, db, trans, pd_client, snap_mgr) {
+                    Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                    Ok(s) => s,
+                };
             tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);

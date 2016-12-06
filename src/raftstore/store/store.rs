@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, BTreeMap};
@@ -67,6 +68,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     store: metapb::Store,
     engine: Arc<DB>,
     sendch: SendCh<Msg>,
+    snapshot_rx: Receiver<Msg>,
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
@@ -109,7 +111,9 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
+    #[allow(too_many_arguments)]
     pub fn new(sender: Sender<Msg>,
+               snapshot_rx: Receiver<Msg>,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
@@ -129,6 +133,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             store: meta,
             engine: engine,
             sendch: sendch,
+            snapshot_rx: snapshot_rx,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
@@ -301,6 +306,46 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.clone()
     }
 
+    fn poll_snapshot_report(&mut self) {
+        // Poll all snapshot messages and handle them.
+        loop {
+            let msg_region_id;
+            let msg_to_peer_id;
+            let msg_status;
+            {
+                match self.snapshot_rx.try_recv() {
+                    Ok(s) => {
+                        match s {
+                            Msg::ReportSnapshot { region_id, to_peer_id, status } => {
+                                msg_region_id = region_id;
+                                msg_to_peer_id = to_peer_id;
+                                msg_status = status;
+                            }
+                            m => {
+                                error!("{} receives unexpected message {:?} from snapshot channel",
+                                       self.tag,
+                                       m);
+                                break;
+                            }
+                        }
+                    }
+                    Err(TryRecvError::Empty) => {
+                        // The snapshot rx is empty
+                        return;
+                    }
+                    Err(e) => {
+                        error!("{} unexpected error {:?} when receive from snapshot channel",
+                               self.tag,
+                               e);
+                        return;
+                    }
+                }
+            }
+            // Report snapshot status to the corresponding peer.
+            self.on_report_snapshot(msg_region_id, msg_to_peer_id, msg_status);
+        }
+    }
+
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
@@ -352,6 +397,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
+
+        self.poll_snapshot_report();
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
             .inc_by(duration_to_nanos(t.elapsed()) as f64)
