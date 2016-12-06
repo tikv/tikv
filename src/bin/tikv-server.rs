@@ -529,7 +529,7 @@ fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String
 
     // Backup path
     let mut backup_path = get_toml_string(config, "server.backup", Some(String::new()));
-    if backup_path.is_empty() && !store_abs_path.is_empty() {
+    if backup_path.is_empty() && store_abs_path != TEMP_DIR {
         backup_path = format!("{}", Path::new(&store_abs_path).join("backup").display())
     }
 
