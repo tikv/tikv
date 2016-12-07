@@ -490,3 +490,74 @@ fn test_node_split_brain() {
     let mut cluster = new_node_cluster(0, count);
     test_split_brain(&mut cluster);
 }
+
+/// A helper function for testing the safe conf change option.
+fn test_safe_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+
+    let region_id = cluster.run_conf_change();
+
+    // Test adding nodes.
+
+    // Ensure it works to add one node to a cluster that has only one node.
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Isolate the leader.
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+
+    // Ensure new leader is elected and it works.
+    cluster.must_put(b"k1", b"v1");
+
+    // Ensure the safe conf change option takes effect:
+    // It rejects "AddNode" request if there are only 2 healthy nodes in a cluster of 3 nodes.
+    pd_client.add_peer(region_id, new_peer(4, 4));
+    pd_client.must_none_peer(region_id, new_peer(4, 4));
+
+    // Recover the isolated peer.
+    cluster.clear_send_filters();
+
+    // Then new node could be added.
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+
+    // Test removing nodes.
+
+    // Ensure nodes could be removed.
+    pd_client.must_remove_peer(region_id, new_peer(4, 4));
+
+    // Isolate the leader.
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+
+    // Ensure new leader is elected and it works.
+    cluster.must_put(b"k2", b"v2");
+
+    // Ensure the safe conf change option takes effect:
+    // It rejects the "RemoveNode" request which asks to remove one healthy node
+    // if there are only 2 healthy nodes in a cluster of 3 nodes.
+    pd_client.remove_peer(region_id, new_peer(2, 2));
+    pd_client.must_have_peer(region_id, new_peer(2, 2));
+
+    // In this case, it's fine to remove one unhealthy node.
+    pd_client.must_remove_peer(region_id, new_peer(1, 1));
+
+    // Ensure it works to remove one node from the cluster that has only two healthy nodes.
+    pd_client.must_remove_peer(region_id, new_peer(2, 2));
+}
+
+#[test]
+fn test_node_safe_conf_change() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_safe_conf_change(&mut cluster);
+}
+
+#[test]
+fn test_server_safe_conf_change() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_safe_conf_change(&mut cluster);
+}

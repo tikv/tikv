@@ -838,6 +838,11 @@ impl Peer {
 
         let mut status = self.raft_group.status();
         let total = status.progress.len();
+        if total == 1 {
+            // It's always safe if there is only one node in the cluster.
+            return Ok(());
+        }
+
         match change_type {
             ConfChangeType::AddNode => {
                 let progress = Progress { ..Default::default() };
@@ -851,34 +856,19 @@ impl Peer {
             }
         }
         let healthy = self.calc_the_healthy(&status.progress);
-        let quorum_after_change;
-        match change_type {
-            ConfChangeType::AddNode => {
-                quorum_after_change = raft::calc_quorum(total + 1);
-                if quorum_after_change > total {
-                    // Add one peer into a cluster that has only one peer.
-                    return Ok(());
-                }
-                if healthy >= quorum_after_change {
-                    return Ok(());
-                }
-            }
-            ConfChangeType::RemoveNode => {
-                quorum_after_change = raft::calc_quorum(total - 1);
-                if healthy >= quorum_after_change {
-                    return Ok(());
-                }
-            }
+        let quorum_after_change = raft::calc_quorum(status.progress.len());
+        if healthy >= quorum_after_change {
+            return Ok(());
         }
 
-        info!("{} rejects unsafe conf change request {:?}, total {}, uptodate {},  \
+        info!("{} rejects unsafe conf change request {:?}, total {}, healthy {},  \
                quorum after change {}",
               self.tag,
               change_peer,
               total,
               healthy,
               quorum_after_change);
-        Err(box_err!("unsafe to perform conf change {:?}, total {}, uptodate {}, quorum after \
+        Err(box_err!("unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
                       change {}",
                      change_peer,
                      total,
