@@ -31,7 +31,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
-use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -808,9 +808,28 @@ impl Peer {
         cmd.call(resp);
     }
 
+    fn is_uptodate(&self, matched_index: u64) -> bool {
+        matched_index >= self.get_store().truncated_index()
+    }
+
+    // Calculate the count of uptodate peers, and whether the specified peer is uptodate.
+    fn calc_uptodate(&self, peer_id: u64, progress: &HashMap<u64, Progress>) -> (usize, bool) {
+        let mut peer_included = false;
+        let mut uptodate = 0;
+        for (id, pr) in progress {
+            if self.is_uptodate(pr.matched) {
+                uptodate += 1;
+                if *id == peer_id {
+                    peer_included = true;
+                }
+            }
+        }
+        (uptodate, peer_included)
+    }
+
     /// Check whether it's safe to propose the specified conf change request.
     /// It's safe iff at least the quorum of the Raft group is still up to date
-    /// right after the specified conf change is applied.
+    /// right after that conf change is applied.
     /// Define the total number of nodes in current Raft cluster to be `total`.
     /// To ensure the above safety, if the cmd is
     /// 1. A `AddNode` request
@@ -824,9 +843,9 @@ impl Peer {
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer().clone();
 
-        let total = self.raft_group.raft.nodes().len();
-        let uptodate_ids = self.raft_group.raft.uptodate();
-        let mut uptodate = uptodate_ids.len();
+        let status = self.raft_group.status();
+        let total = status.progress.len();
+        let (mut uptodate, peer_included) = self.calc_uptodate(peer.get_id(), &status.progress);
         let quorum_after_change;
         match change_type {
             ConfChangeType::AddNode => {
@@ -842,11 +861,8 @@ impl Peer {
             ConfChangeType::RemoveNode => {
                 quorum_after_change = util::calc_quorum(total - 1);
                 // Exclude the node about to be removed if it's in `uptodate_ids`.
-                for id in uptodate_ids {
-                    if id == peer.get_id() {
-                        uptodate -= 1;
-                        break;
-                    }
+                if peer_included {
+                    uptodate -= 1;
                 }
                 if uptodate >= quorum_after_change {
                     return Ok(());
