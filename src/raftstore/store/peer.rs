@@ -209,6 +209,7 @@ pub struct Peer {
     // Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
+    safe_conf_change: bool,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -217,8 +218,6 @@ pub struct Peer {
 
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
-
-    safe_conf_change: bool,
 }
 
 impl Peer {
@@ -301,6 +300,7 @@ impl Peer {
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
+            safe_conf_change: cfg.safe_conf_change,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
@@ -314,7 +314,6 @@ impl Peer {
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
-            safe_conf_change: cfg.safe_conf_change,
         };
 
         peer.load_all_coprocessors();
@@ -813,16 +812,12 @@ impl Peer {
         cmd.call(resp);
     }
 
-    fn is_uptodate(&self, matched_index: u64) -> bool {
-        matched_index >= self.get_store().truncated_index()
-    }
-
     // Calculate the count of uptodate peers, and whether the specified peer is uptodate.
     fn calc_uptodate(&self, peer_id: u64, progress: &HashMap<u64, Progress>) -> (usize, bool) {
         let mut peer_included = false;
         let mut uptodate = 0;
         for (id, pr) in progress {
-            if self.is_uptodate(pr.matched) {
+            if pr.matched >= self.get_store().truncated_index() {
                 uptodate += 1;
                 if *id == peer_id {
                     peer_included = true;
@@ -846,7 +841,7 @@ impl Peer {
         let change_peer = get_change_peer_cmd(cmd).unwrap();
 
         let change_type = change_peer.get_change_type();
-        let peer = change_peer.get_peer().clone();
+        let peer = change_peer.get_peer();
 
         let status = self.raft_group.status();
         let total = status.progress.len();

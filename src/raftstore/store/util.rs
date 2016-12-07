@@ -89,7 +89,7 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
 
 // Calculate the quorum of a Raft cluster with the specified total nodes.
 pub fn calc_quorum(total: usize) -> usize {
-    (total + 1) / 2 + 1
+    total / 2 + 1
 }
 
 #[cfg(test)]
