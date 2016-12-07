@@ -100,9 +100,9 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     where T: Transport,
           C: PdClient
 {
-    // We use base raft tick as the event loop timer tick.
     let mut builder = EventLoopBuilder::new();
-    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval));
+    // To make raft base tick more accurate, timer tick should be small enough.
+    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval / 10));
     builder.notify_capacity(cfg.notify_capacity);
     builder.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(builder.build());
@@ -671,11 +671,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
-        let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
-        let pending_count = ids.len();
+        let pending_count = self.pending_raft_groups.len();
 
-        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(ids.len());
-        for region_id in ids {
+        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(pending_count);
+        for region_id in self.pending_raft_groups.drain() {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
                     Err(e) => {
@@ -1516,6 +1515,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if self.consistency_check_worker.is_busy() {
             // To avoid frequent scan, schedule new check only when all the
             // scheduled check is done.
+            info!("{} worker is busy, skip consistency check", self.tag);
             return;
         }
         let (mut candidate_id, mut candidate_check_time) = (0, Instant::now());
@@ -1539,8 +1539,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             };
 
             if let Err(e) = self.sendch.send(msg) {
-                error!("{} failed to schedule split check: {:?}", peer.tag, e);
+                error!("{} failed to schedule consistent check: {:?}", peer.tag, e);
             }
+        } else {
+            info!("{} no candidate found, skip consistency check", self.tag);
         }
 
         self.register_consistency_check_tick(event_loop);
@@ -1710,6 +1712,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
 
+    // This method is invoked very frequently, should avoid time consuming operation.
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             self.split_check_worker.stop();
@@ -1727,8 +1730,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         // We handle raft ready in event loop.
-        self.on_raft_ready();
-        self.pending_regions.clear();
+        if !self.pending_raft_groups.is_empty() {
+            self.on_raft_ready();
+        }
+        if !self.pending_regions.is_empty() {
+            self.pending_regions.clear();
+        }
     }
 }
 

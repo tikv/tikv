@@ -270,11 +270,28 @@ impl PeerStorage {
     pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
         try!(self.check_range(low, high));
         let mut ents = Vec::with_capacity((high - low) as usize);
+        if low == high {
+            return Ok(ents);
+        }
         let mut total_size: u64 = 0;
         let mut next_index = low;
         let mut exceeded_max_size = false;
 
         let start_key = keys::raft_log_key(self.get_region_id(), low);
+
+        if low + 1 == high {
+            let handle = self.engine.cf_handle(CF_RAFT).unwrap();
+            match box_try!(self.engine.get_cf(handle, &start_key)) {
+                None => return Err(RaftError::Store(StorageError::Unavailable)),
+                Some(v) => {
+                    let mut entry = Entry::new();
+                    box_try!(entry.merge_from_bytes(&v));
+                    assert_eq!(entry.get_index(), low);
+                    return Ok(vec![entry]);
+                }
+            }
+        }
+
         let end_key = keys::raft_log_key(self.get_region_id(), high);
 
         try!(self.engine.scan_cf(CF_RAFT,

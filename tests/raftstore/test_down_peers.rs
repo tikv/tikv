@@ -4,13 +4,13 @@ use std::time::{Instant, Duration};
 use rand::random;
 use kvproto::pdpb;
 
+use super::util;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::cluster::{Cluster, Simulator};
 use super::transport_simulate::IsolationFilterFactory;
 
-fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
-    let begin = Instant::now();
+fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) {
     for _ in 1..100 {
         if cluster.get_down_peers().len() != count as usize {
             sleep(Duration::from_millis(100));
@@ -18,7 +18,6 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
             break;
         }
     }
-    begin.elapsed().as_secs()
 }
 
 fn check_down_seconds(peer: &pdpb::PeerStats, secs: u64) {
@@ -91,17 +90,18 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
 
 fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     cluster.cfg.raft_store.max_peer_down_duration = Duration::from_millis(500);
+    let t = Instant::now();
     cluster.run();
 
     // Kill 1, 3
     cluster.stop_node(1);
     cluster.stop_node(3);
-    let secs = wait_down_peers(cluster, 2);
+    wait_down_peers(cluster, 2);
 
     // Check 1, 3 are down.
     let down_peers = cluster.get_down_peers();
-    check_down_seconds(down_peers.get(&1).unwrap(), secs);
-    check_down_seconds(down_peers.get(&3).unwrap(), secs);
+    check_down_seconds(down_peers.get(&1).unwrap(), t.elapsed().as_secs() + 1);
+    check_down_seconds(down_peers.get(&3).unwrap(), t.elapsed().as_secs() + 1);
 
     // Restart 1, 3
     cluster.run_node(1);
@@ -111,20 +111,20 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
     for _ in 0..3 {
         let n = random::<u64>() % count + 1;
 
+        let t = Instant::now();
+        cluster.must_put(b"k1", b"v1");
+        util::must_get_equal(&cluster.get_engine(n), b"k1", b"v1");
+
         // kill n.
         cluster.stop_node(n);
-        let secs = wait_down_peers(cluster, 1);
+
+        wait_down_peers(cluster, 1);
 
         // Check i is down and others are not down.
-        for i in 1..(count + 1) {
-            match cluster.get_down_peers().get(&i) {
-                Some(peer) => {
-                    assert_eq!(i, n);
-                    check_down_seconds(peer, secs);
-                }
-                None => assert!(i != n),
-            }
-        }
+        let down_peers = cluster.get_down_peers();
+        assert_eq!(down_peers.len(), 1);
+        let peer = down_peers.get(&n).unwrap();
+        check_down_seconds(peer, t.elapsed().as_secs() + 1);
 
         // Restart n.
         cluster.run_node(n);

@@ -660,6 +660,8 @@ impl Peer {
                 hs.set_commit(self.get_store().truncated_index());
             }
             vec![]
+        } else if ready.committed_entries.is_empty() {
+            vec![]
         } else {
             try!(self.handle_raft_commit_entries(&ready.committed_entries))
         };
