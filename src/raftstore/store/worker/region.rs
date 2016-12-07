@@ -182,6 +182,7 @@ impl Runner {
                         // Otherwise it may cause dirty data when applying snapshot.
                         box_try!(self.db.write(wb));
                         wb = WriteBatch::new();
+                        size_cnt = 0;
                     }
                 };
                 try!(check_abort(&abort));
