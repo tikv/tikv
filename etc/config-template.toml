@@ -16,6 +16,8 @@ store = "/tmp/tikv/store"
 labels = ""
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
+# set log file path.
+# log-file = ""
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
@@ -116,11 +118,11 @@ max-manifest-file-size = "20MB"
 # If true, the database will be created if it is missing.
 create-if-missing = true
 
-# This specifies the info LOG dir.
-# If it is empty, the log files will be in the same dir as data.
-# If it is non empty, the log files will be in the specified dir,
-# and the db data dir's absolute path will be used as the log file
-# name's prefix.
+# This specifies RocksDB's info LOG dir.
+# If it is non empty, LOG will be in the specified dir,
+# If it is empty and log-file is non empty, LOG will be in the same dir as log-file.
+# If it is empty and log-file is empty too, LOG will be in the same dir as store.
+# and the db data dir's absolute path will be used as LOG name's prefix.
 # log-dir = "/path/to/log-dir"
 
 # rocksdb wal recovery mode

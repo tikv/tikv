@@ -200,7 +200,7 @@ fn check_advertise_address(addr: &str) {
     }
 }
 
-fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_db_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let rmode = get_toml_int(config, "rocksdb.wal-recovery-mode", Some(2));
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
@@ -226,10 +226,20 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let create_if_missing = get_toml_boolean(config, "rocksdb.create-if-missing", Some(true));
     opts.create_if_missing(create_if_missing);
 
-    let log_dir = get_toml_string(config, "rocksdb.log-dir", Some(String::new()));
+    let mut log_dir = get_toml_string(config, "rocksdb.log-dir", Some(String::new()));
     if !log_dir.is_empty() {
-        let log_abs_path = canonicalize_path(&log_dir);
-        opts.set_db_log_dir(&log_abs_path);
+        log_dir = canonicalize_path(&log_dir);
+    } else {
+        let log_file_path = get_flag_string(matches, "f")
+            .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
+        let log_file_path = Path::new(&log_file_path);
+        if let Some(dir) = log_file_path.parent() {
+            log_dir = canonicalize_path(dir.to_str().unwrap());
+        }
+    }
+    if !log_dir.is_empty() {
+        info!("RocksDB LOG dir: {}", log_dir);
+        opts.set_db_log_dir(&log_dir);
     }
 
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
@@ -479,11 +489,12 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
 fn build_raftkv(config: &toml::Value,
                 ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
+                matches: &Matches,
                 cfg: &Config)
                 -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
-    let opts = get_rocksdb_db_option(config);
+    let opts = get_rocksdb_db_option(matches, config);
     let cfs_opts = vec![get_rocksdb_default_cf_option(config),
                         get_rocksdb_lock_cf_option(),
                         get_rocksdb_write_cf_option(config),
@@ -635,6 +646,7 @@ fn run_raft_server(listener: TcpListener,
                    pd_client: RpcClient,
                    cfg: &Config,
                    backup_path: &str,
+                   matches: &Matches,
                    config: &toml::Value) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel(), "raft-server");
@@ -651,7 +663,7 @@ fn run_raft_server(listener: TcpListener,
     }
 
     let (mut node, mut store, raft_router, snap_mgr, engine) =
-        build_raftkv(config, ch.clone(), pd_client, cfg);
+        build_raftkv(config, ch.clone(), pd_client, matches, cfg);
     info!("tikv server config: {:?}", cfg);
 
     initial_metric(config, Some(node.id()));
@@ -777,5 +789,5 @@ fn main() {
         panic!("in raftkv, cluster_id must greater than 0");
     }
     let _m = TimeMonitor::default();
-    run_raft_server(listener, pd_client, &cfg, &backup_path, &config);
+    run_raft_server(listener, pd_client, &cfg, &backup_path, &matches, &config);
 }
