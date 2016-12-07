@@ -48,6 +48,8 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // Disable consistency check by default as it will hurt performance.
 // We should turn on this only in our tests.
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
+// Enable safe conf change option by default since it improves the availability of the cluster.
+const DEFAULT_SAFE_CONF_CHANGE: bool = true;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -110,6 +112,13 @@ pub struct Config {
 
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_tick_interval: u64,
+
+    // When `safe_conf_change` is set to `true`, every conf change will be checked
+    // to ensure it's safe to be performed.
+    // It's safe iff at least the quorum of the Raft group is still up to date
+    // right after that conf change is applied.
+    // When `safe_conf_change` is set to `false`, this check will be skipped.
+    pub safe_conf_change: bool,
 }
 
 impl Default for Config {
@@ -142,6 +151,7 @@ impl Default for Config {
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
+            safe_conf_change: DEFAULT_SAFE_CONF_CHANGE,
         }
     }
 }

@@ -410,6 +410,9 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
+    // Disable safe conf change option to create a split brain.
+    cluster.cfg.raft_store.safe_conf_change = false;
+
     let r1 = cluster.run_conf_change();
 
     pd_client.must_add_peer(r1, new_peer(2, 2));

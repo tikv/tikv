@@ -217,6 +217,8 @@ pub struct Peer {
 
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
+
+    safe_conf_change: bool,
 }
 
 impl Peer {
@@ -312,6 +314,7 @@ impl Peer {
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
+            safe_conf_change: cfg.safe_conf_change,
         };
 
         peer.load_all_coprocessors();
@@ -735,10 +738,12 @@ impl Peer {
                 self.notify_stale_command(cmd);
             }
 
-            if let Err(e) = self.check_conf_change(&req) {
-                cmd_resp::bind_error(&mut err_resp, e);
-                cmd.call(err_resp);
-                return false;
+            if self.safe_conf_change {
+                if let Err(e) = self.check_conf_change(&req) {
+                    cmd_resp::bind_error(&mut err_resp, e);
+                    cmd.call(err_resp);
+                    return false;
+                }
             }
 
             if let Err(e) = self.propose_conf_change(req, metrics) {

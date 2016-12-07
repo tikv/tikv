@@ -561,6 +561,10 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+
+    // Disable safe conf change option for this test case.
+    cluster.cfg.raft_store.safe_conf_change = false;
+
     // We use three peers([1, 2, 3]) for this test.
     cluster.run();
 
