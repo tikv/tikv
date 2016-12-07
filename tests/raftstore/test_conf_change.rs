@@ -410,16 +410,13 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
-    // Disable safe conf change option to create a split brain.
-    cluster.cfg.raft_store.safe_conf_change = false;
-
     let r1 = cluster.run_conf_change();
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     // leader isolation
-    cluster.must_transfer_leader(r1, new_peer(1, 1));
+    cluster.must_transfer_leader(r1, new_peer(2, 2));
     cluster.add_send_filter(IsolationFilterFactory::new(1));
 
     // refresh region info, maybe no need
@@ -491,7 +488,7 @@ fn test_node_split_brain() {
     test_split_brain(&mut cluster);
 }
 
-/// A helper function for testing the safe conf change option.
+/// A helper function for testing the conf change is safe.
 fn test_safe_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -512,8 +509,9 @@ fn test_safe_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Ensure new leader is elected and it works.
     cluster.must_put(b"k1", b"v1");
 
-    // Ensure the safe conf change option takes effect:
-    // It rejects "AddNode" request if there are only 2 healthy nodes in a cluster of 3 nodes.
+    // Ensure the conf change is safe:
+    // The "AddNode" request will be rejected
+    // if there are only 2 healthy nodes in a cluster of 3 nodes.
     pd_client.add_peer(region_id, new_peer(4, 4));
     pd_client.must_none_peer(region_id, new_peer(4, 4));
 
@@ -535,8 +533,8 @@ fn test_safe_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Ensure new leader is elected and it works.
     cluster.must_put(b"k2", b"v2");
 
-    // Ensure the safe conf change option takes effect:
-    // It rejects the "RemoveNode" request which asks to remove one healthy node
+    // Ensure the conf change is safe:
+    // The "RemoveNode" request which asks to remove one healthy node will be rejected
     // if there are only 2 healthy nodes in a cluster of 3 nodes.
     pd_client.remove_peer(region_id, new_peer(2, 2));
     pd_client.must_have_peer(region_id, new_peer(2, 2));

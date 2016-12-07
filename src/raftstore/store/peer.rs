@@ -209,7 +209,6 @@ pub struct Peer {
     // Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
-    safe_conf_change: bool,
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
@@ -300,7 +299,6 @@ impl Peer {
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
-            safe_conf_change: cfg.safe_conf_change,
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
@@ -928,10 +926,7 @@ impl Peer {
                            cmd: RaftCmdRequest,
                            metrics: &mut RaftProposeMetrics)
                            -> Result<()> {
-
-        if self.safe_conf_change {
-            try!(self.check_conf_change(&cmd))
-        }
+        try!(self.check_conf_change(&cmd));
 
         metrics.conf_change += 1;
 
