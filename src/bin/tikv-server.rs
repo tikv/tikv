@@ -228,10 +228,8 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
 
     let log_dir = get_toml_string(config, "rocksdb.log-dir", Some(String::new()));
     if !log_dir.is_empty() {
-        if let Err(e) = fs::create_dir_all(&log_dir) {
-            exit_with_err(format!("{:?}", e));
-        }
-        opts.set_db_log_dir(&log_dir);
+        let log_abs_path = canonicalize_path(&log_dir);
+        opts.set_db_log_dir(&log_abs_path);
     }
 
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
