@@ -206,6 +206,11 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
+    let max_total_wal_size = get_toml_int(config,
+                                          "rocksdb.max-total-wal-size",
+                                          Some(4 * 1024 * 1024 * 1024));
+    opts.set_max_total_wal_size(max_total_wal_size as u64);
+
     let max_background_compactions =
         get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
     opts.set_max_background_compactions(max_background_compactions as i32);
@@ -400,6 +405,10 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
         get_toml_int(config, "raftstore.notify-capacity", Some(40960)) as usize;
     cfg.raft_store.messages_per_tick =
         get_toml_int(config, "raftstore.messages-per-tick", Some(4096)) as usize;
+    let interval = get_toml_int(config,
+                                "raftstore.split-region-check-tick-interval",
+                                Some(10000));
+    cfg.raft_store.split_region_check_tick_interval = interval as u64;
     cfg.raft_store.region_split_size =
         get_toml_int(config,
                      "raftstore.region-split-size",
@@ -429,20 +438,18 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      "raftstore.raft-log-gc-size-limit",
                      Some(48 * 1024 * 1024)) as u64;
 
-    cfg.raft_store.region_compact_check_interval_secs =
+    cfg.raft_store.region_compact_check_interval =
         get_toml_int(config,
-                     "raftstore.region-compact-check-interval-secs",
-                     Some(300)) as u64;
+                     "raftstore.region-compact-check-interval",
+                     Some(300_000)) as u64;
 
     cfg.raft_store.region_compact_delete_keys_count =
         get_toml_int(config,
                      "raftstore.region-compact-delete-keys-count",
                      Some(1_000_000)) as u64;
 
-    cfg.raft_store.lock_cf_compact_interval_secs =
-        get_toml_int(config,
-                     "raftstore.lock-cf-compact-interval-secs",
-                     Some(300_000)) as u64;
+    cfg.raft_store.lock_cf_compact_interval =
+        get_toml_int(config, "raftstore.lock-cf-compact-interval", Some(600_000)) as u64;
 
     let max_peer_down_millis =
         get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
@@ -457,7 +464,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &st
                      Some(10_000)) as u64;
 
     cfg.raft_store.consistency_check_tick_interval =
-        get_toml_int(config, "raftstore.consistency-check-interval-secs", Some(0)) as u64;
+        get_toml_int(config, "raftstore.consistency-check-interval", Some(0)) as u64;
 
     cfg.storage.sched_notify_capacity =
         get_toml_int(config, "storage.scheduler-notify-capacity", Some(10240)) as usize;
@@ -507,22 +514,41 @@ fn build_raftkv(config: &toml::Value,
      engine)
 }
 
-fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
-    let path = get_flag_string(matches, "s")
-        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
-    if path == TEMP_DIR {
-        return path;
-    }
-
-    let p = Path::new(&path);
+fn canonicalize_path(path: &str) -> String {
+    let p = Path::new(path);
     if p.exists() && p.is_file() {
-        panic!("{} is not a directory!", path);
+        exit_with_err(format!("{} is not a directory!", path));
     }
     if !p.exists() {
         fs::create_dir_all(p).unwrap();
     }
-    let absolute_path = p.canonicalize().unwrap();
-    format!("{}", absolute_path.display())
+    format!("{}", p.canonicalize().unwrap().display())
+}
+
+fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
+    // Store path
+    let store_path = get_flag_string(matches, "s")
+        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
+    let store_abs_path = if store_path == TEMP_DIR {
+        TEMP_DIR.to_owned()
+    } else {
+        canonicalize_path(&store_path)
+    };
+
+    // Backup path
+    let mut backup_path = get_toml_string(config, "server.backup", Some(String::new()));
+    if backup_path.is_empty() && store_abs_path != TEMP_DIR {
+        backup_path = format!("{}", Path::new(&store_abs_path).join("backup").display())
+    }
+
+    if backup_path.is_empty() {
+        info!("empty backup path, backup is disabled");
+        (store_abs_path, backup_path)
+    } else {
+        let backup_abs_path = canonicalize_path(&backup_path);
+        info!("backup path: {}", backup_abs_path);
+        (store_abs_path, backup_abs_path)
+    }
 }
 
 fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
@@ -531,7 +557,10 @@ fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, 
     util::config::parse_store_labels(&labels).unwrap()
 }
 
-fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
+fn start_server<T, S>(mut server: Server<T, S>,
+                      mut el: EventLoop<Server<T, S>>,
+                      engine: Arc<DB>,
+                      backup_path: &str)
     where T: RaftStoreRouter,
           S: StoreAddrResolver + Send + 'static
 {
@@ -542,15 +571,15 @@ fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>,
             server.run(&mut el).unwrap();
         })
         .unwrap();
-    handle_signal(ch, engine);
+    handle_signal(ch, engine, backup_path);
     h.join().unwrap();
 }
 
 #[cfg(unix)]
-fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
+fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
     use signal::trap::Trap;
-    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1};
-    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1]);
+    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
+    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
     for sig in trap {
         match sig {
             SIGTERM | SIGINT => {
@@ -583,6 +612,18 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
                     info!("{}", v)
                 }
             }
+            SIGUSR2 => {
+                if backup_path.is_empty() {
+                    info!("empty backup path, backup is disabled");
+                    continue;
+                }
+
+                info!("backup db to {}", backup_path);
+                if let Err(e) = engine.backup_at(backup_path) {
+                    error!("fail to backup: {}", e);
+                }
+                info!("backup done");
+            }
             // TODO: handle more signal
             _ => unreachable!(),
         }
@@ -590,20 +631,20 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
 }
 
 #[cfg(not(unix))]
-fn handle_signal(ch: SendCh<Msg>) {}
+fn handle_signal(_: SendCh<Msg>, _: Arc<DB>, _: &str) {}
 
 fn run_raft_server(listener: TcpListener,
                    pd_client: RpcClient,
-                   matches: &Matches,
-                   config: &toml::Value,
-                   cfg: &Config) {
+                   cfg: &Config,
+                   backup_path: &str,
+                   config: &toml::Value) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
-    let store_path = get_store_path(matches, config);
-    let mut lock_path = Path::new(&store_path).to_path_buf();
+    let store_path = &cfg.storage.path;
+    let mut lock_path = Path::new(store_path).to_path_buf();
     lock_path.push("LOCK");
     let f = File::create(lock_path).unwrap();
     if f.try_lock_exclusive().is_err() {
@@ -630,7 +671,7 @@ fn run_raft_server(listener: TcpListener,
                           resolver,
                           snap_mgr)
         .unwrap();
-    start_server(svr, event_loop, engine);
+    start_server(svr, event_loop, engine, backup_path);
     node.stop().unwrap();
 }
 
@@ -731,11 +772,12 @@ fn main() {
                             cluster_id,
                             &format!("{}", listener.local_addr().unwrap()));
     cfg.labels = get_store_labels(&matches, &config);
-    cfg.storage.path = get_store_path(&matches, &config);
+    let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
+    cfg.storage.path = store_path;
 
     if cluster_id == DEFAULT_CLUSTER_ID {
         panic!("in raftkv, cluster_id must greater than 0");
     }
     let _m = TimeMonitor::default();
-    run_raft_server(listener, pd_client, &matches, &config, &cfg);
+    run_raft_server(listener, pd_client, &cfg, &backup_path, &config);
 }

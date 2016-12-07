@@ -29,6 +29,9 @@ end-point-concurrency = 8
 # set store capacity, if no set, use unlimited or disk size later.
 # capacity = 0 # 0 is unlimited.
 
+# set backup path, if not set, use "backup" under store path.
+# backup = "/tmp/tikv/store/backup"
+
 [metric]
 # the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
 interval = "15s"
@@ -57,6 +60,8 @@ region-split-size = "64MB"
 # When region size changes exceeds region-split-check-diff, we should check 
 # whether the region should be split or not. 
 region-split-check-diff = "8MB"
+# Interval to check region whether need to be split or not.
+split-region-check-tick-interval = "5s"
 
 # Interval to gc unnecessary raft log.
 # raft-log-gc-tick-interval = "10s"
@@ -73,14 +78,14 @@ region-split-check-diff = "8MB"
 max-peer-down-duration = "5m"
 
 # Interval to check whether start compaction for a region.
-# region-compact-check-interval-secs = 300
+# region-compact-check-interval = "5m"
 # When delete keys of a region exceeds the size, a compaction will be started.
 # region-compact-delete-keys-count = 200000
 # Interval to check whether start lock compaction for a region.
-# lock-cf-compact-interval-secs = 600
+# lock-cf-compact-interval = "10m"
 
 # Interval (s) to check region whether the data are consistent.
-# consistency-check-interval-secs = 0
+# consistency-check-interval = 0
 
 [pd]
 # pd endpoints 
@@ -124,6 +129,9 @@ create-if-missing = true
 # 2 : PointInTimeRecovery, Recover to point-in-time consistency;
 # 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 wal-recovery-mode = 2
+
+# rocksdb max total wal size
+# max-total-wal-size = "4GB"
 
 # Rocksdb Statistics provides cumulative stats over time.
 # Set it ture only when debugging performance, because it will introduce overhead.

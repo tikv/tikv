@@ -93,6 +93,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     tag: String,
 
     start_time: Timespec,
+    is_busy: bool,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -146,6 +147,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             raft_metrics: RaftMetrics::default(),
             tag: tag,
             start_time: time::get_time(),
+            is_busy: false,
         };
         try!(s.init());
         Ok(s)
@@ -244,6 +246,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_store_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
+        self.register_consistency_check_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -700,8 +703,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.on_ready_result(region_id, res)
         }
 
+        let dur = t.elapsed();
+        if !self.is_busy {
+            let election_timeout =
+                Duration::from_millis(self.cfg.raft_base_tick_interval *
+                                      self.cfg.raft_election_timeout_ticks as u64);
+            if dur >= election_timeout {
+                self.is_busy = true;
+            }
+        }
+
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
-            .inc_by(duration_to_nanos(t.elapsed()) as f64)
+            .inc_by(duration_to_nanos(dur) as f64)
             .unwrap();
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
@@ -1116,7 +1129,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactCheck,
-                                       self.cfg.region_compact_check_interval_secs * 1000) {
+                                       self.cfg.region_compact_check_interval) {
             error!("{} register compact check tick err: {:?}", self.tag, e);
         };
     }
@@ -1302,6 +1315,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         stats.set_start_time(self.start_time.sec as u32);
 
+        stats.set_is_busy(self.is_busy);
+        self.is_busy = false;
+
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
@@ -1407,7 +1423,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_lock_cf_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactLockCf,
-                                       self.cfg.lock_cf_compact_interval_secs * 1000) {
+                                       self.cfg.lock_cf_compact_interval) {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
