@@ -489,7 +489,7 @@ fn test_node_split_brain() {
 }
 
 /// A helper function for testing the conf change is safe.
-fn test_safe_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
@@ -547,15 +547,15 @@ fn test_safe_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_safe_conf_change() {
+fn test_node_conf_change_safe() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_safe_conf_change(&mut cluster);
+    test_conf_change_safe(&mut cluster);
 }
 
 #[test]
 fn test_server_safe_conf_change() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_safe_conf_change(&mut cluster);
+    test_conf_change_safe(&mut cluster);
 }
