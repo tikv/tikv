@@ -506,22 +506,41 @@ fn build_raftkv(config: &toml::Value,
      engine)
 }
 
-fn get_store_path(matches: &Matches, config: &toml::Value) -> String {
-    let path = get_flag_string(matches, "s")
-        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
-    if path == TEMP_DIR {
-        return path;
-    }
-
-    let p = Path::new(&path);
+fn canonicalize_path(path: &str) -> String {
+    let p = Path::new(path);
     if p.exists() && p.is_file() {
-        panic!("{} is not a directory!", path);
+        exit_with_err(format!("{} is not a directory!", path));
     }
     if !p.exists() {
         fs::create_dir_all(p).unwrap();
     }
-    let absolute_path = p.canonicalize().unwrap();
-    format!("{}", absolute_path.display())
+    format!("{}", p.canonicalize().unwrap().display())
+}
+
+fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
+    // Store path
+    let store_path = get_flag_string(matches, "s")
+        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
+    let store_abs_path = if store_path == TEMP_DIR {
+        TEMP_DIR.to_owned()
+    } else {
+        canonicalize_path(&store_path)
+    };
+
+    // Backup path
+    let mut backup_path = get_toml_string(config, "server.backup", Some(String::new()));
+    if backup_path.is_empty() && store_abs_path != TEMP_DIR {
+        backup_path = format!("{}", Path::new(&store_abs_path).join("backup").display())
+    }
+
+    if backup_path.is_empty() {
+        info!("empty backup path, backup is disabled");
+        (store_abs_path, backup_path)
+    } else {
+        let backup_abs_path = canonicalize_path(&backup_path);
+        info!("backup path: {}", backup_abs_path);
+        (store_abs_path, backup_abs_path)
+    }
 }
 
 fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
@@ -530,7 +549,10 @@ fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, 
     util::config::parse_store_labels(&labels).unwrap()
 }
 
-fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>, engine: Arc<DB>)
+fn start_server<T, S>(mut server: Server<T, S>,
+                      mut el: EventLoop<Server<T, S>>,
+                      engine: Arc<DB>,
+                      backup_path: &str)
     where T: RaftStoreRouter,
           S: StoreAddrResolver + Send + 'static
 {
@@ -541,15 +563,15 @@ fn start_server<T, S>(mut server: Server<T, S>, mut el: EventLoop<Server<T, S>>,
             server.run(&mut el).unwrap();
         })
         .unwrap();
-    handle_signal(ch, engine);
+    handle_signal(ch, engine, backup_path);
     h.join().unwrap();
 }
 
 #[cfg(unix)]
-fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
+fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
     use signal::trap::Trap;
-    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1};
-    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1]);
+    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
+    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
     for sig in trap {
         match sig {
             SIGTERM | SIGINT => {
@@ -582,6 +604,18 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
                     info!("{}", v)
                 }
             }
+            SIGUSR2 => {
+                if backup_path.is_empty() {
+                    info!("empty backup path, backup is disabled");
+                    continue;
+                }
+
+                info!("backup db to {}", backup_path);
+                if let Err(e) = engine.backup_at(backup_path) {
+                    error!("fail to backup: {}", e);
+                }
+                info!("backup done");
+            }
             // TODO: handle more signal
             _ => unreachable!(),
         }
@@ -589,20 +623,20 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>) {
 }
 
 #[cfg(not(unix))]
-fn handle_signal(ch: SendCh<Msg>) {}
+fn handle_signal(_: SendCh<Msg>, _: Arc<DB>, _: &str) {}
 
 fn run_raft_server(listener: TcpListener,
                    pd_client: RpcClient,
-                   matches: &Matches,
-                   config: &toml::Value,
-                   cfg: &Config) {
+                   cfg: &Config,
+                   backup_path: &str,
+                   config: &toml::Value) {
     let mut event_loop = create_event_loop(cfg).unwrap();
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
 
-    let store_path = get_store_path(matches, config);
-    let mut lock_path = Path::new(&store_path).to_path_buf();
+    let store_path = &cfg.storage.path;
+    let mut lock_path = Path::new(store_path).to_path_buf();
     lock_path.push("LOCK");
     let f = File::create(lock_path).unwrap();
     if f.try_lock_exclusive().is_err() {
@@ -629,7 +663,7 @@ fn run_raft_server(listener: TcpListener,
                           resolver,
                           snap_mgr)
         .unwrap();
-    start_server(svr, event_loop, engine);
+    start_server(svr, event_loop, engine, backup_path);
     node.stop().unwrap();
 }
 
@@ -730,11 +764,12 @@ fn main() {
                             cluster_id,
                             &format!("{}", listener.local_addr().unwrap()));
     cfg.labels = get_store_labels(&matches, &config);
-    cfg.storage.path = get_store_path(&matches, &config);
+    let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
+    cfg.storage.path = store_path;
 
     if cluster_id == DEFAULT_CLUSTER_ID {
         panic!("in raftkv, cluster_id must greater than 0");
     }
     let _m = TimeMonitor::default();
-    run_raft_server(listener, pd_client, &matches, &config, &cfg);
+    run_raft_server(listener, pd_client, &cfg, &backup_path, &config);
 }
