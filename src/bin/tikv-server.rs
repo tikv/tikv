@@ -40,7 +40,6 @@ use std::collections::HashMap;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
-use mio::tcp::TcpListener;
 use mio::EventLoop;
 use fs2::FileExt;
 use prometheus::{Encoder, TextEncoder};
@@ -365,7 +364,7 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
 // Currently, to add a new option, we will define three default value
 // in config.rs, this file and config-template.toml respectively. It may be more
 // maintainable to keep things in one place.
-fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: &str) -> Config {
+fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: String) -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
@@ -625,12 +624,8 @@ fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
 #[cfg(not(unix))]
 fn handle_signal(_: SendCh<Msg>, _: Arc<DB>, _: &str) {}
 
-fn run_raft_server(listener: TcpListener,
-                   pd_client: RpcClient,
-                   cfg: &Config,
-                   backup_path: &str,
-                   config: &toml::Value) {
-    let mut event_loop = create_event_loop(cfg).unwrap();
+fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config: &toml::Value) {
+    let mut event_loop = create_event_loop(&cfg).unwrap();
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
@@ -645,7 +640,7 @@ fn run_raft_server(listener: TcpListener,
     }
 
     let (mut node, mut store, raft_router, snap_mgr, engine) =
-        build_raftkv(config, ch.clone(), pd_client, cfg);
+        build_raftkv(config, ch.clone(), pd_client, &cfg);
     info!("tikv server config: {:?}", cfg);
 
     initial_metric(config, Some(node.id()));
@@ -655,8 +650,11 @@ fn run_raft_server(listener: TcpListener,
         panic!("failed to start storage, error = {:?}", e);
     }
 
+    info!("Start listening on {}...", cfg.addr);
+    let listener = bind(&cfg.addr).unwrap();
+
     let svr = Server::new(&mut event_loop,
-                          cfg,
+                          &cfg,
                           listener,
                           store,
                           raft_router,
@@ -745,8 +743,6 @@ fn main() {
         }
         addr
     });
-    info!("Start listening on {}...", addr);
-    let listener = bind(&addr).unwrap();
 
     let pd_endpoints = get_flag_string(&matches, "pd")
         .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
@@ -759,10 +755,7 @@ fn main() {
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
     let cluster_id = pd_client.cluster_id;
 
-    let mut cfg = build_cfg(&matches,
-                            &config,
-                            cluster_id,
-                            &format!("{}", listener.local_addr().unwrap()));
+    let mut cfg = build_cfg(&matches, &config, cluster_id, addr);
     cfg.labels = get_store_labels(&matches, &config);
     let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
     cfg.storage.path = store_path;
@@ -771,5 +764,5 @@ fn main() {
         panic!("in raftkv, cluster_id must greater than 0");
     }
     let _m = TimeMonitor::default();
-    run_raft_server(listener, pd_client, &cfg, &backup_path, &config);
+    run_raft_server(pd_client, cfg, &backup_path, &config);
 }
