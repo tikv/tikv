@@ -737,14 +737,6 @@ impl Peer {
                 self.notify_stale_command(cmd);
             }
 
-            if self.safe_conf_change {
-                if let Err(e) = self.check_conf_change(&req) {
-                    cmd_resp::bind_error(&mut err_resp, e);
-                    cmd.call(err_resp);
-                    return false;
-                }
-            }
-
             if let Err(e) = self.propose_conf_change(req, metrics) {
                 cmd_resp::bind_error(&mut err_resp, e);
                 cmd.call(err_resp);
@@ -812,23 +804,24 @@ impl Peer {
         cmd.call(resp);
     }
 
-    // Calculate the count of uptodate peers, and whether the specified peer is uptodate.
-    fn calc_uptodate(&self, peer_id: u64, progress: &HashMap<u64, Progress>) -> (usize, bool) {
-        let mut peer_included = false;
-        let mut uptodate = 0;
-        for (id, pr) in progress {
+    /// Calculate the number of the healthy nodes.
+    /// A node is healthy when
+    /// 1. it's the leader of the Raft group, which has the latest logs
+    /// 2. it's a follower, and it does not lag behind the leader a lot.
+    ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
+    ///    it cannot works as a node in the quorum to receive replicating logs from leader.
+    fn calc_the_healthy(&self, progress: &HashMap<u64, Progress>) -> usize {
+        let mut healthy = 0;
+        for pr in progress.values() {
             if pr.matched >= self.get_store().truncated_index() {
-                uptodate += 1;
-                if *id == peer_id {
-                    peer_included = true;
-                }
+                healthy += 1;
             }
         }
-        (uptodate, peer_included)
+        healthy
     }
 
     /// Check whether it's safe to propose the specified conf change request.
-    /// It's safe iff at least the quorum of the Raft group is still up to date
+    /// It's safe iff at least the quorum of the Raft group is still healthy
     /// right after that conf change is applied.
     /// Define the total number of nodes in current Raft cluster to be `total`.
     /// To ensure the above safety, if the cmd is
@@ -843,28 +836,36 @@ impl Peer {
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
 
-        let status = self.raft_group.status();
+        let mut status = self.raft_group.status();
         let total = status.progress.len();
-        let (mut uptodate, peer_included) = self.calc_uptodate(peer.get_id(), &status.progress);
+        match change_type {
+            ConfChangeType::AddNode => {
+                let progress = Progress { ..Default::default() };
+                status.progress.insert(peer.get_id(), progress);
+            }
+            ConfChangeType::RemoveNode => {
+                if status.progress.remove(&peer.get_id()).is_none() {
+                    // It's always safe to remove a unexisting node.
+                    return Ok(());
+                }
+            }
+        }
+        let healthy = self.calc_the_healthy(&status.progress);
         let quorum_after_change;
         match change_type {
             ConfChangeType::AddNode => {
-                quorum_after_change = util::calc_quorum(total + 1);
+                quorum_after_change = raft::calc_quorum(total + 1);
                 if quorum_after_change > total {
                     // Add one peer into a cluster that has only one peer.
                     return Ok(());
                 }
-                if uptodate >= quorum_after_change {
+                if healthy >= quorum_after_change {
                     return Ok(());
                 }
             }
             ConfChangeType::RemoveNode => {
-                quorum_after_change = util::calc_quorum(total - 1);
-                // Exclude the node about to be removed if it's in `uptodate_ids`.
-                if peer_included {
-                    uptodate -= 1;
-                }
-                if uptodate >= quorum_after_change {
+                quorum_after_change = raft::calc_quorum(total - 1);
+                if healthy >= quorum_after_change {
                     return Ok(());
                 }
             }
@@ -875,13 +876,13 @@ impl Peer {
               self.tag,
               change_peer,
               total,
-              uptodate,
+              healthy,
               quorum_after_change);
         Err(box_err!("unsafe to perform conf change {:?}, total {}, uptodate {}, quorum after \
                       change {}",
                      change_peer,
                      total,
-                     uptodate,
+                     healthy,
                      quorum_after_change))
     }
 
@@ -937,6 +938,11 @@ impl Peer {
                            cmd: RaftCmdRequest,
                            metrics: &mut RaftProposeMetrics)
                            -> Result<()> {
+
+        if self.safe_conf_change {
+            try!(self.check_conf_change(&cmd))
+        }
+
         metrics.conf_change += 1;
 
         let data = try!(cmd.write_to_bytes());

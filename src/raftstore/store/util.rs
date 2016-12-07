@@ -87,11 +87,6 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
     epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
-// Calculate the quorum of a Raft cluster with the specified total nodes.
-pub fn calc_quorum(total: usize) -> usize {
-    total / 2 + 1
-}
-
 #[cfg(test)]
 mod tests {
     use kvproto::metapb;

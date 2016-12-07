@@ -115,7 +115,7 @@ pub struct Config {
 
     // When `safe_conf_change` is set to `true`, every conf change will be checked
     // to ensure it's safe to be performed.
-    // It's safe iff at least the quorum of the Raft group is still up to date
+    // It's safe iff at least the quorum of the Raft group is still healthy
     // right after that conf change is applied.
     // When `safe_conf_change` is set to `false`, this check will be skipped.
     pub safe_conf_change: bool,
