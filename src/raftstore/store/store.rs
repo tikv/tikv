@@ -1712,19 +1712,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            for (handle, name) in vec![(self.split_check_worker.stop(),
-                                        self.split_check_worker.name()),
-                                       (self.region_worker.stop(), self.region_worker.name()),
-                                       (self.raftlog_gc_worker.stop(),
-                                        self.raftlog_gc_worker.name()),
-                                       (self.compact_worker.stop(), self.compact_worker.name()),
-                                       (self.pd_worker.stop(), self.pd_worker.name()),
-                                       (self.consistency_check_worker.stop(),
-                                        self.consistency_check_worker.name())] {
-                if let Some(Err(e)) = handle.map(|h| h.join()) {
-                    error!("{} failed to stop {}: {:?}", self.tag, name, e);
-                }
-            }
+            self.split_check_worker.stop();
+            self.region_worker.stop();
+            self.raftlog_gc_worker.stop();
+            self.compact_worker.stop();
+            self.pd_worker.stop();
+            self.consistency_check_worker.stop();
+
             for peer in self.region_peers.values_mut() {
                 peer.clear_pending_commands();
             }
