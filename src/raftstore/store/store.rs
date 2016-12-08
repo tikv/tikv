@@ -1203,6 +1203,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region: peer.region().clone(),
             peer: peer.peer.clone(),
             down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
+            pending_peers: peer.collect_pending_peers(),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", peer.tag, e);
