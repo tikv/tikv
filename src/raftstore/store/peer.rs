@@ -802,13 +802,13 @@ impl Peer {
         cmd.call(resp);
     }
 
-    /// Calculate the number of the healthy nodes.
+    /// Count the number of the healthy nodes.
     /// A node is healthy when
     /// 1. it's the leader of the Raft group, which has the latest logs
     /// 2. it's a follower, and it does not lag behind the leader a lot.
     ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn calc_the_healthy(&self, progress: &HashMap<u64, Progress>) -> usize {
+    fn count_healthy_node(&self, progress: &HashMap<u64, Progress>) -> usize {
         let mut healthy = 0;
         for pr in progress.values() {
             if pr.matched >= self.get_store().truncated_index() {
@@ -853,11 +853,13 @@ impl Peer {
                 }
             }
         }
-        let healthy = self.calc_the_healthy(&status.progress);
-        let quorum_after_change = raft::calc_quorum(status.progress.len());
+        let healthy = self.count_healthy_node(&status.progress);
+        let quorum_after_change = raft::quorum(status.progress.len());
         if healthy >= quorum_after_change {
             return Ok(());
         }
+
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["conf_change", "unsafe"]);
 
         info!("{} rejects unsafe conf change request {:?}, total {}, healthy {},  \
                quorum after change {}",

@@ -226,7 +226,7 @@ fn new_message(to: u64, field_type: MessageType, from: Option<u64>) -> Message {
 }
 
 // Calculate the quorum of a Raft cluster with the specified total nodes.
-pub fn calc_quorum(total: usize) -> usize {
+pub fn quorum(total: usize) -> usize {
     total / 2 + 1
 }
 
@@ -329,7 +329,7 @@ impl<T: Storage> Raft<T> {
     }
 
     fn quorum(&self) -> usize {
-        calc_quorum(self.prs.len())
+        quorum(self.prs.len())
     }
 
     // for testing leader lease
