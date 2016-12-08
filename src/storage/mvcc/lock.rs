@@ -12,10 +12,11 @@
 // limitations under the License.
 
 use byteorder::ReadBytesExt;
-use storage::Mutation;
+use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 use super::{Error, Result};
+use super::super::types::Value;
 
 #[derive(Debug,Clone,Copy,PartialEq)]
 pub enum LockType {
@@ -61,24 +62,37 @@ pub struct Lock {
     pub primary: Vec<u8>,
     pub ts: u64,
     pub ttl: u64,
+    pub short_value: Option<Value>,
 }
 
 impl Lock {
-    pub fn new(lock_type: LockType, primary: Vec<u8>, ts: u64, ttl: u64) -> Lock {
+    pub fn new(lock_type: LockType,
+               primary: Vec<u8>,
+               ts: u64,
+               ttl: u64,
+               short_value: Option<Value>)
+               -> Lock {
         Lock {
             lock_type: lock_type,
             primary: primary,
             ts: ts,
             ttl: ttl,
+            short_value: short_value,
         }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN);
+        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN +
+                                       SHORT_VALUE_MAX_LEN);
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts).unwrap();
         b.encode_var_u64(self.ttl).unwrap();
+        if let Some(ref v) = self.short_value {
+            b.push(SHORT_VALUE_PREFIX);
+            let mut v = v.clone();
+            b.append(&mut v);
+        }
         b
     }
 
@@ -94,6 +108,17 @@ impl Lock {
         } else {
             try!(b.decode_var_u64())
         };
-        Ok(Lock::new(lock_type, primary, ts, ttl))
+
+        let short_value = if b.len() > 0 {
+            if try!(b.read_u8()) == SHORT_VALUE_PREFIX {
+                Some(b.to_vec())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Ok(Lock::new(lock_type, primary, ts, ttl, short_value))
     }
 }

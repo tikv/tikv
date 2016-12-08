@@ -156,9 +156,14 @@ impl<'a> MvccReader<'a> {
         }
         loop {
             match try!(self.seek_write(key, ts)) {
-                Some((commit_ts, write)) => {
+                Some((commit_ts, mut write)) => {
                     match write.write_type {
-                        WriteType::Put => return self.load_data(key, write.start_ts).map(Some),
+                        WriteType::Put => {
+                            if write.short_value.is_some() {
+                                return Ok(write.short_value.take());
+                            }
+                            return self.load_data(key, write.start_ts).map(Some);
+                        }
                         WriteType::Delete => return Ok(None),
                         WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
                     }

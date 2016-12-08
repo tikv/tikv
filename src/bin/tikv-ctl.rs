@@ -410,7 +410,7 @@ mod tests {
             })
             .collect();
         let lock_value: Vec<_> = test_data_lock.iter()
-            .map(|data| Lock::new(data.1, data.2.to_vec(), data.3, 0).to_bytes())
+            .map(|data| Lock::new(data.1, data.2.to_vec(), data.3, 0, None).to_bytes())
             .collect();
         let kvs = keys.iter().zip(lock_value.iter());
         let lock_cf = db.cf_handle(CF_LOCK).unwrap();
@@ -444,7 +444,7 @@ mod tests {
             })
             .collect();
         let write_value: Vec<_> = test_data_write.iter()
-            .map(|data| Write::new(data.1, data.2).to_bytes())
+            .map(|data| Write::new(data.1, data.2, None).to_bytes())
             .collect();
         let kvs = keys.iter().zip(write_value.iter());
         let write_cf = db.cf_handle(CF_WRITE).unwrap();

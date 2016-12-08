@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::fmt;
-use storage::{Key, Value, Mutation, CF_DEFAULT, CF_LOCK, CF_WRITE, Options};
+use storage::{Key, Value, Mutation, CF_DEFAULT, CF_LOCK, CF_WRITE, Options, is_short_value};
 use storage::engine::{Snapshot, Modify, ScanMode};
 use super::reader::MvccReader;
 use super::lock::{LockType, Lock};
@@ -54,8 +54,13 @@ impl<'a> MvccTxn<'a> {
         self.write_size
     }
 
-    fn lock_key(&mut self, key: Key, lock_type: LockType, primary: Vec<u8>, ttl: u64) {
-        let lock = Lock::new(lock_type, primary, self.start_ts, ttl).to_bytes();
+    fn lock_key(&mut self,
+                key: Key,
+                lock_type: LockType,
+                primary: Vec<u8>,
+                ttl: u64,
+                short_value: Option<Value>) {
+        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, short_value).to_bytes();
         self.write_size += CF_LOCK.len() + key.encoded().len() + lock.len();
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
@@ -118,21 +123,37 @@ impl<'a> MvccTxn<'a> {
                 });
             }
         }
+
+        let short_value = if let Mutation::Put((_, ref value)) = mutation {
+            if is_short_value(value) {
+                Some(value.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         self.lock_key(key.clone(),
                       LockType::from_mutation(&mutation),
                       primary.to_vec(),
-                      options.lock_ttl);
+                      options.lock_ttl,
+                      short_value);
 
         if let Mutation::Put((_, ref value)) = mutation {
-            let ts = self.start_ts;
-            self.put_value(key, ts, value.clone());
+            if !is_short_value(value) {
+                let ts = self.start_ts;
+                self.put_value(key, ts, value.clone());
+            }
         }
         Ok(())
     }
 
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
-        let lock_type = match try!(self.reader.load_lock(key)) {
-            Some(ref lock) if lock.ts == self.start_ts => lock.lock_type,
+        let (lock_type, short_value) = match try!(self.reader.load_lock(key)) {
+            Some(ref mut lock) if lock.ts == self.start_ts => {
+                (lock.lock_type, lock.short_value.take())
+            }
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
                     // Committed by concurrent transaction.
@@ -148,7 +169,9 @@ impl<'a> MvccTxn<'a> {
                 };
             }
         };
-        let write = Write::new(WriteType::from_lock_type(lock_type), self.start_ts);
+        let write = Write::new(WriteType::from_lock_type(lock_type),
+                               self.start_ts,
+                               short_value);
         self.put_write(key, commit_ts, write.to_bytes());
         self.unlock_key(key.clone());
         Ok(())
@@ -157,7 +180,9 @@ impl<'a> MvccTxn<'a> {
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
         match try!(self.reader.load_lock(key)) {
             Some(ref lock) if lock.ts == self.start_ts => {
-                self.delete_value(key, lock.ts);
+                if lock.short_value.is_none() {
+                    self.delete_value(key, lock.ts);
+                }
             }
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
@@ -174,7 +199,7 @@ impl<'a> MvccTxn<'a> {
                 };
             }
         }
-        let write = Write::new(WriteType::Rollback, self.start_ts);
+        let write = Write::new(WriteType::Rollback, self.start_ts, None);
         let ts = self.start_ts;
         self.put_write(key, ts, write.to_bytes());
         self.unlock_key(key.clone());
@@ -199,7 +224,7 @@ impl<'a> MvccTxn<'a> {
 
             if remove_older {
                 self.delete_write(key, commit);
-                if write.write_type == WriteType::Put {
+                if write.write_type == WriteType::Put && write.short_value.is_none() {
                     self.delete_value(key, write.start_ts);
                 }
                 delete_versions += 1;

@@ -43,6 +43,13 @@ pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 
+pub const SHORT_VALUE_MAX_LEN: usize = 32;
+pub const SHORT_VALUE_PREFIX: u8 = b'v';
+
+pub fn is_short_value(value: &[u8]) -> bool {
+    value.len() <= SHORT_VALUE_MAX_LEN
+}
+
 #[derive(Debug, Clone)]
 pub enum Mutation {
     Put((Key, Value)),
