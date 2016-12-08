@@ -201,6 +201,18 @@ fn check_advertise_address(addr: &str) {
 
 fn get_rocksdb_db_option(matches: &Matches, config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
+
+    let log_file_path = get_flag_string(matches, "f")
+        .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
+    if !log_file_path.is_empty() {
+        let log_file_path = Path::new(&log_file_path);
+        if let Some(dir) = log_file_path.parent() {
+            let log_dir = canonicalize_path(dir.to_str().unwrap());
+            info!("RocksDB LOG dir: {}", log_dir);
+            opts.set_db_log_dir(&log_dir);
+        }
+    }
+
     let rmode = get_toml_int(config, "rocksdb.wal-recovery-mode", Some(2));
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
@@ -224,22 +236,6 @@ fn get_rocksdb_db_option(matches: &Matches, config: &toml::Value) -> RocksdbOpti
 
     let create_if_missing = get_toml_boolean(config, "rocksdb.create-if-missing", Some(true));
     opts.create_if_missing(create_if_missing);
-
-    let mut log_dir = get_toml_string(config, "rocksdb.log-dir", Some(String::new()));
-    if !log_dir.is_empty() {
-        log_dir = canonicalize_path(&log_dir);
-    } else {
-        let log_file_path = get_flag_string(matches, "f")
-            .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
-        let log_file_path = Path::new(&log_file_path);
-        if let Some(dir) = log_file_path.parent() {
-            log_dir = canonicalize_path(dir.to_str().unwrap());
-        }
-    }
-    if !log_dir.is_empty() {
-        info!("RocksDB LOG dir: {}", log_dir);
-        opts.set_db_log_dir(&log_dir);
-    }
 
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     opts.set_max_open_files(max_open_files as i32);
