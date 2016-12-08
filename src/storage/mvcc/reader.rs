@@ -160,6 +160,9 @@ impl<'a> MvccReader<'a> {
                     match write.write_type {
                         WriteType::Put => {
                             if write.short_value.is_some() {
+                                if self.key_only {
+                                    return Ok(vec![]);
+                                }
                                 return Ok(write.short_value.take());
                             }
                             return self.load_data(key, write.start_ts).map(Some);
