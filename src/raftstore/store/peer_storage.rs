@@ -280,6 +280,8 @@ impl PeerStorage {
         let start_key = keys::raft_log_key(self.get_region_id(), low);
 
         if low + 1 == high {
+            // If election happens in inactive regions, they will just try
+            // to fetch one empty log.
             let handle = self.engine.cf_handle(CF_RAFT).unwrap();
             match box_try!(self.engine.get_cf(handle, &start_key)) {
                 None => return Err(RaftError::Store(StorageError::Unavailable)),
@@ -309,7 +311,7 @@ impl PeerStorage {
 
             next_index += 1;
 
-            total_size += entry.compute_size() as u64;
+            total_size += value.len() as u64;
             exceeded_max_size = total_size > max_size;
 
             if !exceeded_max_size || ents.is_empty() {

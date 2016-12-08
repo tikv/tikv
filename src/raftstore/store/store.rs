@@ -1732,9 +1732,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         if !self.pending_raft_groups.is_empty() {
             self.on_raft_ready();
         }
-        if !self.pending_regions.is_empty() {
-            self.pending_regions.clear();
-        }
+        self.pending_regions.clear();
     }
 }
 
