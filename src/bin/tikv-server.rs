@@ -626,7 +626,7 @@ fn run_raft_server(listener: TcpListener,
                           listener,
                           store,
                           raft_router,
-                          node.get_snapshot_tx(),
+                          node.get_snapshot_status_sender(),
                           resolver,
                           snap_mgr)
         .unwrap();

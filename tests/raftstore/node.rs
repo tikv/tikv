@@ -42,7 +42,7 @@ use super::transport_simulate::*;
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
-    snapshot_txs: HashMap<u64, Arc<Mutex<Sender<ReportSnapshotMsg>>>>,
+    snapshot_status_senders: HashMap<u64, Arc<Mutex<Sender<SnapshotStatusMsg>>>>,
 }
 
 #[derive(Clone)]
@@ -56,7 +56,7 @@ impl ChannelTransport {
             core: Arc::new(RwLock::new(ChannelTransportCore {
                 snap_paths: HashMap::new(),
                 routers: HashMap::new(),
-                snapshot_txs: HashMap::new(),
+                snapshot_status_senders: HashMap::new(),
             })),
         }
     }
@@ -113,12 +113,12 @@ impl Channel<RaftMessage> for ChannelTransport {
                 if is_snapshot {
                     // should report snapshot finish.
                     let core = self.rl();
-                    core.snapshot_txs
+                    core.snapshot_status_senders
                         .get(&from_store)
                         .unwrap()
                         .lock()
                         .unwrap()
-                        .send(ReportSnapshotMsg {
+                        .send(SnapshotStatusMsg {
                             region_id: region_id,
                             to_peer_id: to_peer_id,
                             status: SnapshotStatus::Finish,
@@ -192,7 +192,11 @@ impl Simulator for NodeCluster {
         let node_id = node.id();
         let router = ServerRaftStoreRouter::new(node.get_sendch(), node_id);
         self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
-        self.trans.wl().snapshot_txs.insert(node_id, Arc::new(Mutex::new(node.get_snapshot_tx())));
+        self.trans
+            .wl()
+            .snapshot_status_senders
+            .insert(node_id,
+                    Arc::new(Mutex::new(node.get_snapshot_status_sender())));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 

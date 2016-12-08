@@ -47,7 +47,7 @@ use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner};
-use super::{util, Msg, Tick, ReportSnapshotMsg, SnapManager};
+use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range, Snapshot as EngineSnapshot};
 use super::config::Config;
@@ -68,7 +68,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     store: metapb::Store,
     engine: Arc<DB>,
     sendch: SendCh<Msg>,
-    snapshot_rx: Receiver<ReportSnapshotMsg>,
+    snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
@@ -113,7 +113,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 impl<T: Transport, C: PdClient> Store<T, C> {
     #[allow(too_many_arguments)]
     pub fn new(sender: Sender<Msg>,
-               snapshot_rx: Receiver<ReportSnapshotMsg>,
+               snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
@@ -133,7 +133,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             store: meta,
             engine: engine,
             sendch: sendch,
-            snapshot_rx: snapshot_rx,
+            snapshot_status_receiver: snapshot_status_receiver,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
@@ -313,8 +313,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let msg_to_peer_id;
             let msg_status;
             {
-                match self.snapshot_rx.try_recv() {
-                    Ok(ReportSnapshotMsg { region_id, to_peer_id, status }) => {
+                match self.snapshot_status_receiver.try_recv() {
+                    Ok(SnapshotStatusMsg { region_id, to_peer_id, status }) => {
                         msg_region_id = region_id;
                         msg_to_peer_id = to_peer_id;
                         msg_status = status;

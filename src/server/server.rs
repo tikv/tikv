@@ -29,7 +29,7 @@ use super::{Result, OnResponse, Config};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
-use raftstore::store::{ReportSnapshotMsg, SnapManager};
+use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
@@ -80,7 +80,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     store_resolving: HashSet<u64>,
 
     raft_router: T,
-    snapshot_report_tx: Sender<ReportSnapshotMsg>,
+    snapshot_status_sender: Sender<SnapshotStatusMsg>,
 
     store: StoreHandler,
     end_point_worker: Worker<EndPointTask>,
@@ -105,7 +105,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                listener: TcpListener,
                storage: Storage,
                raft_router: T,
-               tx: Sender<ReportSnapshotMsg>,
+               snapshot_status_sender: Sender<SnapshotStatusMsg>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
@@ -127,7 +127,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store_tokens: HashMap::new(),
             store_resolving: HashSet::new(),
             raft_router: raft_router,
-            snapshot_report_tx: tx,
+            snapshot_status_sender: snapshot_status_sender,
             store: store_handler,
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
@@ -500,7 +500,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
 
         SnapshotReporter {
-            tx: self.snapshot_report_tx.clone(),
+            snapshot_status_sender: self.snapshot_status_sender.clone(),
             region_id: region_id,
             to_peer_id: to_peer_id,
             to_store_id: to_store_id,
@@ -613,7 +613,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 }
 
 struct SnapshotReporter {
-    tx: Sender<ReportSnapshotMsg>,
+    snapshot_status_sender: Sender<SnapshotStatusMsg>,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
@@ -638,7 +638,7 @@ impl SnapshotReporter {
             REPORT_FAILURE_MSG_COUNTER.with_label_values(&["snapshot", &*store]).inc();
         };
 
-        if let Err(e) = self.tx.send(ReportSnapshotMsg {
+        if let Err(e) = self.snapshot_status_sender.send(SnapshotStatusMsg {
             region_id: self.region_id,
             to_peer_id: self.to_peer_id,
             status: status,
@@ -732,14 +732,14 @@ mod tests {
         let router = TestRaftStoreRouter::new(tx);
         let report_unreachable_count = router.report_unreachable_count.clone();
 
-        let (snapshot_tx, _) = mpsc::channel();
+        let (snapshot_status_sender, _) = mpsc::channel();
 
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
                                      storage,
                                      router,
-                                     snapshot_tx,
+                                     snapshot_status_sender,
                                      resolver,
                                      store::new_snap_mgr("", None))
             .unwrap();

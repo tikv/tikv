@@ -24,7 +24,7 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
-use raftstore::store::{self, Msg, ReportSnapshotMsg, Store, Config as StoreConfig, keys, Peekable,
+use raftstore::store::{self, Msg, SnapshotStatusMsg, Store, Config as StoreConfig, keys, Peekable,
                        Transport, SnapManager};
 use super::Result;
 use super::config::Config;
@@ -50,7 +50,7 @@ pub struct Node<C: PdClient + 'static> {
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh<Msg>,
-    snapshot_tx: Option<Sender<ReportSnapshotMsg>>,
+    snapshot_status_sender: Option<Sender<SnapshotStatusMsg>>,
 
     pd_client: Arc<C>,
 }
@@ -89,7 +89,7 @@ impl<C> Node<C>
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
-            snapshot_tx: None,
+            snapshot_status_sender: None,
         }
     }
 
@@ -138,8 +138,8 @@ impl<C> Node<C>
         self.ch.clone()
     }
 
-    pub fn get_snapshot_tx(&self) -> Sender<ReportSnapshotMsg> {
-        self.snapshot_tx.clone().unwrap()
+    pub fn get_snapshot_status_sender(&self) -> Sender<SnapshotStatusMsg> {
+        self.snapshot_status_sender.clone().unwrap()
     }
 
     // check store, return store id for the engine.
@@ -246,7 +246,7 @@ impl<C> Node<C>
 
         let (tx, rx) = mpsc::channel();
         let (snapshot_tx, snapshot_rx) = mpsc::channel();
-        self.snapshot_tx = Some(snapshot_tx);
+        self.snapshot_status_sender = Some(snapshot_tx);
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
             let mut store =

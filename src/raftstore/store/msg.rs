@@ -36,7 +36,7 @@ pub enum Tick {
     ConsistencyCheck,
 }
 
-pub struct ReportSnapshotMsg {
+pub struct SnapshotStatusMsg {
     pub region_id: u64,
     pub to_peer_id: u64,
     pub status: SnapshotStatus,
