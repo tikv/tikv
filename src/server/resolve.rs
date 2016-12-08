@@ -83,7 +83,7 @@ impl<T: PdClient> Runner<T> {
         let pd_client = self.pd_client.clone();
         let s = box_try!(pd_client.get_store(store_id));
         if s.get_state() == metapb::StoreState::Tombstone {
-            RESOLVE_STORE_COUNTER.with_label_values(&["tombstone"]).inc();
+            RESOLVE_STORE_COUNTER_VEC.with_label_values(&["tombstone"]).inc();
             return Err(box_err!("store {} has been removed", store_id));
         }
         let addr = s.get_address().to_owned();
