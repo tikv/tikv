@@ -68,6 +68,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     store: metapb::Store,
     engine: Arc<DB>,
     sendch: SendCh<Msg>,
+
+    send_snapshot_count: usize,
     snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
 
     // region_id -> peers
@@ -133,6 +135,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             store: meta,
             engine: engine,
             sendch: sendch,
+            send_snapshot_count: 0,
             snapshot_status_receiver: snapshot_status_receiver,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
@@ -306,7 +309,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.clone()
     }
 
-    fn poll_snapshot_report(&mut self) {
+    fn poll_snapshot_status(&mut self) {
+        if self.send_snapshot_count == 0 {
+            return;
+        }
+
         // Poll all snapshot messages and handle them.
         loop {
             let msg_region_id;
@@ -332,7 +339,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
             // Report snapshot status to the corresponding peer.
-            self.on_report_snapshot(msg_region_id, msg_to_peer_id, msg_status);
+            self.report_snapshot_status(msg_region_id, msg_to_peer_id, msg_status);
+        }
+    }
+
+    fn report_snapshot_status(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
+        self.send_snapshot_count -= 1;
+        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
+            // The peer must exist in peer_cache.
+            let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
+                Some(peer) => peer,
+                None => {
+                    // If to_peer is removed immediately after sending snapshot, the command
+                    // may be applied before SnapshotStatus is reported. So here just ignore.
+                    warn!("[region {}] peer {} not found, skip reporting snap {:?}",
+                          region_id,
+                          to_peer_id,
+                          status);
+                    return;
+                }
+            };
+            info!("[region {}] report snapshot status {:?} {:?}",
+                  region_id,
+                  to_peer,
+                  status);
+            peer.raft_group.report_snapshot(to_peer_id, status)
         }
     }
 
@@ -388,7 +419,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        self.poll_snapshot_report();
+        self.poll_snapshot_status();
 
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
             .inc_by(duration_to_nanos(t.elapsed()) as f64)
@@ -922,6 +953,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) {
+        self.send_snapshot_count += ready_result.send_snapshot_count;
+
         if let Some(apply_result) = ready_result.apply_snap_result {
             self.on_ready_apply_snapshot(apply_result);
         }
@@ -1447,29 +1480,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::CompactLockCf,
                                        self.cfg.lock_cf_compact_interval) {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
-        }
-    }
-
-    fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
-        if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
-            // The peer must exist in peer_cache.
-            let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
-                Some(peer) => peer,
-                None => {
-                    // If to_peer is removed immediately after sending snapshot, the command
-                    // may be applied before SnapshotStatus is reported. So here just ignore.
-                    warn!("[region {}] peer {} not found, skip reporting snap {:?}",
-                          region_id,
-                          to_peer_id,
-                          status);
-                    return;
-                }
-            };
-            info!("[region {}] report snapshot status {:?} {:?}",
-                  region_id,
-                  to_peer,
-                  status);
-            peer.raft_group.report_snapshot(to_peer_id, status)
         }
     }
 
