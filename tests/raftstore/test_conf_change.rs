@@ -513,6 +513,8 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     // The "AddNode" request will be rejected
     // if there are only 2 healthy nodes in a cluster of 3 nodes.
     pd_client.add_peer(region_id, new_peer(4, 4));
+    // Put a new kv to ensure the previous "AddNode" is handled.
+    cluster.must_put(b"k2", b"v2");
     pd_client.must_none_peer(region_id, new_peer(4, 4));
 
     // Recover the isolated peer.
@@ -531,12 +533,13 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.add_send_filter(IsolationFilterFactory::new(1));
 
     // Ensure new leader is elected and it works.
-    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k3", b"v3");
 
     // Ensure the conf change is safe:
     // The "RemoveNode" request which asks to remove one healthy node will be rejected
     // if there are only 2 healthy nodes in a cluster of 3 nodes.
     pd_client.remove_peer(region_id, new_peer(2, 2));
+    cluster.must_put(b"k4", b"v4");
     pd_client.must_have_peer(region_id, new_peer(2, 2));
 
     // In this case, it's fine to remove one unhealthy node.

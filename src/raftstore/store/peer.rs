@@ -859,7 +859,7 @@ impl Peer {
             return Ok(());
         }
 
-        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["conf_change", "reject_unsafe"]);
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["conf_change", "reject_unsafe"]).inc();
 
         info!("{} rejects unsafe conf change request {:?}, total {}, healthy {},  \
                quorum after change {}",
