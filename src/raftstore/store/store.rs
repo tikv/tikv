@@ -61,6 +61,7 @@ use super::local_metrics::RaftMetrics;
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
+const MIO_TICK_RATIO: u64 = 10;
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
@@ -102,7 +103,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 {
     let mut builder = EventLoopBuilder::new();
     // To make raft base tick more accurate, timer tick should be small enough.
-    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval / 10));
+    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval / MIO_TICK_RATIO));
     builder.notify_capacity(cfg.notify_capacity);
     builder.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(builder.build());
