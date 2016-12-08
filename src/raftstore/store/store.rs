@@ -1515,7 +1515,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if self.consistency_check_worker.is_busy() {
             // To avoid frequent scan, schedule new check only when all the
             // scheduled check is done.
-            info!("{} worker is busy, skip consistency check", self.tag);
+            self.register_consistency_check_tick(event_loop);
             return;
         }
         let (mut candidate_id, mut candidate_check_time) = (0, Instant::now());
@@ -1541,8 +1541,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if let Err(e) = self.sendch.send(msg) {
                 error!("{} failed to schedule consistent check: {:?}", peer.tag, e);
             }
-        } else {
-            info!("{} no candidate found, skip consistency check", self.tag);
         }
 
         self.register_consistency_check_tick(event_loop);

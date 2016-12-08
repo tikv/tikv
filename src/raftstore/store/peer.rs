@@ -660,8 +660,6 @@ impl Peer {
                 hs.set_commit(self.get_store().truncated_index());
             }
             vec![]
-        } else if ready.committed_entries.is_empty() {
-            vec![]
         } else {
             try!(self.handle_raft_commit_entries(&ready.committed_entries))
         };
@@ -1028,6 +1026,9 @@ impl Peer {
     fn handle_raft_commit_entries(&mut self,
                                   committed_entries: &[eraftpb::Entry])
                                   -> Result<Vec<ExecResult>> {
+        if committed_entries.is_empty() {
+            return Ok(vec![]);
+        }
         // We can't apply committed entries when this peer is still applying snapshot.
         assert!(!self.is_applying());
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
