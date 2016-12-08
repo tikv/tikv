@@ -263,7 +263,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#d850e91a125bd4c11b9ac03b3aa000abc371b6ca"
+source = "git+https://github.com/pingcap/kvproto#6a322fe1c8c107177ec436c2d66fa6d191bb4312"
 dependencies = [
  "protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
