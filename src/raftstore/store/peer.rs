@@ -493,6 +493,23 @@ impl Peer {
         down_peers
     }
 
+    pub fn collect_pending_peers(&self) -> Vec<metapb::Peer> {
+        let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
+        let status = self.raft_group.status();
+        let truncated_idx = self.get_store().truncated_index();
+        for (id, progress) in status.progress {
+            if id == self.peer.get_id() {
+                continue;
+            }
+            if progress.matched < truncated_idx {
+                if let Some(p) = self.get_peer_from_cache(id) {
+                    pending_peers.push(p);
+                }
+            }
+        }
+        pending_peers
+    }
+
     pub fn check_stale_state(&mut self, d: Duration) -> StaleState {
         // Updates the `leader_missing_time` according to the current state.
         if self.leader_id() == raft::INVALID_ID {
