@@ -22,7 +22,7 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 
 fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.region_compact_check_interval_secs = 500;
+    cluster.cfg.raft_store.region_compact_check_interval = 500_000;
     cluster.cfg.raft_store.region_compact_delete_keys_count = 5;
     cluster.run();
 

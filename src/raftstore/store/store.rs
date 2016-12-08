@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::option::Option;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
@@ -30,7 +29,7 @@ use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
-use kvproto::eraftpb::{ConfChangeType, Snapshot, MessageType};
+use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
 use pd::PdClient;
@@ -52,7 +51,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState};
-use super::peer_storage::{ApplySnapResult, SnapState};
+use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_updated_regions, bind_error};
 use super::transport::Transport;
@@ -94,6 +93,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     tag: String,
 
     start_time: Timespec,
+    is_busy: bool,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -147,6 +147,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             raft_metrics: RaftMetrics::default(),
             tag: tag,
             start_time: time::get_time(),
+            is_busy: false,
         };
         try!(s.init());
         Ok(s)
@@ -245,6 +246,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_store_heartbeat_tick(event_loop);
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
+        self.register_consistency_check_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -252,7 +254,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(self.engine.clone(),
-                                       self.get_sendch(),
                                        self.snap_mgr.clone(),
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
@@ -702,8 +703,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.on_ready_result(region_id, res)
         }
 
+        let dur = t.elapsed();
+        if !self.is_busy {
+            let election_timeout =
+                Duration::from_millis(self.cfg.raft_base_tick_interval *
+                                      self.cfg.raft_election_timeout_ticks as u64);
+            if dur >= election_timeout {
+                self.is_busy = true;
+            }
+        }
+
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
-            .inc_by(duration_to_nanos(t.elapsed()) as f64)
+            .inc_by(duration_to_nanos(dur) as f64)
             .unwrap();
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
@@ -1128,7 +1139,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactCheck,
-                                       self.cfg.region_compact_check_interval_secs * 1000) {
+                                       self.cfg.region_compact_check_interval) {
             error!("{} register compact check tick err: {:?}", self.tag, e);
         };
     }
@@ -1203,6 +1214,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region: peer.region().clone(),
             peer: peer.peer.clone(),
             down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
+            pending_peers: peer.collect_pending_peers(),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", peer.tag, e);
@@ -1314,6 +1326,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         stats.set_start_time(self.start_time.sec as u32);
 
+        stats.set_is_busy(self.is_busy);
+        self.is_busy = false;
+
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("{} failed to notify pd: {}", self.tag, e);
         }
@@ -1419,7 +1434,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn register_compact_lock_cf_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactLockCf,
-                                       self.cfg.lock_cf_compact_interval_secs * 1000) {
+                                       self.cfg.lock_cf_compact_interval) {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
@@ -1450,26 +1465,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_unreachable(&mut self, region_id: u64, to_peer_id: u64) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             peer.raft_group.report_unreachable(to_peer_id);
-        }
-    }
-
-    fn on_snap_gen_res(&mut self, region_id: u64, snap: Option<Snapshot>) {
-        let peer = match self.region_peers.get_mut(&region_id) {
-            None => return,
-            Some(peer) => peer,
-        };
-        let mut storage = peer.mut_store();
-        if !storage.is_snap_state(SnapState::Generating) {
-            // snapshot no need anymore.
-            return;
-        }
-        match snap {
-            Some(snap) => {
-                storage.set_snap_state(SnapState::Snap(snap));
-            }
-            None => {
-                storage.set_snap_state(SnapState::Failed);
-            }
         }
     }
 }
@@ -1703,9 +1698,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
-            Msg::SnapGenRes { region_id, snap } => {
-                self.on_snap_gen_res(region_id, snap);
-            }
             Msg::ComputeHashResult { region_id, index, hash } => {
                 self.on_hash_computed(region_id, index, hash);
             }
@@ -1731,19 +1723,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            for (handle, name) in vec![(self.split_check_worker.stop(),
-                                        self.split_check_worker.name()),
-                                       (self.region_worker.stop(), self.region_worker.name()),
-                                       (self.raftlog_gc_worker.stop(),
-                                        self.raftlog_gc_worker.name()),
-                                       (self.compact_worker.stop(), self.compact_worker.name()),
-                                       (self.pd_worker.stop(), self.pd_worker.name()),
-                                       (self.consistency_check_worker.stop(),
-                                        self.consistency_check_worker.name())] {
-                if let Some(Err(e)) = handle.map(|h| h.join()) {
-                    error!("{} failed to stop {}: {:?}", self.tag, name, e);
-                }
-            }
+            self.split_check_worker.stop();
+            self.region_worker.stop();
+            self.raftlog_gc_worker.stop();
+            self.compact_worker.stop();
+            self.pd_worker.stop();
+            self.consistency_check_worker.stop();
+
             for peer in self.region_peers.values_mut() {
                 peer.clear_pending_commands();
             }
