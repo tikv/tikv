@@ -16,7 +16,6 @@ use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::{Msg as StoreMsg, Transport};
 use tikv::server::transport::*;
-use tikv::raft::SnapshotStatus;
 use tikv::util::HandyRwLock;
 use tikv::util::transport;
 
@@ -380,7 +379,6 @@ impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
         let mut pending_msg = self.pending_msg.lock().unwrap();
         for m in msgs.drain(..) {
             let paused = match m {
-                StoreMsg::ReportSnapshot { ref status, .. } => *status == SnapshotStatus::Finish,
                 StoreMsg::RaftMessage(ref msg) => {
                     msg.get_message().get_msg_type() == MessageType::MsgSnapshot
                 }

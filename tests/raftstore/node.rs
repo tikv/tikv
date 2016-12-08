@@ -13,7 +13,8 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
@@ -41,6 +42,7 @@ use super::transport_simulate::*;
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
+    snapshot_txs: HashMap<u64, Arc<Mutex<Sender<ReportSnapshotMsg>>>>,
 }
 
 #[derive(Clone)]
@@ -54,6 +56,7 @@ impl ChannelTransport {
             core: Arc::new(RwLock::new(ChannelTransportCore {
                 snap_paths: HashMap::new(),
                 routers: HashMap::new(),
+                snapshot_txs: HashMap::new(),
             })),
         }
     }
@@ -72,7 +75,6 @@ impl Channel<RaftMessage> for ChannelTransport {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
-        let to_store_id = msg.get_to_peer().get_store_id();
         let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
@@ -110,14 +112,17 @@ impl Channel<RaftMessage> for ChannelTransport {
                 try!(h.send_raft_msg(msg));
                 if is_snapshot {
                     // should report snapshot finish.
-                    self.rl()
-                        .routers
+                    let core = self.rl();
+                    core.snapshot_txs
                         .get(&from_store)
                         .unwrap()
-                        .report_snapshot(region_id,
-                                         to_peer_id,
-                                         to_store_id,
-                                         SnapshotStatus::Finish)
+                        .lock()
+                        .unwrap()
+                        .send(ReportSnapshotMsg {
+                            region_id: region_id,
+                            to_peer_id: to_peer_id,
+                            status: SnapshotStatus::Finish,
+                        })
                         .unwrap();
                 }
                 Ok(())
@@ -187,6 +192,7 @@ impl Simulator for NodeCluster {
         let node_id = node.id();
         let router = ServerRaftStoreRouter::new(node.get_sendch(), node_id);
         self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
+        self.trans.wl().snapshot_txs.insert(node_id, Arc::new(Mutex::new(node.get_snapshot_tx())));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 

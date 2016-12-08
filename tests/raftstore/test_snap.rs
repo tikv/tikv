@@ -213,7 +213,6 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
     // Now peer 1 can't send snapshot to peer 2
     cluster.sim.wl().add_recv_filter(3, box PauseFirstSnapshotFilter::new());
-    cluster.sim.wl().add_recv_filter(1, box PauseFirstSnapshotFilter::new());
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // TODO: should check whether snapshot has been sent before split.

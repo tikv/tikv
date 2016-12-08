@@ -24,8 +24,8 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
-use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
-                       SnapManager};
+use raftstore::store::{self, Msg, ReportSnapshotMsg, Store, Config as StoreConfig, keys, Peekable,
+                       Transport, SnapManager};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
@@ -50,7 +50,7 @@ pub struct Node<C: PdClient + 'static> {
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh<Msg>,
-    snapshot_tx: Option<Sender<Msg>>,
+    snapshot_tx: Option<Sender<ReportSnapshotMsg>>,
 
     pd_client: Arc<C>,
 }
@@ -138,7 +138,7 @@ impl<C> Node<C>
         self.ch.clone()
     }
 
-    pub fn get_snapshot_tx(&self) -> Sender<Msg> {
+    pub fn get_snapshot_tx(&self) -> Sender<ReportSnapshotMsg> {
         self.snapshot_tx.clone().unwrap()
     }
 

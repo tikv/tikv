@@ -29,7 +29,7 @@ use super::{Result, OnResponse, Config};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
-use raftstore::store::{Msg as StoreMsg, SnapManager};
+use raftstore::store::{ReportSnapshotMsg, SnapManager};
 use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
@@ -80,7 +80,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     store_resolving: HashSet<u64>,
 
     raft_router: T,
-    snapshot_report_tx: Sender<StoreMsg>,
+    snapshot_report_tx: Sender<ReportSnapshotMsg>,
 
     store: StoreHandler,
     end_point_worker: Worker<EndPointTask>,
@@ -105,7 +105,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                listener: TcpListener,
                storage: Storage,
                raft_router: T,
-               tx: Sender<StoreMsg>,
+               tx: Sender<ReportSnapshotMsg>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
@@ -613,7 +613,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
 }
 
 struct SnapshotReporter {
-    tx: Sender<StoreMsg>,
+    tx: Sender<ReportSnapshotMsg>,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
@@ -633,7 +633,12 @@ impl SnapshotReporter {
                self.region_id,
                status);
 
-        if let Err(e) = self.tx.send(StoreMsg::ReportSnapshot {
+        if status == SnapshotStatus::Failure {
+            let store = self.to_store_id.to_string();
+            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["snapshot", &*store]).inc();
+        };
+
+        if let Err(e) = self.tx.send(ReportSnapshotMsg {
             region_id: self.region_id,
             to_peer_id: self.to_peer_id,
             status: status,
@@ -666,7 +671,6 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::{self, Msg as StoreMsg};
-    use raft::SnapshotStatus;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -703,15 +707,6 @@ mod tests {
         fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
-        }
-
-        fn report_snapshot(&self,
-                           _: u64,
-                           _: u64,
-                           _: u64,
-                           _: SnapshotStatus)
-                           -> RaftStoreResult<()> {
-            unimplemented!();
         }
 
         fn report_unreachable(&self, _: u64, _: u64, _: u64) -> RaftStoreResult<()> {

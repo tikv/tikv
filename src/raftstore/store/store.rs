@@ -47,7 +47,7 @@ use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner};
-use super::{util, Msg, Tick, SnapManager};
+use super::{util, Msg, Tick, ReportSnapshotMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, delete_all_in_range, Snapshot as EngineSnapshot};
 use super::config::Config;
@@ -68,7 +68,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     store: metapb::Store,
     engine: Arc<DB>,
     sendch: SendCh<Msg>,
-    snapshot_rx: Receiver<Msg>,
+    snapshot_rx: Receiver<ReportSnapshotMsg>,
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
@@ -113,7 +113,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 impl<T: Transport, C: PdClient> Store<T, C> {
     #[allow(too_many_arguments)]
     pub fn new(sender: Sender<Msg>,
-               snapshot_rx: Receiver<Msg>,
+               snapshot_rx: Receiver<ReportSnapshotMsg>,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
@@ -314,20 +314,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let msg_status;
             {
                 match self.snapshot_rx.try_recv() {
-                    Ok(s) => {
-                        match s {
-                            Msg::ReportSnapshot { region_id, to_peer_id, status } => {
-                                msg_region_id = region_id;
-                                msg_to_peer_id = to_peer_id;
-                                msg_status = status;
-                            }
-                            m => {
-                                error!("{} receives unexpected message {:?} from snapshot channel",
-                                       self.tag,
-                                       m);
-                                break;
-                            }
-                        }
+                    Ok(ReportSnapshotMsg { region_id, to_peer_id, status }) => {
+                        msg_region_id = region_id;
+                        msg_to_peer_id = to_peer_id;
+                        msg_status = status;
                     }
                     Err(TryRecvError::Empty) => {
                         // The snapshot rx is empty
@@ -1711,9 +1701,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SplitCheckResult { region_id, epoch, split_key } => {
                 info!("[region {}] split check complete.", region_id);
                 self.on_split_check_result(region_id, epoch, split_key);
-            }
-            Msg::ReportSnapshot { region_id, to_peer_id, status } => {
-                self.on_report_snapshot(region_id, to_peer_id, status);
             }
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);
