@@ -16,8 +16,6 @@ store = "/tmp/tikv/store"
 labels = ""
 # log level: trace, debug, info, warn, error, off.
 log-level = "info"
-# set log file path.
-# log-file = ""
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
