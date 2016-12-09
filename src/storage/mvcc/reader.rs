@@ -161,7 +161,7 @@ impl<'a> MvccReader<'a> {
                         WriteType::Put => {
                             if write.short_value.is_some() {
                                 if self.key_only {
-                                    return Ok(vec![]);
+                                    return Ok(Some(vec![]));
                                 }
                                 return Ok(write.short_value.take());
                             }
