@@ -116,8 +116,8 @@ pub struct ReadyResult {
     pub exec_results: Vec<ExecResult>,
     // apply_snap_result is set after snapshot applied.
     pub apply_snap_result: Option<ApplySnapResult>,
-    // send_snapshot_count is the number of snapshot sent.
-    pub send_snapshot_count: usize,
+    // sent_snapshot_count is the number of snapshot sent.
+    pub sent_snapshot_count: usize,
 }
 
 #[derive(Default)]
@@ -433,7 +433,7 @@ impl Peer {
     fn send<T, I>(&mut self,
                   trans: &T,
                   msgs: I,
-                  send_snapshot_count: &mut usize,
+                  sent_snapshot_count: &mut usize,
                   metrics: &mut RaftMessageMetrics)
                   -> Result<()>
         where T: Transport,
@@ -450,7 +450,7 @@ impl Peer {
                 MessageType::MsgRequestVote => metrics.vote += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
                 MessageType::MsgSnapshot => {
-                    *send_snapshot_count += 1;
+                    *sent_snapshot_count += 1;
                     metrics.snapshot += 1;
                 }
                 MessageType::MsgHeartbeat => metrics.heartbeat += 1,
@@ -601,13 +601,13 @@ impl Peer {
 
         self.add_ready_metric(&ready, &mut metrics.ready);
 
-        let mut send_snapshot_count = 0;
+        let mut sent_snapshot_count = 0;
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
             self.send(trans,
                       ready.messages.drain(..),
-                      &mut send_snapshot_count,
+                      &mut sent_snapshot_count,
                       &mut metrics.message)
                 .unwrap_or_else(|e| {
                     // We don't care that the message is sent failed, so here just log this error.
@@ -635,7 +635,7 @@ impl Peer {
         if !self.is_leader() {
             self.send(trans,
                       ready.messages.drain(..),
-                      &mut send_snapshot_count,
+                      &mut sent_snapshot_count,
                       &mut metrics.message)
                 .unwrap_or_else(|e| {
                     warn!("{} follower send messages err {:?}", self.tag, e);
@@ -659,7 +659,7 @@ impl Peer {
         Ok(Some(ReadyResult {
             ready: Some(ready),
             apply_snap_result: apply_result,
-            send_snapshot_count: send_snapshot_count,
+            sent_snapshot_count: sent_snapshot_count,
             exec_results: vec![],
         }))
     }

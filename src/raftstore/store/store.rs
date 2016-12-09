@@ -69,7 +69,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     engine: Arc<DB>,
     sendch: SendCh<Msg>,
 
-    send_snapshot_count: usize,
+    sent_snapshot_count: usize,
     snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
 
     // region_id -> peers
@@ -135,7 +135,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             store: meta,
             engine: engine,
             sendch: sendch,
-            send_snapshot_count: 0,
+            sent_snapshot_count: 0,
             snapshot_status_receiver: snapshot_status_receiver,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
@@ -310,7 +310,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn poll_snapshot_status(&mut self) {
-        if self.send_snapshot_count == 0 {
+        if self.sent_snapshot_count == 0 {
             return;
         }
 
@@ -336,9 +336,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn report_snapshot_status(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
-        self.send_snapshot_count -= 1;
+        self.sent_snapshot_count -= 1;
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
-            // The peer must exist in peer_cache.
             let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
                 Some(peer) => peer,
                 None => {
@@ -944,7 +943,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) {
-        self.send_snapshot_count += ready_result.send_snapshot_count;
+        self.sent_snapshot_count += ready_result.sent_snapshot_count;
 
         if let Some(apply_result) = ready_result.apply_snap_result {
             self.on_ready_apply_snapshot(apply_result);
