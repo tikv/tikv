@@ -14,7 +14,7 @@ use super::util::*;
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) {
     for _ in 1..100 {
         if cluster.get_down_peers().len() != count as usize {
-            sleep(Duration::from_millis(100));
+            sleep(Duration::from_millis(10));
         } else {
             break;
         }
@@ -58,12 +58,15 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     };
 
     cluster.must_transfer_leader(1, new_leader);
+    // new leader should reset all down peer list.
+    wait_down_peers(cluster, 0);
     wait_down_peers(cluster, 1);
     assert!(cluster.get_down_peers()[&1].get_down_seconds() <
             down_secs + timer.elapsed().as_secs());
 
     // Ensure that node will not reuse the previous peer heartbeats.
     cluster.must_transfer_leader(1, leader);
+    wait_down_peers(cluster, 0);
     wait_down_peers(cluster, 1);
     assert!(cluster.get_down_peers()[&1].get_down_seconds() < timer.elapsed().as_secs() + 1);
 }

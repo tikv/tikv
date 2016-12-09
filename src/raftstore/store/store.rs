@@ -388,7 +388,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 stale_peer = Some(p.peer.clone());
             } else if p.peer_id() > target_peer_id {
-                info!("target peer id {} is less than {}, msg maybe stale.",
+                info!("[region {}] target peer id {} is less than {}, msg maybe stale.",
+                      region_id,
                       target_peer_id,
                       p.peer_id());
                 return Ok(false);
@@ -408,9 +409,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let msg_type = message.get_msg_type();
         if msg_type != MessageType::MsgRequestVote &&
            (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX) {
-            info!("target peer {:?} doesn't exist, stale message {:?}.",
-                  target,
-                  msg_type);
+            debug!("target peer {:?} doesn't exist, stale message {:?}.",
+                   target,
+                   msg_type);
             return Ok(false);
         }
 
@@ -638,7 +639,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
         if snap_region.get_peers().into_iter().all(|p| p.get_id() != peer_id) {
-            info!("region {:?} doesn't contain peer {:?}, skip.",
+            info!("[region {}] {:?} doesn't contain peer {:?}, skip.",
+                  snap_region.get_id(),
                   snap_region,
                   msg.get_to_peer());
             return Ok(false);
@@ -1362,20 +1364,26 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let f = try!(self.snap_mgr.rl().get_snap_file(&key, is_sending));
             if is_sending {
                 if key.term < compacted_term || key.idx < compacted_idx {
-                    info!("snap file {} has been compacted, delete.", key);
+                    info!("[region {}] snap file {} has been compacted, delete.",
+                          key.region_id,
+                          key);
                     f.delete();
                 } else if let Ok(meta) = f.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
-                            info!("snap file {} has been expired, delete.", key);
+                            info!("[region {}] snap file {} has been expired, delete.",
+                                  key.region_id,
+                                  key);
                             f.delete();
                         }
                     }
                 }
             } else if key.term <= compacted_term &&
                       (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap) {
-                info!("snap file {} has been applied, delete.", key);
+                info!("[region {}] snap file {} has been applied, delete.",
+                      key.region_id,
+                      key);
                 f.delete();
             }
         }
@@ -1565,7 +1573,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             expected_hash: Vec<u8>) {
         let state = match self.region_peers.get_mut(&region_id) {
             None => {
-                warn!("receive stale hash [region {}, index {}]",
+                warn!("[region {}] receive stale hash at index {}",
                       region_id,
                       expected_index);
                 return;
@@ -1579,7 +1587,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_hash_computed(&mut self, region_id: u64, index: u64, hash: Vec<u8>) {
         let (state, peer) = match self.region_peers.get_mut(&region_id) {
             None => {
-                warn!("receive stale hash [region {}, index {}]", region_id, index);
+                warn!("[region {}] receive stale hash at index {}",
+                      region_id,
+                      index);
                 return;
             }
             Some(p) => (&mut p.consistency_state, &p.peer),
