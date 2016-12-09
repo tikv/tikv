@@ -316,30 +316,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Poll all snapshot messages and handle them.
         loop {
-            let msg_region_id;
-            let msg_to_peer_id;
-            let msg_status;
-            {
-                match self.snapshot_status_receiver.try_recv() {
-                    Ok(SnapshotStatusMsg { region_id, to_peer_id, status }) => {
-                        msg_region_id = region_id;
-                        msg_to_peer_id = to_peer_id;
-                        msg_status = status;
-                    }
-                    Err(TryRecvError::Empty) => {
-                        // The snapshot rx is empty
-                        return;
-                    }
-                    Err(e) => {
-                        error!("{} unexpected error {:?} when receive from snapshot channel",
-                               self.tag,
-                               e);
-                        return;
-                    }
+            match self.snapshot_status_receiver.try_recv() {
+                Ok(SnapshotStatusMsg { region_id, to_peer_id, status }) => {
+                    // Report snapshot status to the corresponding peer.
+                    self.report_snapshot_status(region_id, to_peer_id, status);
+                }
+                Err(TryRecvError::Empty) => {
+                    // The snapshot status receiver channel is empty
+                    return;
+                }
+                Err(e) => {
+                    error!("{} unexpected error {:?} when receive from snapshot channel",
+                           self.tag,
+                           e);
+                    return;
                 }
             }
-            // Report snapshot status to the corresponding peer.
-            self.report_snapshot_status(msg_region_id, msg_to_peer_id, msg_status);
         }
     }
 
@@ -350,9 +342,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
                 Some(peer) => peer,
                 None => {
-                    // If to_peer is removed immediately after sending snapshot, the command
-                    // may be applied before SnapshotStatus is reported. So here just ignore.
-                    warn!("[region {}] peer {} not found, skip reporting snap {:?}",
+                    // If to_peer is gone, ignore this snapshot status
+                    warn!("[region {}] peer {} not found, ignore snapshot status {:?}",
                           region_id,
                           to_peer_id,
                           status);
