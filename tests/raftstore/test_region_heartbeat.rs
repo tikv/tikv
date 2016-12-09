@@ -58,8 +58,8 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     let down_secs = begin.elapsed().as_secs();
     let down_peers = cluster.get_down_peers();
     debug!("down_secs: {} down_peers: {:?}", down_secs, down_peers);
-    check_down_seconds(down_peers.get(&node_id).unwrap(), down_secs);
-    check_down_seconds(down_peers.get(&next_id).unwrap(), down_secs);
+    check_down_seconds(&down_peers[&node_id], down_secs);
+    check_down_seconds(&down_peers[&next_id], down_secs);
 
     // Restart node and sleep a few seconds.
     let sleep_secs = 3;
@@ -81,9 +81,9 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     wait_down_peers(cluster, 1);
 
     // Ensure that node will not reuse the previous peer heartbeats.
-    let prev_secs = cluster.get_down_peers().get(&next_id).unwrap().get_down_seconds();
+    let prev_secs = cluster.get_down_peers()[&next_id].get_down_seconds();
     for _ in 1..100 {
-        let down_secs = cluster.get_down_peers().get(&next_id).unwrap().get_down_seconds();
+        let down_secs = cluster.get_down_peers()[&next_id].get_down_seconds();
         if down_secs != prev_secs {
             assert!(down_secs < sleep_secs);
             break;
@@ -103,8 +103,8 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
 
     // Check 1, 3 are down.
     let down_peers = cluster.get_down_peers();
-    check_down_seconds(down_peers.get(&1).unwrap(), secs);
-    check_down_seconds(down_peers.get(&3).unwrap(), secs);
+    check_down_seconds(&down_peers[&1], secs);
+    check_down_seconds(&down_peers[&3], secs);
 
     // Restart 1, 3
     cluster.run_node(1);
