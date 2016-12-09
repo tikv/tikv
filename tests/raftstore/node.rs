@@ -110,10 +110,7 @@ impl Channel<RaftMessage> for ChannelTransport {
                 try!(h.send_raft_msg(msg));
                 if is_snapshot {
                     // should report snapshot finish.
-                    self.rl()
-                        .routers
-                        .get(&from_store)
-                        .unwrap()
+                    self.rl().routers[&from_store]
                         .report_snapshot(region_id,
                                          to_peer_id,
                                          to_store_id,
@@ -171,7 +168,7 @@ impl Simulator for NodeCluster {
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.rl();
-            let &(ref snap_mgr, _) = trans.snap_paths.get(&node_id).unwrap();
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
 
@@ -194,7 +191,7 @@ impl Simulator for NodeCluster {
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
-        self.trans.wl().snap_paths.get(&node_id).unwrap().1.path().to_str().unwrap().to_owned()
+        self.trans.wl().snap_paths[&node_id].1.path().to_str().unwrap().to_owned()
     }
 
     fn stop_node(&mut self, node_id: u64) {
