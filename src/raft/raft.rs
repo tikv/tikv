@@ -437,7 +437,7 @@ impl<T: Storage> Raft<T> {
     // send_append sends RPC, with entries to the given peer.
     pub fn send_append(&mut self, to: u64) {
         let (term, ents) = {
-            let pr = self.prs.get(&to).unwrap();
+            let pr = &self.prs[&to];
             if pr.is_paused() {
                 return;
             }
@@ -468,7 +468,7 @@ impl<T: Storage> Raft<T> {
         let mut m = Message::new();
         m.set_to(to);
         m.set_msg_type(MessageType::MsgHeartbeat);
-        let commit = cmp::min(self.prs.get(&to).unwrap().matched, self.raft_log.committed);
+        let commit = cmp::min(self.prs[&to].matched, self.raft_log.committed);
         m.set_commit(commit);
         if let Some(context) = ctx {
             m.set_context(context);
@@ -903,7 +903,7 @@ impl<T: Storage> Raft<T> {
         // so reset r.electionElapsed.
         self.election_elapsed = 0;
         self.lead_transferee = Some(lead_transferee);
-        if self.prs.get(&m.get_from()).unwrap().matched == self.raft_log.last_index() {
+        if self.prs[&m.get_from()].matched == self.raft_log.last_index() {
             self.send_timeout_now(lead_transferee);
             info!("{} sends MsgTimeoutNow to {} immediately as {} already has up-to-date log",
                   self.tag,
