@@ -117,7 +117,7 @@ impl Simulator for ServerCluster {
             let p = TempDir::new("test_cluster").unwrap();
             (p.path().to_str().unwrap().to_owned(), Some(p))
         } else {
-            let p = self.snap_paths.get(&node_id).unwrap().path().to_str().unwrap();
+            let p = self.snap_paths[&node_id].path().to_str().unwrap();
             (p.to_owned(), None)
         };
 
@@ -204,13 +204,13 @@ impl Simulator for ServerCluster {
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
-        self.snap_paths.get(&node_id).unwrap().path().to_str().unwrap().to_owned()
+        self.snap_paths[&node_id].path().to_str().unwrap().to_owned()
     }
 
     fn stop_node(&mut self, node_id: u64) {
         let (mut node, h) = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
-        let addr = self.addrs.get(&node_id).unwrap();
+        let addr = &self.addrs[&node_id];
         let _ = self.store_chs.remove(&node_id).unwrap();
         self.conns
             .lock()
@@ -231,7 +231,7 @@ impl Simulator for ServerCluster {
                             request: RaftCmdRequest,
                             timeout: Duration)
                             -> Result<RaftCmdResponse> {
-        let addr = self.addrs.get(&node_id).unwrap();
+        let addr = &self.addrs[&node_id];
         let mut conn = self.pool_get(addr).unwrap();
 
         let mut msg = Message::new();
@@ -265,7 +265,7 @@ impl Simulator for ServerCluster {
 
     fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
-        let addr = self.addrs.get(&store_id).unwrap();
+        let addr = &self.addrs[&store_id];
 
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Raft);

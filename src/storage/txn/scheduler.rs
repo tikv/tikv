@@ -512,7 +512,7 @@ impl Scheduler {
     }
 
     fn get_ctx_tag(&self, cid: u64) -> &'static str {
-        let ctx = self.cmd_ctxs.get(&cid).unwrap();
+        let ctx = &self.cmd_ctxs[&cid];
         ctx.tag
     }
 
@@ -569,7 +569,7 @@ impl Scheduler {
 
     /// Extracts the context of a command.
     fn extract_context(&self, cid: u64) -> &Context {
-        let ctx = &self.cmd_ctxs.get(&cid).unwrap();
+        let ctx = &self.cmd_ctxs[&cid];
         assert_eq!(ctx.cid, cid);
         ctx.cmd.as_ref().unwrap().get_context()
     }
