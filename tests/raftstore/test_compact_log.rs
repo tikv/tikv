@@ -60,7 +60,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
             get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
-        let before_state = before_states.get(&id).unwrap();
+        let before_state = &before_states[&id];
         let idx = after_state.get_index();
         assert!(idx > before_state.get_index());
         assert!(after_state.get_term() > before_state.get_term());
@@ -111,7 +111,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
             get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
-        let before_state = before_states.get(&id).unwrap();
+        let before_state = &before_states[&id];
         let idx = after_state.get_index();
         assert_eq!(idx, before_state.get_index());
     }
@@ -132,7 +132,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
             get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
-        let before_state = before_states.get(&id).unwrap();
+        let before_state = &before_states[&id];
         let idx = after_state.get_index();
         assert!(idx > before_state.get_index());
 
@@ -183,7 +183,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
             get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
-        let before_state = before_states.get(&id).unwrap();
+        let before_state = &before_states[&id];
         let idx = after_state.get_index();
         // Compact raft log at least 2 times.
         assert!(idx - before_state.get_index() >= gc_limit * 2);
@@ -282,7 +282,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
             get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
-        let before_state = before_states.get(&id).unwrap();
+        let before_state = &before_states[&id];
         let idx = after_state.get_index();
         assert_eq!(idx, before_state.get_index());
     }
@@ -308,7 +308,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
             get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
-        let before_state = before_states.get(&id).unwrap();
+        let before_state = &before_states[&id];
         let idx = after_state.get_index();
         assert!(idx > before_state.get_index());
 
