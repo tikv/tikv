@@ -349,16 +349,16 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(16 * 1024);
-    block_base_opts.set_lru_cache(32 * 1024 * 1024);
+    block_base_opts.set_lru_cache(64 * 1024 * 1024);
     block_base_opts.set_bloom_filter(10, false);
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = "no:no:no:no:no:no:no".to_owned();
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
-    opts.set_write_buffer_size(32 * 1024 * 1024);
+    opts.set_write_buffer_size(64 * 1024 * 1024);
     opts.set_max_write_buffer_number(5);
-    opts.set_max_bytes_for_level_base(32 * 1024 * 1024);
+    opts.set_max_bytes_for_level_base(64 * 1024 * 1024);
     opts.set_target_file_size_base(32 * 1024 * 1024);
 
     // set level0_file_num_compaction_trigger = 1 is very important,
