@@ -206,10 +206,17 @@ fn get_rocksdb_db_option(matches: &Matches, config: &toml::Value) -> RocksdbOpti
         .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
     if !log_file_path.is_empty() {
         let log_file_path = Path::new(&log_file_path);
-        if let Some(dir) = log_file_path.parent() {
-            let log_dir = canonicalize_path(dir.to_str().unwrap());
-            info!("RocksDB LOG dir: {}", log_dir);
-            opts.set_db_log_dir(&log_dir);
+        if let Some(mut dir) = log_file_path.parent() {
+            if dir.to_str().unwrap().is_empty() {
+                dir = Path::new("./");
+            }
+            let db_log_dir = {
+                let name = log_file_path.file_name().unwrap().to_str().unwrap();
+                dir.join(format!("rocksdb_{}", name.replace(".", "_")))
+            };
+            let db_log_abs_dir = canonicalize_path(db_log_dir.to_str().unwrap());
+            info!("RocksDB LOG dir: {}", db_log_abs_dir);
+            opts.set_db_log_dir(&db_log_abs_dir);
         }
     }
 
