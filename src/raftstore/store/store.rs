@@ -803,7 +803,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // If the peer for the region before split is leader,
                 // we can force the new peer for the new split region to campaign
                 // to become the leader too.
-                let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
+                let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
                     if let Err(e) = new_peer.raft_group.campaign() {
                         error!("[region {}] peer {:?} campaigns  err {:?}",
@@ -815,7 +815,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 if is_leader {
                     // Notify pd immediately to let it update the region meta.
-                    let left = self.region_peers.get(&region_id).unwrap();
+                    let left = &self.region_peers[&region_id];
                     self.report_split_pd(left, &new_peer);
                 }
 
@@ -1515,7 +1515,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if candidate_id != 0 {
-            let peer = self.region_peers.get(&candidate_id).unwrap();
+            let peer = &self.region_peers[&candidate_id];
 
             info!("{} scheduling consistent check", peer.tag);
             let msg = Msg::RaftCmd {

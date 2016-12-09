@@ -105,7 +105,7 @@ impl Cluster {
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        Ok(self.stores.get(&store_id).unwrap().store.clone())
+        Ok(self.stores[&store_id].store.clone())
     }
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
