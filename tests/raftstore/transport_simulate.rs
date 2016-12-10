@@ -20,6 +20,7 @@ use tikv::util::HandyRwLock;
 use tikv::util::transport;
 
 use rand;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Mutex};
 use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
@@ -353,24 +354,30 @@ impl Filter<RaftMessage> for SnapshotFilter {
     }
 }
 
-/// Pause Snap
-pub struct PauseFirstSnapshotFilter {
+/// `PileSnapshotFilter` is a transport filter to simulate the delivery of multiple snapshots
+/// from different peers at the same time. It will pile up the snapshots from different
+/// peers, and drop the snapshots from the same peers as those piled ones.
+/// Once there are more than 1 snapshots piled in this filter, it will deliver them all
+/// at once.
+pub struct PileSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
-    pending_msg: Mutex<Vec<StoreMsg>>,
+    pending_msg: Mutex<HashMap<u64, StoreMsg>>,
+    piled_count_sender: Mutex<Sender<usize>>,
 }
 
-impl PauseFirstSnapshotFilter {
-    pub fn new() -> PauseFirstSnapshotFilter {
-        PauseFirstSnapshotFilter {
+impl PileSnapshotFilter {
+    pub fn new(sender: Sender<usize>) -> PileSnapshotFilter {
+        PileSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: AtomicBool::new(false),
-            pending_msg: Mutex::new(vec![]),
+            pending_msg: Mutex::new(HashMap::new()),
+            piled_count_sender: Mutex::new(sender),
         }
     }
 }
 
-impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
+impl Filter<StoreMsg> for PileSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
             return Ok(());
@@ -378,22 +385,40 @@ impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
         for m in msgs.drain(..) {
-            let paused = match m {
+            let (piled, from_peer_id) = match m {
                 StoreMsg::RaftMessage(ref msg) => {
-                    msg.get_message().get_msg_type() == MessageType::MsgSnapshot
+                    if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                        let from_peer_id = msg.get_from_peer().get_id();
+                        if pending_msg.contains_key(&from_peer_id) {
+                            // Drop this snapshot message directly since it's from a seen peer
+                            continue;
+                        } else {
+                            // Pile the snapshot from unseen peer
+                            println!("pile from {:?} message {:?}", from_peer_id, msg);
+                            (true, from_peer_id)
+                        }
+                    } else {
+                        (false, 0)
+                    }
                 }
-                _ => false,
+                _ => (false, 0),
             };
-            if paused {
+            if piled {
                 self.dropped.compare_and_swap(false, true, Ordering::Relaxed);
-                pending_msg.push(m);
+                pending_msg.insert(from_peer_id, m);
+                let sender = self.piled_count_sender
+                    .lock()
+                    .unwrap();
+                sender.send(pending_msg.len()).unwrap();
             } else {
                 to_send.push(m);
             }
         }
+        // Deliver those piled snapshots if there are more than 1.
         if pending_msg.len() > 1 {
+            println!("delivery {} snapshots", pending_msg.len());
             self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
-            msgs.extend(pending_msg.drain(..));
+            msgs.extend(pending_msg.drain().map(|(_, v)| v));
             self.stale.compare_and_swap(false, true, Ordering::Relaxed);
         }
         msgs.extend(to_send);
