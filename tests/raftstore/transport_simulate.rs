@@ -394,7 +394,6 @@ impl Filter<StoreMsg> for PileSnapshotFilter {
                             continue;
                         } else {
                             // Pile the snapshot from unseen peer
-                            println!("pile from {:?} message {:?}", from_peer_id, msg);
                             (true, from_peer_id)
                         }
                     } else {
@@ -416,7 +415,6 @@ impl Filter<StoreMsg> for PileSnapshotFilter {
         }
         // Deliver those piled snapshots if there are more than 1.
         if pending_msg.len() > 1 {
-            println!("delivery {} snapshots", pending_msg.len());
             self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
             msgs.extend(pending_msg.drain().map(|(_, v)| v));
             self.stale.compare_and_swap(false, true, Ordering::Relaxed);
