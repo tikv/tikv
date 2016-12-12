@@ -280,20 +280,15 @@ impl Cluster {
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
-        for peer in &down_peers {
-            self.down_peers.insert(peer.get_peer().get_id(), peer.clone());
+        for peer in region.get_peers() {
+            self.down_peers.remove(&peer.get_id());
+            self.pending_peers.remove(&peer.get_id());
         }
-        self.pending_peers.clear();
+        for peer in down_peers {
+            self.down_peers.insert(peer.get_peer().get_id(), peer);
+        }
         for p in pending_peers {
             self.pending_peers.insert(p.get_id(), p);
-        }
-        let active_peers: Vec<_> = region.get_peers()
-            .iter()
-            .filter(|p| !down_peers.iter().any(|d| p.get_id() == d.get_peer().get_id()))
-            .cloned()
-            .collect();
-        for peer in &active_peers {
-            self.down_peers.remove(&peer.get_id());
         }
 
         try!(self.handle_heartbeat_version(region.clone()));
