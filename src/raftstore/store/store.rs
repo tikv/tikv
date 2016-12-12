@@ -97,6 +97,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     tag: String,
 
     start_time: Timespec,
+    is_busy: bool,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -154,6 +155,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             raft_metrics: RaftMetrics::default(),
             tag: tag,
             start_time: time::get_time(),
+            is_busy: false,
         };
         try!(s.init());
         Ok(s)
@@ -759,8 +761,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.on_ready_result(region_id, res)
         }
 
+        let dur = t.elapsed();
+        if !self.is_busy {
+            let election_timeout =
+                Duration::from_millis(self.cfg.raft_base_tick_interval *
+                                      self.cfg.raft_election_timeout_ticks as u64);
+            if dur >= election_timeout {
+                self.is_busy = true;
+            }
+        }
+
         PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
-            .inc_by(duration_to_nanos(t.elapsed()) as f64)
+            .inc_by(duration_to_nanos(dur) as f64)
             .unwrap();
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
@@ -861,7 +873,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // If the peer for the region before split is leader,
                 // we can force the new peer for the new split region to campaign
                 // to become the leader too.
-                let is_leader = self.region_peers.get(&region_id).unwrap().is_leader();
+                let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
                     if let Err(e) = new_peer.raft_group.campaign() {
                         error!("[region {}] peer {:?} campaigns  err {:?}",
@@ -873,7 +885,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 if is_leader {
                     // Notify pd immediately to let it update the region meta.
-                    let left = self.region_peers.get(&region_id).unwrap();
+                    let left = &self.region_peers[&region_id];
                     self.report_split_pd(left, &new_peer);
                 }
 
@@ -1252,6 +1264,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region: peer.region().clone(),
             peer: peer.peer.clone(),
             down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
+            pending_peers: peer.collect_pending_peers(),
         };
         if let Err(e) = self.pd_worker.schedule(task) {
             error!("{} failed to notify pd: {}", peer.tag, e);
@@ -1362,6 +1375,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .set(apply_snapshot_count as f64);
 
         stats.set_start_time(self.start_time.sec as u32);
+
+        stats.set_is_busy(self.is_busy);
+        self.is_busy = false;
 
         if let Err(e) = self.pd_worker.schedule(PdTask::StoreHeartbeat { stats: stats }) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -1552,7 +1568,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if candidate_id != 0 {
-            let peer = self.region_peers.get(&candidate_id).unwrap();
+            let peer = &self.region_peers[&candidate_id];
 
             info!("{} scheduling consistent check", peer.tag);
             let msg = Msg::RaftCmd {
@@ -1731,19 +1747,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            for (handle, name) in vec![(self.split_check_worker.stop(),
-                                        self.split_check_worker.name()),
-                                       (self.region_worker.stop(), self.region_worker.name()),
-                                       (self.raftlog_gc_worker.stop(),
-                                        self.raftlog_gc_worker.name()),
-                                       (self.compact_worker.stop(), self.compact_worker.name()),
-                                       (self.pd_worker.stop(), self.pd_worker.name()),
-                                       (self.consistency_check_worker.stop(),
-                                        self.consistency_check_worker.name())] {
-                if let Some(Err(e)) = handle.map(|h| h.join()) {
-                    error!("{} failed to stop {}: {:?}", self.tag, name, e);
-                }
-            }
+            self.split_check_worker.stop();
+            self.region_worker.stop();
+            self.raftlog_gc_worker.stop();
+            self.compact_worker.stop();
+            self.pd_worker.stop();
+            self.consistency_check_worker.stop();
+
             for peer in self.region_peers.values_mut() {
                 peer.clear_pending_commands();
             }

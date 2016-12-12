@@ -53,6 +53,7 @@ struct Cluster {
     split_count: usize,
 
     down_peers: HashMap<u64, pdpb::PeerStats>,
+    pending_peers: HashMap<u64, metapb::Peer>,
 }
 
 impl Cluster {
@@ -71,6 +72,7 @@ impl Cluster {
             store_stats: HashMap::new(),
             split_count: 0,
             down_peers: HashMap::new(),
+            pending_peers: HashMap::new(),
         }
     }
 
@@ -105,7 +107,7 @@ impl Cluster {
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        Ok(self.stores.get(&store_id).unwrap().store.clone())
+        Ok(self.stores[&store_id].store.clone())
     }
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
@@ -275,10 +277,15 @@ impl Cluster {
     fn region_heartbeat(&mut self,
                         region: metapb::Region,
                         leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>)
+                        down_peers: Vec<pdpb::PeerStats>,
+                        pending_peers: Vec<metapb::Peer>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in &down_peers {
             self.down_peers.insert(peer.get_peer().get_id(), peer.clone());
+        }
+        self.pending_peers.clear();
+        for p in pending_peers {
+            self.pending_peers.insert(p.get_id(), p);
         }
         let active_peers: Vec<_> = region.get_peers()
             .iter()
@@ -476,6 +483,10 @@ impl TestPdClient {
     pub fn get_down_peers(&self) -> HashMap<u64, pdpb::PeerStats> {
         self.cluster.rl().down_peers.clone()
     }
+
+    pub fn get_pending_peers(&self) -> HashMap<u64, metapb::Peer> {
+        self.cluster.rl().pending_peers.clone()
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -537,10 +548,11 @@ impl PdClient for TestPdClient {
     fn region_heartbeat(&self,
                         region: metapb::Region,
                         leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>)
+                        down_peers: Vec<pdpb::PeerStats>,
+                        pending_peers: Vec<metapb::Peer>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         try!(self.check_bootstrap());
-        self.cluster.wl().region_heartbeat(region, leader, down_peers)
+        self.cluster.wl().region_heartbeat(region, leader, down_peers, pending_peers)
     }
 
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {

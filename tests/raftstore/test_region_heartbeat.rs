@@ -1,13 +1,16 @@
 use std::thread::sleep;
+use std::sync::mpsc;
 use std::time::{Instant, Duration};
 
 use rand::random;
 use kvproto::pdpb;
+use tikv::util::HandyRwLock;
 
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::cluster::{Cluster, Simulator};
-use super::transport_simulate::IsolationFilterFactory;
+use super::transport_simulate::*;
+use super::util::*;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) -> u64 {
     let begin = Instant::now();
@@ -55,8 +58,8 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     let down_secs = begin.elapsed().as_secs();
     let down_peers = cluster.get_down_peers();
     debug!("down_secs: {} down_peers: {:?}", down_secs, down_peers);
-    check_down_seconds(down_peers.get(&node_id).unwrap(), down_secs);
-    check_down_seconds(down_peers.get(&next_id).unwrap(), down_secs);
+    check_down_seconds(&down_peers[&node_id], down_secs);
+    check_down_seconds(&down_peers[&next_id], down_secs);
 
     // Restart node and sleep a few seconds.
     let sleep_secs = 3;
@@ -78,9 +81,9 @@ fn test_leader_down_and_become_leader_again<T: Simulator>(cluster: &mut Cluster<
     wait_down_peers(cluster, 1);
 
     // Ensure that node will not reuse the previous peer heartbeats.
-    let prev_secs = cluster.get_down_peers().get(&next_id).unwrap().get_down_seconds();
+    let prev_secs = cluster.get_down_peers()[&next_id].get_down_seconds();
     for _ in 1..100 {
-        let down_secs = cluster.get_down_peers().get(&next_id).unwrap().get_down_seconds();
+        let down_secs = cluster.get_down_peers()[&next_id].get_down_seconds();
         if down_secs != prev_secs {
             assert!(down_secs < sleep_secs);
             break;
@@ -100,8 +103,8 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>, count: u64) {
 
     // Check 1, 3 are down.
     let down_peers = cluster.get_down_peers();
-    check_down_seconds(down_peers.get(&1).unwrap(), secs);
-    check_down_seconds(down_peers.get(&3).unwrap(), secs);
+    check_down_seconds(&down_peers[&1], secs);
+    check_down_seconds(&down_peers[&3], secs);
 
     // Restart 1, 3
     cluster.run_node(1);
@@ -144,4 +147,65 @@ fn test_node_down_peers() {
 fn test_server_down_peers() {
     let mut cluster = new_server_cluster(0, 5);
     test_down_peers(&mut cluster, 5);
+}
+
+fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+
+    let region_id = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+
+    let (tx, _) = mpsc::channel();
+    cluster.sim.wl().add_recv_filter(2, box DropSnapshotFilter::new(tx));
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+
+    let mut tried_times = 0;
+    loop {
+        tried_times += 1;
+        if tried_times > 100 {
+            panic!("can't get pending peer after {} tries.", tried_times);
+        }
+        let pending_peers = cluster.pd_client.get_pending_peers();
+        if pending_peers.is_empty() {
+            sleep(Duration::from_millis(100));
+        } else {
+            assert_eq!(pending_peers[&2], new_peer(2, 2));
+            break;
+        }
+    }
+
+    cluster.sim.wl().clear_recv_filters(2);
+    cluster.must_put(b"k2", b"v2");
+
+    tried_times = 0;
+    loop {
+        tried_times += 1;
+        let pending_peers = cluster.pd_client.get_pending_peers();
+        if !pending_peers.is_empty() {
+            sleep(Duration::from_millis(100));
+        } else {
+            return;
+        }
+        if tried_times > 100 {
+            panic!("pending peer {:?} still exists after {} tries.",
+                   pending_peers,
+                   tried_times);
+        }
+    }
+}
+
+#[test]
+fn test_node_pending_peers() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_pending_peers(&mut cluster);
+}
+
+#[test]
+fn test_server_pending_peers() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_pending_peers(&mut cluster);
 }

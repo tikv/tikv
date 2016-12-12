@@ -452,8 +452,10 @@ impl Filter<StoreMsg> for DropSnapshotFilter {
                     if msg.get_message().get_msg_type() != MessageType::MsgSnapshot {
                         true
                     } else {
-                        notifier.send(msg.get_message().get_snapshot().get_metadata().get_index())
-                            .unwrap();
+                        let idx = msg.get_message().get_snapshot().get_metadata().get_index();
+                        if let Err(e) = notifier.send(idx) {
+                            error!("failed to notify snapshot {:?}: {:?}", msg, e);
+                        }
                         false
                     }
                 }
