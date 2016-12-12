@@ -27,6 +27,7 @@ use storage::Error as StorageError;
 use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
 use storage::engine::Error as EngineError;
+use storage::engine::CbContext;
 use util::escape;
 
 use super::{Result, Error, OnResponse};
@@ -224,8 +225,9 @@ impl StoreHandler {
                            f: fn(StorageResult<T>, &mut Response),
                            on_resp: OnResponse)
                            -> Callback<T> {
-        Box::new(move |r: StorageResult<T>| {
+        Box::new(move |(cb_ctx, r): (CbContext, StorageResult<T>)| {
             let mut resp = Response::new();
+            resp.set_updated_regions(RepeatedField::<_>::from_vec(cb_ctx.updated_regions));
             match extract_region_error(&r) {
                 Some(e) => resp.set_region_error(e),
                 None => f(r, &mut resp),

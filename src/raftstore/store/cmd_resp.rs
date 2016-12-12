@@ -15,8 +15,7 @@ use std::boxed::Box;
 use std::error;
 
 use uuid::Uuid;
-
-use kvproto::raft_cmdpb::RaftCmdResponse;
+use kvproto::raft_cmdpb::{RaftCmdResponse, UpdatedRegion};
 use raftstore::Error;
 
 pub fn bind_uuid(resp: &mut RaftCmdResponse, uuid: Uuid) {
@@ -29,6 +28,12 @@ pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {
     }
 
     resp.mut_header().set_current_term(term);
+}
+
+pub fn bind_updated_regions(resp: &mut RaftCmdResponse, regions: Vec<UpdatedRegion>) {
+    for r in regions {
+        resp.mut_header().mut_updated_regions().push(r);
+    }
 }
 
 pub fn bind_error(resp: &mut RaftCmdResponse, err: Error) {

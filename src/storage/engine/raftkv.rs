@@ -19,7 +19,7 @@ use raftstore::store::engine::Peekable;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, UpdatedRegion};
 
 use uuid::Uuid;
 use std::sync::Arc;
@@ -104,8 +104,14 @@ fn on_result(mut resp: RaftCmdResponse,
              uuid: &[u8],
              db: Arc<DB>)
              -> (CbContext, Result<CmdRes>) {
-    let mut cb_ctx = CbContext::new();
+    let mut cb_ctx: CbContext = Default::default();
     cb_ctx.term = Some(resp.get_header().get_current_term());
+    for mut region in resp.mut_header().take_updated_regions().into_iter() {
+        let mut r = UpdatedRegion::new();
+        r.set_region(region.take_region());
+        r.set_leader(region.take_leader());
+        cb_ctx.updated_regions.push(r);
+    }
 
     if resp.get_header().get_uuid() != uuid {
         return (cb_ctx, Err(Error::InvalidResponse("response is not correct!!!".to_owned())));
@@ -157,6 +163,11 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         header.set_read_quorum(ctx.get_read_quorum());
         if ctx.get_term() != 0 {
             header.set_term(ctx.get_term());
+        }
+        if ctx.has_key_range() {
+            let mut r = header.mut_key_range();
+            r.set_min_key(ctx.get_key_range().get_min_key().to_owned());
+            r.set_max_key(ctx.get_key_range().get_max_key().to_owned());
         }
         header
     }

@@ -40,7 +40,7 @@ pub type KvPair = (Vec<u8>, Value);
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd, Ord)]
 pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
@@ -128,6 +128,8 @@ impl PartialEq for Key {
         self.0 == other.0
     }
 }
+
+impl Eq for Key {}
 
 /// Creates a new key from raw bytes.
 pub fn make_key(k: &[u8]) -> Key {

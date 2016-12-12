@@ -48,7 +48,7 @@ impl SyncStorage {
     }
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {
-        wait_op!(|cb| self.store.async_get(ctx, key.to_owned(), start_ts, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_get(ctx, key.to_owned(), start_ts, cb).unwrap()).unwrap().1
     }
 
     #[allow(dead_code)]
@@ -59,6 +59,7 @@ impl SyncStorage {
                      -> Result<Vec<Result<KvPair>>> {
         wait_op!(|cb| self.store.async_batch_get(ctx, keys.to_owned(), start_ts, cb).unwrap())
             .unwrap()
+            .1
     }
 
     pub fn scan(&self,
@@ -70,6 +71,7 @@ impl SyncStorage {
                 -> Result<Vec<Result<KvPair>>> {
         wait_op!(|cb| self.store.async_scan(ctx, key, limit, key_only, start_ts, cb).unwrap())
             .unwrap()
+            .1
     }
 
     pub fn prewrite(&self,
@@ -80,6 +82,7 @@ impl SyncStorage {
                     -> Result<Vec<Result<()>>> {
         wait_op!(|cb| self.store.async_prewrite(ctx, mutations, primary, start_ts, 0, cb).unwrap())
             .unwrap()
+            .1
     }
 
     pub fn commit(&self,
@@ -88,39 +91,43 @@ impl SyncStorage {
                   start_ts: u64,
                   commit_ts: u64)
                   -> Result<()> {
-        wait_op!(|cb| self.store.async_commit(ctx, keys, start_ts, commit_ts, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_commit(ctx, keys, start_ts, commit_ts, cb).unwrap())
+            .unwrap()
+            .1
     }
 
     pub fn cleanup(&self, ctx: Context, key: Key, start_ts: u64) -> Result<()> {
-        wait_op!(|cb| self.store.async_cleanup(ctx, key, start_ts, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_cleanup(ctx, key, start_ts, cb).unwrap()).unwrap().1
     }
 
     pub fn rollback(&self, ctx: Context, keys: Vec<Key>, start_ts: u64) -> Result<()> {
-        wait_op!(|cb| self.store.async_rollback(ctx, keys, start_ts, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_rollback(ctx, keys, start_ts, cb).unwrap()).unwrap().1
     }
 
     pub fn scan_lock(&self, ctx: Context, max_ts: u64) -> Result<Vec<LockInfo>> {
-        wait_op!(|cb| self.store.async_scan_lock(ctx, max_ts, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_scan_lock(ctx, max_ts, cb).unwrap()).unwrap().1
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {
-        wait_op!(|cb| self.store.async_resolve_lock(ctx, start_ts, commit_ts, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_resolve_lock(ctx, start_ts, commit_ts, cb).unwrap())
+            .unwrap()
+            .1
     }
 
     pub fn gc(&self, ctx: Context, safe_point: u64) -> Result<()> {
-        wait_op!(|cb| self.store.async_gc(ctx, safe_point, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_gc(ctx, safe_point, cb).unwrap()).unwrap().1
     }
 
     pub fn raw_get(&self, ctx: Context, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        wait_op!(|cb| self.store.async_raw_get(ctx, key, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_raw_get(ctx, key, cb).unwrap()).unwrap().1
     }
 
     pub fn raw_put(&self, ctx: Context, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.async_raw_put(ctx, key, value, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_raw_put(ctx, key, value, cb).unwrap()).unwrap().1
     }
 
     pub fn raw_delete(&self, ctx: Context, key: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.async_raw_delete(ctx, key, cb).unwrap()).unwrap()
+        wait_op!(|cb| self.store.async_raw_delete(ctx, key, cb).unwrap()).unwrap().1
     }
 }
 

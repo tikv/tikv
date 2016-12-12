@@ -28,7 +28,7 @@ use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
                           AdminCmdType, Request, Response, AdminRequest, AdminResponse,
-                          TransferLeaderRequest, TransferLeaderResponse};
+                          TransferLeaderRequest, TransferLeaderResponse, UpdatedRegion};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
@@ -708,13 +708,16 @@ impl Peer {
 
             // Execute ready-only commands immediately in leader when doing local reads.
             let mut ctx = ExecContext::new(self, 0, 0, &req);
-            let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-                error!("{} execute raft command err: {:?}", self.tag, e);
-                (cmd_resp::new_error(e), None)
-            });
+            let mut updated_regions = vec![];
+            let (mut resp, _) = self.exec_raft_cmd(&mut ctx, &mut updated_regions)
+                .unwrap_or_else(|e| {
+                    error!("{} execute raft command err: {:?}", self.tag, e);
+                    (cmd_resp::new_error(e), None)
+                });
 
             cmd_resp::bind_uuid(&mut resp, cmd.uuid);
             cmd_resp::bind_term(&mut resp, self.term());
+            cmd_resp::bind_updated_regions(&mut resp, updated_regions);
             cmd.call(resp);
             return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
@@ -977,7 +980,10 @@ impl Peer {
         Ok(())
     }
 
-    pub fn check_epoch(&self, req: &RaftCmdRequest) -> Result<()> {
+    pub fn check_epoch(&self,
+                       req: &RaftCmdRequest,
+                       updated_regions: &mut Vec<UpdatedRegion>)
+                       -> Result<()> {
         let (mut check_ver, mut check_conf_ver) = (false, false);
         if req.has_admin_request() {
             match req.get_admin_request().get_cmd_type() {
@@ -1016,12 +1022,27 @@ impl Peer {
                    self.tag,
                    from_epoch,
                    latest_epoch);
+            let mut updated_region = UpdatedRegion::new();
+            updated_region.set_region(latest_region.clone());
+            updated_region.set_leader(self.peer.clone());
+            updated_regions.push(updated_region);
+
+            if req.get_header().has_key_range() {
+                let range = req.get_header().get_key_range();
+                if range.get_min_key() >= latest_region.get_start_key() &&
+                   range.get_max_key() < latest_region.get_end_key() {
+                    debug!("{} accept stale epoch {:?} after check key range",
+                           self.tag,
+                           from_epoch);
+                    return Ok(());
+                }
+            }
+
             return Err(Error::StaleEpoch(format!("latest_epoch of region {} is {:?}, but you \
                                                   sent {:?}",
                                                  self.region_id,
                                                  latest_epoch,
-                                                 from_epoch),
-                                         vec![self.region().to_owned()]));
+                                                 from_epoch)));
         }
 
         Ok(())
@@ -1247,9 +1268,11 @@ impl Peer {
         }
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
+
         let cmd_cb = self.find_cb(uuid, term, &cmd);
+        let mut updated_regions = vec![];
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
-        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
+        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd, &mut updated_regions);
         timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
@@ -1294,6 +1317,7 @@ impl Peer {
         // Bind uuid here.
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term());
+        cmd_resp::bind_updated_regions(&mut resp, updated_regions);
         cb.call_box((resp,));
 
         exec_result
@@ -1312,16 +1336,18 @@ impl Peer {
     fn apply_raft_cmd(&mut self,
                       index: u64,
                       term: u64,
-                      req: &RaftCmdRequest)
+                      req: &RaftCmdRequest,
+                      updated_regions: &mut Vec<UpdatedRegion>)
                       -> (RaftCmdResponse, Option<ExecResult>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
         let mut ctx = ExecContext::new(self, index, term, req);
-        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-            error!("{} execute raft command err: {:?}", self.tag, e);
-            (cmd_resp::new_error(e), None)
-        });
+        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx, updated_regions)
+            .unwrap_or_else(|e| {
+                error!("{} execute raft command err: {:?}", self.tag, e);
+                (cmd_resp::new_error(e), None)
+            });
 
         ctx.apply_state.set_applied_index(index);
         if !self.pending_remove {
@@ -1439,9 +1465,10 @@ impl<'a> ExecContext<'a> {
 impl Peer {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(&mut self,
-                     ctx: &mut ExecContext)
+                     ctx: &mut ExecContext,
+                     updated_regions: &mut Vec<UpdatedRegion>)
                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        try!(self.check_epoch(ctx.req));
+        try!(self.check_epoch(ctx.req, updated_regions));
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx)
         } else {
