@@ -61,6 +61,7 @@ use super::local_metrics::RaftMetrics;
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
+const MIO_TICK_RATIO: u64 = 10;
 
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
@@ -100,9 +101,9 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     where T: Transport,
           C: PdClient
 {
-    // We use base raft tick as the event loop timer tick.
     let mut builder = EventLoopBuilder::new();
-    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval));
+    // To make raft base tick more accurate, timer tick should be small enough.
+    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval / MIO_TICK_RATIO));
     builder.notify_capacity(cfg.notify_capacity);
     builder.messages_per_tick(cfg.messages_per_tick);
     let event_loop = try!(builder.build());
@@ -387,7 +388,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 stale_peer = Some(p.peer.clone());
             } else if p.peer_id() > target_peer_id {
-                info!("target peer id {} is less than {}, msg maybe stale.",
+                info!("[region {}] target peer id {} is less than {}, msg maybe stale.",
+                      region_id,
                       target_peer_id,
                       p.peer_id());
                 return Ok(false);
@@ -407,9 +409,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let msg_type = message.get_msg_type();
         if msg_type != MessageType::MsgRequestVote &&
            (msg_type != MessageType::MsgHeartbeat || message.get_commit() != INVALID_INDEX) {
-            info!("target peer {:?} doesn't exist, stale message {:?}.",
-                  target,
-                  msg_type);
+            debug!("target peer {:?} doesn't exist, stale message {:?}.",
+                   target,
+                   msg_type);
             return Ok(false);
         }
 
@@ -637,7 +639,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
         if snap_region.get_peers().into_iter().all(|p| p.get_id() != peer_id) {
-            info!("region {:?} doesn't contain peer {:?}, skip.",
+            info!("[region {}] {:?} doesn't contain peer {:?}, skip.",
+                  snap_region.get_id(),
                   snap_region,
                   msg.get_to_peer());
             return Ok(false);
@@ -671,11 +674,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
-        let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
-        let pending_count = ids.len();
+        let pending_count = self.pending_raft_groups.len();
 
-        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(ids.len());
-        for region_id in ids {
+        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(pending_count);
+        for region_id in self.pending_raft_groups.drain() {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
                     Err(e) => {
@@ -1362,20 +1364,26 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let f = try!(self.snap_mgr.rl().get_snap_file(&key, is_sending));
             if is_sending {
                 if key.term < compacted_term || key.idx < compacted_idx {
-                    info!("snap file {} has been compacted, delete.", key);
+                    info!("[region {}] snap file {} has been compacted, delete.",
+                          key.region_id,
+                          key);
                     f.delete();
                 } else if let Ok(meta) = f.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
-                            info!("snap file {} has been expired, delete.", key);
+                            info!("[region {}] snap file {} has been expired, delete.",
+                                  key.region_id,
+                                  key);
                             f.delete();
                         }
                     }
                 }
             } else if key.term <= compacted_term &&
                       (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap) {
-                info!("snap file {} has been applied, delete.", key);
+                info!("[region {}] snap file {} has been applied, delete.",
+                      key.region_id,
+                      key);
                 f.delete();
             }
         }
@@ -1517,6 +1525,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if self.consistency_check_worker.is_busy() {
             // To avoid frequent scan, schedule new check only when all the
             // scheduled check is done.
+            self.register_consistency_check_tick(event_loop);
             return;
         }
         let (mut candidate_id, mut candidate_check_time) = (0, Instant::now());
@@ -1540,7 +1549,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             };
 
             if let Err(e) = self.sendch.send(msg) {
-                error!("{} failed to schedule split check: {:?}", peer.tag, e);
+                error!("{} failed to schedule consistent check: {:?}", peer.tag, e);
             }
         }
 
@@ -1564,7 +1573,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             expected_hash: Vec<u8>) {
         let state = match self.region_peers.get_mut(&region_id) {
             None => {
-                warn!("receive stale hash [region {}, index {}]",
+                warn!("[region {}] receive stale hash at index {}",
                       region_id,
                       expected_index);
                 return;
@@ -1578,7 +1587,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_hash_computed(&mut self, region_id: u64, index: u64, hash: Vec<u8>) {
         let (state, peer) = match self.region_peers.get_mut(&region_id) {
             None => {
-                warn!("receive stale hash [region {}, index {}]", region_id, index);
+                warn!("[region {}] receive stale hash at index {}",
+                      region_id,
+                      index);
                 return;
             }
             Some(p) => (&mut p.consistency_state, &p.peer),
@@ -1711,6 +1722,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
 
+    // This method is invoked very frequently, should avoid time consuming operation.
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             self.split_check_worker.stop();
@@ -1728,7 +1740,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         // We handle raft ready in event loop.
-        self.on_raft_ready();
+        if !self.pending_raft_groups.is_empty() {
+            self.on_raft_ready();
+        }
         self.pending_regions.clear();
     }
 }
