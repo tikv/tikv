@@ -131,6 +131,7 @@ fn test_scheduler_leader_change_twice() {
                         b"k".to_vec(),
                         10,
                         0,
+                        false,
                         box move |res: storage::Result<_>| {
             if let storage::Error::Engine(engine::Error::Request(ref e)) = *res.as_ref()
                 .err()

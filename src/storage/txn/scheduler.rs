@@ -385,11 +385,16 @@ fn process_write_impl(cid: u64,
                       snapshot: &Snapshot)
                       -> Result<()> {
     let (pr, modifies) = match cmd {
-        Command::Prewrite { ref mutations, ref primary, start_ts, lock_ttl, .. } => {
+        Command::Prewrite { ref mutations,
+                            ref primary,
+                            start_ts,
+                            lock_ttl,
+                            skip_constraint_check,
+                            .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, None);
             let mut results = vec![];
             for m in mutations {
-                match txn.prewrite(m.clone(), primary, lock_ttl) {
+                match txn.prewrite(m.clone(), primary, lock_ttl, skip_constraint_check) {
                     Ok(_) => results.push(Ok(())),
                     e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
                     Err(e) => return Err(Error::from(e)),

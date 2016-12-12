@@ -92,6 +92,7 @@ impl StoreHandler {
                             req.get_primary_lock().to_vec(),
                             req.get_start_version(),
                             req.get_lock_ttl(),
+                            req.get_skip_constraint_check(),
                             cb)
             .map_err(Error::Storage)
     }

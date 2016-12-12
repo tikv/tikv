@@ -95,6 +95,7 @@ pub enum Command {
         primary: Vec<u8>,
         start_ts: u64,
         lock_ttl: u64,
+        skip_constraint_check: bool,
     },
     Commit {
         ctx: Context,
@@ -414,6 +415,7 @@ impl Storage {
                           primary: Vec<u8>,
                           start_ts: u64,
                           lock_ttl: u64,
+                          skip_constraint_check: bool,
                           callback: Callback<Vec<Result<()>>>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
@@ -422,6 +424,7 @@ impl Storage {
             primary: primary,
             start_ts: start_ts,
             lock_ttl: lock_ttl,
+            skip_constraint_check: skip_constraint_check,
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Booleans(callback)));
@@ -718,6 +721,7 @@ mod tests {
                             b"x".to_vec(),
                             100,
                             0,
+                            false,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -760,6 +764,7 @@ mod tests {
                             b"a".to_vec(),
                             1,
                             0,
+                            false,
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -781,6 +786,7 @@ mod tests {
                             b"a".to_vec(),
                             1,
                             0,
+                            false,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -822,6 +828,7 @@ mod tests {
                             b"a".to_vec(),
                             1,
                             0,
+                            false,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -857,6 +864,7 @@ mod tests {
                             b"x".to_vec(),
                             100,
                             0,
+                            false,
                             expect_ok(tx.clone()))
             .unwrap();
         storage.async_prewrite(Context::new(),
@@ -864,6 +872,7 @@ mod tests {
                             b"y".to_vec(),
                             101,
                             0,
+                            false,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -899,6 +908,7 @@ mod tests {
                             b"x".to_vec(),
                             105,
                             0,
+                            false,
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -923,6 +933,7 @@ mod tests {
                             b"x".to_vec(),
                             100,
                             0,
+                            false,
                             expect_too_busy(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -940,6 +951,7 @@ mod tests {
                             b"x".to_vec(),
                             100,
                             0,
+                            false,
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();

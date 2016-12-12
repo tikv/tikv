@@ -93,12 +93,19 @@ impl<'a> MvccTxn<'a> {
         self.reader.get(key, self.start_ts)
     }
 
-    pub fn prewrite(&mut self, mutation: Mutation, primary: &[u8], lock_ttl: u64) -> Result<()> {
+    pub fn prewrite(&mut self,
+                    mutation: Mutation,
+                    primary: &[u8],
+                    lock_ttl: u64,
+                    skip_constraint_check: bool)
+                    -> Result<()> {
         let key = mutation.key();
-        if let Some((commit, _)) = try!(self.reader.seek_write(&key, u64::max_value())) {
-            // Abort on writes after our start timestamp ...
-            if commit >= self.start_ts {
-                return Err(Error::WriteConflict);
+        if !skip_constraint_check {
+            if let Some((commit, _)) = try!(self.reader.seek_write(&key, u64::max_value())) {
+                // Abort on writes after our start timestamp ...
+                if commit >= self.start_ts {
+                    return Err(Error::WriteConflict);
+                }
             }
         }
         // ... or locks at any timestamp.
@@ -494,7 +501,11 @@ mod tests {
         assert!(txn.get(&key).unwrap().is_none());
         assert_eq!(txn.write_size, 0);
 
-        txn.prewrite(Mutation::Put((key.clone(), b"value".to_vec())), b"pk", 0).unwrap();
+        txn.prewrite(Mutation::Put((key.clone(), b"value".to_vec())),
+                      b"pk",
+                      0,
+                      false)
+            .unwrap();
         assert!(txn.write_size() > 0);
         engine.write(&ctx, txn.modifies()).unwrap();
 
@@ -530,7 +541,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot.as_ref(), ts, None);
-        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), pk, 0).unwrap();
+        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), pk, 0, false).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
     }
 
@@ -538,7 +549,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot.as_ref(), ts, None);
-        txn.prewrite(Mutation::Delete(make_key(key)), pk, 0).unwrap();
+        txn.prewrite(Mutation::Delete(make_key(key)), pk, 0, false).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
     }
 
@@ -546,7 +557,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot.as_ref(), ts, None);
-        txn.prewrite(Mutation::Lock(make_key(key)), pk, 0).unwrap();
+        txn.prewrite(Mutation::Lock(make_key(key)), pk, 0, false).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
     }
 
@@ -554,7 +565,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot.as_ref(), ts, None);
-        assert!(txn.prewrite(Mutation::Lock(make_key(key)), pk, 0).is_err());
+        assert!(txn.prewrite(Mutation::Lock(make_key(key)), pk, 0, false).is_err());
     }
 
     fn must_commit(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
