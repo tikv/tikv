@@ -97,7 +97,7 @@ impl Write {
             if try!(b.read_u8()) == SHORT_VALUE_PREFIX {
                 Some(b.to_vec())
             } else {
-                panic!("invalid write");
+                panic!("invalid content in write");
             }
         } else {
             None

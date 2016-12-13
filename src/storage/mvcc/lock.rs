@@ -113,7 +113,7 @@ impl Lock {
             if try!(b.read_u8()) == SHORT_VALUE_PREFIX {
                 Some(b.to_vec())
             } else {
-                None
+                panic!("invalid content in lock");
             }
         } else {
             None
