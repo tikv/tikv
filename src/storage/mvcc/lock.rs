@@ -83,15 +83,15 @@ impl Lock {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN +
-                                       SHORT_VALUE_MAX_LEN + 1);
+                                       SHORT_VALUE_MAX_LEN +
+                                       1);
         b.push(self.lock_type.to_u8());
         b.encode_compact_bytes(&self.primary).unwrap();
         b.encode_var_u64(self.ts).unwrap();
         b.encode_var_u64(self.ttl).unwrap();
         if let Some(ref v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
-            let mut v = v.clone();
-            b.append(&mut v);
+            b.extend_from_slice(v);
         }
         b
     }

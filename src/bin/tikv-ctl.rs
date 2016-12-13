@@ -274,6 +274,7 @@ fn dump_mvcc_write(db: &DB, key: &str, encoded: bool) {
         println!("Type: {:?}", write.write_type);
         println!("Start_ts: {:?}", write.start_ts);
         println!("Commit_ts: {:?}", commit_ts);
+        println!("Short value: {:?}", write.short_value);
         println!("");
     }
 }

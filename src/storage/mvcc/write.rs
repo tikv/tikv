@@ -82,8 +82,7 @@ impl Write {
         b.encode_var_u64(self.start_ts).unwrap();
         if let Some(ref v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
-            let mut v = v.clone();
-            b.append(&mut v);
+            b.extend_from_slice(v);
         }
         b
     }
@@ -98,7 +97,7 @@ impl Write {
             if try!(b.read_u8()) == SHORT_VALUE_PREFIX {
                 Some(b.to_vec())
             } else {
-                None
+                panic!("invalid write");
             }
         } else {
             None
