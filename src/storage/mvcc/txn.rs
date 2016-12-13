@@ -516,6 +516,25 @@ mod tests {
         engine.write(&ctx, txn.modifies()).unwrap();
     }
 
+    #[test]
+    fn test_skip_constraint_check() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let (key, value) = (b"key", b"value");
+
+        must_prewrite_put(engine.as_ref(), key, value, key, 5);
+        must_commit(engine.as_ref(), key, 5, 10);
+
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), 5, None);
+        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), key, 0, false).is_err();
+
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), 5, None);
+        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), key, 0, true).is_ok();
+    }
+
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
