@@ -216,7 +216,7 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
     // Pile up snapshots of overlapped region ranges and deliver them all at once.
     let (tx, rx) = mpsc::channel();
-    cluster.sim.wl().add_recv_filter(3, box PileSnapshotFilter::new(tx));
+    cluster.sim.wl().add_recv_filter(3, box CollectSnapshotFilter::new(tx));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // Ensure the snapshot of range ("", "") is sent and piled in filter.

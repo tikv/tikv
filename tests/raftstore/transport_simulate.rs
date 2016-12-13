@@ -354,21 +354,20 @@ impl Filter<RaftMessage> for SnapshotFilter {
     }
 }
 
-/// `PileSnapshotFilter` is a transport filter to simulate the delivery of multiple snapshots
-/// from different peers at the same time. It will pile up the snapshots from different
-/// peers, and drop the snapshots from the same peers as those piled ones.
-/// Once there are more than 1 snapshots piled in this filter, it will deliver them all
-/// at once.
-pub struct PileSnapshotFilter {
+/// `CollectSnapshotFilter` is a simulation transport filter to simulate the simultaneous delivery
+/// of multiple snapshots from different peers. It collects the snapshots from different
+/// peers and drop the subsequent snapshots from the same peers. Currently, if there are
+/// more than 1 snapshots in this filter, all the snapshots will be dilivered at once.
+pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
     pending_msg: Mutex<HashMap<u64, StoreMsg>>,
     piled_count_sender: Mutex<Sender<usize>>,
 }
 
-impl PileSnapshotFilter {
-    pub fn new(sender: Sender<usize>) -> PileSnapshotFilter {
-        PileSnapshotFilter {
+impl CollectSnapshotFilter {
+    pub fn new(sender: Sender<usize>) -> CollectSnapshotFilter {
+        CollectSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: AtomicBool::new(false),
             pending_msg: Mutex::new(HashMap::new()),
@@ -377,7 +376,7 @@ impl PileSnapshotFilter {
     }
 }
 
-impl Filter<StoreMsg> for PileSnapshotFilter {
+impl Filter<StoreMsg> for CollectSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
             return Ok(());
