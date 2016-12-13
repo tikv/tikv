@@ -409,6 +409,7 @@ impl Storage {
         Ok(())
     }
 
+    #[allow(too_many_arguments)]
     pub fn async_prewrite(&self,
                           ctx: Context,
                           mutations: Vec<Mutation>,
