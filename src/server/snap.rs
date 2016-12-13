@@ -199,7 +199,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             self.close(token);
                         });
                         // don't need to write checksum, because it's already included in the file.
-                        if let Err(e) = writer.raw_save() {
+                        if let Err(e) = writer.save() {
                             error!("failed to save file {:?}: {:?}", token, e);
                             return;
                         }

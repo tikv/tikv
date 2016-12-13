@@ -150,16 +150,16 @@ impl SnapFile {
         Ok(())
     }
 
-    /// Same as `raw_save`, but will automatically append the checksum to
+    /// Same as `save`, but will automatically append the checksum to
     /// the end of file.
-    pub fn save(&mut self) -> io::Result<()> {
+    pub fn save_with_checksum(&mut self) -> io::Result<()> {
         self.save_impl(true)
     }
 
     /// Use the content in temporary files replace the target file.
     ///
     /// Please note that this method can only be called once.
-    pub fn raw_save(&mut self) -> io::Result<()> {
+    pub fn save(&mut self) -> io::Result<()> {
         self.save_impl(false)
     }
 
@@ -242,7 +242,7 @@ impl SnapValidationReader {
 
     /// Validate the file
     ///
-    /// If the reader will be comsumed after calling this method, no further data can be
+    /// If the reader will be consumed after calling this method, no further data can be
     /// read from this reader again.
     pub fn validate(&mut self) -> io::Result<()> {
         if self.res.is_none() {
@@ -511,9 +511,9 @@ mod test {
         let f2 = SnapFile::new(&path3, size_track.clone(), false, &key1).unwrap();
         let key2 = SnapKey::new(2, 1, 1);
         let mut f3 = SnapFile::new(&path3, size_track.clone(), true, &key2).unwrap();
-        f3.save().unwrap();
+        f3.save_with_checksum().unwrap();
         let mut f4 = SnapFile::new(&path3, size_track.clone(), false, &key2).unwrap();
-        f4.save().unwrap();
+        f4.save_with_checksum().unwrap();
         assert!(!f1.exists());
         assert!(!f2.exists());
         assert!(f3.exists());
@@ -547,10 +547,10 @@ mod test {
         let key2 = SnapKey::new(2, 1, 1);
         let mut f3 = SnapFile::new(path_str, size_track.clone(), true, &key2).unwrap();
         f3.write_all(test_data).unwrap();
-        f3.save().unwrap();
+        f3.save_with_checksum().unwrap();
         let mut f4 = SnapFile::new(path_str, size_track.clone(), false, &key2).unwrap();
         f4.write_all(test_data).unwrap();
-        f4.save().unwrap();
+        f4.save_with_checksum().unwrap();
 
         mgr = new_snap_mgr(path_str, None);
         mgr.wl().init().unwrap();
@@ -565,7 +565,7 @@ mod test {
         let mut f4 = mgr.rl().get_snap_file(&key2, true).unwrap();
         f4.write_all(test_data).unwrap();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
-        f4.save().unwrap();
+        f4.save_with_checksum().unwrap();
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
     }
 
@@ -578,16 +578,16 @@ mod test {
         let size_track = Arc::new(RwLock::new(0));
         let mut f1 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
         f1.write_all(b"testdata").unwrap();
-        f1.save().unwrap();
+        f1.save_with_checksum().unwrap();
         let mut reader = f1.reader().unwrap();
         reader.validate().unwrap();
 
-        // partial read should not affect validation.
+        // read partially should not affect validation.
         reader = f1.reader().unwrap();
         reader.read(&mut [0, 0]).unwrap();
         reader.validate().unwrap();
 
-        // fully read should not affect validation.
+        // read fully should not affect validation.
         reader = f1.reader().unwrap();
         while reader.read(&mut [0, 0]).unwrap() != 0 {}
         reader.validate().unwrap();

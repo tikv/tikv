@@ -790,7 +790,7 @@ fn build_snap_file(f: &mut SnapFile,
     }
     // use an empty byte array to indicate that kvpair reaches an end.
     box_try!(f.encode_compact_bytes(b""));
-    try!(f.save());
+    try!(f.save_with_checksum());
 
     info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
           region.get_id(),
@@ -1226,7 +1226,7 @@ mod test {
         let mut f = File::open(source_snap.path()).unwrap();
         dst_snap.encode_u64(0).unwrap();
         io::copy(&mut f, &mut dst_snap).unwrap();
-        dst_snap.raw_save().unwrap();
+        dst_snap.save().unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(sched, &td2);
