@@ -558,7 +558,7 @@ fn test_leader_election() {
         m.set_to(1);
         m.set_msg_type(MessageType::MsgHup);
         network.send(vec![m]);
-        let raft = network.peers.get(&1).unwrap();
+        let raft = &network.peers[&1];
         if raft.state != state {
             panic!("#{}: state = {:?}, want {:?}", i, raft.state, state);
         }
@@ -1375,7 +1375,7 @@ fn test_leader_superseding_with_check_quorum() {
 
     let mut nt = Network::new(vec![Some(a), Some(b), Some(c)]);
 
-    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    let b_election_timeout = nt.peers[&2].get_election_timeout();
 
     // prevent campaigning from b
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
@@ -1384,20 +1384,20 @@ fn test_leader_superseding_with_check_quorum() {
     }
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
-    assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Follower);
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&3].state, StateRole::Follower);
 
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
     // Peer b rejected c's vote since its electionElapsed had not reached to electionTimeout
-    assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Candidate);
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
 
     // Letting b's electionElapsed reach to electionTimeout
     for _ in 0..b_election_timeout {
         nt.peers.get_mut(&2).unwrap().tick();
     }
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
-    assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Leader);
+    assert_eq!(nt.peers[&3].state, StateRole::Leader);
 }
 
 #[test]
@@ -1415,8 +1415,8 @@ fn test_leader_election_with_check_quorum() {
     // we can not let system choosing the value of randomizedElectionTimeout
     // otherwise it will introduce some uncertainty into this test case
     // we need to ensure randomizedElectionTimeout > electionTimeout here
-    let a_election_timeout = nt.peers.get(&1).unwrap().get_election_timeout();
-    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    let a_election_timeout = nt.peers[&1].get_election_timeout();
+    let b_election_timeout = nt.peers[&2].get_election_timeout();
     nt.peers.get_mut(&1).unwrap().set_randomized_election_timeout(a_election_timeout + 1);
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 2);
 
@@ -1424,13 +1424,13 @@ fn test_leader_election_with_check_quorum() {
 
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
-    assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Follower);
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&3].state, StateRole::Follower);
 
     // need to reset randomizedElectionTimeout larger than electionTimeout again,
     // because the value might be reset to electionTimeout since the last state changes
-    let a_election_timeout = nt.peers.get(&1).unwrap().get_election_timeout();
-    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    let a_election_timeout = nt.peers[&1].get_election_timeout();
+    let b_election_timeout = nt.peers[&2].get_election_timeout();
     nt.peers.get_mut(&1).unwrap().set_randomized_election_timeout(a_election_timeout + 1);
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 2);
 
@@ -1442,8 +1442,8 @@ fn test_leader_election_with_check_quorum() {
     }
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Follower);
-    assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Leader);
+    assert_eq!(nt.peers[&1].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::Leader);
 }
 
 // test_free_stuck_candidate_with_check_quorum ensures that a candidate with a higher term
@@ -1464,7 +1464,7 @@ fn test_free_stuck_candidate_with_check_quorum() {
     // we can not let system choosing the value of randomizedElectionTimeout
     // otherwise it will introduce some uncertainty into this test case
     // we need to ensure randomizedElectionTimeout > electionTimeout here
-    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    let b_election_timeout = nt.peers[&2].get_election_timeout();
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
 
     for _ in 0..b_election_timeout {
@@ -1474,28 +1474,25 @@ fn test_free_stuck_candidate_with_check_quorum() {
     nt.isolate(1);
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&2).unwrap().state, StateRole::Follower);
-    assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Candidate);
-    assert_eq!(nt.peers.get(&3).unwrap().term,
-               nt.peers.get(&2).unwrap().term + 1);
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
+    assert_eq!(nt.peers[&3].term, &nt.peers[&2].term + 1);
 
     // Vote again for safety
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&2).unwrap().state, StateRole::Follower);
-    assert_eq!(nt.peers.get(&3).unwrap().state, StateRole::Candidate);
-    assert_eq!(nt.peers.get(&3).unwrap().term,
-               nt.peers.get(&2).unwrap().term + 2);
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].state, StateRole::Candidate);
+    assert_eq!(nt.peers[&3].term, &nt.peers[&2].term + 2);
 
     nt.recover();
     let mut msg = new_message(1, 3, MessageType::MsgHeartbeat, 0);
-    msg.set_term(nt.peers.get(&1).unwrap().term);
+    msg.set_term(nt.peers[&1].term);
     nt.send(vec![msg]);
 
     // Disrupt the leader so that the stuck peer is freed
-    assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Follower);
-    assert_eq!(nt.peers.get(&3).unwrap().term,
-               nt.peers.get(&1).unwrap().term);
+    assert_eq!(nt.peers[&1].state, StateRole::Follower);
+    assert_eq!(nt.peers[&3].term, nt.peers[&1].term);
 }
 
 #[test]
@@ -1511,23 +1508,23 @@ fn test_non_promotable_voter_wich_check_quorum() {
     // we can not let system choosing the value of randomizedElectionTimeout
     // otherwise it will introduce some uncertainty into this test case
     // we need to ensure randomizedElectionTimeout > electionTimeout here
-    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    let b_election_timeout = nt.peers[&2].get_election_timeout();
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
 
     // Need to remove 2 again to make it a non-promotable node since newNetwork
     // overwritten some internal states
     nt.peers.get_mut(&2).unwrap().prs.remove(&2).unwrap();
 
-    assert_eq!(nt.peers.get(&2).unwrap().promotable(), false);
+    assert_eq!(nt.peers[&2].promotable(), false);
 
     for _ in 0..b_election_timeout {
         nt.peers.get_mut(&2).unwrap().tick();
     }
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&1).unwrap().state, StateRole::Leader);
-    assert_eq!(nt.peers.get(&2).unwrap().state, StateRole::Follower);
-    assert_eq!(nt.peers.get(&2).unwrap().leader_id, 1);
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+    assert_eq!(nt.peers[&2].state, StateRole::Follower);
+    assert_eq!(nt.peers[&2].leader_id, 1);
 }
 
 #[test]
@@ -1541,7 +1538,7 @@ fn test_read_only_option_safe() {
     // we can not let system choose the value of randomizedElectionTimeout
     // otherwise it will introduce some uncertainty into this test case
     // we need to ensure randomizedElectionTimeout > electionTimeout here
-    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    let b_election_timeout = nt.peers[&2].get_election_timeout();
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
 
     for _ in 0..b_election_timeout {
@@ -1604,7 +1601,7 @@ fn test_read_only_option_lease() {
     // we can not let system choose the value of randomizedElectionTimeout
     // otherwise it will introduce some uncertainty into this test case
     // we need to ensure randomizedElectionTimeout > electionTimeout here
-    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    let b_election_timeout = nt.peers[&2].get_election_timeout();
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
 
     for _ in 0..b_election_timeout {
@@ -2275,12 +2272,12 @@ fn test_leader_transfer_to_uptodate_node() {
 
     // Transfer leadership to peer 2.
     nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Follower, 2);
 
     // After some log replication, transfer leadership back to peer 1.
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
     nt.send(vec![new_message(1, 2, MessageType::MsgTransferLeader, 0)]);
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 // test_leader_transfer_to_uptodate_node_from_follower verifies transferring should succeed
@@ -2298,12 +2295,12 @@ fn test_leader_transfer_to_uptodate_node_from_follower() {
 
     // transfer leadership to peer 2.
     nt.send(vec![new_message(2, 2, MessageType::MsgTransferLeader, 0)]);
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Follower, 2);
 
     // After some log replication, transfer leadership back to peer 1.
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
     nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 // TestLeaderTransferWithCheckQuorum ensures transferring leader still works
@@ -2318,7 +2315,7 @@ fn test_leader_transfer_with_check_quorum() {
         r.set_randomized_election_timeout(election_timeout + i as usize);
     }
 
-    let b_election_timeout = nt.peers.get(&2).unwrap().get_election_timeout();
+    let b_election_timeout = nt.peers[&2].get_election_timeout();
     nt.peers.get_mut(&2).unwrap().set_randomized_election_timeout(b_election_timeout + 1);
 
     // Letting peer 2 electionElapsed reach to timeout so that it can vote for peer 1
@@ -2327,16 +2324,16 @@ fn test_leader_transfer_with_check_quorum() {
     }
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
-    assert_eq!(nt.peers.get(&1).unwrap().leader_id, 1);
+    assert_eq!(nt.peers[&1].leader_id, 1);
 
     // Transfer leadership to 2.
     nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Follower, 2);
 
     // After some log replication, transfer leadership back to 1.
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
     nt.send(vec![new_message(1, 2, MessageType::MsgTransferLeader, 0)]);
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 #[test]
@@ -2353,7 +2350,7 @@ fn test_leader_transfer_to_slow_follower() {
     // Transfer leadership to 3 when node 3 is lack of log.
     nt.send(vec![new_message(3, 1, MessageType::MsgTransferLeader, 0)]);
 
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Follower, 3);
 }
 
 #[test]
@@ -2381,7 +2378,7 @@ fn test_leader_transfer_after_snapshot() {
     // Send pb.MsgHeartbeatResp to leader to trigger a snapshot for node 3.
     nt.send(vec![new_message(3, 1, MessageType::MsgHeartbeatResponse, 0)]);
 
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 3);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Follower, 3);
 }
 
 #[test]
@@ -2391,7 +2388,7 @@ fn test_leader_transfer_to_self() {
 
     // Transfer leadership to self, there will be noop.
     nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 #[test]
@@ -2401,7 +2398,7 @@ fn test_leader_transfer_to_non_existing_node() {
 
     // Transfer leadership to non-existing node, there will be noop.
     nt.send(vec![new_message(4, 1, MessageType::MsgTransferLeader, 0)]);
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 #[test]
@@ -2424,7 +2421,7 @@ fn test_leader_transfer_timeout() {
         nt.peers.get_mut(&1).unwrap().tick();
     }
 
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 #[test]
@@ -2455,7 +2452,7 @@ fn test_leader_transfer_receive_higher_term_vote() {
 
     nt.send(vec![new_message_with_entries(2, 2, MessageType::MsgHup, vec![new_entry(1, 2, None)])]);
 
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Follower, 2);
 }
 
 #[test]
@@ -2471,7 +2468,7 @@ fn test_leader_transfer_remove_node() {
 
     nt.peers.get_mut(&1).unwrap().remove_node(3);
 
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 // test_leader_transfer_back verifies leadership can transfer
@@ -2489,7 +2486,7 @@ fn test_leader_transfer_back() {
     // Transfer leadership back to self.
     nt.send(vec![new_message(1, 1, MessageType::MsgTransferLeader, 0)]);
 
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 // test_leader_transfer_second_transfer_to_another_node verifies leader can transfer to another node
@@ -2507,7 +2504,7 @@ fn test_leader_transfer_second_transfer_to_another_node() {
     // Transfer leadership to another node.
     nt.send(vec![new_message(2, 1, MessageType::MsgTransferLeader, 0)]);
 
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Follower, 2);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Follower, 2);
 }
 
 // test_leader_transfer_second_transfer_to_same_node verifies second transfer leader request
@@ -2535,7 +2532,7 @@ fn test_leader_transfer_second_transfer_to_same_node() {
         nt.peers.get_mut(&1).unwrap().tick();
     }
 
-    check_leader_transfer_state(nt.peers.get(&1).unwrap(), StateRole::Leader, 1);
+    check_leader_transfer_state(&nt.peers[&1], StateRole::Leader, 1);
 }
 
 fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64) {

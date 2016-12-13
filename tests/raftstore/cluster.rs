@@ -152,8 +152,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
-        let engine = self.engines.get(&node_id).unwrap();
-        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
+        let engine = self.engines[&node_id].clone();
+        self.sim.wl().run_node(node_id, self.cfg.clone(), engine);
         debug!("node {} started", node_id);
     }
 
@@ -164,7 +164,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        self.engines.get(&node_id).unwrap().clone()
+        self.engines[&node_id].clone()
     }
 
     pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
@@ -346,7 +346,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        let region = bootstrap_region(self.engines.get(&node_id).unwrap(), 1, 1, 1).unwrap();
+        let region = bootstrap_region(&self.engines[&node_id], 1, 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
@@ -394,6 +394,11 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let err = resp.get_header().get_error();
+        if err.has_stale_command() {
+            // command got truncated, leadership may have changed.
+            self.reset_leader_of_region(region_id);
+            return true;
+        }
         if !err.has_not_leader() {
             return false;
         }

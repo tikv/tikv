@@ -22,7 +22,7 @@ impl super::PdClient for RpcClient {
         // can send this request with any cluster ID, then PD will return its
         // cluster ID in the response header.
         let get_pd_members = pdpb::GetPDMembersRequest::new();
-        let mut req = self.new_request(pdpb::CommandType::GetPDMembers);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::GetPDMembers);
         req.set_get_pd_members(get_pd_members);
 
         let mut resp = try!(self.send(&req));
@@ -35,7 +35,7 @@ impl super::PdClient for RpcClient {
         bootstrap.set_store(store);
         bootstrap.set_region(region);
 
-        let mut req = self.new_request(pdpb::CommandType::Bootstrap);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::Bootstrap);
         req.set_bootstrap(bootstrap);
 
         let resp = try!(self.send(&req));
@@ -43,7 +43,7 @@ impl super::PdClient for RpcClient {
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
-        let mut req = self.new_request(pdpb::CommandType::IsBootstrapped);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::IsBootstrapped);
         req.set_is_bootstrapped(pdpb::IsBootstrappedRequest::new());
 
         let resp = try!(self.send(&req));
@@ -52,7 +52,7 @@ impl super::PdClient for RpcClient {
     }
 
     fn alloc_id(&self) -> Result<u64> {
-        let mut req = self.new_request(pdpb::CommandType::AllocId);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::AllocId);
         req.set_alloc_id(pdpb::AllocIdRequest::new());
 
         let resp = try!(self.send(&req));
@@ -64,7 +64,7 @@ impl super::PdClient for RpcClient {
         let mut put_store = pdpb::PutStoreRequest::new();
         put_store.set_store(store);
 
-        let mut req = self.new_request(pdpb::CommandType::PutStore);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::PutStore);
         req.set_put_store(put_store);
 
         let resp = try!(self.send(&req));
@@ -75,7 +75,7 @@ impl super::PdClient for RpcClient {
         let mut get_store = pdpb::GetStoreRequest::new();
         get_store.set_store_id(store_id);
 
-        let mut req = self.new_request(pdpb::CommandType::GetStore);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::GetStore);
         req.set_get_store(get_store);
 
         let mut resp = try!(self.send(&req));
@@ -84,7 +84,7 @@ impl super::PdClient for RpcClient {
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-        let mut req = self.new_request(pdpb::CommandType::GetClusterConfig);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::GetClusterConfig);
         req.set_get_cluster_config(pdpb::GetClusterConfigRequest::new());
 
         let mut resp = try!(self.send(&req));
@@ -96,7 +96,7 @@ impl super::PdClient for RpcClient {
         let mut get_region = pdpb::GetRegionRequest::new();
         get_region.set_region_key(key.to_vec());
 
-        let mut req = self.new_request(pdpb::CommandType::GetRegion);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::GetRegion);
         req.set_get_region(get_region);
 
         let mut resp = try!(self.send(&req));
@@ -108,7 +108,7 @@ impl super::PdClient for RpcClient {
         let mut get_region_by_id = pdpb::GetRegionByIDRequest::new();
         get_region_by_id.set_region_id(region_id);
 
-        let mut req = self.new_request(pdpb::CommandType::GetRegionByID);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::GetRegionByID);
         req.set_get_region_by_id(get_region_by_id);
 
         let mut resp = try!(self.send(&req));
@@ -123,14 +123,16 @@ impl super::PdClient for RpcClient {
     fn region_heartbeat(&self,
                         region: metapb::Region,
                         leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>)
+                        down_peers: Vec<pdpb::PeerStats>,
+                        pending_peers: Vec<metapb::Peer>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         let mut heartbeat = pdpb::RegionHeartbeatRequest::new();
         heartbeat.set_region(region);
         heartbeat.set_leader(leader);
         heartbeat.set_down_peers(RepeatedField::from_vec(down_peers));
+        heartbeat.set_pending_peers(RepeatedField::from_vec(pending_peers));
 
-        let mut req = self.new_request(pdpb::CommandType::RegionHeartbeat);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::RegionHeartbeat);
         req.set_region_heartbeat(heartbeat);
 
         let mut resp = try!(self.send(&req));
@@ -142,7 +144,7 @@ impl super::PdClient for RpcClient {
         let mut ask_split = pdpb::AskSplitRequest::new();
         ask_split.set_region(region);
 
-        let mut req = self.new_request(pdpb::CommandType::AskSplit);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::AskSplit);
         req.set_ask_split(ask_split);
 
         let mut resp = try!(self.send(&req));
@@ -154,7 +156,7 @@ impl super::PdClient for RpcClient {
         let mut heartbeat = pdpb::StoreHeartbeatRequest::new();
         heartbeat.set_stats(stats);
 
-        let mut req = self.new_request(pdpb::CommandType::StoreHeartbeat);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::StoreHeartbeat);
         req.set_store_heartbeat(heartbeat);
 
         let resp = try!(self.send(&req));
@@ -166,7 +168,7 @@ impl super::PdClient for RpcClient {
         report_split.set_left(left);
         report_split.set_right(right);
 
-        let mut req = self.new_request(pdpb::CommandType::ReportSplit);
+        let mut req = new_request(self.cluster_id, pdpb::CommandType::ReportSplit);
         req.set_report_split(report_split);
 
         let resp = try!(self.send(&req));
@@ -174,18 +176,15 @@ impl super::PdClient for RpcClient {
     }
 }
 
-impl RpcClient {
-    fn new_request(&self, cmd_type: pdpb::CommandType) -> pdpb::Request {
-        let mut header = pdpb::RequestHeader::new();
-        header.set_cluster_id(self.cluster_id);
-        header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        let mut req = pdpb::Request::new();
-        req.set_header(header);
-        req.set_cmd_type(cmd_type);
-        req
-    }
+pub fn new_request(cluster_id: u64, cmd_type: pdpb::CommandType) -> pdpb::Request {
+    let mut header = pdpb::RequestHeader::new();
+    header.set_cluster_id(cluster_id);
+    header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    let mut req = pdpb::Request::new();
+    req.set_header(header);
+    req.set_cmd_type(cmd_type);
+    req
 }
-
 
 fn check_resp(resp: &pdpb::Response) -> Result<()> {
     if !resp.has_header() {

@@ -228,6 +228,36 @@ impl Command {
             Command::Gc { .. } => "gc",
         }
     }
+
+    pub fn get_context(&self) -> &Context {
+        match *self {
+            Command::Get { ref ctx, .. } |
+            Command::BatchGet { ref ctx, .. } |
+            Command::Scan { ref ctx, .. } |
+            Command::Prewrite { ref ctx, .. } |
+            Command::Commit { ref ctx, .. } |
+            Command::Cleanup { ref ctx, .. } |
+            Command::Rollback { ref ctx, .. } |
+            Command::ScanLock { ref ctx, .. } |
+            Command::ResolveLock { ref ctx, .. } |
+            Command::Gc { ref ctx, .. } => ctx,
+        }
+    }
+
+    pub fn mut_context(&mut self) -> &mut Context {
+        match *self {
+            Command::Get { ref mut ctx, .. } |
+            Command::BatchGet { ref mut ctx, .. } |
+            Command::Scan { ref mut ctx, .. } |
+            Command::Prewrite { ref mut ctx, .. } |
+            Command::Commit { ref mut ctx, .. } |
+            Command::Cleanup { ref mut ctx, .. } |
+            Command::Rollback { ref mut ctx, .. } |
+            Command::ScanLock { ref mut ctx, .. } |
+            Command::ResolveLock { ref mut ctx, .. } |
+            Command::Gc { ref mut ctx, .. } => ctx,
+        }
+    }
 }
 
 use util::transport::SendCh;
@@ -504,15 +534,16 @@ impl Storage {
                          key: Vec<u8>,
                          callback: Callback<Option<Vec<u8>>>)
                          -> Result<()> {
-        self.engine
+        try!(self.engine
             .async_snapshot(&ctx,
-                            box move |res: engine::Result<_>| {
+                            box move |(_, res): (_, engine::Result<_>)| {
                                 callback(res.and_then(|snap: Box<Snapshot>| {
                                         snap.get(&Key::from_encoded(key))
                                     })
                                     .map_err(Error::from))
-                            })
-            .map_err(Error::from)
+                            }));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
+        Ok(())
     }
 
     pub fn async_raw_put(&self,
@@ -521,11 +552,14 @@ impl Storage {
                          value: Vec<u8>,
                          callback: Callback<()>)
                          -> Result<()> {
-        self.engine
+        try!(self.engine
             .async_write(&ctx,
                          vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
-                         box |res: engine::Result<_>| callback(res.map_err(Error::from)))
-            .map_err(Error::from)
+                         box |(_, res): (_, engine::Result<_>)| {
+                             callback(res.map_err(Error::from))
+                         }));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["put"]).inc();
+        Ok(())
     }
 
     pub fn async_raw_delete(&self,
@@ -533,11 +567,14 @@ impl Storage {
                             key: Vec<u8>,
                             callback: Callback<()>)
                             -> Result<()> {
-        self.engine
+        try!(self.engine
             .async_write(&ctx,
                          vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
-                         box |res: engine::Result<_>| callback(res.map_err(Error::from)))
-            .map_err(Error::from)
+                         box |(_, res): (_, engine::Result<_>)| {
+                             callback(res.map_err(Error::from))
+                         }));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["delete"]).inc();
+        Ok(())
     }
 }
 

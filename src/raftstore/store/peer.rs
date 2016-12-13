@@ -31,7 +31,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
-use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, INVALID_INDEX};
+use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
@@ -493,6 +493,23 @@ impl Peer {
         down_peers
     }
 
+    pub fn collect_pending_peers(&self) -> Vec<metapb::Peer> {
+        let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
+        let status = self.raft_group.status();
+        let truncated_idx = self.get_store().truncated_index();
+        for (id, progress) in status.progress {
+            if id == self.peer.get_id() {
+                continue;
+            }
+            if progress.matched < truncated_idx {
+                if let Some(p) = self.get_peer_from_cache(id) {
+                    pending_peers.push(p);
+                }
+            }
+        }
+        pending_peers
+    }
+
     pub fn check_stale_state(&mut self, d: Duration) -> StaleState {
         // Updates the `leader_missing_time` according to the current state.
         if self.leader_id() == raft::INVALID_ID {
@@ -732,7 +749,7 @@ impl Peer {
                 // a stale pending conf change before next conf change is applied. If it
                 // becomes leader again with the stale pending conf change, will enter
                 // this block, so we notify leadership may have changed.
-                self.notify_not_leader(cmd);
+                self.notify_stale_command(cmd);
             }
 
             if let Err(e) = self.propose_conf_change(req, metrics) {
@@ -795,16 +812,85 @@ impl Peer {
         true
     }
 
-    /// Call the callback of `cmd` that leadership may have been changed.
-    ///
-    /// Please note that, `NotLeader` here doesn't mean that currently this
-    /// peer is not leader.
-    fn notify_not_leader(&self, mut cmd: PendingCmd) {
-        let leader = self.get_peer_from_cache(self.leader_id());
-        let not_leader = Error::NotLeader(self.region_id, leader);
-        let resp = cmd_resp::err_resp(not_leader, cmd.uuid, self.term());
+    /// Call the callback of `cmd` when it can not be continue processed.
+    fn notify_stale_command(&self, mut cmd: PendingCmd) {
+        let resp = cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, self.term());
         info!("{} command {} is stale, skip", self.tag, cmd.uuid);
         cmd.call(resp);
+    }
+
+    /// Count the number of the healthy nodes.
+    /// A node is healthy when
+    /// 1. it's the leader of the Raft group, which has the latest logs
+    /// 2. it's a follower, and it does not lag behind the leader a lot.
+    ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
+    ///    it cannot works as a node in the quorum to receive replicating logs from leader.
+    fn count_healthy_node(&self, progress: &HashMap<u64, Progress>) -> usize {
+        let mut healthy = 0;
+        for pr in progress.values() {
+            if pr.matched >= self.get_store().truncated_index() {
+                healthy += 1;
+            }
+        }
+        healthy
+    }
+
+    /// Check whether it's safe to propose the specified conf change request.
+    /// It's safe iff at least the quorum of the Raft group is still healthy
+    /// right after that conf change is applied.
+    /// Define the total number of nodes in current Raft cluster to be `total`.
+    /// To ensure the above safety, if the cmd is
+    /// 1. A `AddNode` request
+    ///    Then at least '(total + 1)/2 + 1' nodes need to be up to date for now.
+    /// 2. A `RemoveNode` request
+    ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
+    ///    need to be up to date for now.
+    fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
+        let change_peer = get_change_peer_cmd(cmd).unwrap();
+
+        let change_type = change_peer.get_change_type();
+        let peer = change_peer.get_peer();
+
+        let mut status = self.raft_group.status();
+        let total = status.progress.len();
+        if total == 1 {
+            // It's always safe if there is only one node in the cluster.
+            return Ok(());
+        }
+
+        match change_type {
+            ConfChangeType::AddNode => {
+                let progress = Progress { ..Default::default() };
+                status.progress.insert(peer.get_id(), progress);
+            }
+            ConfChangeType::RemoveNode => {
+                if status.progress.remove(&peer.get_id()).is_none() {
+                    // It's always safe to remove a unexisting node.
+                    return Ok(());
+                }
+            }
+        }
+        let healthy = self.count_healthy_node(&status.progress);
+        let quorum_after_change = raft::quorum(status.progress.len());
+        if healthy >= quorum_after_change {
+            return Ok(());
+        }
+
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["conf_change", "reject_unsafe"]).inc();
+
+        info!("{} rejects unsafe conf change request {:?}, total {}, healthy {},  \
+               quorum after change {}",
+              self.tag,
+              change_peer,
+              total,
+              healthy,
+              quorum_after_change);
+        Err(box_err!("unsafe to perform conf change {:?}, total {}, healthy {}, quorum after \
+                      change {}",
+                     change_peer,
+                     total,
+                     healthy,
+                     quorum_after_change))
     }
 
     fn propose_normal(&mut self,
@@ -859,6 +945,8 @@ impl Peer {
                            cmd: RaftCmdRequest,
                            metrics: &mut RaftProposeMetrics)
                            -> Result<()> {
+        try!(self.check_conf_change(&cmd));
+
         metrics.conf_change += 1;
 
         let data = try!(cmd.write_to_bytes());
@@ -1031,6 +1119,9 @@ impl Peer {
     fn handle_raft_commit_entries(&mut self,
                                   committed_entries: &[eraftpb::Entry])
                                   -> Result<Vec<ExecResult>> {
+        if committed_entries.is_empty() {
+            return Ok(vec![]);
+        }
         // We can't apply committed entries when this peer is still applying snapshot.
         assert!(!self.is_applying());
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
@@ -1092,7 +1183,7 @@ impl Peer {
             assert!(term > 0);
             while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
                 // apprently, all the callbacks whose term is less than entry's term are stale.
-                self.notify_not_leader(cmd);
+                self.notify_stale_command(cmd);
             }
             return Ok(None);
         }
@@ -1128,7 +1219,7 @@ impl Peer {
                 if cmd.uuid == uuid {
                     return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.unwrap()));
                 } else {
-                    self.notify_not_leader(cmd);
+                    self.notify_stale_command(cmd);
                 }
             }
             return None;
@@ -1140,7 +1231,7 @@ impl Peer {
             // Because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
             // TODO: call coprocessor with uuid instead.
-            self.notify_not_leader(head);
+            self.notify_stale_command(head);
         }
         None
     }
