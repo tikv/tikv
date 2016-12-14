@@ -111,14 +111,17 @@ impl Lock {
         };
 
         let short_value = if b.len() > 0 {
-            if try!(b.read_u8()) == SHORT_VALUE_PREFIX {
+            let flag = try!(b.read_u8());
+            if flag == SHORT_VALUE_PREFIX {
                 let len = try!(b.read_u8());
                 if len as usize != b.len() {
-                    panic!("short value len not equal to content");
+                    panic!("short value len [{}] not equal to content len [{}]",
+                           len,
+                           b.len());
                 }
                 Some(b.to_vec())
             } else {
-                panic!("invalid content in lock");
+                panic!("invalid flag [{:?}] in write", flag);
             }
         } else {
             None
