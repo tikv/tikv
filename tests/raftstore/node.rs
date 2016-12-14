@@ -42,7 +42,7 @@ use super::transport_simulate::*;
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
-    snapshot_status_senders: HashMap<u64, Arc<Mutex<Sender<SnapshotStatusMsg>>>>,
+    snapshot_status_senders: HashMap<u64, Mutex<Sender<SnapshotStatusMsg>>>,
 }
 
 #[derive(Clone)]
@@ -195,8 +195,7 @@ impl Simulator for NodeCluster {
         self.trans
             .wl()
             .snapshot_status_senders
-            .insert(node_id,
-                    Arc::new(Mutex::new(node.get_snapshot_status_sender())));
+            .insert(node_id, Mutex::new(node.get_snapshot_status_sender()));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 
