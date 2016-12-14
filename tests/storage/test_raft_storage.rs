@@ -131,7 +131,7 @@ fn test_scheduler_leader_change_twice() {
                         vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
                         b"k".to_vec(),
                         10,
-                        OptionalArgs::new(0, false),
+                        OptionalArgs::default(),
                         box move |res: storage::Result<_>| {
             if let storage::Error::Engine(engine::Error::Request(ref e)) = *res.as_ref()
                 .err()

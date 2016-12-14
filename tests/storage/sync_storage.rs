@@ -68,7 +68,16 @@ impl SyncStorage {
                 key_only: bool,
                 start_ts: u64)
                 -> Result<Vec<Result<KvPair>>> {
-        wait_op!(|cb| self.store.async_scan(ctx, key, limit, key_only, start_ts, cb).unwrap())
+        wait_op!(|cb| {
+                self.store
+                    .async_scan(ctx,
+                                key,
+                                limit,
+                                start_ts,
+                                OptionalArgs::new(0, false, key_only),
+                                cb)
+                    .unwrap()
+            })
             .unwrap()
     }
 
@@ -84,7 +93,7 @@ impl SyncStorage {
                                     mutations,
                                     primary,
                                     start_ts,
-                                    OptionalArgs::new(0, false),
+                                    OptionalArgs::default(),
                                     cb)
                     .unwrap()
             })

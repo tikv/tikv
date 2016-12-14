@@ -263,16 +263,19 @@ impl Command {
 
 use util::transport::SendCh;
 
+#[derive(Default)]
 pub struct OptionalArgs {
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
+    pub key_only: bool,
 }
 
 impl OptionalArgs {
-    pub fn new(lock_ttl: u64, skip_constraint_check: bool) -> OptionalArgs {
+    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> OptionalArgs {
         OptionalArgs {
             lock_ttl: lock_ttl,
             skip_constraint_check: skip_constraint_check,
+            key_only: key_only,
         }
     }
 }
@@ -406,15 +409,15 @@ impl Storage {
                       ctx: Context,
                       start_key: Key,
                       limit: usize,
-                      key_only: bool,
                       start_ts: u64,
+                      optional_args: OptionalArgs,
                       callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             ctx: ctx,
             start_key: start_key,
             limit: limit,
-            key_only: key_only,
+            key_only: optional_args.key_only,
             start_ts: start_ts,
         };
         let tag = cmd.tag();
@@ -733,7 +736,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -775,7 +778,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -796,7 +799,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -810,8 +813,8 @@ mod tests {
         storage.async_scan(Context::new(),
                         make_key(b"\x00"),
                         1000,
-                        false,
                         5,
+                        OptionalArgs::default(),
                         expect_scan(tx.clone(),
                                     vec![
             Some((b"a".to_vec(), b"aa".to_vec())),
@@ -837,7 +840,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -872,14 +875,14 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -914,7 +917,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                             b"x".to_vec(),
                             105,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -938,7 +941,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_too_busy(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -955,7 +958,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            OptionalArgs::new(0, false),
+                            OptionalArgs::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
