@@ -527,7 +527,11 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot.as_ref(), 5, None);
-        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), key, 0, false).is_err();
+        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
+                      key,
+                      0,
+                      false)
+            .is_err();
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
