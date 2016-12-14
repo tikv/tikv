@@ -22,7 +22,8 @@ use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, Cmd
 use kvproto::kvrpcpb::{CmdRawGetResponse, CmdRawPutResponse, CmdRawDeleteResponse};
 use kvproto::msgpb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
+use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult,
+              OptionalArgs};
 use storage::Error as StorageError;
 use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
@@ -91,8 +92,7 @@ impl StoreHandler {
                             mutations,
                             req.get_primary_lock().to_vec(),
                             req.get_start_version(),
-                            req.get_lock_ttl(),
-                            req.get_skip_constraint_check(),
+                            OptionalArgs::new(req.get_lock_ttl(), req.get_skip_constraint_check()),
                             cb)
             .map_err(Error::Storage)
     }
