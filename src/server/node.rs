@@ -249,11 +249,16 @@ impl<C> Node<C>
         self.snapshot_status_sender = Some(snapshot_tx);
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
-            let mut store =
-                match Store::new(ch, snapshot_rx, store, cfg, db, trans, pd_client, snap_mgr) {
-                    Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                    Ok(s) => s,
-                };
+            let mut store = match Store::new((ch, snapshot_rx),
+                                             store,
+                                             cfg,
+                                             db,
+                                             trans,
+                                             pd_client,
+                                             snap_mgr) {
+                Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                Ok(s) => s,
+            };
             tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);

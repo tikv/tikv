@@ -226,6 +226,9 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     // Split the region range and then there should be another snapshot for the split ranges.
     cluster.must_split(&region, b"k2");
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    // Ensure the regions work after split.
+    cluster.must_put(b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
     cluster.must_put(b"k4", b"v4");
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }

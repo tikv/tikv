@@ -114,9 +114,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
-    #[allow(too_many_arguments)]
-    pub fn new(sender: Sender<Msg>,
-               snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
+    pub fn new(chan: (Sender<Msg>, Receiver<SnapshotStatusMsg>),
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
@@ -124,6 +122,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                pd_client: Arc<C>,
                mgr: SnapManager)
                -> Result<Store<T, C>> {
+        let (sender, snapshot_status_receiver) = chan;
+
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
