@@ -442,9 +442,7 @@ impl Peer {
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
                 MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
-                MessageType::MsgSnapshot => {
-                    metrics.snapshot += 1;
-                }
+                MessageType::MsgSnapshot => metrics.snapshot += 1,
                 MessageType::MsgHeartbeat => metrics.heartbeat += 1,
                 MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
                 MessageType::MsgTransferLeader => metrics.transfer_leader += 1,
