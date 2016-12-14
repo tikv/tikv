@@ -69,7 +69,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     engine: Arc<DB>,
     sendch: SendCh<Msg>,
 
-    sent_snapshot_count: usize,
+    sent_snapshot_count: u64,
     snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
 
     // region_id -> peers
@@ -732,6 +732,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let ids: Vec<u64> = self.pending_raft_groups.drain().collect();
         let pending_count = ids.len();
 
+        let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
         let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(ids.len());
         for region_id in ids {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
@@ -746,6 +747,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
+        let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
+        self.sent_snapshot_count += sent_snapshot_count;
 
         for (region_id, mut res) in ready_results {
             {
@@ -955,8 +958,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_result(&mut self, region_id: u64, ready_result: ReadyResult) {
-        self.sent_snapshot_count += ready_result.sent_snapshot_count;
-
         if let Some(apply_result) = ready_result.apply_snap_result {
             self.on_ready_apply_snapshot(apply_result);
         }

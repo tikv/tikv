@@ -13,7 +13,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::option::Option;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
@@ -504,7 +503,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             region_id: region_id,
             to_peer_id: to_peer_id,
             to_store_id: to_store_id,
-            reported: AtomicBool::new(false),
         }
     }
 
@@ -611,17 +609,10 @@ struct SnapshotReporter {
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
-
-    reported: AtomicBool,
 }
 
 impl SnapshotReporter {
     pub fn report(&self, status: SnapshotStatus) {
-        // return directly if already reported.
-        if self.reported.compare_and_swap(false, true, Ordering::Relaxed) {
-            return;
-        }
-
         debug!("send snapshot to {} for {} {:?}",
                self.to_peer_id,
                self.region_id,
