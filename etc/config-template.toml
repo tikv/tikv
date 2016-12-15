@@ -134,6 +134,14 @@ enable-statistics = false
 # Same as rocksdb's default value (10 min).
 stats-dump-period-sec = 600
 
+# If true, then the contents of manifest and data files are not synced
+# to stable storage. Their contents remain in the OS buffers till the
+# OS decides to flush them. This option is good for bulk-loading
+# of data. Once the bulk-loading is complete, please issue a
+# sync to the OS to flush all dirty buffers to stable storage.
+# Default false.
+# disable-data-sync = false
+
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
 # compression method (if any) is used to compress a block.

@@ -54,4 +54,11 @@ lazy_static! {
             "Bucketed histogram of latch wait",
             &["type"]
         ).unwrap();
+
+    pub static ref RAWKV_COMMAND_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_storage_rawkv_command_total",
+            "Total number of rawkv commands received.",
+            &["type"]
+        ).unwrap();
 }

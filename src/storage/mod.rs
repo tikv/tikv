@@ -534,15 +534,16 @@ impl Storage {
                          key: Vec<u8>,
                          callback: Callback<Option<Vec<u8>>>)
                          -> Result<()> {
-        self.engine
+        try!(self.engine
             .async_snapshot(&ctx,
                             box move |(_, res): (_, engine::Result<_>)| {
                                 callback(res.and_then(|snap: Box<Snapshot>| {
                                         snap.get(&Key::from_encoded(key))
                                     })
                                     .map_err(Error::from))
-                            })
-            .map_err(Error::from)
+                            }));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
+        Ok(())
     }
 
     pub fn async_raw_put(&self,
@@ -551,11 +552,14 @@ impl Storage {
                          value: Vec<u8>,
                          callback: Callback<()>)
                          -> Result<()> {
-        self.engine
+        try!(self.engine
             .async_write(&ctx,
                          vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
-                         box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)))
-            .map_err(Error::from)
+                         box |(_, res): (_, engine::Result<_>)| {
+                             callback(res.map_err(Error::from))
+                         }));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["put"]).inc();
+        Ok(())
     }
 
     pub fn async_raw_delete(&self,
@@ -563,11 +567,14 @@ impl Storage {
                             key: Vec<u8>,
                             callback: Callback<()>)
                             -> Result<()> {
-        self.engine
+        try!(self.engine
             .async_write(&ctx,
                          vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
-                         box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)))
-            .map_err(Error::from)
+                         box |(_, res): (_, engine::Result<_>)| {
+                             callback(res.map_err(Error::from))
+                         }));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["delete"]).inc();
+        Ok(())
     }
 }
 
