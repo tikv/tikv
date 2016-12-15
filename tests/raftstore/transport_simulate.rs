@@ -362,7 +362,7 @@ pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
     pending_msg: Mutex<HashMap<u64, StoreMsg>>,
-    piled_count_sender: Mutex<Sender<usize>>,
+    pending_count_sender: Mutex<Sender<usize>>,
 }
 
 impl CollectSnapshotFilter {
@@ -371,7 +371,7 @@ impl CollectSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: AtomicBool::new(false),
             pending_msg: Mutex::new(HashMap::new()),
-            piled_count_sender: Mutex::new(sender),
+            pending_count_sender: Mutex::new(sender),
         }
     }
 }
@@ -384,7 +384,7 @@ impl Filter<StoreMsg> for CollectSnapshotFilter {
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
         for m in msgs.drain(..) {
-            let (piled, from_peer_id) = match m {
+            let (is_pending, from_peer_id) = match m {
                 StoreMsg::RaftMessage(ref msg) => {
                     if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
                         let from_peer_id = msg.get_from_peer().get_id();
@@ -401,10 +401,10 @@ impl Filter<StoreMsg> for CollectSnapshotFilter {
                 }
                 _ => (false, 0),
             };
-            if piled {
+            if is_pending {
                 self.dropped.compare_and_swap(false, true, Ordering::Relaxed);
                 pending_msg.insert(from_peer_id, m);
-                let sender = self.piled_count_sender
+                let sender = self.pending_count_sender
                     .lock()
                     .unwrap();
                 sender.send(pending_msg.len()).unwrap();
@@ -412,7 +412,7 @@ impl Filter<StoreMsg> for CollectSnapshotFilter {
                 to_send.push(m);
             }
         }
-        // Deliver those piled snapshots if there are more than 1.
+        // Deliver those pending snapshots if there are more than 1.
         if pending_msg.len() > 1 {
             self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
             msgs.extend(pending_msg.drain().map(|(_, v)| v));

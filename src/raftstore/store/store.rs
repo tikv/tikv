@@ -142,7 +142,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                pd_client: Arc<C>,
                mgr: SnapManager)
                -> Result<Store<T, C>> {
-
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
