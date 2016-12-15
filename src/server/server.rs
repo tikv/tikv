@@ -59,6 +59,12 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
     Ok(listener)
 }
 
+// A helper structure to bundle all senders for messages to raftstore.
+pub struct ServerChannel<T: RaftStoreRouter + 'static> {
+    pub router: T,
+    pub snapshot_status_sender: Sender<SnapshotStatusMsg>,
+}
+
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
@@ -98,13 +104,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // address in Node before creating the Server, so we first
     // create the listener outer, get the real listening address for
     // Node and then pass it here.
-    #[allow(too_many_arguments)]
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
                listener: TcpListener,
                storage: Storage,
-               raft_router: T,
-               snapshot_status_sender: Sender<SnapshotStatusMsg>,
+               ch: ServerChannel<T>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
@@ -125,8 +129,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             store_tokens: HashMap::new(),
             store_resolving: HashSet::new(),
-            raft_router: raft_router,
-            snapshot_status_sender: snapshot_status_sender,
+            raft_router: ch.router,
+            snapshot_status_sender: ch.snapshot_status_sender,
             store: store_handler,
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
@@ -719,12 +723,15 @@ mod tests {
 
         let (snapshot_status_sender, _) = mpsc::channel();
 
+        let ch = ServerChannel {
+            router: router,
+            snapshot_status_sender: snapshot_status_sender,
+        };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
                                      storage,
-                                     router,
-                                     snapshot_status_sender,
+                                     ch,
                                      resolver,
                                      store::new_snap_mgr("", None))
             .unwrap();

@@ -24,8 +24,8 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
-use raftstore::store::{self, Msg, SnapshotStatusMsg, Store, Config as StoreConfig, keys, Peekable,
-                       Transport, SnapManager};
+use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, Store, Config as StoreConfig,
+                       keys, Peekable, Transport, SnapManager};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
@@ -242,20 +242,18 @@ impl<C> Node<C>
         let cfg = self.store_cfg.clone();
         let pd_client = self.pd_client.clone();
         let store = self.store.clone();
-        let ch = event_loop.channel();
+        let sender = event_loop.channel();
 
         let (tx, rx) = mpsc::channel();
         let (snapshot_tx, snapshot_rx) = mpsc::channel();
         self.snapshot_status_sender = Some(snapshot_tx);
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
-            let mut store = match Store::new((ch, snapshot_rx),
-                                             store,
-                                             cfg,
-                                             db,
-                                             trans,
-                                             pd_client,
-                                             snap_mgr) {
+            let ch = StoreChannel {
+                sender: sender,
+                snapshot_status_receiver: snapshot_rx,
+            };
+            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };

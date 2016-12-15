@@ -23,7 +23,7 @@ use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, Server, ServerTransport, create_event_loop, Msg, bind};
+use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
@@ -177,12 +177,15 @@ impl Simulator for ServerCluster {
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
+        let server_chan = ServerChannel {
+            router: sim_router.clone(),
+            snapshot_status_sender: node.get_snapshot_status_sender(),
+        };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
                                      store,
-                                     sim_router.clone(),
-                                     node.get_snapshot_status_sender(),
+                                     server_chan,
                                      resolver,
                                      snap_mgr)
             .unwrap();

@@ -47,8 +47,8 @@ use prometheus::{Encoder, TextEncoder};
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::transport::SendCh;
-use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config, bind,
-                   create_event_loop, create_raft_storage, Msg};
+use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
+                   Config, bind, create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
@@ -653,12 +653,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config:
     info!("Start listening on {}...", cfg.addr);
     let listener = bind(&cfg.addr).unwrap();
 
+    let server_chan = ServerChannel {
+        router: raft_router,
+        snapshot_status_sender: node.get_snapshot_status_sender(),
+    };
     let svr = Server::new(&mut event_loop,
                           &cfg,
                           listener,
                           store,
-                          raft_router,
-                          node.get_snapshot_status_sender(),
+                          server_chan,
                           resolver,
                           snap_mgr)
         .unwrap();

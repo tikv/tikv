@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, BTreeMap};
@@ -63,6 +63,12 @@ type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 
+// A helper structure to bundle all channels for messages to `Store`.
+pub struct StoreChannel {
+    pub sender: Sender<Msg>,
+    pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
+}
+
 pub struct Store<T: Transport, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
@@ -70,7 +76,7 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     sendch: SendCh<Msg>,
 
     sent_snapshot_count: u64,
-    snapshot_status_receiver: Receiver<SnapshotStatusMsg>,
+    snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
 
     // region_id -> peers
     region_peers: HashMap<u64, Peer>,
@@ -114,7 +120,7 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
 }
 
 impl<T: Transport, C: PdClient> Store<T, C> {
-    pub fn new(chan: (Sender<Msg>, Receiver<SnapshotStatusMsg>),
+    pub fn new(ch: StoreChannel,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
@@ -122,12 +128,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                pd_client: Arc<C>,
                mgr: SnapManager)
                -> Result<Store<T, C>> {
-        let (sender, snapshot_status_receiver) = chan;
 
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
-        let sendch = SendCh::new(sender, "raftstore");
+        let sendch = SendCh::new(ch.sender, "raftstore");
         let peer_cache = HashMap::new();
         let tag = format!("[store {}]", meta.get_id());
 
@@ -137,7 +142,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             engine: engine,
             sendch: sendch,
             sent_snapshot_count: 0,
-            snapshot_status_receiver: snapshot_status_receiver,
+            snapshot_status_receiver: ch.snapshot_status_receiver,
             region_peers: HashMap::new(),
             pending_raft_groups: HashSet::new(),
             split_check_worker: Worker::new("split check worker"),
