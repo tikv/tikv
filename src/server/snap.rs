@@ -198,6 +198,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             self.snap_mgr.wl().deregister(&key, &SnapEntry::Receiving);
                             self.close(token);
                         });
+                        // don't need to write checksum, because it's already included in the file.
                         if let Err(e) = writer.save() {
                             error!("failed to save file {:?}: {:?}", token, e);
                             return;
