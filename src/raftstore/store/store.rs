@@ -50,7 +50,8 @@ use super::{util, Msg, Tick, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState,
+                  ReadyContext};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -691,32 +692,28 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
 
-        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(pending_count);
-        for region_id in self.pending_raft_groups.drain() {
-            if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
-                    Err(e) => {
-                        // TODO: should we panic or shutdown the store?
-                        error!("{} handle raft ready append err: {:?}", peer.tag, e);
-                        continue;
-                    }
-                    Ok(Some(res)) => ready_results.push((region_id, res)),
-                    Ok(None) => {}
+        let (wb, append_res) = {
+            let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
+            for region_id in self.pending_raft_groups.drain() {
+                if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                    peer.handle_raft_ready_append(&mut ctx);
                 }
             }
+            (ctx.wb, ctx.ready_res)
+        };
+
+        if !wb.is_empty() {
+            self.engine.write(wb).unwrap_or_else(|e| {
+                panic!("{} failed to save append result: {:?}", self.tag, e);
+            });
         }
 
-        for (region_id, mut res) in ready_results {
-            {
-                let peer = self.region_peers.get_mut(&region_id).unwrap();
-
-                if let Err(e) = peer.handle_raft_ready_apply(&mut res) {
-                    // TODO: should we panic or shutdown the store?
-                    error!("{} handle raft ready err: {:?}", peer.tag, e);
-                    continue;
-                }
-            };
-
+        for (ready, invoke_ctx) in append_res {
+            let region_id = invoke_ctx.region_id;
+            let res = self.region_peers
+                .get_mut(&region_id)
+                .unwrap()
+                .handle_raft_ready_apply(&mut self.raft_metrics, &self.trans, ready, invoke_ctx);
             self.on_ready_result(region_id, res)
         }
 
