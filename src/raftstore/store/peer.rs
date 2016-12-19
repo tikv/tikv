@@ -433,7 +433,11 @@ impl Peer {
               I: Iterator<Item = eraftpb::Message>
     {
         for msg in msgs {
-            match msg.get_msg_type() {
+            let msg_type = msg.get_msg_type();
+
+            try!(self.send_raft_message(msg, trans));
+
+            match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
@@ -445,8 +449,6 @@ impl Peer {
                 MessageType::MsgTimeoutNow => metrics.timeout_now += 1,
                 _ => {}
             }
-
-            try!(self.send_raft_message(msg, trans));
         }
         Ok(())
     }
@@ -609,10 +611,11 @@ impl Peer {
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
-            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
-                // We don't care that the message is sent failed, so here just log this error.
-                warn!("{} leader send messages err {:?}", self.tag, e);
-            })
+            self.send(trans, ready.messages.drain(..), &mut metrics.message)
+                .unwrap_or_else(|e| {
+                    // We don't care that the message is sent failed, so here just log this error.
+                    warn!("{} leader send messages err {:?}", self.tag, e);
+                })
         }
 
         let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
@@ -633,9 +636,10 @@ impl Peer {
         append_timer.observe_duration();
 
         if !self.is_leader() {
-            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
-                warn!("{} follower send messages err {:?}", self.tag, e);
-            })
+            self.send(trans, ready.messages.drain(..), &mut metrics.message)
+                .unwrap_or_else(|e| {
+                    warn!("{} follower send messages err {:?}", self.tag, e);
+                })
         }
 
         slow_log!(t,

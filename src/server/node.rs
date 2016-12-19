@@ -13,6 +13,7 @@
 
 use std::thread;
 use std::sync::{Arc, mpsc};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use mio::EventLoop;
@@ -23,8 +24,8 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
-use raftstore::store::{self, Msg, Store, Config as StoreConfig, keys, Peekable, Transport,
-                       SnapManager};
+use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, Store, Config as StoreConfig,
+                       keys, Peekable, Transport, SnapManager};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
@@ -49,6 +50,7 @@ pub struct Node<C: PdClient + 'static> {
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh<Msg>,
+    snapshot_status_sender: Option<Sender<SnapshotStatusMsg>>,
 
     pd_client: Arc<C>,
 }
@@ -87,6 +89,7 @@ impl<C> Node<C>
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
+            snapshot_status_sender: None,
         }
     }
 
@@ -133,6 +136,10 @@ impl<C> Node<C>
 
     pub fn get_sendch(&self) -> SendCh<Msg> {
         self.ch.clone()
+    }
+
+    pub fn get_snapshot_status_sender(&self) -> Sender<SnapshotStatusMsg> {
+        self.snapshot_status_sender.clone().unwrap()
     }
 
     // check store, return store id for the engine.
@@ -235,11 +242,17 @@ impl<C> Node<C>
         let cfg = self.store_cfg.clone();
         let pd_client = self.pd_client.clone();
         let store = self.store.clone();
-        let ch = event_loop.channel();
+        let sender = event_loop.channel();
 
         let (tx, rx) = mpsc::channel();
+        let (snapshot_tx, snapshot_rx) = mpsc::channel();
+        self.snapshot_status_sender = Some(snapshot_tx);
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
+            let ch = StoreChannel {
+                sender: sender,
+                snapshot_status_receiver: snapshot_rx,
+            };
             let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,

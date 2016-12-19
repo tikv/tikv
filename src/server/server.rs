@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::option::Option;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
 
@@ -28,7 +28,7 @@ use super::{Result, OnResponse, Config};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
-use raftstore::store::SnapManager;
+use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
@@ -59,6 +59,12 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
     Ok(listener)
 }
 
+// A helper structure to bundle all senders for messages to raftstore.
+pub struct ServerChannel<T: RaftStoreRouter + 'static> {
+    pub raft_router: T,
+    pub snapshot_status_sender: Sender<SnapshotStatusMsg>,
+}
+
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
@@ -78,7 +84,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     store_tokens: HashMap<u64, Token>,
     store_resolving: HashSet<u64>,
 
-    raft_router: T,
+    ch: ServerChannel<T>,
 
     store: StoreHandler,
     end_point_worker: Worker<EndPointTask>,
@@ -101,7 +107,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                cfg: &Config,
                listener: TcpListener,
                storage: Storage,
-               raft_router: T,
+               ch: ServerChannel<T>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
@@ -122,7 +128,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             store_tokens: HashMap::new(),
             store_resolving: HashSet::new(),
-            raft_router: raft_router,
+            ch: ch,
             store: store_handler,
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
@@ -141,7 +147,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
         let ch = self.get_sendch();
-        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone(), ch);
+        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
 
         info!("TiKV is ready to serve");
@@ -245,7 +251,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         match msg_type {
             MessageType::Raft => {
                 RECV_MSG_COUNTER.with_label_values(&["raft"]).inc();
-                try!(self.raft_router.send_raft_msg(msg.take_raft()));
+                try!(self.ch.raft_router.send_raft_msg(msg.take_raft()));
                 Ok(())
             }
             MessageType::Cmd => {
@@ -290,7 +296,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             on_resp.call_box((resp_msg,));
         };
 
-        try!(self.raft_router.send_command(msg, cb));
+        try!(self.ch.raft_router.send_command(msg, cb));
 
         Ok(())
     }
@@ -411,7 +417,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
         let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
 
-        if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id, to_store_id) {
+        if let Err(e) = self.ch.raft_router.report_unreachable(region_id, to_peer_id, to_store_id) {
             error!("report peer {} unreachable for region {} failed {:?}",
                    to_peer_id,
                    region_id,
@@ -489,17 +495,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         self.write_data(event_loop, token, data)
     }
 
-    fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter<T> {
+    fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter {
         let region_id = data.msg.get_raft().get_region_id();
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
         let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
 
         SnapshotReporter {
-            router: self.raft_router.clone(),
+            snapshot_status_sender: self.ch.snapshot_status_sender.clone(),
             region_id: region_id,
             to_peer_id: to_peer_id,
             to_store_id: to_store_id,
-            reported: AtomicBool::new(false),
         }
     }
 
@@ -601,30 +606,30 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     }
 }
 
-struct SnapshotReporter<T: RaftStoreRouter + 'static> {
-    router: T,
+struct SnapshotReporter {
+    snapshot_status_sender: Sender<SnapshotStatusMsg>,
     region_id: u64,
     to_peer_id: u64,
     to_store_id: u64,
-
-    reported: AtomicBool,
 }
 
-impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
+impl SnapshotReporter {
     pub fn report(&self, status: SnapshotStatus) {
-        // return directly if already reported.
-        if self.reported.compare_and_swap(false, true, Ordering::Relaxed) {
-            return;
-        }
-
         debug!("send snapshot to {} for {} {:?}",
                self.to_peer_id,
                self.region_id,
                status);
 
+        if status == SnapshotStatus::Failure {
+            let store = self.to_store_id.to_string();
+            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["snapshot", &*store]).inc();
+        };
 
-        if let Err(e) = self.router
-            .report_snapshot(self.region_id, self.to_peer_id, self.to_store_id, status) {
+        if let Err(e) = self.snapshot_status_sender.send(SnapshotStatusMsg {
+            region_id: self.region_id,
+            to_peer_id: self.to_peer_id,
+            status: status,
+        }) {
             error!("report snapshot to peer {} in store {} with region {} err {:?}",
                    self.to_peer_id,
                    self.to_store_id,
@@ -653,7 +658,6 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::{self, Msg as StoreMsg};
-    use raft::SnapshotStatus;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -692,15 +696,6 @@ mod tests {
             Ok(())
         }
 
-        fn report_snapshot(&self,
-                           _: u64,
-                           _: u64,
-                           _: u64,
-                           _: SnapshotStatus)
-                           -> RaftStoreResult<()> {
-            unimplemented!();
-        }
-
         fn report_unreachable(&self, _: u64, _: u64, _: u64) -> RaftStoreResult<()> {
             let count = self.report_unreachable_count.clone();
             count.fetch_add(1, Ordering::SeqCst);
@@ -724,11 +719,17 @@ mod tests {
         let router = TestRaftStoreRouter::new(tx);
         let report_unreachable_count = router.report_unreachable_count.clone();
 
+        let (snapshot_status_sender, _) = mpsc::channel();
+
+        let ch = ServerChannel {
+            raft_router: router,
+            snapshot_status_sender: snapshot_status_sender,
+        };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
                                      storage,
-                                     router,
+                                     ch,
                                      resolver,
                                      store::new_snap_mgr("", None))
             .unwrap();
