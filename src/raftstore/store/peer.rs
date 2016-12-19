@@ -669,12 +669,12 @@ impl Peer {
                                                  mut ready: Ready,
                                                  invoke_ctx: InvokeContext)
                                                  -> ReadyResult {
-        let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
-
         if invoke_ctx.has_snapshot() {
-            // When apply snapshot, there is no log applied but not compacted yet.
+            // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
         }
+
+        let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
 
         if !self.is_leader() {
             self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
