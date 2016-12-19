@@ -61,7 +61,7 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
 
 // A helper structure to bundle all senders for messages to raftstore.
 pub struct ServerChannel<T: RaftStoreRouter + 'static> {
-    pub router: T,
+    pub raft_router: T,
     pub snapshot_status_sender: Sender<SnapshotStatusMsg>,
 }
 
@@ -84,8 +84,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     store_tokens: HashMap<u64, Token>,
     store_resolving: HashSet<u64>,
 
-    raft_router: T,
-    snapshot_status_sender: Sender<SnapshotStatusMsg>,
+    ch: ServerChannel<T>,
 
     store: StoreHandler,
     end_point_worker: Worker<EndPointTask>,
@@ -129,8 +128,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
             store_tokens: HashMap::new(),
             store_resolving: HashSet::new(),
-            raft_router: ch.router,
-            snapshot_status_sender: ch.snapshot_status_sender,
+            ch: ch,
             store: store_handler,
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
@@ -149,7 +147,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
         let ch = self.get_sendch();
-        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.raft_router.clone(), ch);
+        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
 
         info!("TiKV is ready to serve");
@@ -253,7 +251,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         match msg_type {
             MessageType::Raft => {
                 RECV_MSG_COUNTER.with_label_values(&["raft"]).inc();
-                try!(self.raft_router.send_raft_msg(msg.take_raft()));
+                try!(self.ch.raft_router.send_raft_msg(msg.take_raft()));
                 Ok(())
             }
             MessageType::Cmd => {
@@ -298,7 +296,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             on_resp.call_box((resp_msg,));
         };
 
-        try!(self.raft_router.send_command(msg, cb));
+        try!(self.ch.raft_router.send_command(msg, cb));
 
         Ok(())
     }
@@ -419,7 +417,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
         let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
 
-        if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id, to_store_id) {
+        if let Err(e) = self.ch.raft_router.report_unreachable(region_id, to_peer_id, to_store_id) {
             error!("report peer {} unreachable for region {} failed {:?}",
                    to_peer_id,
                    region_id,
@@ -503,7 +501,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
 
         SnapshotReporter {
-            snapshot_status_sender: self.snapshot_status_sender.clone(),
+            snapshot_status_sender: self.ch.snapshot_status_sender.clone(),
             region_id: region_id,
             to_peer_id: to_peer_id,
             to_store_id: to_store_id,
@@ -724,7 +722,7 @@ mod tests {
         let (snapshot_status_sender, _) = mpsc::channel();
 
         let ch = ServerChannel {
-            router: router,
+            raft_router: router,
             snapshot_status_sender: snapshot_status_sender,
         };
         let mut server = Server::new(&mut event_loop,

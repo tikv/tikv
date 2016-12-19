@@ -178,7 +178,7 @@ impl Simulator for ServerCluster {
         self.storages.insert(node_id, store.get_engine());
 
         let server_chan = ServerChannel {
-            router: sim_router.clone(),
+            raft_router: sim_router.clone(),
             snapshot_status_sender: node.get_snapshot_status_sender(),
         };
         let mut server = Server::new(&mut event_loop,

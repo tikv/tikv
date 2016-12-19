@@ -657,7 +657,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config:
     let listener = bind(&cfg.addr).unwrap();
 
     let server_chan = ServerChannel {
-        router: raft_router,
+        raft_router: raft_router,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
     let svr = Server::new(&mut event_loop,
