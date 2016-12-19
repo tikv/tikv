@@ -28,8 +28,8 @@ mod worker;
 mod metrics;
 mod local_metrics;
 
-pub use self::msg::{Msg, Callback, Tick};
-pub use self::store::{Store, create_event_loop};
+pub use self::msg::{Msg, Callback, Tick, SnapshotStatusMsg};
+pub use self::store::{StoreChannel, Store, create_event_loop};
 pub use self::config::Config;
 pub use self::transport::Transport;
 pub use self::peer::Peer;

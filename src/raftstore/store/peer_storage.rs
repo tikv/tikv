@@ -847,7 +847,7 @@ fn build_snap_file(f: &mut SnapFile,
     }
     // use an empty byte array to indicate that kvpair reaches an end.
     box_try!(f.encode_compact_bytes(b""));
-    try!(f.save());
+    try!(f.save_with_checksum());
 
     info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
           region.get_id(),
@@ -908,7 +908,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     let mut snap_file = try!(mgr.rl().get_snap_file(&key, true));
     if snap_file.exists() {
-        if let Err(e) = snap_file.validate() {
+        if let Err(e) = snap_file.reader().and_then(|mut r| r.validate()) {
             error!("[region {}] file {} is invalid, will regenerate: {:?}",
                    region_id,
                    snap_file.path().display(),

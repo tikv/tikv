@@ -460,7 +460,11 @@ impl Peer {
               I: IntoIterator<Item = eraftpb::Message>
     {
         for msg in msgs {
-            match msg.get_msg_type() {
+            let msg_type = msg.get_msg_type();
+
+            try!(self.send_raft_message(msg, trans));
+
+            match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
                 MessageType::MsgRequestVote => metrics.vote += 1,
@@ -472,8 +476,6 @@ impl Peer {
                 MessageType::MsgTimeoutNow => metrics.timeout_now += 1,
                 _ => {}
             }
-
-            try!(self.send_raft_message(msg, trans));
         }
         Ok(())
     }

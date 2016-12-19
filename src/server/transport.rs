@@ -19,7 +19,6 @@ use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use raft::SnapshotStatus;
 use super::{Msg, ConnData};
 use util::transport::SendCh;
 use super::metrics::*;
@@ -41,20 +40,6 @@ pub trait RaftStoreRouter: Send + Clone {
         self.try_send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,
-        })
-    }
-
-    // Report sending snapshot status.
-    fn report_snapshot(&self,
-                       region_id: u64,
-                       to_peer_id: u64,
-                       _: u64,
-                       status: SnapshotStatus)
-                       -> RaftStoreResult<()> {
-        self.send(StoreMsg::ReportSnapshot {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-            status: status,
         })
     }
 
@@ -114,23 +99,6 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         self.try_send(StoreMsg::RaftCmd {
             request: req,
             callback: cb,
-        })
-    }
-
-    fn report_snapshot(&self,
-                       region_id: u64,
-                       to_peer_id: u64,
-                       to_store_id: u64,
-                       status: SnapshotStatus)
-                       -> RaftStoreResult<()> {
-        if status == SnapshotStatus::Failure {
-            let store = to_store_id.to_string();
-            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["snapshot", &*store]).inc();
-        };
-        self.send(StoreMsg::ReportSnapshot {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-            status: status,
         })
     }
 
