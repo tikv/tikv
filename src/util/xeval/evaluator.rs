@@ -32,11 +32,11 @@ use chrono::FixedOffset;
 /// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
 /// Read-only statements should ignore truncate error, write statements should not ignore
 /// truncate error.
-const FLAG_IGNORE_TRUNCATE: u64 = 1;
+pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
 /// `FLAG_TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
 /// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
 /// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
-const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
+pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
 #[derive(Debug)]
 /// Some global variables needed in an evaluation.

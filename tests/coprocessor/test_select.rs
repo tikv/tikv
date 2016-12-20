@@ -11,6 +11,7 @@ use tipb::select::{ByItem, SelectRequest, SelectResponse, Chunk};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType};
 use storage::sync_storage::SyncStorage;
+use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
 
 use std::collections::{HashMap, BTreeMap};
 use std::sync::mpsc;
@@ -361,7 +362,16 @@ impl<'a> Select<'a> {
         self
     }
 
-    fn build(mut self) -> Request {
+    fn where_expr(mut self, expr: Expr) -> Select<'a> {
+        self.sel.set_field_where(expr);
+        self
+    }
+
+    fn build(self) -> Request {
+        self.build_with(&[0])
+    }
+
+    fn build_with(mut self, flags: &[u64]) -> Request {
         let mut req = Request::new();
 
         if self.idx < 0 {
@@ -371,6 +381,7 @@ impl<'a> Select<'a> {
             self.sel.set_index_info(self.table.get_index_info(self.idx));
             req.set_tp(REQ_TYPE_INDEX);
         }
+        self.sel.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
 
         req.set_data(self.sel.write_to_bytes().unwrap());
 
@@ -1230,4 +1241,99 @@ fn test_index_aggr_extre() {
         assert_eq!(row.data, &*expected_encoded);
     }
     end_point.stop().unwrap();
+}
+
+#[test]
+fn test_where() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let cond = {
+        let mut col = Expr::new();
+        col.set_tp(ExprType::ColumnRef);
+        col.mut_val().encode_i64(product.count.id).unwrap();
+
+        let mut value = Expr::new();
+        value.set_tp(ExprType::String);
+        value.set_val(String::from("2").into_bytes());
+
+        let mut cond = Expr::new();
+        cond.set_tp(ExprType::LT);
+        cond.mut_children().push(col);
+        cond.mut_children().push(value);
+        cond
+    };
+
+    let req = Select::from(&product.table).where_expr(cond).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 1);
+    let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let row = spliter.next().unwrap();
+    let (id, name, cnt) = data[2];
+    let name_datum = name.map(|s| s.as_bytes()).into();
+    let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
+    assert_eq!(id, row.handle);
+    assert_eq!(row.data, &*expected_encoded);
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_handle_truncate() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let cond = {
+        let mut col = Expr::new();
+        col.set_tp(ExprType::ColumnRef);
+        col.mut_val().encode_i64(product.count.id).unwrap();
+
+        // "2x" will be truncated.
+        let mut value = Expr::new();
+        value.set_tp(ExprType::String);
+        value.set_val(String::from("2x").into_bytes());
+
+        let mut cond = Expr::new();
+        cond.set_tp(ExprType::LT);
+        cond.mut_children().push(col);
+        cond.mut_children().push(value);
+        cond
+    };
+
+    // Ignore truncate error.
+    let req =
+        Select::from(&product.table).where_expr(cond.clone()).build_with(&[FLAG_IGNORE_TRUNCATE]);
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 1);
+    let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let row = spliter.next().unwrap();
+    let (id, name, cnt) = data[2];
+    let name_datum = name.map(|s| s.as_bytes()).into();
+    let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
+    assert_eq!(id, row.handle);
+    assert_eq!(row.data, &*expected_encoded);
+
+    // Do NOT ignore truncate error.
+    let req = Select::from(&product.table).where_expr(cond.clone()).build();
+    let (tx, rx) = mpsc::channel();
+    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
+    end_point.schedule(EndPointTask::Request(req)).unwrap();
+    let resp = rx.recv().unwrap().take_cop_resp();
+    assert!(resp.has_other_error());
+
+    end_point.stop().unwrap().join().unwrap();
 }
