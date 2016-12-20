@@ -103,6 +103,20 @@ fn ents(terms: Vec<u64>) -> Interface {
     raft
 }
 
+// voted_with_config creates a raft state machine with Vote and Term set
+// to the given value but no log entries (indicating that it voted in
+// the given term but has not received any logs).
+fn voted_with_config(vote: u64, term: u64) -> Interface {
+    let storage = MemStorage::new();
+    let mut hardstate = HardState::new();
+    hardstate.set_vote(vote);
+    hardstate.set_term(term);
+    storage.wl().set_hardstate(hardstate);
+    let mut raft = new_test_raft(1, vec![], 5, 1, storage);
+    raft.reset(term);
+    return raft;
+}
+
 fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
     s.wl().append(r.raft_log.unstable_entries().unwrap_or(&[])).expect("");
     let (last_idx, last_term) = (r.raft_log.last_index(), r.raft_log.last_term());
@@ -625,6 +639,63 @@ fn test_leader_cycle(pre_vote: bool) {
                        sm.state);
             }
         }
+    }
+}
+
+// TestLeaderElectionOverwriteNewerLogs tests a scenario in which a
+// newly-elected leader does *not* have the newest (i.e. highest term)
+// log entries, and must overwrite higher-term log entries with
+// lower-term ones.
+#[test]
+fn test_leader_election_overwrite_newlogs_no_pre_vote() {
+    test_leader_election_overwrite_new_logs(false)
+}
+
+#[test]
+fn test_leader_election_overwrite_newlogs_pre_vote() {
+    test_leader_election_overwrite_new_logs(true)
+}
+
+fn test_leader_election_overwrite_new_logs(prevote: bool) {
+    // This network represents the results of the following sequence of
+    // events:
+    // - Node 1 won the election in term 1.
+    // - Node 1 replicated a log entry to node 2 but died before sending
+    //   it to other nodes.
+    // - Node 3 won the second election in term 2.
+    // - Node 3 wrote an entry to its logs but died without sending it
+    //   to any other nodes.
+    //
+    // At this point, nodes 1, 2, and 3 all have uncommitted entries in
+    // their logs and could win an election at term 3. The winner's log
+    // entry overwrites the losers'. (TestLeaderSyncFollowerLog tests
+    // the case where older log entries are overwritten, so this test
+    // focuses on the case where the newer entries are lost).
+    let mut n = Network::new(vec![Some(ents(vec![1])),    // Node 1: Won first election
+                                  Some(ents(vec![1])),    // Node 2: Got logs from node 1 
+                                  Some(ents(vec![2])),    // Node 3: Won second election
+                                  Some(voted_with_config(3, 2)),   // Node 4: Voted but didn't get logs
+                                  Some(voted_with_config(3, 2))], // Noe 5: Voted but didn't get logs
+                             prevote);
+    // Node 1 campaigns. The election fails because a quorum of nodes
+    // know about the election that already happened at term 2. Node 1's
+    // term is pushed ahead to 2.
+    n.send(vec![new_message(1,1,MessageType::MsgHup, 0)]);
+    assert_eq!(n.peers[&1].state,StateRole::Follower, "state = {:?}, want: StateFollower", n.peers[&1].state);
+    assert_eq!(n.peers[&1].term, 2, "term = {}, want 2", n.peers[&1].term);
+
+    // Node 1 campaigns again with a higher term. This time it succeeds.
+    n.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+    assert_eq!(n.peers[&1].state, StateRole::Leader, "state = {:?}, want: StateLeader", n.peers[&1].state);
+    assert_eq!(n.peers[&1].term,  3, "term = {}, want 3", n.peers[&1].term);
+
+    // Now all nodes agree on a log entry with term 1 at index 1 (and
+    // term 3 at index 2).
+    for (id, sm) in &n.peers {
+        let ents = sm.raft_log.all_entries();
+        assert_eq!(ents.len(), 2, "Node {}: ents.len() == {}, want 2", id, ents.len());
+        assert_eq!(ents[0].get_term(), 1, "Node {}: term at index 1 == {}, want 1", id, ents[0].get_term());
+        assert_eq!(ents[1].get_term(), 3, "Node {}: term at index 2 == {}, want 3", id, ents[1].get_term());
     }
 }
 
