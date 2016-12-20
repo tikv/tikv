@@ -198,15 +198,10 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let s = try!(str::from_utf8(bs).map(|s| s.trim()));
+                let s = try!(str::from_utf8(bs));
                 let rd = try!(s.parse::<Res<Decimal>>());
-                let d = match handle_truncate(ctx, rd) {
-                    Res::Ok(d) => d,
-                    Res::Truncated(_) => {
-                        return Err(box_err!("[1265] Data Truncated"));
-                    }
-                    Res::Overflow(_) => return Err(box_err!("[1264] Data Out Of Range")),
-                };
+                info!("\n--- s: {}\n--- rd: {:?}", s, rd);
+                let d = try!(handle_truncate(ctx, rd)).unwrap();
                 let f = try!(d.as_f64());
                 self.cmp_f64(f)
             }
@@ -869,13 +864,15 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     Ok(buf.split_at(1 + pos))
 }
 
-fn handle_truncate<T>(ctx: &EvalContext, res: Res<T>) -> Res<T> {
-    match res {
-        Res::Truncated(_) if ctx.ignore_truncate || ctx.truncate_as_warning => {
-            Res::Ok(res.unwrap())
+fn handle_truncate<T: Display>(ctx: &EvalContext, res: Res<T>) -> Result<Res<T>> {
+    if res.is_truncated() {
+        if ctx.ignore_truncate || ctx.truncate_as_warning {
+            return Ok(res);
+        } else {
+            return res.into_result().map(|d| Res::Truncated(d));
         }
-        _ => res,
     }
+    Ok(res)
 }
 
 #[cfg(test)]

@@ -61,6 +61,13 @@ impl<T> Res<T> {
             _ => false,
         }
     }
+
+    pub fn is_truncated(&self) -> bool {
+        match *self {
+            Res::Truncated(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl<T: Display> Res<T> {
@@ -1355,7 +1362,8 @@ impl Decimal {
     }
 
     fn from_str(s: &str, word_buf_len: u8) -> Result<Res<Decimal>> {
-        let mut bs = s.trim_left().as_bytes();
+        let valid_s = get_valid_float_prefix(s.trim());
+        let mut bs = valid_s.as_bytes();
         if bs.is_empty() {
             return Err(box_err!("{} is empty", s));
         }
@@ -1444,6 +1452,10 @@ impl Decimal {
             d.negative = false;
         }
         d.result_frac_cnt = d.frac_cnt;
+
+        if valid_s.len() < s.len() {
+            d = Res::Truncated(d.unwrap());
+        }
         Ok(d)
     }
 
@@ -1464,6 +1476,48 @@ impl Decimal {
         }
         res
     }
+}
+
+fn get_valid_float_prefix(s: &str) -> &str {
+    let mut saw_dot = false;
+    let mut saw_digit = false;
+    let mut valid_len = 0;
+    let mut e_idx = 0;
+    for (i, c) in s.chars().enumerate() {
+        if c == '+' || c == '-' {
+            if i != 0 && i != e_idx + 1 {
+                // "1e+1" is valid.
+                break;
+            }
+        } else if c == '.' {
+            if saw_dot {
+                // "1.1."
+                break;
+            }
+            saw_dot = true;
+            if saw_digit {
+                // "123." is valid.
+                valid_len = i + 1;
+            }
+        } else if c == 'e' || c == 'E' {
+            if !saw_digit {
+                // "+.e"
+                break;
+            }
+            if e_idx != 0 {
+                // "1e5e"
+                break;
+            }
+            e_idx = i
+        } else if c < '0' || c > '9' {
+            break;
+        } else {
+            saw_digit = true;
+            valid_len = i + 1;
+        }
+    }
+
+    &s[..valid_len]
 }
 
 macro_rules! enable_conv_for_int {
