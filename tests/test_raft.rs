@@ -36,7 +36,6 @@ use kvproto::eraftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfSta
                        ConfChange, ConfChangeType};
 use rand;
 
-
 pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
     let mut s = format!("committed: {}\n", raft_log.committed);
     s = s + &format!("applied: {}\n", raft_log.applied);
@@ -147,7 +146,7 @@ impl Interface {
         }
     }
 
-    fn initial(&mut self, id: u64, ids: &[u64]) {
+    fn initial(&mut self, id: u64, ids: &[u64], pre_vote: bool) {
         if self.raft.is_some() {
             self.id = id;
             self.prs = HashMap::with_capacity(ids.len());
@@ -156,6 +155,7 @@ impl Interface {
             }
             let term = self.term;
             self.reset(term);
+            self.pre_vote = pre_vote;
         }
     }
 }
@@ -264,10 +264,7 @@ impl Network {
                     npeers.insert(id, r);
                 }
                 Some(mut p) => {
-                    p.initial(id, &peer_addrs);
-                    if p.raft.is_some() {
-                        p.pre_vote = prevote;
-                    }
+                    p.initial(id, &peer_addrs, prevote);
                     npeers.insert(id, p);
                 }
             }
@@ -535,7 +532,7 @@ fn test_progress_paused() {
 }
 
 #[test]
-fn test_leader_election_no_pre() {
+fn test_leader_election_no_pre_vote() {
     test_leader_election(false);
 }
 
@@ -569,14 +566,6 @@ fn test_leader_election(pre_vote: bool) {
                            Some(ents(vec![1,1])),
                            None],
                       pre_vote), StateRole::Follower, 1),
-
-        // logs converge
-        (Network::new(vec![Some(ents(vec![1])),
-                           None,
-                           Some(ents(vec![2])),
-                           Some(ents(vec![1])),
-                           None],
-                      pre_vote), StateRole::Leader,2),
     ];
 
     for (i, &mut (ref mut network, state, term)) in tests.iter_mut().enumerate() {
@@ -587,8 +576,8 @@ fn test_leader_election(pre_vote: bool) {
         network.send(vec![m]);
         let raft = network.peers.get(&1).unwrap();
         let (exp_state, exp_term) = if state == StateRole::Candidate && pre_vote {
-            // In pre_vote mode, an election that fails to complete
-            // leaves the node in pre_candidate state without advancing
+            // In pre-vote mode, an election that fails to complete
+            // leaves the node in pre-candidate state without advancing
             // the term.
             (StateRole::PreCandidate, 0)
         } else {
@@ -604,7 +593,7 @@ fn test_leader_election(pre_vote: bool) {
 }
 
 #[test]
-fn test_leader_cycle_not_pre_vote() {
+fn test_leader_cycle_no_pre_vote() {
     test_leader_cycle(false)
 }
 
@@ -658,7 +647,7 @@ fn test_vote_from_any_state_(vt: MessageType) {
                 let term = sm.term;
                 sm.become_follower(term, 3);
             }
-            StateRole::PreCandidate => sm.become_precandidate(),
+            StateRole::PreCandidate => sm.become_pre_candidate(),
             StateRole::Candidate => sm.become_candidate(),
             StateRole::Leader => {
                 sm.become_candidate();
@@ -836,15 +825,17 @@ fn test_dueling_pre_candidates() {
 
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
+
     // 1 becomes leader since it receives votes from 1 and 2
     assert_eq!(nt.peers[&1].state, StateRole::Leader);
+
     // 3 campaigns then reverts to follower when its pre_vote is rejected
     assert_eq!(nt.peers[&3].state, StateRole::Follower);
 
     nt.recover();
 
     // Candidtate 3 now increases its term and tries to vote again.
-    // With pre_vote, it does not disrupt the leader.
+    // With pre-vote, it does not disrupt the leader.
     nt.send(vec![new_message(3, 3, MessageType::MsgHup, 0)]);
     let wlog = new_raft_log(vec![empty_entry(1, 1)], 2, 1);
     let wlog2 = new_raft_log_with_storage(new_storage());
@@ -1289,22 +1280,22 @@ fn test_handle_heartbeat_resp() {
     // A heartbeat response from a node that is behind; re-send MsgApp
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     let mut msgs = sm.read_messages();
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgAppend);
+    assert_eq!(msgs.len(), 1, "msgs.len() = {}, want 1", msgs.len());
+    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgAppend, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgAppend);
 
     // A second heartbeat response with no AppResp does not re-send because we are in the wait
     // state.
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
-    assert_eq!(msgs.len(), 0);
+    assert_eq!(msgs.len(), 0, "msgs.len() = {}, want 0", msgs.len());
 
     // Send a heartbeat to reset the wait state; next heartbeat will re-send MsgApp.
     sm.bcast_heartbeat();
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
-    assert_eq!(msgs.len(), 2);
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
-    assert_eq!(msgs[1].get_msg_type(), MessageType::MsgAppend);
+    assert_eq!(msgs.len(), 2, "msgs.len() = {}, want 2", msgs.len());
+    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
+    assert_eq!(msgs[1].get_msg_type(), MessageType::MsgAppend, "type = {:?}, want {:?}", msgs[1].get_msg_type(), MessageType::MsgAppend);
 
     // Once we have an MsgAppResp, heartbeats no longer send MsgApp.
     let mut m = new_message(2, 0, MessageType::MsgAppendResponse, 0);
@@ -1316,8 +1307,8 @@ fn test_handle_heartbeat_resp() {
     sm.bcast_heartbeat(); // reset wait state
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
+    assert_eq!(msgs.len(), 1, "msgs.len() = {}, want 1", msgs.len());
+    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
 }
 
 // test_msg_append_response_wait_reset verifies the waitReset behavior of a leader
@@ -1473,7 +1464,7 @@ fn test_state_transition() {
                 StateRole::Follower => sm.become_follower(wterm, wlead),
                 StateRole::Candidate => sm.become_candidate(),
                 StateRole::Leader => sm.become_leader(),
-                StateRole::PreCandidate => sm.become_precandidate(),
+                StateRole::PreCandidate => sm.become_pre_candidate(),
             }
         });
         if res.is_ok() ^ wallow {
@@ -1513,7 +1504,7 @@ fn test_all_server_stepdown() {
                 sm.become_candidate();
                 sm.become_leader();
             }
-            StateRole::PreCandidate => sm.become_precandidate(),
+            StateRole::PreCandidate => sm.become_pre_candidate(),
         }
 
         for (j, &msg_type) in tmsg_types.iter().enumerate() {

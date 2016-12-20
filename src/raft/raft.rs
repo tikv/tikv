@@ -380,7 +380,9 @@ impl<T: Storage> Raft<T> {
         m.set_from(self.id);
         if m.get_msg_type() == MessageType::MsgRequestVote ||
            m.get_msg_type() == MessageType::MsgRequestPreVote {
-            if m.get_term() == 0 {
+               if m.get_term() == 0 {
+                // Pre-vote rpcs are sent at a term other than our actual term, so the code
+                // that sends these messages is responsible for setting the term.
                 panic!("term should be set when sending {:?}", m.get_msg_type());
             }
         } else {
@@ -661,11 +663,11 @@ impl<T: Storage> Raft<T> {
         info!("{} became candidate at term {}", self.tag, self.term);
     }
 
-    pub fn become_precandidate(&mut self) {
-        // TODO: remove the panic when the raft implementation is stable
+    // TODO: remove the panic when the raft implementation is stable
+    pub fn become_pre_candidate(&mut self) {
         assert!(self.state != StateRole::Leader,
                 "invalid transition [leader -> pre-candidate]");
-        // Becoming a pre-candidate changes our states.
+        // Becoming a pre-candidate changes our state.
         // but doesn't change anything else. In particular it does not increase
         // self.term or change self.vote.
         self.state = StateRole::PreCandidate;
@@ -702,7 +704,7 @@ impl<T: Storage> Raft<T> {
 
     fn campaign(&mut self, campaign_type: &[u8]) {
         let (vote_msg, term) = if campaign_type == CAMPAIGN_PRE_ELECTION {
-            self.become_precandidate();
+            self.become_pre_candidate();
             // pre_vote RPCs are sent for next term before we've incremented self.term.
             (MessageType::MsgRequestPreVote, self.term + 1)
         } else {
@@ -776,12 +778,13 @@ impl<T: Storage> Raft<T> {
                     // if a server receives ReqeustVote request within the minimum election
                     // timeout of hearing from a current leader, it does not update its term
                     // or grant its vote
-                    info!("{} [logterm: {}, index: {}] ignored {:?} vote from \
+                    info!("{} [logterm: {}, index: {}, vote: {}] ignored {:?} vote from \
                            {} [logterm: {}, index: {}] at term {}: lease is not expired \
                            (remaining ticks: {})",
                           self.tag,
                           self.raft_log.last_term(),
                           self.raft_log.last_index(),
+                          self.vote,
                           m.get_msg_type(),
                           m.get_from(),
                           m.get_log_term(),
@@ -795,15 +798,16 @@ impl<T: Storage> Raft<T> {
                 INVALID_ID
             } else {
                 m.get_from()
-            };
-            // Never change our term in response to a pre_vote
-            if m.get_msg_type() != MessageType::MsgRequestPreVote &&
-               (m.get_msg_type() != MessageType::MsgRequestPreVoteResponse || m.get_reject()) {
+                               };
+            if m.get_msg_type() == MessageType::MsgRequestPreVote {
+                // Never change our term in response to a PreVote
+            } else if m.get_msg_type() == MessageType::MsgRequestPreVoteResponse && !m.get_reject() {
                 // We send pre_vote requests with a term in our future. If the
                 // pre_vote is granted, we will increment our term when we get a
                 // quorum. If it is not, the term comes from the node that
                 // rejected our vote so we should become a follower at the new
                 // term.
+            } else {
                 info!("{} [term: {}] received a {:?} message with higher term from {} [term: {}]",
                       self.tag,
                       self.term,
@@ -821,13 +825,13 @@ impl<T: Storage> Raft<T> {
                 // also mean that this node has advanced its term number during a network
                 // partition, and it is now unable to either win an election or to rejoin
                 // the majority on the old term. If checkQuorum is false, this will be
-                // handled by incrementing term numbers in response to MsgRequestVote with a higher
-                // term, but if checkQuorum is true we may not advance the term on MsgRequestVote
-                // and must generate other messages to advance the term. The net result of these
+                // handled by incrementing term numbers in response to MsgVote with a higher
+                // term, but if checkQuorum is true we may not advance the term on MsgVote and
+                // must generate other messages to advance the term. The net result of these
                 // two features is to minimize the disruption caused by nodes that have been
-                // removed from the cluster's configuration: a removed node will send
-                // MsgRequestVotes which will be ignored, but it will not receive MsgApp or
-                // MsgHeartbeat, so it will not create disruptive term increases
+                // removed from the cluster's configuration: a removed node will send MsgVotes
+                // which will be ignored, but it will not receive MsgApp or MsgHeartbeat, so it
+                // will not create disruptive term increases
                 let to_send = new_message(m.get_from(), MessageType::MsgAppendResponse, None);
                 self.send(to_send);
             } else {
@@ -892,6 +896,7 @@ impl<T: Storage> Raft<T> {
                     to_send.set_reject(false);
                     self.send(to_send);
                     if m.get_msg_type() == MessageType::MsgRequestVote {
+                        // Only record real votes.
                         self.election_elapsed = 0;
                         self.vote = m.get_from();
                     }
@@ -1277,7 +1282,7 @@ impl<T: Storage> Raft<T> {
     }
 
     // step_candidate is shared by Candidate and PreCandidate; the difference is
-    // wether they response to MsgRequestVote or MsgRequestPreVote.
+    // whether they response to MsgRequestVote or MsgRequestPreVote.
     fn step_candidate(&mut self, m: Message) {
         let term = self.term;
         match m.get_msg_type() {
@@ -1299,7 +1304,7 @@ impl<T: Storage> Raft<T> {
             }
             MessageType::MsgRequestPreVoteResponse |
             MessageType::MsgRequestVoteResponse => {
-                // Only hands vote responses corresponding to our candidacy (while in
+                // Only handle vote responses corresponding to our candidacy (while in
                 // StateCandidate, we may get state MsgRequestPreVote messages in this term
                 // from our pre_candidate state)
                 if (self.state == StateRole::Candidate &&
@@ -1309,10 +1314,11 @@ impl<T: Storage> Raft<T> {
                     return;
                 }
                 let gr = self.poll(m.get_from(), m.get_msg_type(), !m.get_reject());
-                info!("{} [quorum:{}] has received {} votes and {} vote rejections",
+                info!("{} [quorum:{}] has received {} {:?} votes and {} vote rejections",
                       self.tag,
                       self.quorum(),
                       gr,
+                      m.get_msg_type(),
                       self.votes.len() - gr);
                 if self.quorum() == gr {
                     if self.state == StateRole::PreCandidate {
@@ -1379,8 +1385,8 @@ impl<T: Storage> Raft<T> {
                       self.tag,
                       self.term,
                       m.get_from());
-                // Leadership trnasfers never use prevote even if self.prevte is true; we
-                // know we are not recovering from a partition to there is no need for the
+                // Leadership trnasfers never use pre-vote even if self.pre_vote is true; we
+                // know we are not recovering from a partition so there is no need for the
                 // extra round trip.
                 self.campaign(CAMPAIGN_TRANSFER);
             }
