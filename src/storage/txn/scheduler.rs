@@ -272,9 +272,9 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             }
         }
         // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
-        Command::Scan { ref start_key, limit, key_only, start_ts, .. } => {
+        Command::Scan { ref start_key, limit, start_ts, ref options, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
-            let res = snap_store.scanner(ScanMode::Forward, key_only)
+            let res = snap_store.scanner(ScanMode::Forward, options.key_only)
                 .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
                 .and_then(|mut results| {
                     Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
@@ -385,11 +385,11 @@ fn process_write_impl(cid: u64,
                       snapshot: &Snapshot)
                       -> Result<()> {
     let (pr, modifies) = match cmd {
-        Command::Prewrite { ref mutations, ref primary, start_ts, lock_ttl, .. } => {
+        Command::Prewrite { ref mutations, ref primary, start_ts, ref options, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, None);
             let mut results = vec![];
             for m in mutations {
-                match txn.prewrite(m.clone(), primary, lock_ttl) {
+                match txn.prewrite(m.clone(), primary, options) {
                     Ok(_) => results.push(Ok(())),
                     e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
                     Err(e) => return Err(Error::from(e)),

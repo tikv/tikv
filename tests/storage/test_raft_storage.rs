@@ -17,7 +17,7 @@ use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::thread;
 use tikv::util::HandyRwLock;
-use tikv::storage::{self, Storage, Engine, Snapshot, Modify, Mutation, make_key, ALL_CFS};
+use tikv::storage::{self, Storage, Engine, Snapshot, Modify, Mutation, make_key, ALL_CFS, Options};
 use tikv::storage::engine::{self, Callback, Result};
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
@@ -130,7 +130,7 @@ fn test_scheduler_leader_change_twice() {
                         vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
                         b"k".to_vec(),
                         10,
-                        0,
+                        Options::default(),
                         box move |res: storage::Result<_>| {
             if let storage::Error::Engine(engine::Error::Request(ref e)) = *res.as_ref()
                 .err()
