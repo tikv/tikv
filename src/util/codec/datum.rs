@@ -26,7 +26,7 @@ use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
 use super::bytes::BytesEncoder;
 use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
-                   Time};
+                   Res, Time};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -198,7 +198,16 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = try!(convert::bytes_to_f64(bs));
+                let s = try!(str::from_utf8(bs).map(|s| s.trim()));
+                let rd = try!(s.parse::<Res<Decimal>>());
+                let d = match handle_truncate(ctx, rd) {
+                    Res::Ok(d) => d,
+                    Res::Truncated(_) => {
+                        return Err(box_err!("[1265] Data Truncated"));
+                    }
+                    Res::Overflow(_) => return Err(box_err!("[1264] Data Out Of Range")),
+                };
+                let f = try!(d.as_f64());
                 self.cmp_f64(f)
             }
         }
@@ -858,6 +867,15 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         return Err(box_err!("{} is too short", escape(buf)));
     }
     Ok(buf.split_at(1 + pos))
+}
+
+fn handle_truncate<T>(ctx: &EvalContext, res: Res<T>) -> Res<T> {
+    match res {
+        Res::Truncated(_) if ctx.ignore_truncate || ctx.truncate_as_warning => {
+            Res::Ok(res.unwrap())
+        }
+        _ => res,
+    }
 }
 
 #[cfg(test)]

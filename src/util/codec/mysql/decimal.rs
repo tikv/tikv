@@ -1535,6 +1535,14 @@ impl FromStr for Decimal {
     }
 }
 
+impl FromStr for Res<Decimal> {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Res<Decimal>> {
+        Decimal::from_str(s, WORD_BUF_LEN)
+    }
+}
+
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
         let mut dec = self.clone();
@@ -2194,6 +2202,8 @@ mod test {
             (WORD_BUF_LEN, "2E0", Res::Ok("2")),
             (WORD_BUF_LEN, "2.2E-1", Res::Ok("0.22")),
             (WORD_BUF_LEN, "2.23E2", Res::Ok("223")),
+            (WORD_BUF_LEN, "11x", Res::Truncated("11")),
+            (WORD_BUF_LEN, "11x.", Res::Truncated("11")),
         ];
 
         for (word_buf_len, dec_str, exp) in cases {

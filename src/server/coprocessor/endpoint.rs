@@ -344,6 +344,7 @@ impl TiDbEndPoint {
                     // should we handle locked here too?
                     sel_resp.set_error(to_pb_error(&e));
                     // TODO add detail error
+                    // unwrap errors
                     resp.set_other_error(format!("{}", e));
                 } else {
                     // other error should be handle by ti client.
