@@ -663,23 +663,67 @@ fn test_vote_from_any_state_(vt: MessageType) {
         msg.set_log_term(new_term);
         msg.set_index(42);
         sm.step(msg).expect("");
-        assert_eq!(sm.msgs.len(), 1);
+        assert_eq!(sm.msgs.len(),
+                   1,
+                   "{:?},{:?}: {} response messages, want 1: {:?}",
+                   vt,
+                   state,
+                   sm.msgs.len(),
+                   sm.msgs);
         let resp = &sm.msgs[0];
-        assert_eq!(resp.get_msg_type(), vote_resp_msg_type(vt));
-        assert!(!resp.get_reject());
+        assert_eq!(resp.get_msg_type(),
+                   vote_resp_msg_type(vt),
+                   "{:?}, {:?}: response message is {:?}, want {:?}",
+                   vt,
+                   state,
+                   resp.get_msg_type(),
+                   vote_resp_msg_type(vt));
+        assert!(!resp.get_reject(),
+                "{:?},{:?}: unexpected rejection",
+                vt,
+                state);
 
         // If this was a real vote, we reset our state and term.
         if vt == MessageType::MsgRequestVote {
-            assert_eq!(sm.state, StateRole::Follower);
-            assert_eq!(sm.term, new_term);
-            assert_eq!(sm.vote, 2);
+            assert_eq!(sm.state,
+                       StateRole::Follower,
+                       "{:?},{:?}, state {:?}, want {:?}",
+                       vt,
+                       StateRole::Follower,
+                       sm.state,
+                       state);
+            assert_eq!(sm.term,
+                       new_term,
+                       "{:?},{:?}, term {}, want {}",
+                       vt,
+                       state,
+                       sm.term,
+                       new_term);
+            assert_eq!(sm.vote, 2, "{:?},{:?}, vote {}, want 2", vt, state, sm.vote);
         } else {
             // In a pre_vote, nothing changes.
-            assert_eq!(sm.state, state);
-            assert_eq!(sm.term, orig_term);
+            assert_eq!(sm.state,
+                       state,
+                       "{:?},{:?}, state {:?}, want {:?}",
+                       vt,
+                       state,
+                       sm.state,
+                       state);
+            assert_eq!(sm.term,
+                       orig_term,
+                       "{:?},{:?}, term {}, want {}",
+                       vt,
+                       state,
+                       sm.term,
+                       orig_term);
             // If st == Follower or PreCandidate, sm hasn't vote yet.
             // In Candidate or Leader, it's voted for itself.
-            assert!(sm.vote == INVALID_ID || sm.vote == 1);
+            assert!(sm.vote == INVALID_ID || sm.vote == 1,
+                    "{:?},{:?}, vote {}, want {:?} or 1",
+                    vt,
+                    state,
+                    sm.vote,
+                    INVALID_ID);
         }
     }
     test_vote_from_any_state_impl(vt, StateRole::Follower);
@@ -687,7 +731,6 @@ fn test_vote_from_any_state_(vt: MessageType) {
     test_vote_from_any_state_impl(vt, StateRole::PreCandidate);
     test_vote_from_any_state_impl(vt, StateRole::Leader);
 }
-
 
 #[test]
 fn test_log_replicatioin() {
