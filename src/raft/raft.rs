@@ -380,7 +380,7 @@ impl<T: Storage> Raft<T> {
         m.set_from(self.id);
         if m.get_msg_type() == MessageType::MsgRequestVote ||
            m.get_msg_type() == MessageType::MsgRequestPreVote {
-               if m.get_term() == 0 {
+            if m.get_term() == 0 {
                 // Pre-vote rpcs are sent at a term other than our actual term, so the code
                 // that sends these messages is responsible for setting the term.
                 panic!("term should be set when sending {:?}", m.get_msg_type());
@@ -798,10 +798,11 @@ impl<T: Storage> Raft<T> {
                 INVALID_ID
             } else {
                 m.get_from()
-                               };
+            };
             if m.get_msg_type() == MessageType::MsgRequestPreVote {
                 // Never change our term in response to a PreVote
-            } else if m.get_msg_type() == MessageType::MsgRequestPreVoteResponse && !m.get_reject() {
+            } else if m.get_msg_type() == MessageType::MsgRequestPreVoteResponse &&
+                      !m.get_reject() {
                 // We send pre_vote requests with a term in our future. If the
                 // pre_vote is granted, we will increment our term when we get a
                 // quorum. If it is not, the term comes from the node that

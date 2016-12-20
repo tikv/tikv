@@ -1281,7 +1281,11 @@ fn test_handle_heartbeat_resp() {
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     let mut msgs = sm.read_messages();
     assert_eq!(msgs.len(), 1, "msgs.len() = {}, want 1", msgs.len());
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgAppend, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgAppend);
+    assert_eq!(msgs[0].get_msg_type(),
+               MessageType::MsgAppend,
+               "type = {:?}, want {:?}",
+               msgs[0].get_msg_type(),
+               MessageType::MsgAppend);
 
     // A second heartbeat response with no AppResp does not re-send because we are in the wait
     // state.
@@ -1294,8 +1298,16 @@ fn test_handle_heartbeat_resp() {
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
     assert_eq!(msgs.len(), 2, "msgs.len() = {}, want 2", msgs.len());
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
-    assert_eq!(msgs[1].get_msg_type(), MessageType::MsgAppend, "type = {:?}, want {:?}", msgs[1].get_msg_type(), MessageType::MsgAppend);
+    assert_eq!(msgs[0].get_msg_type(),
+               MessageType::MsgHeartbeat,
+               "type = {:?}, want {:?}",
+               msgs[0].get_msg_type(),
+               MessageType::MsgHeartbeat);
+    assert_eq!(msgs[1].get_msg_type(),
+               MessageType::MsgAppend,
+               "type = {:?}, want {:?}",
+               msgs[1].get_msg_type(),
+               MessageType::MsgAppend);
 
     // Once we have an MsgAppResp, heartbeats no longer send MsgApp.
     let mut m = new_message(2, 0, MessageType::MsgAppendResponse, 0);
@@ -1308,7 +1320,11 @@ fn test_handle_heartbeat_resp() {
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
     assert_eq!(msgs.len(), 1, "msgs.len() = {}, want 1", msgs.len());
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
+    assert_eq!(msgs[0].get_msg_type(),
+               MessageType::MsgHeartbeat,
+               "type = {:?}, want {:?}",
+               msgs[0].get_msg_type(),
+               MessageType::MsgHeartbeat);
 }
 
 // test_msg_append_response_wait_reset verifies the waitReset behavior of a leader
