@@ -1050,7 +1050,7 @@ fn test_single_node_candidate() {
 }
 
 #[test]
-fn test_sinle_node_precandidate() {
+fn test_sinle_node_pre_candidate() {
     let mut tt = Network::new(vec![None], true);
     tt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
 
