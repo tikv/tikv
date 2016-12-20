@@ -194,6 +194,11 @@ target-file-size-base = "16MB"
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read
 block-cache-size = "1GB"
 
+# Indicating if we'd put index/filter blocks to the block cache.
+# If not specified, each "table reader" object will pre-load index/filter block
+# during table initialization.
+cache-index-and-filter-blocks = false
+
 # options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
@@ -205,6 +210,7 @@ min-write-buffer-number-to-merge = 1
 max-bytes-for-level-base = "64MB"
 target-file-size-base = "16MB"
 block-cache-size = "256MB"
+cache-index-and-filter-blocks = false
 
 # options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.

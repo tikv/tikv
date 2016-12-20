@@ -259,6 +259,12 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                                         Some(block_cache_default));
     block_base_opts.set_lru_cache(block_cache_size as usize);
 
+    let cache_index_and_filter =
+        get_toml_boolean(config,
+                         (prefix.clone() + "cache-index-and-filter-blocks").as_str(),
+                         Some(false));
+    block_base_opts.set_cache_index_and_filter_blocks(cache_index_and_filter);
+
     if use_bloom_filter {
         let bloom_bits_per_key = get_toml_int(config,
                                               (prefix.clone() + "bloom-filter-bits-per-key")
