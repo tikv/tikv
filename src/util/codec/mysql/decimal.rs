@@ -74,8 +74,8 @@ impl<T: Display> Res<T> {
     pub fn into_result(self) -> Result<T> {
         match self {
             Res::Ok(t) => Ok(t),
-            Res::Overflow(t) => Err(box_err!("overflow: {}", t)),
-            Res::Truncated(t) => Err(box_err!("truncated: {}", t)),
+            Res::Overflow(_) => Err(box_err!("[1264] Data Out of Range")),
+            Res::Truncated(_) => Err(box_err!("[1265] Data Truncated")),
         }
     }
 }
@@ -1362,7 +1362,8 @@ impl Decimal {
     }
 
     fn from_str(s: &str, word_buf_len: u8) -> Result<Res<Decimal>> {
-        let valid_s = get_valid_float_prefix(s.trim());
+        let trimed_s = s.trim();
+        let valid_s = get_valid_float_prefix(trimed_s);
         let mut bs = valid_s.as_bytes();
         if bs.is_empty() {
             return Err(box_err!("{} is empty", s));
@@ -1453,7 +1454,7 @@ impl Decimal {
         }
         d.result_frac_cnt = d.frac_cnt;
 
-        if valid_s.len() < s.len() {
+        if valid_s.len() < trimed_s.len() {
             d = Res::Truncated(d.unwrap());
         }
         Ok(d)
@@ -2220,8 +2221,8 @@ mod test {
         let cases = vec![
             (WORD_BUF_LEN, "12345", Res::Ok("12345")),
             (WORD_BUF_LEN, "12345.", Res::Ok("12345")),
-            (WORD_BUF_LEN, "123.45.", Res::Ok("123.45")),
-            (WORD_BUF_LEN, "-123.45.", Res::Ok("-123.45")),
+            (WORD_BUF_LEN, "123.45.", Res::Truncated("123.45")),
+            (WORD_BUF_LEN, "-123.45.", Res::Truncated("-123.45")),
             (WORD_BUF_LEN, ".00012345000098765", Res::Ok("0.00012345000098765")),
             (WORD_BUF_LEN, ".12345000098765", Res::Ok("0.12345000098765")),
             (WORD_BUF_LEN, "-.000000012345000098765", Res::Ok("-0.000000012345000098765")),
@@ -2256,6 +2257,8 @@ mod test {
             (WORD_BUF_LEN, "2E0", Res::Ok("2")),
             (WORD_BUF_LEN, "2.2E-1", Res::Ok("0.22")),
             (WORD_BUF_LEN, "2.23E2", Res::Ok("223")),
+            (WORD_BUF_LEN, "  11", Res::Ok("11")),
+            (WORD_BUF_LEN, "  11  ", Res::Ok("11")),
             (WORD_BUF_LEN, "11x", Res::Truncated("11")),
             (WORD_BUF_LEN, "11x.", Res::Truncated("11")),
         ];

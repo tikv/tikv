@@ -200,7 +200,6 @@ impl Datum {
             _ => {
                 let s = try!(str::from_utf8(bs));
                 let rd = try!(s.parse::<Res<Decimal>>());
-                info!("\n--- s: {}\n--- rd: {:?}", s, rd);
                 let d = try!(handle_truncate(ctx, rd)).unwrap();
                 let f = try!(d.as_f64());
                 self.cmp_f64(f)
@@ -869,7 +868,7 @@ fn handle_truncate<T: Display>(ctx: &EvalContext, res: Res<T>) -> Result<Res<T>>
         if ctx.ignore_truncate || ctx.truncate_as_warning {
             return Ok(res);
         } else {
-            return res.into_result().map(|d| Res::Truncated(d));
+            return res.into_result().map(Res::Truncated);
         }
     }
     Ok(res)
