@@ -877,12 +877,15 @@ fn handle_truncate<T: Display>(ctx: &EvalContext, res: Res<T>) -> Result<Res<T>>
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::codec::mysql::{MAX_FSP, Duration, Decimal, Time};
+    use util::codec::mysql::{MAX_FSP, Duration, Decimal, Time, Res};
     use util::as_slice;
+    use util::xeval::EvalContext;
 
     use std::cmp::Ordering;
     use std::time::Duration as StdDuration;
     use std::{i8, u8, i16, u16, i32, u32, i64, u64};
+
+    use chrono::FixedOffset;
 
     fn same_type(l: &Datum, r: &Datum) -> bool {
         match (l, r) {
@@ -1256,5 +1259,34 @@ mod test {
             assert_eq!(res_x, exp_x);
             assert_eq!(res_y, exp_y);
         }
+    }
+
+    #[test]
+    fn test_handle_truncate() {
+        let ctxs = vec![EvalContext {
+                            tz: FixedOffset::east(0),
+                            ignore_truncate: true,
+                            truncate_as_warning: false,
+                        },
+                        EvalContext {
+                            tz: FixedOffset::east(0),
+                            ignore_truncate: false,
+                            truncate_as_warning: true,
+                        },
+                        EvalContext {
+                            tz: FixedOffset::east(0),
+                            ignore_truncate: false,
+                            truncate_as_warning: false,
+                        }];
+
+        for ctx in &ctxs {
+            assert!(super::handle_truncate(ctx, Res::Ok(1)).is_ok());
+            assert!(super::handle_truncate(ctx, Res::Overflow(1)).is_ok());
+        }
+
+        let t = Res::Truncated(1);
+        assert!(super::handle_truncate(&ctxs[0], t.clone()).is_ok());
+        assert!(super::handle_truncate(&ctxs[1], t.clone()).is_ok());
+        assert!(super::handle_truncate(&ctxs[2], t.clone()).is_err());
     }
 }
