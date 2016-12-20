@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tikv::storage::{Storage, Engine, Key, Value, KvPair, Mutation, Result, OptionalArgs};
+use tikv::storage::{Storage, Engine, Key, Value, KvPair, Mutation, Result, Options};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
@@ -74,7 +74,7 @@ impl SyncStorage {
                                 key,
                                 limit,
                                 start_ts,
-                                OptionalArgs::new(0, false, key_only),
+                                Options::new(0, false, key_only),
                                 cb)
                     .unwrap()
             })
@@ -89,12 +89,7 @@ impl SyncStorage {
                     -> Result<Vec<Result<()>>> {
         wait_op!(|cb| {
                 self.store
-                    .async_prewrite(ctx,
-                                    mutations,
-                                    primary,
-                                    start_ts,
-                                    OptionalArgs::default(),
-                                    cb)
+                    .async_prewrite(ctx, mutations, primary, start_ts, Options::default(), cb)
                     .unwrap()
             })
             .unwrap()

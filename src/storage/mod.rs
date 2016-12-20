@@ -86,16 +86,15 @@ pub enum Command {
         ctx: Context,
         start_key: Key,
         limit: usize,
-        key_only: bool,
         start_ts: u64,
+        options: Options,
     },
     Prewrite {
         ctx: Context,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
-        lock_ttl: u64,
-        skip_constraint_check: bool,
+        options: Options,
     },
     Commit {
         ctx: Context,
@@ -264,15 +263,15 @@ impl Command {
 use util::transport::SendCh;
 
 #[derive(Default)]
-pub struct OptionalArgs {
+pub struct Options {
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
     pub key_only: bool,
 }
 
-impl OptionalArgs {
-    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> OptionalArgs {
-        OptionalArgs {
+impl Options {
+    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
+        Options {
             lock_ttl: lock_ttl,
             skip_constraint_check: skip_constraint_check,
             key_only: key_only,
@@ -410,15 +409,15 @@ impl Storage {
                       start_key: Key,
                       limit: usize,
                       start_ts: u64,
-                      optional_args: OptionalArgs,
+                      options: Options,
                       callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             ctx: ctx,
             start_key: start_key,
             limit: limit,
-            key_only: optional_args.key_only,
             start_ts: start_ts,
+            options: options,
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
@@ -431,7 +430,7 @@ impl Storage {
                           mutations: Vec<Mutation>,
                           primary: Vec<u8>,
                           start_ts: u64,
-                          optional_args: OptionalArgs,
+                          options: Options,
                           callback: Callback<Vec<Result<()>>>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
@@ -439,8 +438,7 @@ impl Storage {
             mutations: mutations,
             primary: primary,
             start_ts: start_ts,
-            lock_ttl: optional_args.lock_ttl,
-            skip_constraint_check: optional_args.skip_constraint_check,
+            options: options,
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Booleans(callback)));
@@ -736,7 +734,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -778,7 +776,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -799,7 +797,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -814,7 +812,7 @@ mod tests {
                         make_key(b"\x00"),
                         1000,
                         5,
-                        OptionalArgs::default(),
+                        Options::default(),
                         expect_scan(tx.clone(),
                                     vec![
             Some((b"a".to_vec(), b"aa".to_vec())),
@@ -840,7 +838,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -875,14 +873,14 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -917,7 +915,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                             b"x".to_vec(),
                             105,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -941,7 +939,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_too_busy(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -958,7 +956,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            OptionalArgs::default(),
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
