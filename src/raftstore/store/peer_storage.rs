@@ -35,7 +35,8 @@ use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
-use storage::CF_RAFT;
+use storage::{CF_RAFT, CF_WRITE};
+use storage::types::Key;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -803,6 +804,14 @@ fn build_snap_file(f: &mut SnapFile,
     let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
     for cf in snap.cf_names() {
         box_try!(f.encode_compact_bytes(cf.as_bytes()));
+
+        let (begin_key, end_key) = if cf == CF_WRITE {
+            (Key::from_encoded(begin_key.clone()).append_ts(0).encoded().clone(),
+             Key::from_encoded(end_key.clone()).append_ts(0).encoded().clone())
+        } else {
+            (begin_key.clone(), end_key.clone())
+        };
+
         try!(snap.scan_cf(cf,
                           &begin_key,
                           &end_key,
