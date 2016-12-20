@@ -671,31 +671,51 @@ fn test_leader_election_overwrite_new_logs(prevote: bool) {
     // entry overwrites the losers'. (TestLeaderSyncFollowerLog tests
     // the case where older log entries are overwritten, so this test
     // focuses on the case where the newer entries are lost).
-    let mut n = Network::new(vec![Some(ents(vec![1])),    // Node 1: Won first election
-                                  Some(ents(vec![1])),    // Node 2: Got logs from node 1 
-                                  Some(ents(vec![2])),    // Node 3: Won second election
-                                  Some(voted_with_config(3, 2)),   // Node 4: Voted but didn't get logs
-                                  Some(voted_with_config(3, 2))], // Noe 5: Voted but didn't get logs
+    let mut n = Network::new(vec![Some(ents(vec![1])), // Node 1: Won first election
+                                  Some(ents(vec![1])), // Node 2: Got logs from node 1
+                                  Some(ents(vec![2])), // Node 3: Won second election
+                                  // Node 4: Voted but didnt get logs
+                                  Some(voted_with_config(3, 2)),
+                                  // Noe 5: Voted but didnt get logs
+                                  Some(voted_with_config(3, 2))],
                              prevote);
     // Node 1 campaigns. The election fails because a quorum of nodes
     // know about the election that already happened at term 2. Node 1's
     // term is pushed ahead to 2.
-    n.send(vec![new_message(1,1,MessageType::MsgHup, 0)]);
-    assert_eq!(n.peers[&1].state,StateRole::Follower, "state = {:?}, want: StateFollower", n.peers[&1].state);
+    n.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+    assert_eq!(n.peers[&1].state,
+               StateRole::Follower,
+               "state = {:?}, want: StateFollower",
+               n.peers[&1].state);
     assert_eq!(n.peers[&1].term, 2, "term = {}, want 2", n.peers[&1].term);
 
     // Node 1 campaigns again with a higher term. This time it succeeds.
     n.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
-    assert_eq!(n.peers[&1].state, StateRole::Leader, "state = {:?}, want: StateLeader", n.peers[&1].state);
-    assert_eq!(n.peers[&1].term,  3, "term = {}, want 3", n.peers[&1].term);
+    assert_eq!(n.peers[&1].state,
+               StateRole::Leader,
+               "state = {:?}, want: StateLeader",
+               n.peers[&1].state);
+    assert_eq!(n.peers[&1].term, 3, "term = {}, want 3", n.peers[&1].term);
 
     // Now all nodes agree on a log entry with term 1 at index 1 (and
     // term 3 at index 2).
     for (id, sm) in &n.peers {
         let ents = sm.raft_log.all_entries();
-        assert_eq!(ents.len(), 2, "Node {}: ents.len() == {}, want 2", id, ents.len());
-        assert_eq!(ents[0].get_term(), 1, "Node {}: term at index 1 == {}, want 1", id, ents[0].get_term());
-        assert_eq!(ents[1].get_term(), 3, "Node {}: term at index 2 == {}, want 3", id, ents[1].get_term());
+        assert_eq!(ents.len(),
+                   2,
+                   "Node {}: ents.len() == {}, want 2",
+                   id,
+                   ents.len());
+        assert_eq!(ents[0].get_term(),
+                   1,
+                   "Node {}: term at index 1 == {}, want 1",
+                   id,
+                   ents[0].get_term());
+        assert_eq!(ents[1].get_term(),
+                   3,
+                   "Node {}: term at index 2 == {}, want 3",
+                   id,
+                   ents[1].get_term());
     }
 }
 
@@ -1352,7 +1372,11 @@ fn test_handle_heartbeat_resp() {
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     let mut msgs = sm.read_messages();
     assert_eq!(msgs.len(), 1, "msgs.len() = {}, want 1", msgs.len());
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgAppend, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgAppend);
+    assert_eq!(msgs[0].get_msg_type(),
+               MessageType::MsgAppend,
+               "type = {:?}, want {:?}",
+               msgs[0].get_msg_type(),
+               MessageType::MsgAppend);
 
     // A second heartbeat response with no AppResp does not re-send because we are in the wait
     // state.
@@ -1365,8 +1389,16 @@ fn test_handle_heartbeat_resp() {
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
     assert_eq!(msgs.len(), 2, "msgs.len() = {}, want 2", msgs.len());
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
-    assert_eq!(msgs[1].get_msg_type(), MessageType::MsgAppend, "type = {:?}, want {:?}", msgs[1].get_msg_type(), MessageType::MsgAppend);
+    assert_eq!(msgs[0].get_msg_type(),
+               MessageType::MsgHeartbeat,
+               "type = {:?}, want {:?}",
+               msgs[0].get_msg_type(),
+               MessageType::MsgHeartbeat);
+    assert_eq!(msgs[1].get_msg_type(),
+               MessageType::MsgAppend,
+               "type = {:?}, want {:?}",
+               msgs[1].get_msg_type(),
+               MessageType::MsgAppend);
 
     // Once we have an MsgAppResp, heartbeats no longer send MsgApp.
     let mut m = new_message(2, 0, MessageType::MsgAppendResponse, 0);
@@ -1379,7 +1411,11 @@ fn test_handle_heartbeat_resp() {
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
     assert_eq!(msgs.len(), 1, "msgs.len() = {}, want 1", msgs.len());
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat, "type = {:?}, want {:?}", msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
+    assert_eq!(msgs[0].get_msg_type(),
+               MessageType::MsgHeartbeat,
+               "type = {:?}, want {:?}",
+               msgs[0].get_msg_type(),
+               MessageType::MsgHeartbeat);
 }
 
 // test_msg_append_response_wait_reset verifies the waitReset behavior of a leader
