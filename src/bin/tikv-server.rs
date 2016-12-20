@@ -262,7 +262,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let cache_index_and_filter =
         get_toml_boolean(config,
                          (prefix.clone() + "cache-index-and-filter-blocks").as_str(),
-                         Some(false));
+                         Some(true));
     block_base_opts.set_cache_index_and_filter_blocks(cache_index_and_filter);
 
     if use_bloom_filter {
