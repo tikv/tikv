@@ -771,17 +771,29 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             });
         }
 
-        for (ready, invoke_ctx) in append_res {
+        let mut ready_results = Vec::with_capacity(append_res.len());
+        for (mut ready, invoke_ctx) in append_res {
             let region_id = invoke_ctx.region_id;
             let res = self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(&mut self.raft_metrics, &self.trans, ready, invoke_ctx);
-            self.on_ready_result(region_id, res)
+                .post_raft_ready_append(&mut self.raft_metrics,
+                                        &self.trans,
+                                        &mut ready,
+                                        invoke_ctx);
+            ready_results.push((region_id, ready, res));
         }
 
         let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
         self.sent_snapshot_count += sent_snapshot_count;
+
+        for (region_id, ready, mut res) in ready_results {
+            self.region_peers
+                .get_mut(&region_id)
+                .unwrap()
+                .handle_raft_ready_apply(ready, &mut res);
+            self.on_ready_result(region_id, res)
+        }
 
         let dur = t.elapsed();
         if !self.is_busy {

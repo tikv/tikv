@@ -665,12 +665,12 @@ impl Peer {
         ctx.ready_res.push((ready, invoke_ctx));
     }
 
-    pub fn handle_raft_ready_apply<T: Transport>(&mut self,
-                                                 metrics: &mut RaftMetrics,
-                                                 trans: &T,
-                                                 mut ready: Ready,
-                                                 invoke_ctx: InvokeContext)
-                                                 -> ReadyResult {
+    pub fn post_raft_ready_append<T: Transport>(&mut self,
+                                                metrics: &mut RaftMetrics,
+                                                trans: &T,
+                                                ready: &mut Ready,
+                                                invoke_ctx: InvokeContext)
+                                                -> ReadyResult {
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
@@ -684,6 +684,13 @@ impl Peer {
             });
         }
 
+        ReadyResult {
+            apply_snap_result: apply_snap_result,
+            exec_results: vec![],
+        }
+    }
+
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, result: &mut ReadyResult) {
         // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_commit_entries` directly, these updates
@@ -691,7 +698,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        let exec_results = if self.is_applying() {
+        result.exec_results = if self.is_applying() {
             if let Some(ref mut hs) = ready.hs {
                 // Snapshot's metadata has been applied.
                 hs.set_commit(self.get_store().truncated_index());
@@ -702,10 +709,6 @@ impl Peer {
         };
 
         self.raft_group.advance(ready);
-        ReadyResult {
-            exec_results: exec_results,
-            apply_snap_result: apply_snap_result,
-        }
     }
 
     /// Propose a request.
