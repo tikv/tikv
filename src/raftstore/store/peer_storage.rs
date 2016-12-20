@@ -804,14 +804,6 @@ fn build_snap_file(f: &mut SnapFile,
     let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
     for cf in snap.cf_names() {
         box_try!(f.encode_compact_bytes(cf.as_bytes()));
-
-        let (begin_key, end_key) = if cf == CF_WRITE {
-            (Key::from_encoded(begin_key.clone()).append_ts(0).encoded().clone(),
-             Key::from_encoded(end_key.clone()).append_ts(0).encoded().clone())
-        } else {
-            (begin_key.clone(), end_key.clone())
-        };
-
         try!(snap.scan_cf(cf,
                           &begin_key,
                           &end_key,

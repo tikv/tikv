@@ -98,6 +98,7 @@ pub trait Snapshot: Send {
     fn iter<'a>(&'a self,
                 upper_bound: Option<&[u8]>,
                 fill_cache: bool,
+                total_order_seek: bool,
                 mode: ScanMode)
                 -> Result<Cursor<'a>>;
     #[allow(needless_lifetimes)]
@@ -105,6 +106,7 @@ pub trait Snapshot: Send {
                    cf: CfName,
                    upper_bound: Option<&[u8]>,
                    fill_cache: bool,
+                   total_order_seek: bool,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
 }

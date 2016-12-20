@@ -287,9 +287,11 @@ impl Snapshot for RegionSnapshot {
     fn iter<'b>(&'b self,
                 upper_bound: Option<&[u8]>,
                 fill_cache: bool,
+                total_order_seek: bool,
                 mode: ScanMode)
                 -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound, fill_cache), mode))
+        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound, fill_cache, total_order_seek),
+                       mode))
     }
 
     #[allow(needless_lifetimes)]
@@ -297,9 +299,14 @@ impl Snapshot for RegionSnapshot {
                    cf: CfName,
                    upper_bound: Option<&[u8]>,
                    fill_cache: bool,
+                   total_order_seek: bool,
                    mode: ScanMode)
                    -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound, fill_cache)),
+        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self,
+                                                    cf,
+                                                    upper_bound,
+                                                    fill_cache,
+                                                    total_order_seek)),
                        mode))
     }
 }

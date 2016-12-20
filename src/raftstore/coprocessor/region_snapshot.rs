@@ -49,16 +49,30 @@ impl RegionSnapshot {
         &self.region
     }
 
-    pub fn iter(&self, upper_bound: Option<&[u8]>, fill_cache: bool) -> RegionIterator {
-        RegionIterator::new(&self.snap, self.region.clone(), upper_bound, fill_cache)
+    pub fn iter(&self,
+                upper_bound: Option<&[u8]>,
+                fill_cache: bool,
+                total_order_seek: bool)
+                -> RegionIterator {
+        RegionIterator::new(&self.snap,
+                            self.region.clone(),
+                            upper_bound,
+                            fill_cache,
+                            total_order_seek)
     }
 
     pub fn iter_cf(&self,
                    cf: &str,
                    upper_bound: Option<&[u8]>,
-                   fill_cache: bool)
+                   fill_cache: bool,
+                   total_order_seek: bool)
                    -> Result<RegionIterator> {
-        Ok(RegionIterator::new_cf(&self.snap, self.region.clone(), upper_bound, fill_cache, cf))
+        Ok(RegionIterator::new_cf(&self.snap,
+                                  self.region.clone(),
+                                  upper_bound,
+                                  fill_cache,
+                                  total_order_seek,
+                                  cf))
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -71,7 +85,7 @@ impl RegionSnapshot {
                    -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(self.iter(Some(end_key), fill_cache), start_key, f)
+        self.scan_impl(self.iter(Some(end_key), fill_cache, true), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
@@ -84,7 +98,10 @@ impl RegionSnapshot {
                       -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(try!(self.iter_cf(cf, Some(end_key), fill_cache)),
+        self.scan_impl(try!(self.iter_cf(cf,
+                                         Some(end_key),
+                                         fill_cache,
+                                         true /* total-order-seek */)),
                        start_key,
                        f)
     }
@@ -154,11 +171,12 @@ impl<'a> RegionIterator<'a> {
     pub fn new(snap: &'a Snapshot,
                region: Region,
                upper_bound: Option<&[u8]>,
-               fill_cache: bool)
+               fill_cache: bool,
+               total_order_seek: bool)
                -> RegionIterator<'a> {
         let upper_bound = adjust_upper_bound(upper_bound);
         let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
-        let iter = snap.new_iterator(Some(encoded_upper.as_slice()), fill_cache);
+        let iter = snap.new_iterator(Some(encoded_upper.as_slice()), fill_cache, total_order_seek);
         RegionIterator {
             iter: iter,
             valid: false,
@@ -172,11 +190,16 @@ impl<'a> RegionIterator<'a> {
                   region: Region,
                   upper_bound: Option<&[u8]>,
                   fill_cache: bool,
+                  total_order_seek: bool,
                   cf: &str)
                   -> RegionIterator<'a> {
         let upper_bound = adjust_upper_bound(upper_bound);
         let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
-        let iter = snap.new_iterator_cf(cf, Some(encoded_upper.as_slice()), fill_cache).unwrap();
+        let iter = snap.new_iterator_cf(cf,
+                             Some(encoded_upper.as_slice()),
+                             fill_cache,
+                             total_order_seek)
+            .unwrap();
         RegionIterator {
             iter: iter,
             valid: false,

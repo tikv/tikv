@@ -163,7 +163,7 @@ impl Runner {
             try!(check_abort(&abort));
             let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
 
-            let mut it = box_try!(self.db.new_iterator_cf(cf, Some(end_key), false));
+            let mut it = box_try!(self.db.new_iterator_cf(cf, Some(end_key), false, true));
 
             try!(check_abort(&abort));
             it.seek(start_key.into());
