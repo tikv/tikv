@@ -753,6 +753,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
+        let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
         let (wb, append_res) = {
@@ -786,6 +787,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
         self.sent_snapshot_count += sent_snapshot_count;
+
+        slow_log!(t,
+                  "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
+                   snapshots",
+                  self.tag,
+                  pending_count,
+                  ready_results.capacity(),
+                  self.raft_metrics.ready.append - previous_ready_metrics.append,
+                  self.raft_metrics.ready.message - previous_ready_metrics.message,
+                  self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot);
 
         for (region_id, ready, mut res) in ready_results {
             self.region_peers

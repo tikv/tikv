@@ -625,11 +625,8 @@ impl Peer {
         let mut ready = self.raft_group.ready();
         ready_timer.observe_duration();
 
-        let t = SlowTimer::new();
-
         self.update_leader_lease(&ready);
 
-        let ready_metrics = ctx.metrics.ready.clone();
         self.add_ready_metric(&ready, &mut ctx.metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
@@ -652,15 +649,6 @@ impl Peer {
             }
         };
         append_timer.observe_duration();
-
-        slow_log!(t,
-                  "{} handle ready, entries {}, messages \
-                   {}, snapshot {}, hard state changed {}",
-                  self.tag,
-                  ctx.metrics.ready.append - ready_metrics.append,
-                  ctx.metrics.ready.message - ready_metrics.message,
-                  ctx.metrics.ready.snapshot - ready_metrics.snapshot,
-                  ready.hs.is_some());
 
         ctx.ready_res.push((ready, invoke_ctx));
     }
