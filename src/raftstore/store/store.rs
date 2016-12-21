@@ -61,7 +61,9 @@ use super::local_metrics::RaftMetrics;
 
 type Key = Vec<u8>;
 
-const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
+const ROCKSDB_TOTAL_SST_FILES_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
+const ROCKSDB_TABLE_READERS_MEM_PROPERTY: &'static str = "rocksdb.estimate-table-readers-mem";
+const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES_PROPERTY: &'static str = "rocksdb.cur-size-all-mem-tables";
 const MIO_TICK_RATIO: u64 = 10;
 
 // A helper structure to bundle all channels for messages to `Store`.
@@ -1344,7 +1346,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for cf in ALL_CFS {
             let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
             let cf_used_size = self.engine
-                .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY)
+                .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE_PROPERTY)
                 .expect("rocksdb is too old, missing total-sst-files-size property");
 
             // It is important to monitor each cf's size, especially the "raft" and "lock" column
@@ -1352,6 +1354,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
 
             used_size += cf_used_size;
+
+            // TODO: find a better place to record these metrics.
+            // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
+            // For index and filter blocks memory
+            if let Some(readers_mem) = self.engine
+                .get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM_PROPERTY) {
+                STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[cf, "readers-mem"])
+                    .set(readers_mem as f64);
+            }
+
+            // For memtable
+            if let Some(mem_table) = self.engine
+                .get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES_PROPERTY) {
+                STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[cf, "mem-tables"])
+                    .set(mem_table as f64);
+            }
+
+            // TODO: add cache usage and pinned usage.
         }
 
         used_size += self.snap_mgr.rl().get_total_snap_size();

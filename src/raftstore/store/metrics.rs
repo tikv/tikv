@@ -112,4 +112,11 @@ lazy_static! {
             "Total number of hash has been computed.",
             &["type", "result"]
         ).unwrap();
+
+    pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_memory_bytes",
+            "Sizes of each column families.",
+            &["cf", "type"]
+        ).unwrap();
 }
