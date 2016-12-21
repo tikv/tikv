@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let mut iter = snap.iter(None, true);
+        let mut iter = snap.iter(None, true, true);
         assert!(iter.seek(b"a1").is_err());
         assert!(iter.seek(b"a2").unwrap());
         assert_eq!(iter.key(), b"a3");
@@ -440,7 +440,7 @@ mod tests {
         assert_eq!(data.len(), 4);
         assert_eq!(data, base_data);
 
-        let mut iter = snap.iter(None, true);
+        let mut iter = snap.iter(None, true, true);
         assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first());
@@ -456,7 +456,7 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(Some(b"a5"), true);
+        let mut iter = snap.iter(Some(b"a5"), true, true);
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
@@ -475,7 +475,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(None, true), ScanMode::Mixed);
+        let mut iter = Cursor::new(snap.iter(None, true, true), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())).unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
@@ -504,7 +504,7 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(None, true), ScanMode::Mixed);
+        let mut iter = Cursor::new(snap.iter(None, true, true), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());

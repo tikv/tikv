@@ -222,7 +222,7 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
     } else {
         encode_bytes(unescape(key_prefix).as_slice())
     };
-    let mut iter = db.new_iterator_cf(mvcc_type, None, false).unwrap();
+    let mut iter = db.new_iterator_cf(mvcc_type, None, false, true).unwrap();
     iter.seek(keys::data_key(&encoded_prefix).as_slice().into());
     if !iter.valid() {
         vec![]

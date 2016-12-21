@@ -59,8 +59,8 @@ getopts = "0.2"
 regex = "0.1"
 
 [dependencies.rocksdb]
-git = "https://github.com/siddontang/rust-rocksdb.git"
-branch = "siddontang/slicetransform"
+git = "https://github.com/zhangjinpeng1987/rust-rocksdb.git"
+branch = "zhangjinpeng/prefix-extractor"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"

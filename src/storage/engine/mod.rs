@@ -486,7 +486,7 @@ mod tests {
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(None, true, true, ScanMode::Mixed).unwrap();
         iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -494,7 +494,7 @@ mod tests {
 
     fn assert_reverse_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(None, true, true, ScanMode::Mixed).unwrap();
         iter.reverse_seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -548,7 +548,7 @@ mod tests {
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(None, true, true, ScanMode::Mixed).unwrap();
         assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         assert!(!iter.reverse_seek(&make_key(b"x")).unwrap());
         must_delete(engine, b"x");
@@ -559,7 +559,7 @@ mod tests {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(None, true, true, ScanMode::Mixed).unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
         assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
@@ -573,7 +573,7 @@ mod tests {
             must_put(engine, key.as_bytes(), b"3");
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(None, true, true, ScanMode::Mixed).unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
 
@@ -587,7 +587,7 @@ mod tests {
 
     fn test_empty_seek(engine: &Engine) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(None, true, true, ScanMode::Mixed).unwrap();
         assert!(!cursor.near_reverse_seek(&make_key(b"x")).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"z")).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"w")).unwrap());
@@ -613,8 +613,8 @@ mod tests {
                         reverse: bool,
                         start: usize,
                         step: usize) {
-        let mut cursor = snapshot.iter(None, false, mode).unwrap();
-        let mut near_cursor = snapshot.iter(None, false, mode).unwrap();
+        let mut cursor = snapshot.iter(None, false, true, mode).unwrap();
+        let mut near_cursor = snapshot.iter(None, false, true, mode).unwrap();
         let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 
         for (_, mut i) in (start..SEEK_BOUND * 30).enumerate().filter(|&(i, _)| i % step == 0) {
