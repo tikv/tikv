@@ -23,7 +23,7 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 use util::escape;
 use util::xeval::EvalContext;
 use super::{number, Result, bytes, convert};
-use super::number::{NumberDecoder, get_valid_float_prefix};
+use super::number::NumberDecoder;
 use super::bytes::BytesEncoder;
 use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
                    Time};
@@ -198,10 +198,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let s = try!(str::from_utf8(bs)).trim();
-                let vs = get_valid_float_prefix(s);
-                try!(handle_truncate(ctx, s.len() > vs.len()));
-                let f = vs.parse().unwrap_or(0.0);
+                let f = try!(convert::bytes_to_f64_with_context(ctx, bs));
                 self.cmp_f64(f)
             }
         }
@@ -327,10 +324,10 @@ impl Datum {
 
     /// into_arith converts datum to appropriate datum for arithmetic computing.
     /// Keep compatible with TiDB's `CoerceArithmetic` fucntion.
-    pub fn into_arith(self) -> Result<Datum> {
+    pub fn into_arith(self, ctx: &EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => convert::bytes_to_f64(&bs).map(From::from),
+            Datum::Bytes(bs) => convert::bytes_to_f64_with_context(ctx, &bs).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec = try!(t.to_decimal());
@@ -863,27 +860,15 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     Ok(buf.split_at(1 + pos))
 }
 
-#[inline]
-fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
-    if is_truncated && !(ctx.ignore_truncate || ctx.truncate_as_warning) {
-        Err(box_err!("[1265] Data Truncated"))
-    } else {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
     use util::codec::mysql::{MAX_FSP, Duration, Decimal, Time};
     use util::as_slice;
-    use util::xeval::EvalContext;
 
     use std::cmp::Ordering;
     use std::time::Duration as StdDuration;
     use std::{i8, u8, i16, u16, i32, u32, i64, u64};
-
-    use chrono::FixedOffset;
 
     fn same_type(l: &Datum, r: &Datum) -> bool {
         match (l, r) {
@@ -1257,33 +1242,5 @@ mod test {
             assert_eq!(res_x, exp_x);
             assert_eq!(res_y, exp_y);
         }
-    }
-
-    #[test]
-    fn test_handle_truncate() {
-        let ctxs = vec![EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: true,
-                            truncate_as_warning: false,
-                        },
-                        EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: false,
-                            truncate_as_warning: true,
-                        },
-                        EvalContext {
-                            tz: FixedOffset::east(0),
-                            ignore_truncate: false,
-                            truncate_as_warning: false,
-                        }];
-
-        for ctx in &ctxs {
-            assert!(super::handle_truncate(ctx, false).is_ok());
-            assert!(super::handle_truncate(ctx, false).is_ok());
-        }
-
-        assert!(super::handle_truncate(&ctxs[0], true).is_ok());
-        assert!(super::handle_truncate(&ctxs[1], true).is_ok());
-        assert!(super::handle_truncate(&ctxs[2], true).is_err());
     }
 }

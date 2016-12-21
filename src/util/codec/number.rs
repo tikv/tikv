@@ -176,48 +176,6 @@ pub trait NumberDecoder: Read {
 
 impl<T: Read> NumberDecoder for T {}
 
-pub fn get_valid_float_prefix(s: &str) -> &str {
-    let mut saw_dot = false;
-    let mut saw_digit = false;
-    let mut valid_len = 0;
-    let mut e_idx = 0;
-    for (i, c) in s.chars().enumerate() {
-        if c == '+' || c == '-' {
-            if i != 0 && i != e_idx + 1 {
-                // "1e+1" is valid.
-                break;
-            }
-        } else if c == '.' {
-            if saw_dot {
-                // "1.1."
-                break;
-            }
-            saw_dot = true;
-            if saw_digit {
-                // "123." is valid.
-                valid_len = i + 1;
-            }
-        } else if c == 'e' || c == 'E' {
-            if !saw_digit {
-                // "+.e"
-                break;
-            }
-            if e_idx != 0 {
-                // "1e5e"
-                break;
-            }
-            e_idx = i
-        } else if c < '0' || c > '9' {
-            break;
-        } else {
-            saw_digit = true;
-            valid_len = i + 1;
-        }
-    }
-
-    &s[..valid_len]
-}
-
 #[cfg(test)]
 mod test {
     use super::*;

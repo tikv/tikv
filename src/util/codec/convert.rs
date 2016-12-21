@@ -13,7 +13,9 @@
 
 
 use std;
+use std::str;
 
+use util::xeval::EvalContext;
 use super::Result;
 
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
@@ -61,11 +63,74 @@ pub fn bytes_to_f64(bytes: &[u8]) -> Result<f64> {
     Ok(f)
 }
 
+/// `bytes_to_f64` converts a byte array to a float64 in best effort.
+/// similar to `bytes_to_f64` with additional context.
+pub fn bytes_to_f64_with_context(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
+    let s = try!(str::from_utf8(bytes)).trim();
+    let vs = get_valid_float_prefix(s);
+    try!(handle_truncate(ctx, s.len() > vs.len()));
+
+    bytes_to_f64(vs.as_bytes())
+}
+
+#[inline]
+fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
+    if is_truncated && !(ctx.ignore_truncate || ctx.truncate_as_warning) {
+        Err(box_err!("[1265] Data Truncated"))
+    } else {
+        Ok(())
+    }
+}
+
+fn get_valid_float_prefix(s: &str) -> &str {
+    let mut saw_dot = false;
+    let mut saw_digit = false;
+    let mut valid_len = 0;
+    let mut e_idx = 0;
+    for (i, c) in s.chars().enumerate() {
+        if c == '+' || c == '-' {
+            if i != 0 && i != e_idx + 1 {
+                // "1e+1" is valid.
+                break;
+            }
+        } else if c == '.' {
+            if saw_dot {
+                // "1.1."
+                break;
+            }
+            saw_dot = true;
+            if saw_digit {
+                // "123." is valid.
+                valid_len = i + 1;
+            }
+        } else if c == 'e' || c == 'E' {
+            if !saw_digit {
+                // "+.e"
+                break;
+            }
+            if e_idx != 0 {
+                // "1e5e"
+                break;
+            }
+            e_idx = i
+        } else if c < '0' || c > '9' {
+            break;
+        } else {
+            saw_digit = true;
+            valid_len = i + 1;
+        }
+    }
+
+    if valid_len == 0 { "0" } else { &s[..valid_len] }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
     use std::f64::EPSILON;
+    use util::xeval::EvalContext;
+    use chrono::FixedOffset;
 
     #[test]
     fn test_bytes_to_i64() {
@@ -110,6 +175,55 @@ mod test {
             if (ff - f).abs() > EPSILON {
                 panic!("{:?} should be decode to {}, but got {}", v, f, ff);
             }
+        }
+    }
+
+    #[test]
+    fn test_handle_truncate() {
+        let ctxs = vec![EvalContext {
+                            tz: FixedOffset::east(0),
+                            ignore_truncate: true,
+                            truncate_as_warning: false,
+                        },
+                        EvalContext {
+                            tz: FixedOffset::east(0),
+                            ignore_truncate: false,
+                            truncate_as_warning: true,
+                        },
+                        EvalContext {
+                            tz: FixedOffset::east(0),
+                            ignore_truncate: false,
+                            truncate_as_warning: false,
+                        }];
+
+        for ctx in &ctxs {
+            assert!(super::handle_truncate(ctx, false).is_ok());
+            assert!(super::handle_truncate(ctx, false).is_ok());
+        }
+
+        assert!(super::handle_truncate(&ctxs[0], true).is_ok());
+        assert!(super::handle_truncate(&ctxs[1], true).is_ok());
+        assert!(super::handle_truncate(&ctxs[2], true).is_err());
+    }
+
+    #[test]
+    fn test_get_valid_float_prefix() {
+        let cases = vec![("-100", "-100"),
+                         ("1abc", "1"),
+                         ("-1-1", "-1"),
+                         ("+1+1", "+1"),
+                         ("123..34", "123."),
+                         ("123.23E-10", "123.23E-10"),
+                         ("1.1e1.3", "1.1e1"),
+                         ("1.1e-13a", "1.1e-13"),
+                         ("1.", "1."),
+                         (".1", ".1"),
+                         ("", "0"),
+                         ("123e+", "123"),
+                         ("123.e", "123.")];
+
+        for (i, o) in cases {
+            assert_eq!(super::get_valid_float_prefix(i), o);
         }
     }
 }

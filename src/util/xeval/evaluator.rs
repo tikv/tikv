@@ -329,7 +329,7 @@ impl Evaluator {
         where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
     {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
-        eval_arith(left, right, f)
+        eval_arith(ctx, left, right, f)
     }
 
     fn eval_case_when(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -359,11 +359,11 @@ impl Evaluator {
 }
 
 #[inline]
-pub fn eval_arith<F>(left: Datum, right: Datum, f: F) -> Result<Datum>
+pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
     where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
 {
-    let left = try!(left.into_arith());
-    let right = try!(right.into_arith());
+    let left = try!(left.into_arith(ctx));
+    let right = try!(right.into_arith(ctx));
 
     let (left, right) = try!(Datum::coerce(left, right));
     if left == Datum::Null || right == Datum::Null {
