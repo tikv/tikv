@@ -1297,43 +1297,79 @@ fn test_handle_truncate() {
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
 
-    let cond = {
-        let mut col = Expr::new();
-        col.set_tp(ExprType::ColumnRef);
-        col.mut_val().encode_i64(product.count.id).unwrap();
+    let cases = vec![{
+                         // count > "2x"
+                         let mut col = Expr::new();
+                         col.set_tp(ExprType::ColumnRef);
+                         col.mut_val().encode_i64(product.count.id).unwrap();
 
-        // "2x" will be truncated.
-        let mut value = Expr::new();
-        value.set_tp(ExprType::String);
-        value.set_val(String::from("2x").into_bytes());
+                         // "2x" will be truncated.
+                         let mut value = Expr::new();
+                         value.set_tp(ExprType::String);
+                         value.set_val(String::from("2x").into_bytes());
 
-        let mut cond = Expr::new();
-        cond.set_tp(ExprType::LT);
-        cond.mut_children().push(col);
-        cond.mut_children().push(value);
-        cond
-    };
+                         let mut cond = Expr::new();
+                         cond.set_tp(ExprType::LT);
+                         cond.mut_children().push(col);
+                         cond.mut_children().push(value);
+                         cond
+                     },
+                     {
+                         // id
+                         let mut col_id = Expr::new();
+                         col_id.set_tp(ExprType::ColumnRef);
+                         col_id.mut_val().encode_i64(product.id.id).unwrap();
 
-    // Ignore truncate error.
-    let req =
-        Select::from(&product.table).where_expr(cond.clone()).build_with(&[FLAG_IGNORE_TRUNCATE]);
-    let mut resp = handle_select(&end_point, req);
-    assert_eq!(row_cnt(resp.get_chunks()), 1);
-    let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    let row = spliter.next().unwrap();
-    let (id, name, cnt) = data[2];
-    let name_datum = name.map(|s| s.as_bytes()).into();
-    let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
-    assert_eq!(id, row.handle);
-    assert_eq!(row.data, &*expected_encoded);
+                         // "3x" will be truncated.
+                         let mut value = Expr::new();
+                         value.set_tp(ExprType::String);
+                         value.set_val(String::from("3x").into_bytes());
 
-    // Do NOT ignore truncate error.
-    let req = Select::from(&product.table).where_expr(cond.clone()).build();
-    let (tx, rx) = mpsc::channel();
-    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
-    end_point.schedule(EndPointTask::Request(req)).unwrap();
-    let resp = rx.recv().unwrap().take_cop_resp();
-    assert!(resp.has_other_error());
+                         // count
+                         let mut col_count = Expr::new();
+                         col_count.set_tp(ExprType::ColumnRef);
+                         col_count.mut_val().encode_i64(product.count.id).unwrap();
+
+                         // "3x" + count
+                         let mut plus = Expr::new();
+                         plus.set_tp(ExprType::Plus);
+                         plus.mut_children().push(value);
+                         plus.mut_children().push(col_count);
+
+                         // id = "3x" + count
+                         let mut cond = Expr::new();
+                         cond.set_tp(ExprType::EQ);
+                         cond.mut_children().push(col_id);
+                         cond.mut_children().push(plus);
+                         cond
+                     }];
+
+    for cond in cases {
+        println!("{:?}", cond);
+        // Ignore truncate error.
+        let req = Select::from(&product.table)
+            .where_expr(cond.clone())
+            .build_with(&[FLAG_IGNORE_TRUNCATE]);
+        let mut resp = handle_select(&end_point, req);
+        println!("{:?}", resp);
+        assert_eq!(row_cnt(resp.get_chunks()), 1);
+        let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+        let row = spliter.next().unwrap();
+        let (id, name, cnt) = data[2];
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()])
+            .unwrap();
+        assert_eq!(id, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+
+        // Do NOT ignore truncate error.
+        let req = Select::from(&product.table).where_expr(cond.clone()).build();
+        let (tx, rx) = mpsc::channel();
+        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
+        end_point.schedule(EndPointTask::Request(req)).unwrap();
+        let resp = rx.recv().unwrap().take_cop_resp();
+        assert!(resp.has_other_error());
+    }
 
     end_point.stop().unwrap().join().unwrap();
 }
