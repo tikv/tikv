@@ -23,10 +23,10 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 use util::escape;
 use util::xeval::EvalContext;
 use super::{number, Result, bytes, convert};
-use super::number::NumberDecoder;
+use super::number::{NumberDecoder, get_valid_float_prefix};
 use super::bytes::BytesEncoder;
 use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
-                   Res, Time};
+                   Time};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -198,10 +198,10 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let s = try!(str::from_utf8(bs));
-                let rd = try!(s.parse::<Res<Decimal>>());
-                let d = try!(handle_truncate(ctx, rd)).unwrap();
-                let f = try!(d.as_f64());
+                let s = try!(str::from_utf8(bs)).trim();
+                let vs = get_valid_float_prefix(s);
+                try!(handle_truncate(ctx, s.len() > vs.len()));
+                let f = vs.parse().unwrap_or(0.0);
                 self.cmp_f64(f)
             }
         }
@@ -863,21 +863,19 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     Ok(buf.split_at(1 + pos))
 }
 
-fn handle_truncate<T: Display>(ctx: &EvalContext, res: Res<T>) -> Result<Res<T>> {
-    if res.is_truncated() {
-        if ctx.ignore_truncate || ctx.truncate_as_warning {
-            return Ok(res);
-        } else {
-            return res.into_result().map(Res::Truncated);
-        }
+#[inline]
+fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
+    if is_truncated && !(ctx.ignore_truncate || ctx.truncate_as_warning) {
+        Err(box_err!("[1265] Data Truncated"))
+    } else {
+        Ok(())
     }
-    Ok(res)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::codec::mysql::{MAX_FSP, Duration, Decimal, Time, Res};
+    use util::codec::mysql::{MAX_FSP, Duration, Decimal, Time};
     use util::as_slice;
     use util::xeval::EvalContext;
 
@@ -1280,13 +1278,12 @@ mod test {
                         }];
 
         for ctx in &ctxs {
-            assert!(super::handle_truncate(ctx, Res::Ok(1)).is_ok());
-            assert!(super::handle_truncate(ctx, Res::Overflow(1)).is_ok());
+            assert!(super::handle_truncate(ctx, false).is_ok());
+            assert!(super::handle_truncate(ctx, false).is_ok());
         }
 
-        let t = Res::Truncated(1);
-        assert!(super::handle_truncate(&ctxs[0], t.clone()).is_ok());
-        assert!(super::handle_truncate(&ctxs[1], t.clone()).is_ok());
-        assert!(super::handle_truncate(&ctxs[2], t.clone()).is_err());
+        assert!(super::handle_truncate(&ctxs[0], true).is_ok());
+        assert!(super::handle_truncate(&ctxs[1], true).is_ok());
+        assert!(super::handle_truncate(&ctxs[2], true).is_err());
     }
 }

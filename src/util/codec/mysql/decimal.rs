@@ -61,21 +61,14 @@ impl<T> Res<T> {
             _ => false,
         }
     }
-
-    pub fn is_truncated(&self) -> bool {
-        match *self {
-            Res::Truncated(_) => true,
-            _ => false,
-        }
-    }
 }
 
 impl<T: Display> Res<T> {
     pub fn into_result(self) -> Result<T> {
         match self {
             Res::Ok(t) => Ok(t),
-            Res::Overflow(_) => Err(box_err!("[1264] Data Out of Range")),
-            Res::Truncated(_) => Err(box_err!("[1265] Data Truncated")),
+            Res::Overflow(t) => Err(box_err!("overflow: {}", t)),
+            Res::Truncated(t) => Err(box_err!("truncated: {}", t)),
         }
     }
 }
@@ -1362,9 +1355,7 @@ impl Decimal {
     }
 
     fn from_str(s: &str, word_buf_len: u8) -> Result<Res<Decimal>> {
-        let trimed_s = s.trim();
-        let valid_s = get_valid_float_prefix(trimed_s);
-        let mut bs = valid_s.as_bytes();
+        let mut bs = s.trim_left().as_bytes();
         if bs.is_empty() {
             return Err(box_err!("{} is empty", s));
         }
@@ -1453,10 +1444,6 @@ impl Decimal {
             d.negative = false;
         }
         d.result_frac_cnt = d.frac_cnt;
-
-        if valid_s.len() < trimed_s.len() {
-            d = Res::Truncated(d.unwrap());
-        }
         Ok(d)
     }
 
@@ -1477,48 +1464,6 @@ impl Decimal {
         }
         res
     }
-}
-
-fn get_valid_float_prefix(s: &str) -> &str {
-    let mut saw_dot = false;
-    let mut saw_digit = false;
-    let mut valid_len = 0;
-    let mut e_idx = 0;
-    for (i, c) in s.chars().enumerate() {
-        if c == '+' || c == '-' {
-            if i != 0 && i != e_idx + 1 {
-                // "1e+1" is valid.
-                break;
-            }
-        } else if c == '.' {
-            if saw_dot {
-                // "1.1."
-                break;
-            }
-            saw_dot = true;
-            if saw_digit {
-                // "123." is valid.
-                valid_len = i + 1;
-            }
-        } else if c == 'e' || c == 'E' {
-            if !saw_digit {
-                // "+.e"
-                break;
-            }
-            if e_idx != 0 {
-                // "1e5e"
-                break;
-            }
-            e_idx = i
-        } else if c < '0' || c > '9' {
-            break;
-        } else {
-            saw_digit = true;
-            valid_len = i + 1;
-        }
-    }
-
-    &s[..valid_len]
 }
 
 macro_rules! enable_conv_for_int {
@@ -1587,14 +1532,6 @@ impl FromStr for Decimal {
             Res::Overflow(_) => Err(box_err!("parsing {} will overflow", s)),
             Res::Truncated(_) => Err(box_err!("parsing {} will truncated", s)),
         }
-    }
-}
-
-impl FromStr for Res<Decimal> {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Res<Decimal>> {
-        Decimal::from_str(s, WORD_BUF_LEN)
     }
 }
 
@@ -2221,8 +2158,8 @@ mod test {
         let cases = vec![
             (WORD_BUF_LEN, "12345", Res::Ok("12345")),
             (WORD_BUF_LEN, "12345.", Res::Ok("12345")),
-            (WORD_BUF_LEN, "123.45.", Res::Truncated("123.45")),
-            (WORD_BUF_LEN, "-123.45.", Res::Truncated("-123.45")),
+            (WORD_BUF_LEN, "123.45.", Res::Ok("123.45")),
+            (WORD_BUF_LEN, "-123.45.", Res::Ok("-123.45")),
             (WORD_BUF_LEN, ".00012345000098765", Res::Ok("0.00012345000098765")),
             (WORD_BUF_LEN, ".12345000098765", Res::Ok("0.12345000098765")),
             (WORD_BUF_LEN, "-.000000012345000098765", Res::Ok("-0.000000012345000098765")),
@@ -2257,10 +2194,6 @@ mod test {
             (WORD_BUF_LEN, "2E0", Res::Ok("2")),
             (WORD_BUF_LEN, "2.2E-1", Res::Ok("0.22")),
             (WORD_BUF_LEN, "2.23E2", Res::Ok("223")),
-            (WORD_BUF_LEN, "  11", Res::Ok("11")),
-            (WORD_BUF_LEN, "  11  ", Res::Ok("11")),
-            (WORD_BUF_LEN, "11x", Res::Truncated("11")),
-            (WORD_BUF_LEN, "11x.", Res::Truncated("11")),
         ];
 
         for (word_buf_len, dec_str, exp) in cases {
