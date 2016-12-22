@@ -160,7 +160,7 @@ impl Datum {
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
             Datum::Bytes(ref bs) => {
-                let ff = try!(convert::bytes_to_f64_with_context(ctx, bs));
+                let ff = try!(convert::bytes_to_f64(ctx, bs));
                 cmp_f64(ff, f)
             }
             Datum::Dec(ref d) => {
@@ -198,7 +198,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = try!(convert::bytes_to_f64_with_context(ctx, bs));
+                let f = try!(convert::bytes_to_f64(ctx, bs));
                 self.cmp_f64(ctx, f)
             }
         }
@@ -287,7 +287,7 @@ impl Datum {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
             Datum::F64(f) => Ok(f),
-            Datum::Bytes(bs) => convert::bytes_to_f64_with_context(ctx, &bs),
+            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs),
             Datum::Time(t) => {
                 let d = try!(t.to_decimal());
                 d.as_f64()
@@ -329,7 +329,7 @@ impl Datum {
     pub fn into_arith(self, ctx: &EvalContext) -> Result<Datum> {
         match self {
             // MySQL will convert string to float for arithmetic operation
-            Datum::Bytes(bs) => convert::bytes_to_f64_with_context(ctx, &bs).map(From::from),
+            Datum::Bytes(bs) => convert::bytes_to_f64(ctx, &bs).map(From::from),
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec = try!(t.to_decimal());

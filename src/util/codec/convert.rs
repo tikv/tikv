@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-use std;
 use std::str;
 
 use util::xeval::EvalContext;
@@ -48,33 +46,15 @@ pub fn bytes_to_int_with_context(_: &EvalContext, bytes: &[u8]) -> Result<i64> {
 }
 
 /// `bytes_to_f64` converts a byte array to a float64 in best effort.
-pub fn bytes_to_f64(bytes: &[u8]) -> Result<f64> {
-    let f = match std::str::from_utf8(bytes) {
-        Ok(s) => {
-            match s.trim().parse::<f64>() {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("failed to parse float from {}: {}", s, e);
-                    0.0
-                }
-            }
-        }
-        Err(e) => {
-            error!("failed to convert bytes to str: {:?}", e);
-            0.0
-        }
-    };
-    Ok(f)
-}
-
-/// `bytes_to_f64_with_context` converts a byte array to a float64 in best effort.
-/// similar to `bytes_to_f64` with additional context.
-pub fn bytes_to_f64_with_context(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
+pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
     let s = try!(str::from_utf8(bytes)).trim();
     let vs = get_valid_float_prefix(s);
     try!(handle_truncate(ctx, s.len() > vs.len()));
 
-    bytes_to_f64(vs.as_bytes())
+    vs.parse::<f64>().map_err(|e| {
+        error!("failed to parse float from {}: {}", s, e);
+        box_err!("{:?}", e)
+    })
 }
 
 #[inline]
@@ -152,8 +132,14 @@ mod test {
             (b"-231", -231),
             (b"", 0),
         ];
+
+        let ctx = EvalContext {
+            tz: FixedOffset::east(0),
+            ignore_truncate: true,
+            truncate_as_warning: false,
+        };
         for (bs, n) in tests {
-            let t = bytes_to_int(bs).unwrap();
+            let t = bytes_to_int_with_context(&ctx, bs).unwrap();
             if t != n {
                 panic!("expect convert {:?} to {}, but got {}", bs, n, t);
             }
@@ -174,8 +160,13 @@ mod test {
             (b"xx.11", 0.0),
         ];
 
+        let ctx = EvalContext {
+            tz: FixedOffset::east(0),
+            ignore_truncate: true,
+            truncate_as_warning: false,
+        };
         for (v, f) in tests {
-            let ff = bytes_to_f64(v).unwrap();
+            let ff = bytes_to_f64(&ctx, v).unwrap();
             if (ff - f).abs() > EPSILON {
                 panic!("{:?} should be decode to {}, but got {}", v, f, ff);
             }
