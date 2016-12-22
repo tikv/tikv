@@ -610,7 +610,10 @@ mod tests {
         assert!(txn.get(&key).unwrap().is_none());
         assert_eq!(txn.write_size, 0);
 
-        txn.prewrite(Mutation::Put((key.clone(), v.to_vec())), pk, &Options::default()).unwrap();
+        txn.prewrite(Mutation::Put((key.clone(), v.to_vec())),
+                      pk,
+                      &Options::default())
+            .unwrap();
         assert!(txn.write_size() > 0);
         engine.write(&ctx, txn.modifies()).unwrap();
 
