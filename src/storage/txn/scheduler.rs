@@ -356,6 +356,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
+        Command::RawGet { ref key, .. } => {
+            match snapshot.get(key) {
+                Ok(val) => ProcessResult::Value { value: val },
+                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+            }
+        }
         _ => panic!("unsupported read command"),
     };
 
