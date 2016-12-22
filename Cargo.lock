@@ -296,7 +296,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/prefix-extractor#51160ace47ffc8d8f54bd4bef9c2e798423009ee"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/prefix-extractor#90b0fe806b4bcdde7de819a8c10196818073164b"
 dependencies = [
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -524,7 +524,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/prefix-extractor#51160ace47ffc8d8f54bd4bef9c2e798423009ee"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/prefix-extractor#90b0fe806b4bcdde7de819a8c10196818073164b"
 dependencies = [
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/prefix-extractor)",
