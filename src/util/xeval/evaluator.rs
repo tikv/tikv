@@ -27,16 +27,33 @@ use tipb::expression::{Expr, ExprType};
 use tipb::select::SelectRequest;
 use chrono::FixedOffset;
 
+/// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
+/// truncate error.
+/// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
+/// Read-only statements should ignore truncate error, write statements should not ignore
+/// truncate error.
+pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
+/// `FLAG_TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
+/// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
+/// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
+pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
+
 #[derive(Debug)]
 /// Some global variables needed in an evaluation.
 pub struct EvalContext {
     /// timezone to use when parse/calculate time.
     pub tz: FixedOffset,
+    pub ignore_truncate: bool,
+    pub truncate_as_warning: bool,
 }
 
 impl Default for EvalContext {
     fn default() -> EvalContext {
-        EvalContext { tz: FixedOffset::east(0) }
+        EvalContext {
+            tz: FixedOffset::east(0),
+            ignore_truncate: false,
+            truncate_as_warning: false,
+        }
     }
 }
 
@@ -52,7 +69,16 @@ impl EvalContext {
             None => return Err(Error::Eval(format!("invalid tz offset {}", offset))),
             Some(tz) => tz,
         };
-        Ok(EvalContext { tz: tz })
+
+        let flags = sel.get_flags();
+
+        let e = EvalContext {
+            tz: tz,
+            ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
+            truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
+        };
+
+        Ok(e)
     }
 }
 
@@ -227,7 +253,7 @@ impl Evaluator {
         if d == Datum::Null {
             return Ok(Datum::Null);
         }
-        let b = try!(d.into_bool());
+        let b = try!(d.into_bool(ctx));
         Ok((b.map(|v| !v)).into())
     }
 
@@ -262,8 +288,8 @@ impl Evaluator {
                                  expr: &Expr)
                                  -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
-        let left_bool = try!(left.into_bool());
-        let right_bool = try!(right.into_bool());
+        let left_bool = try!(left.into_bool(ctx));
+        let right_bool = try!(right.into_bool(ctx));
         Ok((left_bool, right_bool))
     }
 
@@ -300,10 +326,10 @@ impl Evaluator {
     }
 
     fn eval_arith<F>(&mut self, ctx: &EvalContext, expr: &Expr, f: F) -> Result<Datum>
-        where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
+        where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
     {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
-        eval_arith(left, right, f)
+        eval_arith(ctx, left, right, f)
     }
 
     fn eval_case_when(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -313,7 +339,7 @@ impl Evaluator {
                 // else statement
                 return Ok(res);
             }
-            if !try!(res.into_bool()).unwrap_or(false) {
+            if !try!(res.into_bool(ctx)).unwrap_or(false) {
                 continue;
             }
             return self.eval(ctx, &chunk[1]).map_err(From::from);
@@ -333,18 +359,18 @@ impl Evaluator {
 }
 
 #[inline]
-pub fn eval_arith<F>(left: Datum, right: Datum, f: F) -> Result<Datum>
-    where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
+pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
+    where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
 {
-    let left = try!(left.into_arith());
-    let right = try!(right.into_arith());
+    let left = try!(left.into_arith(ctx));
+    let right = try!(right.into_arith(ctx));
 
     let (left, right) = try!(Datum::coerce(left, right));
     if left == Datum::Null || right == Datum::Null {
         return Ok(Datum::Null);
     }
 
-    f(left, right).map_err(From::from)
+    f(left, ctx, right).map_err(From::from)
 }
 
 /// Check if `target` is in `value_list`.
