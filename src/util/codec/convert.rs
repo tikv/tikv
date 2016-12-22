@@ -43,6 +43,10 @@ pub fn bytes_to_int(bytes: &[u8]) -> Result<i64> {
     Ok(r)
 }
 
+pub fn bytes_to_int_with_context(_: &EvalContext, bytes: &[u8]) -> Result<i64> {
+    bytes_to_int(bytes)
+}
+
 /// `bytes_to_f64` converts a byte array to a float64 in best effort.
 pub fn bytes_to_f64(bytes: &[u8]) -> Result<f64> {
     let f = match std::str::from_utf8(bytes) {

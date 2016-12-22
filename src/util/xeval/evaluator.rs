@@ -253,7 +253,7 @@ impl Evaluator {
         if d == Datum::Null {
             return Ok(Datum::Null);
         }
-        let b = try!(d.into_bool());
+        let b = try!(d.into_bool(ctx));
         Ok((b.map(|v| !v)).into())
     }
 
@@ -288,8 +288,8 @@ impl Evaluator {
                                  expr: &Expr)
                                  -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
-        let left_bool = try!(left.into_bool());
-        let right_bool = try!(right.into_bool());
+        let left_bool = try!(left.into_bool(ctx));
+        let right_bool = try!(right.into_bool(ctx));
         Ok((left_bool, right_bool))
     }
 
@@ -339,7 +339,7 @@ impl Evaluator {
                 // else statement
                 return Ok(res);
             }
-            if !try!(res.into_bool()).unwrap_or(false) {
+            if !try!(res.into_bool(ctx)).unwrap_or(false) {
                 continue;
             }
             return self.eval(ctx, &chunk[1]).map_err(From::from);

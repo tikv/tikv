@@ -247,12 +247,14 @@ impl Datum {
 
     /// `into_bool` converts self to a bool.
     /// source function name is `ToBool`.
-    pub fn into_bool(self) -> Result<Option<bool>> {
+    pub fn into_bool(self, ctx: &EvalContext) -> Result<Option<bool>> {
         let b = match self {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => Some(!bs.is_empty() && try!(convert::bytes_to_int(bs)) != 0),
+            Datum::Bytes(ref bs) => {
+                Some(!bs.is_empty() && try!(convert::bytes_to_int_with_context(ctx, bs)) != 0)
+            }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_empty()),
             Datum::Dec(d) => Some(try!(d.as_f64()).round() != 0f64),
@@ -1183,8 +1185,17 @@ mod test {
             (Datum::Dec(Decimal::from_f64(0.1415926).unwrap()), Some(false)),
             (Datum::Dec(0u64.into()), Some(false)),
         ];
+        use chrono::FixedOffset;
+        use util::xeval::EvalContext;
+
+        let ctx = EvalContext {
+            tz: FixedOffset::east(0),
+            ignore_truncate: true,
+            truncate_as_warning: true,
+        };
+
         for (d, b) in tests {
-            if d.clone().into_bool().unwrap() != b {
+            if d.clone().into_bool(&ctx).unwrap() != b {
                 panic!("expect {:?} to be {:?}", d, b);
             }
         }
