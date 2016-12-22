@@ -13,8 +13,10 @@
 
 use byteorder::ReadBytesExt;
 use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
+use storage::{SHORT_VALUE_PREFIX, SHORT_VALUE_MAX_LEN};
 use super::lock::LockType;
 use super::{Error, Result};
+use super::super::types::Value;
 
 #[derive(Debug,Clone,Copy,PartialEq)]
 pub enum WriteType {
@@ -62,20 +64,27 @@ impl WriteType {
 pub struct Write {
     pub write_type: WriteType,
     pub start_ts: u64,
+    pub short_value: Option<Value>,
 }
 
 impl Write {
-    pub fn new(write_type: WriteType, start_ts: u64) -> Write {
+    pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
         Write {
             write_type: write_type,
             start_ts: start_ts,
+            short_value: short_value,
         }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN);
+        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
         b.push(self.write_type.to_u8());
         b.encode_var_u64(self.start_ts).unwrap();
+        if let Some(ref v) = self.short_value {
+            b.push(SHORT_VALUE_PREFIX);
+            b.push(v.len() as u8);
+            b.extend_from_slice(v);
+        }
         b
     }
 
@@ -85,6 +94,22 @@ impl Write {
         }
         let write_type = try!(WriteType::from_u8(try!(b.read_u8())).ok_or(Error::BadFormatWrite));
         let start_ts = try!(b.decode_var_u64());
-        Ok(Write::new(write_type, start_ts))
+        let short_value = if b.len() > 0 {
+            let flag = try!(b.read_u8());
+            if flag == SHORT_VALUE_PREFIX {
+                let len = try!(b.read_u8());
+                if len as usize != b.len() {
+                    panic!("short value len [{}] not equal to content len [{}]",
+                           len,
+                           b.len());
+                }
+                Some(b.to_vec())
+            } else {
+                panic!("invalid flag [{:?}] in write", flag);
+            }
+        } else {
+            None
+        };
+        Ok(Write::new(write_type, start_ts, short_value))
     }
 }
