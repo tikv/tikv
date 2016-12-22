@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{self, str};
+use std::{self, str, i64};
 
 use util::xeval::EvalContext;
 use super::Result;
@@ -46,8 +46,7 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
 /// TODO: handle overflow.
 pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = try!(str::from_utf8(bytes)).trim();
-    let vs = get_valid_int_prefix(s);
-    try!(handle_truncate(ctx, s.len() > vs.len()));
+    let vs = try!(get_valid_int_prefix(ctx, s));
 
     bytes_to_int_without_context(vs.as_bytes())
 }
@@ -74,8 +73,7 @@ fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
 /// `bytes_to_f64` converts a byte array to a float64 in best effort.
 pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
     let s = try!(str::from_utf8(bytes)).trim();
-    let vs = get_valid_float_prefix(s);
-    try!(handle_truncate(ctx, s.len() > vs.len()));
+    let vs = try!(get_valid_float_prefix(ctx, s));
 
     bytes_to_f64_without_context(vs.as_bytes())
 }
@@ -89,12 +87,12 @@ fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
     }
 }
 
-// TODO: port `floatStrToIntStr`.
-fn get_valid_int_prefix(s: &str) -> &str {
-    get_valid_float_prefix(s)
+fn get_valid_int_prefix(ctx: &EvalContext, s: &str) -> Result<String> {
+    let vs = try!(get_valid_float_prefix(ctx, s));
+    float_str_to_int_string(vs)
 }
 
-fn get_valid_float_prefix(s: &str) -> &str {
+fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> {
     let mut saw_dot = false;
     let mut saw_digit = false;
     let mut valid_len = 0;
@@ -133,7 +131,77 @@ fn get_valid_float_prefix(s: &str) -> &str {
         }
     }
 
-    if valid_len == 0 { "0" } else { &s[..valid_len] }
+    try!(handle_truncate(ctx, valid_len < s.len()));
+    if valid_len == 0 {
+        Ok("0")
+    } else {
+        Ok(&s[..valid_len])
+    }
+}
+
+// float_str_to_int_str converts a valid float string into valid integer string which can be parsed by
+// strconv.ParseInt, we can't parse float first then convert it to string because precision will
+// be lost.
+fn float_str_to_int_string(valid_float: &str) -> Result<String> {
+    let mut dot_idx: i64 = -1;
+    let mut e_idx: i64 = -1;
+    for (i, c) in valid_float.chars().enumerate() {
+        match c {
+            '.' => dot_idx = i as i64,
+            'e' | 'E' => e_idx = i as i64,
+            _ => (),
+        }
+    }
+
+    if dot_idx == -1 && e_idx == -1 {
+        return Ok(valid_float.to_owned());
+    }
+
+    let mut int_cnt;
+    let mut digits = String::with_capacity(valid_float.len());
+
+    if dot_idx == -1 {
+        digits.push_str(&valid_float[..e_idx as usize]);
+        int_cnt = digits.len() as i64;
+    } else {
+        digits.push_str(&valid_float[..dot_idx as usize]);
+        int_cnt = digits.len() as i64;
+
+        if e_idx == -1 {
+            digits.push_str(&valid_float[dot_idx as usize + 1..]);
+        } else {
+            digits.push_str(&valid_float[dot_idx as usize + 1..e_idx as usize]);
+        }
+    }
+    if e_idx != -1 {
+        let exp = box_try!(valid_float.parse::<i64>());
+        if exp > 0 && int_cnt > (i64::MAX - exp) {
+            // (exp + incCnt) overflows MaxInt64.
+            return Err(box_err!("[1264] Data Out of Range"));
+        }
+        int_cnt += exp;
+    }
+    if int_cnt <= 0 {
+        return Ok("0".to_owned());
+    }
+    if int_cnt == 1 && (digits.starts_with('-') || digits.starts_with('+')) {
+        return Ok("0".to_owned());
+    }
+    let mut valid_int = String::new();
+    if int_cnt <= digits.len() as i64 {
+        valid_int.push_str(&digits[..int_cnt as usize]);
+    } else {
+        let extra_zero_count = int_cnt - digits.len() as i64;
+        if extra_zero_count > 20 {
+            // Return overflow to avoid allocating too much memory.
+            return Err(box_err!("[1264] Data Out of Range"));
+        }
+        valid_int.push_str(&digits);
+        for _ in &[0..extra_zero_count] {
+            valid_int.push('0');
+        }
+    }
+    Ok(valid_int)
 }
 
 #[cfg(test)]
@@ -238,8 +306,16 @@ mod test {
                          ("123e+", "123"),
                          ("123.e", "123.")];
 
+        let ctx = EvalContext {
+            tz: FixedOffset::east(0),
+            ignore_truncate: true,
+            truncate_as_warning: false,
+        };
         for (i, o) in cases {
-            assert_eq!(super::get_valid_float_prefix(i), o);
+            assert_eq!(super::get_valid_float_prefix(&ctx, i).unwrap(), o);
         }
+
+        assert!(super::float_str_to_int_string("1e9223372036854775807").is_err());
+        assert!(super::float_str_to_int_string("1e21").is_err());
     }
 }
