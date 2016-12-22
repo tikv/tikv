@@ -34,6 +34,7 @@ use raftstore::{Result, Error};
 use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
+use super::peer::ReadyContext;
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
 
@@ -115,35 +116,44 @@ pub struct ApplySnapResult {
 }
 
 pub struct InvokeContext {
+    pub region_id: u64,
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
-    pub wb: WriteBatch,
     last_term: u64,
-    engine: Arc<DB>,
+    pub snap_region: Option<Region>,
 }
 
 impl InvokeContext {
     pub fn new(store: &PeerStorage) -> InvokeContext {
         InvokeContext {
+            region_id: store.get_region_id(),
             raft_state: store.raft_state.clone(),
             apply_state: store.apply_state.clone(),
-            wb: WriteBatch::new(),
             last_term: store.last_term,
-            engine: store.engine.clone(),
+            snap_region: None,
         }
     }
 
-    pub fn save_raft(&self, region_id: u64) -> Result<()> {
-        let raft_cf = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
-        try!(self.wb.put_msg_cf(raft_cf, &keys::raft_state_key(region_id), &self.raft_state));
+    #[inline]
+    pub fn has_snapshot(&self) -> bool {
+        self.snap_region.is_some()
+    }
+
+    #[inline]
+    pub fn save_raft_to(&self, db: &DB, wb: &mut WriteBatch) -> Result<()> {
+        let handle = try!(rocksdb::get_cf_handle(db, CF_RAFT));
+        try!(wb.put_msg_cf(handle,
+                           &keys::raft_state_key(self.region_id),
+                           &self.raft_state));
         Ok(())
     }
 
-    pub fn save_apply(&self, region_id: u64) -> Result<()> {
-        let raft_cf = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
-        try!(self.wb.put_msg_cf(raft_cf,
-                                &keys::apply_state_key(region_id),
-                                &self.apply_state));
+    #[inline]
+    pub fn save_apply_to(&self, db: &DB, wb: &mut WriteBatch) -> Result<()> {
+        let handle = try!(rocksdb::get_cf_handle(db, CF_RAFT));
+        try!(wb.put_msg_cf(handle,
+                           &keys::apply_state_key(self.region_id),
+                           &self.apply_state));
         Ok(())
     }
 }
@@ -470,27 +480,32 @@ impl PeerStorage {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append(&self, ctx: &mut InvokeContext, entries: &[Entry]) -> Result<u64> {
+    pub fn append(&self,
+                  ctx: &mut InvokeContext,
+                  entries: &[Entry],
+                  wb: &mut WriteBatch)
+                  -> Result<u64> {
         debug!("{} append {} entries", self.tag, entries.len());
         let prev_last_index = ctx.raft_state.get_last_index();
-        if entries.len() == 0 {
+        if entries.is_empty() {
             return Ok(prev_last_index);
         }
 
+        let (last_index, last_term) = {
+            let e = entries.last().unwrap();
+            (e.get_index(), e.get_term())
+        };
+
         let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
         for entry in entries {
-            try!(ctx.wb.put_msg_cf(handle,
-                                   &keys::raft_log_key(self.get_region_id(), entry.get_index()),
-                                   entry));
+            try!(wb.put_msg_cf(handle,
+                               &keys::raft_log_key(self.get_region_id(), entry.get_index()),
+                               entry));
         }
-
-        let e = entries.last().unwrap();
-        let last_index = e.get_index();
-        let last_term = e.get_term();
 
         // Delete any previously appended log entries which never committed.
         for i in (last_index + 1)..(prev_last_index + 1) {
-            try!(ctx.wb.delete_cf(handle, &keys::raft_log_key(self.get_region_id(), i)));
+            try!(wb.delete_cf(handle, &keys::raft_log_key(self.get_region_id(), i)));
         }
 
         ctx.raft_state.set_last_index(last_index);
@@ -502,8 +517,9 @@ impl PeerStorage {
     // Apply the peer with given snapshot.
     pub fn apply_snapshot(&self,
                           ctx: &mut InvokeContext,
-                          snap: &Snapshot)
-                          -> Result<ApplySnapResult> {
+                          snap: &Snapshot,
+                          wb: &mut WriteBatch)
+                          -> Result<()> {
         info!("{} begin to apply snapshot", self.tag);
 
         let mut snap_data = RaftSnapshotData::new();
@@ -511,17 +527,17 @@ impl PeerStorage {
 
         let region_id = self.get_region_id();
 
-        let region = snap_data.get_region();
+        let region = snap_data.take_region();
         if region.get_id() != region_id {
             return Err(box_err!("mismatch region id {} != {}", region_id, region.get_id()));
         }
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            try!(self.clear_meta(&ctx.wb));
+            try!(self.clear_meta(wb));
         }
 
-        try!(write_peer_state(&ctx.wb, region, PeerState::Applying));
+        try!(write_peer_state(wb, &region, PeerState::Applying));
 
         let last_index = snap.get_metadata().get_index();
 
@@ -539,10 +555,8 @@ impl PeerStorage {
               region,
               ctx.apply_state);
 
-        Ok(ApplySnapResult {
-            prev_region: self.region.clone(),
-            region: region.clone(),
-        })
+        ctx.snap_region = Some(region);
+        Ok(())
     }
 
     // Discard all log entries prior to compact_index. We must guarantee
@@ -733,16 +747,24 @@ impl PeerStorage {
         self.region_sched.schedule(task).expect("snap apply job should not fail");
     }
 
-    pub fn handle_raft_ready(&mut self, ready: &Ready) -> Result<Option<ApplySnapResult>> {
+    /// Save memory states to disk.
+    ///
+    /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
+    /// it explictly to disk. If it's flushed to disk successfully, `post_ready` should be called
+    /// to update the memory states properly.
+    // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
+    // a requirement to advance the ready object properly later.
+    pub fn handle_raft_ready<T>(&mut self,
+                                ready_ctx: &mut ReadyContext<T>,
+                                ready: &Ready)
+                                -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let mut apply_snap_res = None;
-        let region_id = self.get_region_id();
         if !raft::is_empty_snap(&ready.snapshot) {
-            let res = try!(self.apply_snapshot(&mut ctx, &ready.snapshot));
-            apply_snap_res = Some(res);
+            try!(self.apply_snapshot(&mut ctx, &ready.snapshot, &mut ready_ctx.wb));
         }
+
         if !ready.entries.is_empty() {
-            try!(self.append(&mut ctx, &ready.entries));
+            try!(self.append(&mut ctx, &ready.entries, &mut ready_ctx.wb));
         }
 
         // Last index is 0 means the peer is created from raft message
@@ -754,42 +776,47 @@ impl PeerStorage {
         }
 
         if ctx.raft_state != self.raft_state {
-            try!(ctx.save_raft(region_id));
+            try!(ctx.save_raft_to(&self.engine, &mut ready_ctx.wb));
         }
 
         if ctx.apply_state != self.apply_state {
-            try!(ctx.save_apply(region_id));
+            try!(ctx.save_apply_to(&self.engine, &mut ready_ctx.wb));
         }
 
-        if !ctx.wb.is_empty() {
-            try!(self.engine.write(ctx.wb));
-        }
+        Ok(ctx)
+    }
 
+    /// Update the memory state after ready changes are flushed to disk successfully.
+    pub fn post_ready(&mut self, ctx: InvokeContext) -> Option<ApplySnapResult> {
         self.raft_state = ctx.raft_state;
         self.apply_state = ctx.apply_state;
         self.last_term = ctx.last_term;
         // If we apply snapshot ok, we should update some infos like applied index too.
-        if let Some(res) = apply_snap_res {
-            // cleanup data before scheduling apply task
-            if self.is_initialized() {
-                if let Err(e) = self.clear_extra_data(&res.region) {
-                    // No need panic here, when applying snapshot, the deletion will be tried
-                    // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
-                    // [b, c) will be kept in rocksdb until a covered snapshot is applied or
-                    // store is restarted.
-                    error!("{} cleanup data fail, may leave some dirty data: {:?}",
-                           self.tag,
-                           e);
-                }
+        let snap_region = match ctx.snap_region {
+            Some(r) => r,
+            None => return None,
+        };
+        // cleanup data before scheduling apply task
+        if self.is_initialized() {
+            if let Err(e) = self.clear_extra_data(&self.region) {
+                // No need panic here, when applying snapshot, the deletion will be tried
+                // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
+                // [b, c) will be kept in rocksdb until a covered snapshot is applied or
+                // store is restarted.
+                error!("{} cleanup data fail, may leave some dirty data: {:?}",
+                       self.tag,
+                       e);
             }
-
-            self.schedule_applying_snapshot();
-
-            self.region = res.region.clone();
-            return Ok(Some(res));
         }
 
-        Ok(None)
+        self.schedule_applying_snapshot();
+        let prev_region = self.region.clone();
+        self.region = snap_region;
+
+        Some(ApplySnapResult {
+            prev_region: prev_region,
+            region: self.region.clone(),
+        })
     }
 }
 
@@ -989,6 +1016,7 @@ mod test {
     use util::rocksdb::new_engine;
     use storage::{CF_DEFAULT, CF_RAFT};
     use kvproto::eraftpb::HardState;
+    use rocksdb::WriteBatch;
 
     use super::*;
 
@@ -1005,13 +1033,14 @@ mod test {
                              ents: &[Entry])
                              -> PeerStorage {
         let mut store = new_storage(sched, path);
+        let mut wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
-        store.append(&mut ctx, &ents[1..]).expect("");
+        store.append(&mut ctx, &ents[1..], &mut wb).expect("");
         ctx.apply_state.mut_truncated_state().set_index(ents[0].get_index());
         ctx.apply_state.mut_truncated_state().set_term(ents[0].get_term());
         ctx.apply_state.set_applied_index(ents.last().unwrap().get_index());
-        ctx.save_apply(store.get_region_id()).unwrap();
-        store.engine.write(ctx.wb).expect("");
+        ctx.save_apply_to(&store.engine, &mut wb).unwrap();
+        store.engine.write(wb).expect("");
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1114,7 +1143,9 @@ mod test {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
             }
             if res.is_ok() {
-                store.engine.write(ctx.wb).expect("");
+                let mut wb = WriteBatch::new();
+                ctx.save_apply_to(&store.engine, &mut wb).unwrap();
+                store.engine.write(wb).expect("");
             }
         }
     }
@@ -1162,22 +1193,24 @@ mod test {
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let mut ctx = InvokeContext::new(&s);
-        s.append(&mut ctx, &[new_entry(6, 5), new_entry(7, 5)]).unwrap();
+        let mut wb = WriteBatch::new();
+        s.append(&mut ctx, &[new_entry(6, 5), new_entry(7, 5)], &mut wb).unwrap();
         let mut hs = HardState::new();
         hs.set_commit(7);
         hs.set_term(5);
         ctx.raft_state.set_hard_state(hs);
         ctx.raft_state.set_last_index(7);
         ctx.apply_state.set_applied_index(7);
-        ctx.save_apply(1).unwrap();
-        ctx.save_raft(1).unwrap();
-        s.get_engine().write(ctx.wb).unwrap();
+        ctx.save_apply_to(&s.engine, &mut wb).unwrap();
+        ctx.save_raft_to(&s.engine, &mut wb).unwrap();
+        s.engine.write(wb).unwrap();
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
         s.compact(&mut ctx.apply_state, 7).unwrap();
-        ctx.save_apply(1).unwrap();
-        s.get_engine().write(ctx.wb).unwrap();
+        wb = WriteBatch::new();
+        ctx.save_apply_to(&s.engine, &mut wb).unwrap();
+        s.engine.write(wb).unwrap();
         s.apply_state = ctx.apply_state;
         let (tx, rx) = channel();
         tx.send(snap.clone()).unwrap();
@@ -1250,8 +1283,10 @@ mod test {
             let sched = worker.scheduler();
             let mut store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store);
-            store.append(&mut ctx, &entries).expect("");
-            store.engine.write(ctx.wb).expect("");
+            let mut wb = WriteBatch::new();
+            store.append(&mut ctx, &entries, &mut wb).unwrap();
+            ctx.save_raft_to(&store.engine, &mut wb).unwrap();
+            store.engine.write(wb).expect("");
             store.raft_state = ctx.raft_state;
             let li = store.last_index();
             let actual_entries = store.entries(4, li + 1, u64::max_value()).expect("");
@@ -1296,7 +1331,8 @@ mod test {
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert!(ctx.last_term != snap1.get_metadata().get_term());
-        s2.apply_snapshot(&mut ctx, &snap1).unwrap();
+        let mut wb = WriteBatch::new();
+        s2.apply_snapshot(&mut ctx, &snap1, &mut wb).unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
         assert_eq!(ctx.raft_state.get_last_index(), 6);

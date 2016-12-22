@@ -51,7 +51,8 @@ use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState};
+use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState,
+                  ReadyContext};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -754,36 +755,56 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
-
+        let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
-        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(pending_count);
-        for region_id in self.pending_raft_groups.drain() {
-            if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
-                    Err(e) => {
-                        // TODO: should we panic or shutdown the store?
-                        error!("{} handle raft ready append err: {:?}", peer.tag, e);
-                        continue;
-                    }
-                    Ok(Some(res)) => ready_results.push((region_id, res)),
-                    Ok(None) => {}
+
+        let (wb, append_res) = {
+            let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
+            for region_id in self.pending_raft_groups.drain() {
+                if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                    peer.handle_raft_ready_append(&mut ctx);
                 }
             }
+            (ctx.wb, ctx.ready_res)
+        };
+
+        if !wb.is_empty() {
+            self.engine.write(wb).unwrap_or_else(|e| {
+                panic!("{} failed to save append result: {:?}", self.tag, e);
+            });
         }
+
+        let mut ready_results = Vec::with_capacity(append_res.len());
+        for (mut ready, invoke_ctx) in append_res {
+            let region_id = invoke_ctx.region_id;
+            let res = self.region_peers
+                .get_mut(&region_id)
+                .unwrap()
+                .post_raft_ready_append(&mut self.raft_metrics,
+                                        &self.trans,
+                                        &mut ready,
+                                        invoke_ctx);
+            ready_results.push((region_id, ready, res));
+        }
+
         let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
         self.sent_snapshot_count += sent_snapshot_count;
 
-        for (region_id, mut res) in ready_results {
-            {
-                let peer = self.region_peers.get_mut(&region_id).unwrap();
+        slow_log!(t,
+                  "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
+                   snapshots",
+                  self.tag,
+                  pending_count,
+                  ready_results.capacity(),
+                  self.raft_metrics.ready.append - previous_ready_metrics.append,
+                  self.raft_metrics.ready.message - previous_ready_metrics.message,
+                  self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot);
 
-                if let Err(e) = peer.handle_raft_ready_apply(&mut res) {
-                    // TODO: should we panic or shutdown the store?
-                    error!("{} handle raft ready err: {:?}", peer.tag, e);
-                    continue;
-                }
-            };
-
+        for (region_id, ready, mut res) in ready_results {
+            self.region_peers
+                .get_mut(&region_id)
+                .unwrap()
+                .handle_raft_ready_apply(ready, &mut res);
             self.on_ready_result(region_id, res)
         }
 
