@@ -46,7 +46,7 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
 /// TODO: handle overflow.
 pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = try!(str::from_utf8(bytes)).trim();
-    let vs = get_valid_float_prefix(s);
+    let vs = get_valid_int_prefix(s);
     try!(handle_truncate(ctx, s.len() > vs.len()));
 
     bytes_to_int_without_context(vs.as_bytes())
@@ -87,6 +87,11 @@ fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+// TODO: prot `floatStrToIntStr`.
+fn get_valid_int_prefix(s: &str) -> &str {
+    get_valid_float_prefix(s)
 }
 
 fn get_valid_float_prefix(s: &str) -> &str {
