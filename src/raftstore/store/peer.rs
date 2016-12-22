@@ -21,7 +21,7 @@ use std::time::{Instant, Duration};
 use time::{Timespec, Duration as TimeDuration};
 
 use rocksdb::{DB, WriteBatch, Writable};
-use protobuf::{self, Message};
+use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;
 
 use kvproto::metapb;
@@ -39,7 +39,8 @@ use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::{PdClient, INVALID_ID};
 use storage::{CF_LOCK, CF_RAFT};
 use super::store::Store;
-use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state};
+use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state,
+                          InvokeContext};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -105,12 +106,29 @@ pub enum ExecResult {
     VerifyHash { index: u64, hash: Vec<u8> },
 }
 
+pub struct ReadyContext<'a, T: 'a> {
+    pub wb: WriteBatch,
+    pub metrics: &'a mut RaftMetrics,
+    pub trans: &'a T,
+    pub ready_res: Vec<(Ready, InvokeContext)>,
+}
+
+impl<'a, T> ReadyContext<'a, T> {
+    pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
+        ReadyContext {
+            wb: WriteBatch::new(),
+            metrics: metrics,
+            trans: t,
+            ready_res: Vec::with_capacity(cap),
+        }
+    }
+}
+
 // When we apply commands in handing ready, we should also need a way to
 // let outer store do something after handing ready over.
 // We can save these intermediate results in ready result.
 // We only need to care administration commands now.
 pub struct ReadyResult {
-    pub ready: Option<Ready>,
     // We can execute multi commands like 1, conf change, 2 split region, ...
     // in one ready, and outer store should handle these results sequentially too.
     pub exec_results: Vec<ExecResult>,
@@ -177,6 +195,15 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
            peer_id,
            cmd.uuid);
     cmd.call(resp);
+}
+
+// TODO: make sure received entries are not corrupted
+// If this happens, TiKV will panic and can't recover without extra effort.
+#[inline]
+fn parse_data_at<T: Message + MessageStatic>(data: &[u8], index: u64, tag: &str) -> T {
+    protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
+        panic!("{} data is corrupted at {}: {:?}", tag, index, e);
+    })
 }
 
 pub struct ConsistencyState {
@@ -430,7 +457,7 @@ impl Peer {
     #[inline]
     fn send<T, I>(&mut self, trans: &T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
         where T: Transport,
-              I: Iterator<Item = eraftpb::Message>
+              I: IntoIterator<Item = eraftpb::Message>
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
@@ -578,22 +605,18 @@ impl Peer {
         }
     }
 
-
-    pub fn handle_raft_ready_append<T: Transport>(&mut self,
-                                                  trans: &T,
-                                                  metrics: &mut RaftMetrics)
-                                                  -> Result<Option<ReadyResult>> {
+    pub fn handle_raft_ready_append<T: Transport>(&mut self, ctx: &mut ReadyContext<T>) {
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
             // to full message queue under high load.
             debug!("{} still applying snapshot, skip further handling.",
                    self.tag);
-            return Ok(None);
+            return;
         }
 
         if !self.raft_group.has_ready() {
-            return Ok(None);
+            return;
         }
 
         debug!("{} handle raft ready", self.tag);
@@ -602,72 +625,60 @@ impl Peer {
         let mut ready = self.raft_group.ready();
         ready_timer.observe_duration();
 
-        let t = SlowTimer::new();
-
         self.update_leader_lease(&ready);
 
-        self.add_ready_metric(&ready, &mut metrics.ready);
+        self.add_ready_metric(&ready, &mut ctx.metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
-            self.send(trans, ready.messages.drain(..), &mut metrics.message)
-                .unwrap_or_else(|e| {
-                    // We don't care that the message is sent failed, so here just log this error.
-                    warn!("{} leader send messages err {:?}", self.tag, e);
-                })
+            let msgs = ready.messages.drain(..);
+            self.send(ctx.trans, msgs, &mut ctx.metrics.message).unwrap_or_else(|e| {
+                // We don't care that the message is sent failed, so here just log this error.
+                warn!("{} leader send messages err {:?}", self.tag, e);
+            });
         }
 
         let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
-        let apply_result = match self.mut_store().handle_raft_ready(&ready) {
+        let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
-                // Leader has to panic when failed to persist raft entries,
-                // because all the MsgAppend messages have been sent out already.
-                // Suppose there are 2 followers. If any follower sends back a
-                // MsgAppendResponse, the leader will commit the non-persistent
-                // entries.
-                if self.is_leader() {
-                    panic!("{} failed to handle raft ready: {:?}", self.tag, e);
-                }
-                return Err(e);
+                // We may have written something to writebatch and it can't be reverted, so has
+                // to panic here.
+                panic!("{} failed to handle raft ready: {:?}", self.tag, e);
             }
         };
         append_timer.observe_duration();
 
-        if !self.is_leader() {
-            self.send(trans, ready.messages.drain(..), &mut metrics.message)
-                .unwrap_or_else(|e| {
-                    warn!("{} follower send messages err {:?}", self.tag, e);
-                })
-        }
+        ctx.ready_res.push((ready, invoke_ctx));
+    }
 
-        slow_log!(t,
-                  "{} handle ready, entries {}, messages \
-                   {}, snapshot {}, hard state changed {}",
-                  self.tag,
-                  ready.entries.len(),
-                  ready.messages.len(),
-                  apply_result.is_some(),
-                  ready.hs.is_some());
-
-        if apply_result.is_some() {
-            // When apply snapshot, there is no log applied but not compacted yet.
+    pub fn post_raft_ready_append<T: Transport>(&mut self,
+                                                metrics: &mut RaftMetrics,
+                                                trans: &T,
+                                                ready: &mut Ready,
+                                                invoke_ctx: InvokeContext)
+                                                -> ReadyResult {
+        if invoke_ctx.has_snapshot() {
+            // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
         }
 
-        Ok(Some(ReadyResult {
-            ready: Some(ready),
-            apply_snap_result: apply_result,
+        let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
+
+        if !self.is_leader() {
+            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
+                warn!("{} follower send messages err {:?}", self.tag, e);
+            });
+        }
+
+        ReadyResult {
+            apply_snap_result: apply_snap_result,
             exec_results: vec![],
-        }))
+        }
     }
 
-    pub fn handle_raft_ready_apply(&mut self, ready_result: &mut ReadyResult) -> Result<()> {
-        let mut ready = ready_result.ready.take().unwrap_or_else(|| {
-            panic!("{} must have a ready in ReadyResult", self.tag);
-        });
-
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, result: &mut ReadyResult) {
         // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_commit_entries` directly, these updates
@@ -675,18 +686,17 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        ready_result.exec_results = if self.is_applying() {
+        result.exec_results = if self.is_applying() {
             if let Some(ref mut hs) = ready.hs {
                 // Snapshot's metadata has been applied.
                 hs.set_commit(self.get_store().truncated_index());
             }
             vec![]
         } else {
-            try!(self.handle_raft_commit_entries(&ready.committed_entries))
+            self.handle_raft_commit_entries(&ready.committed_entries)
         };
 
         self.raft_group.advance(ready);
-        Ok(())
     }
 
     /// Propose a request.
@@ -1122,9 +1132,9 @@ impl Peer {
 
     fn handle_raft_commit_entries(&mut self,
                                   committed_entries: &[eraftpb::Entry])
-                                  -> Result<Vec<ExecResult>> {
+                                  -> Vec<ExecResult> {
         if committed_entries.is_empty() {
-            return Ok(vec![]);
+            return vec![];
         }
         // We can't apply committed entries when this peer is still applying snapshot.
         assert!(!self.is_applying());
@@ -1151,10 +1161,10 @@ impl Peer {
             // raft meta is very small, can be ignored.
             self.raft_log_size_hint += entry.get_data().len() as u64;
 
-            let res = try!(match entry.get_entry_type() {
+            let res = match entry.get_entry_type() {
                 eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
                 eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
-            });
+            };
 
             if let Some(res) = res {
                 results.push(res);
@@ -1165,44 +1175,50 @@ impl Peer {
                   "{} handle ready {} committed entries",
                   self.tag,
                   committed_count);
-        Ok(results)
+        results
     }
 
-    fn handle_raft_entry_normal(&mut self, entry: &eraftpb::Entry) -> Result<Option<ExecResult>> {
+    fn handle_raft_entry_normal(&mut self, entry: &eraftpb::Entry) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
 
-        if data.is_empty() {
-            // when a peer become leader, it will send an empty entry.
-            let wb = WriteBatch::new();
-            let mut state = self.get_store().apply_state.clone();
-            state.set_applied_index(index);
-            let engine = self.engine.clone();
-            let raft_cf = try!(rocksdb::get_cf_handle(engine.as_ref(), CF_RAFT));
-            try!(wb.put_msg_cf(raft_cf, &keys::apply_state_key(self.region_id), &state));
-            try!(self.engine.write(wb));
-            self.mut_store().apply_state = state;
-            self.mut_store().applied_index_term = term;
-            assert!(term > 0);
-            while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
-                // apprently, all the callbacks whose term is less than entry's term are stale.
-                self.notify_stale_command(cmd);
-            }
-            return Ok(None);
+        if !data.is_empty() {
+            let cmd = parse_data_at(data, index, &self.tag);
+            return self.process_raft_cmd(index, term, cmd);
         }
 
-        let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data));
-        Ok(self.process_raft_cmd(index, term, cmd))
+        // when a peer become leader, it will send an empty entry.
+        let wb = WriteBatch::new();
+        let mut state = self.get_store().apply_state.clone();
+        state.set_applied_index(index);
+        rocksdb::get_cf_handle(&self.engine, CF_RAFT)
+            .map_err(From::from)
+            .and_then(|handle| {
+                wb.put_msg_cf(handle, &keys::apply_state_key(self.region_id), &state)
+            })
+            .and_then(|_| self.engine.write(wb).map_err(From::from))
+            .unwrap_or_else(|e| {
+                panic!("{} failed to apply empty entry at {}: {:?}",
+                       self.tag,
+                       index,
+                       e);
+            });
+        self.mut_store().apply_state = state;
+        self.mut_store().applied_index_term = term;
+        assert!(term > 0);
+        while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
+            // apprently, all the callbacks whose term is less than entry's term are stale.
+            self.notify_stale_command(cmd);
+        }
+        None
     }
 
-    fn handle_raft_entry_conf_change(&mut self,
-                                     entry: &eraftpb::Entry)
-                                     -> Result<Option<ExecResult>> {
+    fn handle_raft_entry_conf_change(&mut self, entry: &eraftpb::Entry) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
-        let conf_change = try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
-        let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
+        let conf_change: eraftpb::ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
+        let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
         let (res, cc) = match self.process_raft_cmd(index, term, cmd) {
             res @ Some(_) => (res, conf_change),
             // If failed, tell raft that the config change was aborted.
@@ -1210,7 +1226,7 @@ impl Peer {
         };
         self.raft_group.apply_conf_change(cc);
 
-        Ok(res)
+        res
     }
 
     fn find_cb(&mut self,
