@@ -326,7 +326,7 @@ impl Evaluator {
     }
 
     fn eval_arith<F>(&mut self, ctx: &EvalContext, expr: &Expr, f: F) -> Result<Datum>
-        where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
+        where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
     {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
         eval_arith(ctx, left, right, f)
@@ -360,7 +360,7 @@ impl Evaluator {
 
 #[inline]
 pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
-    where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
+    where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
 {
     let left = try!(left.into_arith(ctx));
     let right = try!(right.into_arith(ctx));
@@ -370,7 +370,7 @@ pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Resu
         return Ok(Datum::Null);
     }
 
-    f(left, right).map_err(From::from)
+    f(left, ctx, right).map_err(From::from)
 }
 
 /// Check if `target` is in `value_list`.

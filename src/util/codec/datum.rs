@@ -114,17 +114,17 @@ impl Datum {
                     _ => Ok(Ordering::Less),
                 }
             }
-            Datum::I64(i) => self.cmp_i64(i),
-            Datum::U64(u) => self.cmp_u64(u),
-            Datum::F64(f) => self.cmp_f64(f),
+            Datum::I64(i) => self.cmp_i64(ctx, i),
+            Datum::U64(u) => self.cmp_u64(ctx, u),
+            Datum::F64(f) => self.cmp_f64(ctx, f),
             Datum::Bytes(ref bs) => self.cmp_bytes(ctx, bs),
-            Datum::Dur(ref d) => self.cmp_dur(d),
-            Datum::Dec(ref d) => self.cmp_dec(d),
+            Datum::Dur(ref d) => self.cmp_dur(ctx, d),
+            Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(ref t) => self.cmp_time(ctx, t),
         }
     }
 
-    fn cmp_i64(&self, i: i64) -> Result<Ordering> {
+    fn cmp_i64(&self, ctx: &EvalContext, i: i64) -> Result<Ordering> {
         match *self {
             Datum::I64(ii) => Ok(ii.cmp(&i)),
             Datum::U64(u) => {
@@ -134,11 +134,11 @@ impl Datum {
                     Ok(u.cmp(&(i as u64)))
                 }
             }
-            _ => self.cmp_f64(i as f64),
+            _ => self.cmp_f64(ctx, i as f64),
         }
     }
 
-    fn cmp_u64(&self, u: u64) -> Result<Ordering> {
+    fn cmp_u64(&self, ctx: &EvalContext, u: u64) -> Result<Ordering> {
         match *self {
             Datum::I64(i) => {
                 if i < 0 || u > i64::MAX as u64 {
@@ -148,11 +148,11 @@ impl Datum {
                 }
             }
             Datum::U64(uu) => Ok(uu.cmp(&u)),
-            _ => self.cmp_f64(u as f64),
+            _ => self.cmp_f64(ctx, u as f64),
         }
     }
 
-    fn cmp_f64(&self, f: f64) -> Result<Ordering> {
+    fn cmp_f64(&self, ctx: &EvalContext, f: f64) -> Result<Ordering> {
         match *self {
             Datum::Null | Datum::Min => Ok(Ordering::Less),
             Datum::Max => Ok(Ordering::Greater),
@@ -160,7 +160,7 @@ impl Datum {
             Datum::U64(u) => cmp_f64(u as f64, f),
             Datum::F64(ff) => cmp_f64(ff, f),
             Datum::Bytes(ref bs) => {
-                let ff = try!(convert::bytes_to_f64(bs));
+                let ff = try!(convert::bytes_to_f64_with_context(ctx, bs));
                 cmp_f64(ff, f)
             }
             Datum::Dec(ref d) => {
@@ -199,12 +199,12 @@ impl Datum {
             }
             _ => {
                 let f = try!(convert::bytes_to_f64_with_context(ctx, bs));
-                self.cmp_f64(f)
+                self.cmp_f64(ctx, f)
             }
         }
     }
 
-    fn cmp_dec(&self, dec: &Decimal) -> Result<Ordering> {
+    fn cmp_dec(&self, ctx: &EvalContext, dec: &Decimal) -> Result<Ordering> {
         match *self {
             Datum::Dec(ref d) => Ok(d.cmp(dec)),
             Datum::Bytes(ref bs) => {
@@ -214,19 +214,19 @@ impl Datum {
             }
             _ => {
                 let f = try!(dec.as_f64());
-                self.cmp_f64(f)
+                self.cmp_f64(ctx, f)
             }
         }
     }
 
-    fn cmp_dur(&self, d: &Duration) -> Result<Ordering> {
+    fn cmp_dur(&self, ctx: &EvalContext, d: &Duration) -> Result<Ordering> {
         match *self {
             Datum::Dur(ref d2) => Ok(d2.cmp(d)),
             Datum::Bytes(ref bs) => {
                 let d2 = try!(Duration::parse(bs, MAX_FSP));
                 Ok(d2.cmp(d))
             }
-            _ => self.cmp_f64(d.to_secs()),
+            _ => self.cmp_f64(ctx, d.to_secs()),
         }
     }
 
@@ -240,7 +240,7 @@ impl Datum {
             Datum::Time(ref t) => Ok(t.cmp(time)),
             _ => {
                 let f = try!(time.to_f64());
-                self.cmp_f64(f)
+                self.cmp_f64(ctx, f)
             }
         }
     }
@@ -280,12 +280,12 @@ impl Datum {
 
     /// `into_f64` converts self into f64.
     /// source function name is `ToFloat64`.
-    pub fn into_f64(self) -> Result<f64> {
+    pub fn into_f64(self, ctx: &EvalContext) -> Result<f64> {
         match self {
             Datum::I64(i) => Ok(i as f64),
             Datum::U64(u) => Ok(u as f64),
             Datum::F64(f) => Ok(f),
-            Datum::Bytes(bs) => convert::bytes_to_f64(&bs),
+            Datum::Bytes(bs) => convert::bytes_to_f64_with_context(ctx, &bs),
             Datum::Time(t) => {
                 let d = try!(t.to_decimal());
                 d.as_f64()
@@ -408,10 +408,10 @@ impl Datum {
         Ok(res)
     }
 
-    pub fn checked_div(self, d: Datum) -> Result<Datum> {
+    pub fn checked_div(self, ctx: &EvalContext, d: Datum) -> Result<Datum> {
         match (self, d) {
             (Datum::F64(f), d) => {
-                let f2 = try!(d.into_f64());
+                let f2 = try!(d.into_f64(ctx));
                 if f2 == 0f64 {
                     return Ok(Datum::Null);
                 }
@@ -432,7 +432,7 @@ impl Datum {
     }
 
     /// Keep compatible with TiDB's `ComputePlus` function.
-    pub fn checked_add(self, d: Datum) -> Result<Datum> {
+    pub fn checked_add(self, _: &EvalContext, d: Datum) -> Result<Datum> {
         let res: Datum = match (&self, &d) {
             (&Datum::I64(l), &Datum::I64(r)) => l.checked_add(r).into(),
             (&Datum::I64(l), &Datum::U64(r)) |
@@ -459,7 +459,7 @@ impl Datum {
     }
 
     /// `checked_minus` computes the result of `self - d`.
-    pub fn checked_minus(self, d: Datum) -> Result<Datum> {
+    pub fn checked_minus(self, _: &EvalContext, d: Datum) -> Result<Datum> {
         let res = match (&self, &d) {
             (&Datum::I64(l), &Datum::I64(r)) => l.checked_sub(r).into(),
             (&Datum::I64(l), &Datum::U64(r)) => {
@@ -491,7 +491,7 @@ impl Datum {
     }
 
     // `checked_mul` computes the result of a * b.
-    pub fn checked_mul(self, d: Datum) -> Result<Datum> {
+    pub fn checked_mul(self, _: &EvalContext, d: Datum) -> Result<Datum> {
         let res = match (&self, &d) {
             (&Datum::I64(l), &Datum::I64(r)) => l.checked_mul(r).into(),
             (&Datum::I64(l), &Datum::U64(r)) |
@@ -514,7 +514,7 @@ impl Datum {
     }
 
     // `checked_rem` computes the result of a mod b.
-    pub fn checked_rem(self, d: Datum) -> Result<Datum> {
+    pub fn checked_rem(self, _: &EvalContext, d: Datum) -> Result<Datum> {
         match d {
             Datum::I64(0) | Datum::U64(0) | Datum::F64(0f64) => return Ok(Datum::Null),
             _ => {}
@@ -551,7 +551,7 @@ impl Datum {
     }
 
     // `checked_int_div` computes the result of a / b, both a and b are integer.
-    pub fn checked_int_div(self, d: Datum) -> Result<Datum> {
+    pub fn checked_int_div(self, _: &EvalContext, d: Datum) -> Result<Datum> {
         match d {
             Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
             _ => {}

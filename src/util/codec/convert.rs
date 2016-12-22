@@ -63,7 +63,7 @@ pub fn bytes_to_f64(bytes: &[u8]) -> Result<f64> {
     Ok(f)
 }
 
-/// `bytes_to_f64` converts a byte array to a float64 in best effort.
+/// `bytes_to_f64_with_context` converts a byte array to a float64 in best effort.
 /// similar to `bytes_to_f64` with additional context.
 pub fn bytes_to_f64_with_context(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
     let s = try!(str::from_utf8(bytes)).trim();
