@@ -89,7 +89,7 @@ fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
     }
 }
 
-// TODO: prot `floatStrToIntStr`.
+// TODO: port `floatStrToIntStr`.
 fn get_valid_int_prefix(s: &str) -> &str {
     get_valid_float_prefix(s)
 }
