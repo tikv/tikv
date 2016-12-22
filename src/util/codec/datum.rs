@@ -253,7 +253,7 @@ impl Datum {
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
             Datum::Bytes(ref bs) => {
-                Some(!bs.is_empty() && try!(convert::bytes_to_int_with_context(ctx, bs)) != 0)
+                Some(!bs.is_empty() && try!(convert::bytes_to_int(ctx, bs)) != 0)
             }
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_empty()),

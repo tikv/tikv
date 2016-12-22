@@ -11,14 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::str;
+use std::{self, str};
 
 use util::xeval::EvalContext;
 use super::Result;
 
-/// `bytes_to_int` converts a byte arrays to an i64 in best effort.
-/// TODO: handle overflow.
-pub fn bytes_to_int(bytes: &[u8]) -> Result<i64> {
+fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     // trim
     let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
     let mut negative = false;
@@ -41,8 +39,33 @@ pub fn bytes_to_int(bytes: &[u8]) -> Result<i64> {
     Ok(r)
 }
 
-pub fn bytes_to_int_with_context(_: &EvalContext, bytes: &[u8]) -> Result<i64> {
-    bytes_to_int(bytes)
+/// `bytes_to_int` converts a byte arrays to an i64 in best effort.
+/// TODO: handle overflow.
+pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
+    let s = try!(str::from_utf8(bytes)).trim();
+    let vs = get_valid_float_prefix(s);
+    try!(handle_truncate(ctx, s.len() > vs.len()));
+
+    bytes_to_int_without_context(vs.as_bytes())
+}
+
+fn bytes_to_f64_without_context(bytes: &[u8]) -> Result<f64> {
+    let f = match std::str::from_utf8(bytes) {
+        Ok(s) => {
+            match s.trim().parse::<f64>() {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("failed to parse float from {}: {}", s, e);
+                    0.0
+                }
+            }
+        }
+        Err(e) => {
+            error!("failed to convert bytes to str: {:?}", e);
+            0.0
+        }
+    };
+    Ok(f)
 }
 
 /// `bytes_to_f64` converts a byte array to a float64 in best effort.
@@ -51,10 +74,7 @@ pub fn bytes_to_f64(ctx: &EvalContext, bytes: &[u8]) -> Result<f64> {
     let vs = get_valid_float_prefix(s);
     try!(handle_truncate(ctx, s.len() > vs.len()));
 
-    vs.parse::<f64>().map_err(|e| {
-        error!("failed to parse float from {}: {}", s, e);
-        box_err!("{:?}", e)
-    })
+    bytes_to_f64_without_context(vs.as_bytes())
 }
 
 #[inline]
@@ -110,11 +130,9 @@ fn get_valid_float_prefix(s: &str) -> &str {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-
     use std::f64::EPSILON;
-    use util::xeval::EvalContext;
     use chrono::FixedOffset;
+    use util::xeval::EvalContext;
 
     #[test]
     fn test_bytes_to_i64() {
@@ -133,13 +151,8 @@ mod test {
             (b"", 0),
         ];
 
-        let ctx = EvalContext {
-            tz: FixedOffset::east(0),
-            ignore_truncate: true,
-            truncate_as_warning: false,
-        };
         for (bs, n) in tests {
-            let t = bytes_to_int_with_context(&ctx, bs).unwrap();
+            let t = super::bytes_to_int_without_context(bs).unwrap();
             if t != n {
                 panic!("expect convert {:?} to {}, but got {}", bs, n, t);
             }
@@ -160,13 +173,8 @@ mod test {
             (b"xx.11", 0.0),
         ];
 
-        let ctx = EvalContext {
-            tz: FixedOffset::east(0),
-            ignore_truncate: true,
-            truncate_as_warning: false,
-        };
         for (v, f) in tests {
-            let ff = bytes_to_f64(&ctx, v).unwrap();
+            let ff = super::bytes_to_f64_without_context(v).unwrap();
             if (ff - f).abs() > EPSILON {
                 panic!("{:?} should be decode to {}, but got {}", v, f, ff);
             }
