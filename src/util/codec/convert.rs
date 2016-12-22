@@ -16,7 +16,10 @@ use std::{self, str};
 use util::xeval::EvalContext;
 use super::Result;
 
-fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
+/// `bytes_to_int_without_context` converts a byte arrays to an i64
+/// in best effort, but without context.
+/// TODO: handle overflow.
+pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     // trim
     let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
     let mut negative = false;

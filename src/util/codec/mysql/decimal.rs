@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 
 use byteorder::ReadBytesExt;
 
-use util::codec::{Result, Error, TEN_POW};
+use util::codec::{Result, Error, TEN_POW, convert};
 use util::codec::bytes::BytesDecoder;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1426,10 +1426,7 @@ impl Decimal {
         }
 
         if end_idx + 1 < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
-            let exp = {
-                let s = try!(str::from_utf8(&bs[end_idx + 1..]));
-                box_try!(s.parse::<i64>())
-            };
+            let exp = try!(convert::bytes_to_int_without_context(&bs[end_idx + 1..]));
             if exp > i32::MAX as i64 / 2 {
                 d.reset_to_zero();
                 return Ok(Res::Overflow(d.unwrap()));
