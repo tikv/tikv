@@ -181,10 +181,7 @@ fn float_str_to_int_string(valid_float: &str) -> Result<String> {
         }
         int_cnt += exp;
     }
-    if int_cnt <= 0 {
-        return Ok("0".to_owned());
-    }
-    if int_cnt == 1 && (digits.starts_with('-') || digits.starts_with('+')) {
+    if int_cnt <= 0 || (int_cnt == 1 && (digits.starts_with('-') || digits.starts_with('+'))) {
         return Ok("0".to_owned());
     }
     let mut valid_int = String::new();
