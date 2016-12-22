@@ -183,6 +183,11 @@ mod test {
         let ctxs = vec![EvalContext {
                             tz: FixedOffset::east(0),
                             ignore_truncate: true,
+                            truncate_as_warning: true,
+                        },
+                        EvalContext {
+                            tz: FixedOffset::east(0),
+                            ignore_truncate: true,
                             truncate_as_warning: false,
                         },
                         EvalContext {
@@ -198,12 +203,12 @@ mod test {
 
         for ctx in &ctxs {
             assert!(super::handle_truncate(ctx, false).is_ok());
-            assert!(super::handle_truncate(ctx, false).is_ok());
         }
 
         assert!(super::handle_truncate(&ctxs[0], true).is_ok());
         assert!(super::handle_truncate(&ctxs[1], true).is_ok());
-        assert!(super::handle_truncate(&ctxs[2], true).is_err());
+        assert!(super::handle_truncate(&ctxs[2], true).is_ok());
+        assert!(super::handle_truncate(&ctxs[3], true).is_err());
     }
 
     #[test]

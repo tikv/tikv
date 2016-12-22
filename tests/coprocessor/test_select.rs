@@ -1345,13 +1345,11 @@ fn test_handle_truncate() {
                      }];
 
     for cond in cases {
-        println!("{:?}", cond);
         // Ignore truncate error.
         let req = Select::from(&product.table)
             .where_expr(cond.clone())
             .build_with(&[FLAG_IGNORE_TRUNCATE]);
         let mut resp = handle_select(&end_point, req);
-        println!("{:?}", resp);
         assert_eq!(row_cnt(resp.get_chunks()), 1);
         let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
         let row = spliter.next().unwrap();
