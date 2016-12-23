@@ -138,9 +138,9 @@ fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> 
     }
 }
 
-// float_str_to_int_str converts a valid float string into valid integer string which can be parsed by
-// strconv.ParseInt, we can't parse float first then convert it to string because precision will
-// be lost.
+/// It converts a valid float string into valid integer string which can be
+/// parsed by `i64::from_str`, we can't parse float first then convert it to string
+/// because precision will be lost.
 fn float_str_to_int_string(valid_float: &str) -> Result<String> {
     let mut dot_idx: i64 = -1;
     let mut e_idx: i64 = -1;
