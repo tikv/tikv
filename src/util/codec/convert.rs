@@ -190,12 +190,11 @@ fn float_str_to_int_string(valid_float: &str) -> Result<String> {
         let extra_zero_count = int_cnt - digits.len() as i64;
         if extra_zero_count > 20 {
             // Return overflow to avoid allocating too much memory.
+            // TODO: refactor errors
             return Err(box_err!("[1264] Data Out of Range"));
         }
         valid_int.push_str(&digits);
-        for _ in &[0..extra_zero_count] {
-            valid_int.push('0');
-        }
+        valid_int.extend((0..extra_zero_count).map(|_| '0'));
     }
     Ok(valid_int)
 }
@@ -310,8 +309,29 @@ mod test {
         for (i, o) in cases {
             assert_eq!(super::get_valid_float_prefix(&ctx, i).unwrap(), o);
         }
+    }
 
-        assert!(super::float_str_to_int_string("1e9223372036854775807").is_err());
-        assert!(super::float_str_to_int_string("1e21").is_err());
+    #[test]
+    fn test_get_valid_int_prefix() {
+        let cases = vec![(".1", true, "0"),
+                         (".0", true, "0"),
+                         ("123", true, "123"),
+                         ("123e1", true, "1230"),
+                         ("123.1e2", true, "12310"),
+                         ("123.45e5", true, "12345000"),
+                         ("123.45678e5", true, "12345678"),
+                         ("123.456789e5", true, "12345678"),
+                         ("-123.45678e5", true, "-12345678"),
+                         ("+123.45678e5", true, "+12345678"),
+                         ("1e21", false, ""),
+                         ("1e9223372036854775807", false, "")];
+
+        for (i, ok, e) in cases {
+            let o = super::float_str_to_int_string(i);
+            assert_eq!(o.is_ok(), ok);
+            if ok {
+                assert_eq!(o.unwrap(), e);
+            }
+        }
     }
 }
