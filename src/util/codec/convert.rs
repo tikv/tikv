@@ -188,7 +188,7 @@ fn float_str_to_int_string(valid_float: &str) -> Result<String> {
         valid_int.push_str(&digits[..int_cnt as usize]);
     } else {
         let extra_zero_count = int_cnt - digits.len() as i64;
-        if extra_zero_count > 20 {
+        if extra_zero_count > MAX_ZERO_COUNT {
             // Return overflow to avoid allocating too much memory.
             // TODO: refactor errors
             return Err(box_err!("[1264] Data Out of Range"));
@@ -198,6 +198,8 @@ fn float_str_to_int_string(valid_float: &str) -> Result<String> {
     }
     Ok(valid_int)
 }
+
+const MAX_ZERO_COUNT: i64 = 20;
 
 #[cfg(test)]
 mod test {
