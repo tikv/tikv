@@ -18,7 +18,7 @@ use super::Result;
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
-/// TODO: handle overflow.
+/// Note that it does NOT handle overflow.
 pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     // trim
     let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
@@ -43,7 +43,6 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
 }
 
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
-/// TODO: handle overflow.
 pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = try!(str::from_utf8(bytes)).trim();
     let vs = try!(get_valid_int_prefix(ctx, s));
@@ -174,7 +173,7 @@ fn float_str_to_int_string(valid_float: &str) -> Result<String> {
         }
     }
     if e_idx != -1 {
-        let exp = box_try!(valid_float.parse::<i64>());
+        let exp = box_try!((&valid_float[e_idx as usize + 1..]).parse::<i64>());
         if exp > 0 && int_cnt > (i64::MAX - exp) {
             // (exp + incCnt) overflows MaxInt64.
             return Err(box_err!("[1264] Data Out of Range"));
