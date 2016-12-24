@@ -109,7 +109,7 @@ fn test_raw_node_read_index_to_old_leader() {
     let r2 = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
     let r3 = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
 
-    let mut nt = Network::new(vec![Some(r1), Some(r2), Some(r3)], false);
+    let mut nt = Network::new(vec![Some(r1), Some(r2), Some(r3)]);
 
     // elect r1 as leader
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
