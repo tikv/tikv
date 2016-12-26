@@ -79,7 +79,7 @@ impl Sum {
     /// add others to res.
     ///
     /// return false means the others is skipped.
-    fn add_asssign(&mut self, mut args: Vec<Datum>) -> Result<bool> {
+    fn add_asssign(&mut self, ctx: &EvalContext, mut args: Vec<Datum>) -> Result<bool> {
         if args.len() != 1 {
             return Err(box_err!("sum only support one column, but got {}", args.len()));
         }
@@ -88,7 +88,7 @@ impl Sum {
             return Ok(false);
         }
         let res = match self.res.take() {
-            Some(b) => box_try!(evaluator::eval_arith(a, b, Datum::checked_add)),
+            Some(b) => box_try!(evaluator::eval_arith(ctx, a, b, Datum::checked_add)),
             None => a,
         };
         self.res = Some(res);
@@ -97,8 +97,8 @@ impl Sum {
 }
 
 impl AggrFunc for Sum {
-    fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
-        try!(self.add_asssign(args));
+    fn update(&mut self, ctx: &EvalContext, args: Vec<Datum>) -> Result<()> {
+        try!(self.add_asssign(ctx, args));
         Ok(())
     }
 
@@ -120,8 +120,8 @@ struct Avg {
 }
 
 impl AggrFunc for Avg {
-    fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
-        if try!(self.sum.add_asssign(args)) {
+    fn update(&mut self, ctx: &EvalContext, args: Vec<Datum>) -> Result<()> {
+        if try!(self.sum.add_asssign(ctx, args)) {
             self.cnt += 1;
         }
         Ok(())
