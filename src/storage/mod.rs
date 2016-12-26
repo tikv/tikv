@@ -134,6 +134,7 @@ pub enum Command {
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
+    RawGet { ctx: Context, key: Key },
 }
 
 impl Display for Command {
@@ -199,6 +200,9 @@ impl Display for Command {
                        safe_point,
                        ctx)
             }
+            Command::RawGet { ref ctx, ref key } => {
+                write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
+            }
         }
     }
 }
@@ -215,7 +219,8 @@ impl Command {
             Command::Get { .. } |
             Command::BatchGet { .. } |
             Command::Scan { .. } |
-            Command::ScanLock { .. } => true,
+            Command::ScanLock { .. } |
+            Command::RawGet { .. } => true,
             Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
@@ -234,6 +239,7 @@ impl Command {
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => "gc",
+            Command::RawGet { .. } => "raw_get",
         }
     }
 
@@ -248,7 +254,8 @@ impl Command {
             Command::Rollback { ref ctx, .. } |
             Command::ScanLock { ref ctx, .. } |
             Command::ResolveLock { ref ctx, .. } |
-            Command::Gc { ref ctx, .. } => ctx,
+            Command::Gc { ref ctx, .. } |
+            Command::RawGet { ref ctx, .. } => ctx,
         }
     }
 
@@ -263,7 +270,8 @@ impl Command {
             Command::Rollback { ref mut ctx, .. } |
             Command::ScanLock { ref mut ctx, .. } |
             Command::ResolveLock { ref mut ctx, .. } |
-            Command::Gc { ref mut ctx, .. } => ctx,
+            Command::Gc { ref mut ctx, .. } |
+            Command::RawGet { ref mut ctx, .. } => ctx,
         }
     }
 }
@@ -559,14 +567,11 @@ impl Storage {
                          key: Vec<u8>,
                          callback: Callback<Option<Vec<u8>>>)
                          -> Result<()> {
-        try!(self.engine
-            .async_snapshot(&ctx,
-                            box move |(_, res): (_, engine::Result<_>)| {
-                                callback(res.and_then(|snap: Box<Snapshot>| {
-                                        snap.get(&Key::from_encoded(key))
-                                    })
-                                    .map_err(Error::from))
-                            }));
+        let cmd = Command::RawGet {
+            ctx: ctx,
+            key: Key::from_encoded(key),
+        };
+        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
         Ok(())
     }
