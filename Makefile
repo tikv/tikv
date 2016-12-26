@@ -11,6 +11,7 @@ endif
 DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
+CARGO_TARGET_DIR ?= $(CURDIR)/target
 
 default: release
 
@@ -29,8 +30,8 @@ run:
 
 release:
 	cargo build --release --features "${ENABLE_FEATURES}"
-	@mkdir -p bin 
-	cp -f ./target/release/tikv-ctl ./target/release/tikv-server ./bin
+	@mkdir -p ${BIN_PATH}
+	cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 
 static_release:
 	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 make release
