@@ -90,7 +90,13 @@ fn read_messages<T: Storage>(raft: &mut Raft<T>) -> Vec<Message> {
     raft.msgs.drain(..).collect()
 }
 
+// ents creates a raft state machine with a sequence of log entries at
+// the given terms.
 fn ents(terms: Vec<u64>) -> Interface {
+    ents_with_config(terms, false)
+}
+
+fn ents_with_config(terms: Vec<u64>, pre_vote: bool) -> Interface {
     let store = MemStorage::new();
     for (i, term) in terms.iter().enumerate() {
         let mut e = Entry::new();
@@ -99,9 +105,26 @@ fn ents(terms: Vec<u64>) -> Interface {
         store.wl().append(&[e]).expect("");
     }
     let mut raft = new_test_raft(1, vec![], 5, 1, store);
+    raft.pre_vote = pre_vote;
     raft.reset(terms[terms.len() - 1]);
     raft
 }
+
+// voted_with_config creates a raft state machine with vote and term set
+// to the given value but no log entries (indicating that it voted in
+// the given term but has not receive any logs).
+fn voted_with_config(vote: u64, term: u64, pre_vote: bool) -> Interface {
+    let mut hard_state = HardState::new();
+    hard_state.set_vote(vote);
+    hard_state.set_term(term);
+    let store = MemStorage::new();
+    store.wl().set_hardstate(hard_state);
+    let mut raft = new_test_raft(1, vec![], 5, 1, store);
+    raft.pre_vote = pre_vote;
+    raft.reset(term);
+    raft
+}
+
 
 fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
     s.wl().append(r.raft_log.unstable_entries().unwrap_or(&[])).expect("");
@@ -146,7 +169,7 @@ impl Interface {
         }
     }
 
-    fn initial(&mut self, id: u64, ids: &[u64], pre_vote: bool) {
+    fn initial(&mut self, id: u64, ids: &[u64]) {
         if self.raft.is_some() {
             self.id = id;
             self.prs = HashMap::with_capacity(ids.len());
@@ -155,7 +178,6 @@ impl Interface {
             }
             let term = self.term;
             self.reset(term);
-            self.pre_vote = pre_vote;
         }
     }
 }
@@ -270,7 +292,7 @@ impl Network {
                     npeers.insert(id, r);
                 }
                 Some(mut p) => {
-                    p.initial(id, &peer_addrs, pre_vote);
+                    p.initial(id, &peer_addrs);
                     npeers.insert(id, p);
                 }
             }
@@ -567,17 +589,10 @@ fn test_leader_election(pre_vote: bool) {
         // three logs futher along than 0, but in the same term so rejection
         // are returned instead of the votes being ignored.
         (Network::new_with_config(vec![None,
-                                       Some(ents(vec![1])),
-                                       Some(ents(vec![1])),
-                                       Some(ents(vec![1,1])),
+                                       Some(ents_with_config(vec![1], pre_vote)),
+                                       Some(ents_with_config(vec![1], pre_vote)),
+                                       Some(ents_with_config(vec![1,1], pre_vote)),
                                        None], pre_vote), StateRole::Follower, 1),
-
-        // logs converge
-        (Network::new_with_config(vec![Some(ents(vec![1])),
-                                       None,
-                                       Some(ents(vec![2])),
-                                       Some(ents(vec![1])),
-                                       None], pre_vote), StateRole::Leader, 2),
     ];
 
     for (i, &mut (ref mut network, state, term)) in tests.iter_mut().enumerate() {
@@ -640,6 +655,80 @@ fn test_leader_cycle(pre_vote: bool) {
         }
     }
 }
+
+
+#[test]
+fn test_leader_election_overwrite_newer_logs_no_pre_vote() {
+    test_leader_election_overwrite_newer_logs(false);
+}
+
+#[test]
+fn test_leader_election_overwrite_newer_logs_pre_vote() {
+    test_leader_election_overwrite_newer_logs(true);
+}
+
+// test_leader_election_overwrite_newer_logs tests a scenario in which a
+// newly-elected leader does *not* have the newest (i.e. highest term)
+// log entries, and must overwrite higher-term log entries with
+// lower-term ones.
+fn test_leader_election_overwrite_newer_logs(pre_vote: bool) {
+    // This network represents the results of the following sequence of
+    // events:
+    // - Node 1 won the election in term 1.
+    // - Node 1 replicated a log entry to node 2 but died before sending
+    //   it to other nodes.
+    // - Node 3 won the second election in term 2.
+    // - Node 3 wrote an entry to its logs but died without sending it
+    //   to any other nodes.
+    //
+    // At this point, nodes 1, 2, and 3 all have uncommitted entries in
+    // their logs and could win an election at term 3. The winner's log
+    // entry overwrites the loser's. (test_leader_sync_follower_log tests
+    // the case where older log entries are overwritten, so this test
+    // focuses on the case where the newer entries are lost).
+    let mut network = Network::new_with_config(vec![
+        Some(ents_with_config(vec![1], pre_vote)), // Node 1: Won first election
+        Some(ents_with_config(vec![1], pre_vote)), // Node 2: Get logs from node 1
+        Some(ents_with_config(vec![2], pre_vote)), // Node 3: Won second election
+        Some(voted_with_config(3, 2, pre_vote)),  // Node 4: Voted but didn't get logs
+        Some(voted_with_config(3, 2, pre_vote)),   // Node 5: Voted but didn't get logs
+    ],
+                                               pre_vote);
+
+    // Node 1 campaigns. The election fails because a quorum of nodes
+    // know about the election that already happened at term 2. Node 1's
+    // term is pushed ahead to 2.
+    network.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+    assert_eq!(network.peers[&1].state, StateRole::Follower);
+    assert_eq!(network.peers[&1].term, 2);
+
+    // Node 1 campaigns again with a higher term. this time it succeeds.
+    network.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+    assert_eq!(network.peers[&1].state, StateRole::Leader);
+    assert_eq!(network.peers[&1].term, 3);
+
+    // Now all nodes agree on a log entry with term 1 at index 1 (and
+    // term 3 at index 2).
+    for (id, sm) in &network.peers {
+        let entries = sm.raft_log.all_entries();
+        assert_eq!(entries.len(),
+                   2,
+                   "node {}: entries.len() == {}, want 2",
+                   id,
+                   entries.len());
+        assert_eq!(entries[0].get_term(),
+                   1,
+                   "node {}: term at index 1 == {}, want 1",
+                   id,
+                   entries[0].get_term());
+        assert_eq!(entries[1].get_term(),
+                   3,
+                   "node {}: term at index 2 == {}, want 3",
+                   id,
+                   entries[1].get_term());
+    }
+}
+
 
 #[test]
 fn test_vote_from_any_state() {
