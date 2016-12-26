@@ -35,6 +35,7 @@ use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::peer::ReadyContext;
+use super::metrics::*;
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
 
@@ -396,6 +397,7 @@ impl PeerStorage {
                   self.tag,
                   idx,
                   self.truncated_index());
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.with_label_values(&["stale"]).inc();
             return false;
         }
 
@@ -404,6 +406,7 @@ impl PeerStorage {
             error!("{} decode snapshot fail, it may be corrupted: {:?}",
                    self.tag,
                    e);
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.with_label_values(&["decode"]).inc();
             return false;
         }
         let snap_epoch = snap_data.get_region().get_region_epoch();
@@ -413,6 +416,7 @@ impl PeerStorage {
                   self.tag,
                   snap_epoch,
                   latest_epoch);
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.with_label_values(&["epoch"]).inc();
             return false;
         }
 
