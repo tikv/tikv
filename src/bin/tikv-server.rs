@@ -252,7 +252,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let mut block_base_opts = BlockBasedOptions::new();
     let block_size = get_toml_int(config,
                                   (prefix.clone() + "block-size").as_str(),
-                                  Some(16 * 1024));
+                                  Some(64 * 1024));
     block_base_opts.set_block_size(block_size as usize);
     let block_cache_size = get_toml_int(config,
                                         (prefix.clone() + "block-cache-size").as_str(),
@@ -286,7 +286,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
 
     let write_buffer_size = get_toml_int(config,
                                          (prefix.clone() + "write-buffer-size").as_str(),
-                                         Some(64 * 1024 * 1024));
+                                         Some(128 * 1024 * 1024));
     opts.set_write_buffer_size(write_buffer_size as u64);
 
     let max_write_buffer_number = get_toml_int(config,
@@ -304,12 +304,12 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let max_bytes_for_level_base = get_toml_int(config,
                                                 (prefix.clone() + "max-bytes-for-level-base")
                                                     .as_str(),
-                                                Some(64 * 1024 * 1024));
+                                                Some(128 * 1024 * 1024));
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
 
     let target_file_size_base = get_toml_int(config,
                                              (prefix.clone() + "target-file-size-base").as_str(),
-                                             Some(16 * 1024 * 1024));
+                                             Some(32 * 1024 * 1024));
     opts.set_target_file_size_base(target_file_size_base as u64);
 
     let level_zero_slowdown_writes_trigger =
