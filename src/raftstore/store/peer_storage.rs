@@ -438,15 +438,19 @@ impl PeerStorage {
 
         if tried {
             *snap_state = SnapState::Relax;
-            if let Some(s) = snap {
-                if self.validate_snap(&s) {
+            match snap {
+                Some(s) => {
                     *tried_cnt = 0;
-                    return Ok(s);
+                    if self.validate_snap(&s) {
+                        return Ok(s);
+                    }
+                }
+                None => {
+                    warn!("{} snapshot generating failed at {} try time",
+                          self.tag,
+                          *tried_cnt);
                 }
             }
-            warn!("{} snapshot generating failed at {} try time",
-                  self.tag,
-                  *tried_cnt);
         }
 
         if SnapState::Relax != *snap_state {
@@ -1218,21 +1222,24 @@ mod test {
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned.
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 2);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
-        if let SnapState::Generating(ref rx) = *s.snap_state.borrow() {
-            rx.recv_timeout(Duration::from_secs(3)).unwrap();
-            worker.stop().unwrap().join().unwrap();
-            match rx.try_recv() {
-                Err(TryRecvError::Disconnected) => {}
-                res => panic!("unexpected result: {:?}", res),
+        match *s.snap_state.borrow() {
+            SnapState::Generating(ref rx) => {
+                rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                worker.stop().unwrap().join().unwrap();
+                match rx.try_recv() {
+                    Err(TryRecvError::Disconnected) => {}
+                    res => panic!("unexpected result: {:?}", res),
+                }
             }
+            ref s => panic!("unexpected state {:?}", s),
         }
         // Disconnected channel should trigger another try.
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 3);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
-        for cnt in 3..super::MAX_SNAP_TRY_CNT {
+        for cnt in 2..super::MAX_SNAP_TRY_CNT {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot().unwrap_err(), unavailable);
             assert_eq!(*s.snap_tried_cnt.borrow(), cnt + 1);
