@@ -90,12 +90,8 @@ fn read_messages<T: Storage>(raft: &mut Raft<T>) -> Vec<Message> {
     raft.msgs.drain(..).collect()
 }
 
-// ents creates a raft state machine with a sequence of log entries at
+// ents_with_config creates a raft state machine with a sequence of log entries at
 // the given terms.
-fn ents(terms: Vec<u64>) -> Interface {
-    ents_with_config(terms, false)
-}
-
 fn ents_with_config(terms: Vec<u64>, pre_vote: bool) -> Interface {
     let store = MemStorage::new();
     for (i, term) in terms.iter().enumerate() {
@@ -640,12 +636,12 @@ fn test_leader_cycle(pre_vote: bool) {
 
         for sm in network.peers.values() {
             if sm.id == campaigner_id && sm.state != StateRole::Leader {
-                panic!("preVote={}: campaigning node {} state = {:?}, want Leader",
+                panic!("pre_vote={}: campaigning node {} state = {:?}, want Leader",
                        pre_vote,
                        sm.id,
                        sm.state);
             } else if sm.id != campaigner_id && sm.state != StateRole::Follower {
-                panic!("preVote={}: after campaign of node {}, node {} had state = {:?}, want \
+                panic!("pre_vote={}: after campaign of node {}, node {} had state = {:?}, want \
                         Follower",
                        pre_vote,
                        campaigner_id,
