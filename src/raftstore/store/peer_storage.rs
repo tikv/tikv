@@ -35,6 +35,7 @@ use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::peer::ReadyContext;
+use super::metrics::*;
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
 
@@ -396,6 +397,7 @@ impl PeerStorage {
                   self.tag,
                   idx,
                   self.truncated_index());
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.with_label_values(&["stale"]).inc();
             return false;
         }
 
@@ -404,6 +406,7 @@ impl PeerStorage {
             error!("{} decode snapshot fail, it may be corrupted: {:?}",
                    self.tag,
                    e);
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.with_label_values(&["decode"]).inc();
             return false;
         }
         let snap_epoch = snap_data.get_region().get_region_epoch();
@@ -413,6 +416,7 @@ impl PeerStorage {
                   self.tag,
                   snap_epoch,
                   latest_epoch);
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.with_label_values(&["epoch"]).inc();
             return false;
         }
 
@@ -438,15 +442,19 @@ impl PeerStorage {
 
         if tried {
             *snap_state = SnapState::Relax;
-            if let Some(s) = snap {
-                if self.validate_snap(&s) {
+            match snap {
+                Some(s) => {
                     *tried_cnt = 0;
-                    return Ok(s);
+                    if self.validate_snap(&s) {
+                        return Ok(s);
+                    }
+                }
+                None => {
+                    warn!("{} snapshot generating failed at {} try time",
+                          self.tag,
+                          *tried_cnt);
                 }
             }
-            warn!("{} snapshot generating failed at {} try time",
-                  self.tag,
-                  *tried_cnt);
         }
 
         if SnapState::Relax != *snap_state {
@@ -1218,21 +1226,24 @@ mod test {
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned.
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 2);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
-        if let SnapState::Generating(ref rx) = *s.snap_state.borrow() {
-            rx.recv_timeout(Duration::from_secs(3)).unwrap();
-            worker.stop().unwrap().join().unwrap();
-            match rx.try_recv() {
-                Err(TryRecvError::Disconnected) => {}
-                res => panic!("unexpected result: {:?}", res),
+        match *s.snap_state.borrow() {
+            SnapState::Generating(ref rx) => {
+                rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                worker.stop().unwrap().join().unwrap();
+                match rx.try_recv() {
+                    Err(TryRecvError::Disconnected) => {}
+                    res => panic!("unexpected result: {:?}", res),
+                }
             }
+            ref s => panic!("unexpected state {:?}", s),
         }
         // Disconnected channel should trigger another try.
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 3);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
-        for cnt in 3..super::MAX_SNAP_TRY_CNT {
+        for cnt in 2..super::MAX_SNAP_TRY_CNT {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot().unwrap_err(), unavailable);
             assert_eq!(*s.snap_tried_cnt.borrow(), cnt + 1);
