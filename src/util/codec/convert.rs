@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::{self, str, i64};
+use std::borrow::Cow;
 
 use util::xeval::EvalContext;
 use super::Result;
@@ -43,6 +44,7 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
 }
 
 /// `bytes_to_int` converts a byte arrays to an i64 in best effort.
+/// TODO: handle overflow properly.
 pub fn bytes_to_int(ctx: &EvalContext, bytes: &[u8]) -> Result<i64> {
     let s = try!(str::from_utf8(bytes)).trim();
     let vs = try!(get_valid_int_prefix(ctx, s));
@@ -86,9 +88,9 @@ fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
     }
 }
 
-fn get_valid_int_prefix(ctx: &EvalContext, s: &str) -> Result<String> {
+fn get_valid_int_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
     let vs = try!(get_valid_float_prefix(ctx, s));
-    float_str_to_int_string(vs)
+    float_str_to_int_string(Cow::Borrowed(vs))
 }
 
 fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> {
@@ -141,39 +143,39 @@ fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> 
 /// It converts a valid float string into valid integer string which can be
 /// parsed by `i64::from_str`, we can't parse float first then convert it to string
 /// because precision will be lost.
-fn float_str_to_int_string(valid_float: &str) -> Result<String> {
-    let mut dot_idx: i64 = -1;
-    let mut e_idx: i64 = -1;
+fn float_str_to_int_string(valid_float: Cow<str>) -> Result<Cow<str>> {
+    let mut dot_idx = None;
+    let mut e_idx = None;
     for (i, c) in valid_float.chars().enumerate() {
         match c {
-            '.' => dot_idx = i as i64,
-            'e' | 'E' => e_idx = i as i64,
+            '.' => dot_idx = Some(i),
+            'e' | 'E' => e_idx = Some(i),
             _ => (),
         }
     }
 
-    if dot_idx == -1 && e_idx == -1 {
-        return Ok(valid_float.to_owned());
+    if dot_idx.is_none() && e_idx.is_none() {
+        return Ok(valid_float);
     }
 
     let mut int_cnt;
     let mut digits = String::with_capacity(valid_float.len());
 
-    if dot_idx == -1 {
-        digits.push_str(&valid_float[..e_idx as usize]);
+    if dot_idx.is_none() {
+        digits.push_str(&valid_float[..e_idx.unwrap()]);
         int_cnt = digits.len() as i64;
     } else {
-        digits.push_str(&valid_float[..dot_idx as usize]);
+        digits.push_str(&valid_float[..dot_idx.unwrap()]);
         int_cnt = digits.len() as i64;
 
-        if e_idx == -1 {
-            digits.push_str(&valid_float[dot_idx as usize + 1..]);
+        if e_idx.is_none() {
+            digits.push_str(&valid_float[dot_idx.unwrap() + 1..]);
         } else {
-            digits.push_str(&valid_float[dot_idx as usize + 1..e_idx as usize]);
+            digits.push_str(&valid_float[dot_idx.unwrap() + 1..e_idx.unwrap()]);
         }
     }
-    if e_idx != -1 {
-        let exp = box_try!((&valid_float[e_idx as usize + 1..]).parse::<i64>());
+    if e_idx.is_some() {
+        let exp = box_try!((&valid_float[e_idx.unwrap() + 1..]).parse::<i64>());
         if exp > 0 && int_cnt > (i64::MAX - exp) {
             // (exp + incCnt) overflows MaxInt64.
             return Err(box_err!("[1264] Data Out of Range"));
@@ -181,7 +183,7 @@ fn float_str_to_int_string(valid_float: &str) -> Result<String> {
         int_cnt += exp;
     }
     if int_cnt <= 0 || (int_cnt == 1 && (digits.starts_with('-') || digits.starts_with('+'))) {
-        return Ok("0".to_owned());
+        return Ok(Cow::Borrowed("0"));
     }
     let mut valid_int = String::new();
     if int_cnt <= digits.len() as i64 {
@@ -196,7 +198,7 @@ fn float_str_to_int_string(valid_float: &str) -> Result<String> {
         valid_int.push_str(&digits);
         valid_int.extend((0..extra_zero_count).map(|_| '0'));
     }
-    Ok(valid_int)
+    Ok(Cow::Owned(valid_int))
 }
 
 const MAX_ZERO_COUNT: i64 = 20;
@@ -204,7 +206,10 @@ const MAX_ZERO_COUNT: i64 = 20;
 #[cfg(test)]
 mod test {
     use std::f64::EPSILON;
+    use std::borrow::Cow;
+
     use chrono::FixedOffset;
+
     use util::xeval::EvalContext;
 
     #[test]
@@ -329,10 +334,10 @@ mod test {
                          ("1e9223372036854775807", false, "")];
 
         for (i, ok, e) in cases {
-            let o = super::float_str_to_int_string(i);
+            let o = super::float_str_to_int_string(Cow::Borrowed(i));
             assert_eq!(o.is_ok(), ok);
             if ok {
-                assert_eq!(o.unwrap(), e);
+                assert_eq!(o.unwrap(), *e);
             }
         }
     }
