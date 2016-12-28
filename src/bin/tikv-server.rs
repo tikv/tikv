@@ -412,14 +412,14 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg.raft_store.region_split_size =
         get_toml_int(config,
                      "raftstore.region-split-size",
-                     Some(64 * 1024 * 1024)) as u64;
+                     Some(96 * 1024 * 1024)) as u64;
     cfg.raft_store.region_max_size =
-        get_toml_int(config, "raftstore.region-max-size", Some(80 * 1024 * 1024)) as u64;
+        get_toml_int(config, "raftstore.region-max-size", Some(128 * 1024 * 1024)) as u64;
 
     cfg.raft_store.region_check_size_diff =
         get_toml_int(config,
                      "raftstore.region-split-check-diff",
-                     Some(8 * 1024 * 1024)) as u64;
+                     Some(24 * 1024 * 1024)) as u64;
 
     cfg.raft_store.raft_log_gc_tick_interval =
         get_toml_int(config, "raftstore.raft-log-gc-tick-interval", Some(10_000)) as u64;
