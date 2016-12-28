@@ -34,6 +34,7 @@ use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
+use super::network_monitor::{Event as MonitorEvent, Runner as MonitorRunner};
 use raft::SnapshotStatus;
 use util::sockopt::SocketOpt;
 use super::metrics::*;
@@ -92,6 +93,8 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
+    network_monitor_worker: Worker<MonitorEvent>,
+
     resolver: S,
 
     cfg: Config,
@@ -120,6 +123,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let store_handler = StoreHandler::new(storage);
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
+        let network_monitor_worker = Worker::new("network-monitor");
 
         let svr = Server {
             listener: listener,
@@ -133,6 +137,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
+            network_monitor_worker: network_monitor_worker,
             resolver: resolver,
             cfg: cfg.clone(),
         };
@@ -149,6 +154,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
+
+        let network_monitor_runner = MonitorRunner::new(self.get_sendch());
+        box_try!(self.network_monitor_worker.start(network_monitor_runner));
 
         info!("TiKV is ready to serve");
 

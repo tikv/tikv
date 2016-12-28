@@ -33,6 +33,7 @@ pub mod transport;
 pub mod node;
 pub mod resolve;
 pub mod snap;
+pub mod network_monitor;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID};
 pub use self::errors::{Result, Error};
