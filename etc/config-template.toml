@@ -59,7 +59,7 @@ region-max-size = "128MB"
 region-split-size = "96MB"
 # When region size changes exceeds region-split-check-diff, we should check 
 # whether the region should be split or not. 
-region-split-check-diff = "24MB"
+region-split-check-diff = "12MB"
 # Interval to check region whether need to be split or not.
 split-region-check-tick-interval = "5s"
 
