@@ -382,11 +382,14 @@ impl<T: Storage> Raft<T> {
             if m.get_term() == 0 {
                 // Pre-vote RPCs are sent at a term other than our actual term, so the code
                 // that sends these messages is responsible for setting the term.
-                panic!("term should be set when sending {:?}", m.get_msg_type());
+                panic!("{} term should be set when sending {:?}",
+                       self.tag,
+                       m.get_msg_type());
             }
         } else {
             if m.get_term() != 0 {
-                panic!("term should not be set when sending {:?} (was {})",
+                panic!("{} term should not be set when sending {:?} (was {})",
+                       self.tag,
                        m.get_msg_type(),
                        m.get_term());
             }
@@ -863,11 +866,11 @@ impl<T: Storage> Raft<T> {
                                self.raft_log.committed + 1,
                                raft_log::NO_LIMIT)
                         .expect("unexpected error getting unapplied entries");
-                    let n = self.num_pending_conf(&ents[..]);
+                    let n = self.num_pending_conf(&ents);
                     if n != 0 && self.raft_log.committed > self.raft_log.applied {
                         warn!("{} cannot campaign at term {} since there are still {} pending \
                                configuration changes to apply",
-                              self.id,
+                              self.tag,
                               self.term,
                               n);
                         return Ok(());
