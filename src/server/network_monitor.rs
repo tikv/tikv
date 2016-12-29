@@ -13,17 +13,28 @@
 
 use std::fmt::{self, Formatter, Display};
 
+use kvproto::statpb::{Request as StatRequest, Response as StatResponse};
+
 use super::{Result, Msg};
-use util::worker::Runnable;
+use util::worker::{Runnable, Worker, Scheduler};
 use util::transport::SendCh;
+
+// NetworkMonitor keep watch on the network status between servers.
+pub trait NetworkMonitor {
+    fn renew_network_stat(&self, store_id: u64, remote_store_ids: Vec<u64>) -> Result<()>;
+
+    fn send_request(&self, req: StatRequest) -> Result<()>;
+
+    fn send_response(&self, resp: StatResponse) -> Result<()>;
+}
 
 pub enum Event {
     RenewNetworkStat {
         store_id: u64,
         remote_store_ids: Vec<u64>,
     },
-    Ping { from_store_id: u64 },
-    Pong { from_store_id: u64 },
+    Request { req: StatRequest },
+    Response { resp: StatResponse },
 }
 
 impl Display for Event {
@@ -31,8 +42,8 @@ impl Display for Event {
         // TODO add messages
         match *self {
             Event::RenewNetworkStat { .. } => write!(f, ""),
-            Event::Ping { .. } => write!(f, ""),
-            Event::Pong { .. } => write!(f, ""),
+            Event::Request { .. } => write!(f, ""),
+            Event::Response { .. } => write!(f, ""),
         }
     }
 }
@@ -53,12 +64,60 @@ impl Runnable<Event> for Runner {
             Event::RenewNetworkStat { .. } => {
                 // TODO add impl
             }
-            Event::Ping { .. } => {
+            Event::Request { .. } => {
                 // TODO add impl
             }
-            Event::Pong { .. } => {
+            Event::Response { .. } => {
                 // TODO add impl
             }
+        }
+    }
+}
+
+pub struct SimpleNetworkMonitor {
+    worker: Worker<Event>,
+}
+
+impl SimpleNetworkMonitor {
+    pub fn new(ch: SendCh<Msg>) -> Result<SimpleNetworkMonitor> {
+        let mut m = SimpleNetworkMonitor { worker: Worker::new("network-monitor") };
+        let runner = Runner::new(ch);
+        box_try!(m.worker.start(runner));
+        Ok(m)
+    }
+
+    pub fn scheduler(&self) -> Scheduler<Event> {
+        self.worker.scheduler()
+    }
+}
+
+impl NetworkMonitor for SimpleNetworkMonitor {
+    fn renew_network_stat(&self, store_id: u64, remote_store_ids: Vec<u64>) -> Result<()> {
+        let event = Event::RenewNetworkStat {
+            store_id: store_id,
+            remote_store_ids: remote_store_ids,
+        };
+        box_try!(self.worker.schedule(event));
+        Ok(())
+    }
+
+    fn send_request(&self, req: StatRequest) -> Result<()> {
+        let event = Event::Request { req: req };
+        box_try!(self.worker.schedule(event));
+        Ok(())
+    }
+
+    fn send_response(&self, resp: StatResponse) -> Result<()> {
+        let event = Event::Response { resp: resp };
+        box_try!(self.worker.schedule(event));
+        Ok(())
+    }
+}
+
+impl Drop for SimpleNetworkMonitor {
+    fn drop(&mut self) {
+        if let Some(Err(e)) = self.worker.stop().map(|h| h.join()) {
+            error!("failed to stop simple network monitor theard: {:?}!!!", e);
         }
     }
 }

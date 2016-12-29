@@ -44,7 +44,7 @@ use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, wri
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
-use super::transport::Transport;
+use super::transport::{Transport, NetworkMonitorTransport};
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
@@ -250,9 +250,11 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                             region: &metapb::Region)
-                                             -> Result<Peer> {
+    pub fn create<T: Transport, N: NetworkMonitorTransport, C: PdClient>(store: &mut Store<T,
+                                                                                           N,
+                                                                                           C>,
+                                                                         region: &metapb::Region)
+                                                                         -> Result<Peer> {
         let store_id = store.store_id();
         let peer_id = match util::find_peer(region, store_id) {
             None => {
@@ -270,10 +272,12 @@ impl Peer {
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
-    pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                                region_id: u64,
-                                                peer_id: u64)
-                                                -> Result<Peer> {
+    pub fn replicate<T: Transport, N: NetworkMonitorTransport, C: PdClient>(store: &mut Store<T,
+                                                                                              N,
+                                                                                              C>,
+                                                                            region_id: u64,
+                                                                            peer_id: u64)
+                                                                            -> Result<Peer> {
         // We will remove tombstone key when apply snapshot
         info!("[region {}] replicate peer with id {}", region_id, peer_id);
 
@@ -282,10 +286,10 @@ impl Peer {
         Peer::new(store, &region, peer_id)
     }
 
-    fn new<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                      region: &metapb::Region,
-                                      peer_id: u64)
-                                      -> Result<Peer> {
+    fn new<T: Transport, N: NetworkMonitorTransport, C: PdClient>(store: &mut Store<T, N, C>,
+                                                                  region: &metapb::Region,
+                                                                  peer_id: u64)
+                                                                  -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }

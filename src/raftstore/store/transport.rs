@@ -19,3 +19,13 @@ use raftstore::Result;
 pub trait Transport: Send + Clone {
     fn send(&self, msg: RaftMessage) -> Result<()>;
 }
+
+pub struct RenewNetworkStat {
+    pub store_id: u64,
+    pub remote_store_ids: Vec<u64>,
+}
+
+// Transports message between store and network monitor.
+pub trait NetworkMonitorTransport: Send + Clone {
+    fn send(&self, stat: RenewNetworkStat) -> Result<()>;
+}
