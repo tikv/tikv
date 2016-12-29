@@ -52,6 +52,7 @@ mod raftlog_gc;
 mod pd;
 mod metrics;
 mod consistency_check;
+mod apply;
 
 pub use self::region::{Task as RegionTask, Runner as RegionRunner};
 pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};
@@ -59,3 +60,5 @@ pub use self::compact::{Task as CompactTask, Runner as CompactRunner};
 pub use self::raftlog_gc::{Task as RaftlogGcTask, Runner as RaftlogGcRunner};
 pub use self::pd::{Task as PdTask, Runner as PdRunner};
 pub use self::consistency_check::{Task as ConsistencyCheckTask, Runner as ConsistencyCheckRunner};
+pub use self::apply::{Task as ApplyTask, Runner as ApplyRunner, TaskRes as ApplyTaskRes,
+                      ExecResult};

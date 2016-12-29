@@ -65,7 +65,7 @@ fn new_ready(ss: Option<SoftState>,
         ss: ss,
         hs: hs,
         entries: entries,
-        committed_entries: committed_entries,
+        committed_entries: Some(committed_entries),
         ..Default::default()
     }
 }
