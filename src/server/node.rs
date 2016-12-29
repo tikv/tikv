@@ -15,6 +15,7 @@ use std::thread;
 use std::sync::{Arc, mpsc};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
+use std::process;
 
 use mio::EventLoop;
 use rocksdb::DB;
@@ -152,9 +153,10 @@ impl<C> Node<C>
 
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
-            return Err(box_err!("store ident {:?} has mismatched cluster id with {}",
-                                ident,
-                                self.cluster_id));
+            error!("cluster id mismatch: local_id {} remote_id {}",
+                   ident.get_cluster_id(),
+                   self.cluster_id);
+            process::exit(1);
         }
 
         let store_id = ident.get_store_id();
