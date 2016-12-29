@@ -153,7 +153,7 @@ impl<C> Node<C>
 
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
-            error!("cluster id mismatch: local_id {} remote_id {}",
+            error!("cluster ID mismatch: local_id {} remote_id {}",
                    ident.get_cluster_id(),
                    self.cluster_id);
             process::exit(1);
