@@ -55,7 +55,7 @@ pd-store-heartbeat-tick-interval = "10s"
 # When the region's size exceeds region-max-size, we will split the region 
 # into two which the left region's size will be region-split-size or a little 
 # bit smaller. 
-region-max-size = "128MB"
+region-max-size = "144MB"
 region-split-size = "96MB"
 # When region size changes exceeds region-split-check-diff, we should check 
 # whether the region should be split or not. 
