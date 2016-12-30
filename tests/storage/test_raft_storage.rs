@@ -43,7 +43,6 @@ fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
 
     (cluster, SyncStorage::from_engine(engine, &Default::default()), ctx)
 }
-
 #[test]
 fn test_raft_storage() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
@@ -68,30 +67,7 @@ fn test_raft_storage() {
 }
 
 #[test]
-fn test_raft_storage() {
-    let (_cluster, storage, mut ctx) = new_raft_storage();
-    let key = make_key(b"key");
-    assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
-    storage.prewrite(ctx.clone(),
-                  vec![Mutation::Put((key.clone(), b"value".to_vec()))],
-                  b"key".to_vec(),
-                  10)
-        .unwrap();
-    storage.commit(ctx.clone(), vec![key.clone()], 10, 15).unwrap();
-    assert_eq!(storage.get(ctx.clone(), &key, 20).unwrap().unwrap(),
-               b"value".to_vec());
-
-    // Test wrong region id.
-    let region_id = ctx.get_region_id();
-    ctx.set_region_id(region_id + 1);
-    assert!(storage.get(ctx.clone(), &key, 20).is_err());
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
-    assert!(storage.scan(ctx.clone(), key.clone(), 1, false, 20).is_err());
-    assert!(storage.scan_lock(ctx.clone(), 20).is_err());
-}
-
-#[test]
-fn test_raft_storage() {
+fn test_raft_storage_store_not_match() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
     let key = make_key(b"key");
     assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
@@ -105,8 +81,10 @@ fn test_raft_storage() {
                b"value".to_vec());
 
     // Test store not match.
-    let store_id = ctx.get_peer().get_store_id();
-    ctx.get_peer().set_store_id(store_id + 1);
+    let mut peer = ctx.get_peer().clone();
+    let store_id = peer.get_store_id();
+    peer.set_store_id(store_id + 1);
+    ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(storage.scan(ctx.clone(), key.clone(), 1, false, 20).is_err());
