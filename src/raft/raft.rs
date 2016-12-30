@@ -237,6 +237,7 @@ fn new_message(to: u64, field_type: MessageType, from: Option<u64>) -> Message {
     m.set_msg_type(field_type);
     m
 }
+
 // vote_resp_msg_type maps vote and pre_vote message types to their correspond responses.
 pub fn vote_resp_msg_type(t: MessageType) -> MessageType {
     match t {
@@ -895,17 +896,7 @@ impl<T: Storage> Raft<T> {
                 if (self.vote == INVALID_ID || m.get_term() > self.term ||
                     self.vote == m.get_from()) &&
                    self.raft_log.is_up_to_date(m.get_index(), m.get_log_term()) {
-                    info!("{} [logterm: {}, index: {}, vote: {}] cast {:?} for {} [logterm: {}, \
-                           index: {}] at term {}",
-                          self.tag,
-                          self.raft_log.last_term(),
-                          self.raft_log.last_index(),
-                          self.vote,
-                          m.get_msg_type(),
-                          m.get_from(),
-                          m.get_log_term(),
-                          m.get_index(),
-                          self.term);
+                    self.log_vote_approve(&m);
                     let mut to_send =
                         new_message(m.get_from(), vote_resp_msg_type(m.get_msg_type()), None);
                     to_send.set_reject(false);
@@ -916,18 +907,7 @@ impl<T: Storage> Raft<T> {
                         self.vote = m.get_from();
                     }
                 } else {
-                    info!("{} [logterm: {}, index: {}, vote: {}] rejected {:?} from {} [logterm: \
-                           {}, index: {}] at term {}",
-                          self.tag,
-                          self.raft_log.last_term(),
-                          self.raft_log.last_index(),
-                          self.vote,
-                          m.get_msg_type(),
-                          m.get_from(),
-                          m.get_log_term(),
-                          m.get_index(),
-                          self.term);
-
+                    self.log_vote_reject(&m);
                     let mut to_send =
                         new_message(m.get_from(), vote_resp_msg_type(m.get_msg_type()), None);
                     to_send.set_reject(true);
@@ -944,6 +924,34 @@ impl<T: Storage> Raft<T> {
         }
 
         Ok(())
+    }
+
+    fn log_vote_approve(&self, m: &Message) {
+        info!("{} [logterm: {}, index: {}, vote: {}] cast {:?} for {} [logterm: {}, index: {}] \
+               at term {}",
+              self.tag,
+              self.raft_log.last_term(),
+              self.raft_log.last_index(),
+              self.vote,
+              m.get_msg_type(),
+              m.get_from(),
+              m.get_log_term(),
+              m.get_index(),
+              self.term);
+    }
+
+    fn log_vote_reject(&self, m: &Message) {
+        info!("{} [logterm: {}, index: {}, vote: {}] rejected {:?} from {} [logterm: {}, index: \
+               {}] at term {}",
+              self.tag,
+              self.raft_log.last_term(),
+              self.raft_log.last_index(),
+              self.vote,
+              m.get_msg_type(),
+              m.get_from(),
+              m.get_log_term(),
+              m.get_index(),
+              self.term);
     }
 
     fn handle_append_response(&mut self,
