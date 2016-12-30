@@ -319,26 +319,31 @@ mod test {
     }
 
     #[test]
-    fn test_get_valid_int_prefix() {
-        let cases = vec![(".1", true, "0"),
-                         (".0", true, "0"),
-                         ("123", true, "123"),
-                         ("123e1", true, "1230"),
-                         ("123.1e2", true, "12310"),
-                         ("123.45e5", true, "12345000"),
-                         ("123.45678e5", true, "12345678"),
-                         ("123.456789e5", true, "12345678"),
-                         ("-123.45678e5", true, "-12345678"),
-                         ("+123.45678e5", true, "+12345678"),
-                         ("1e21", false, ""),
-                         ("1e9223372036854775807", false, "")];
+    fn test_invalid_get_valid_int_prefix() {
+        let cases = vec!["1e21", "1e9223372036854775807"];
 
-        for (i, ok, e) in cases {
+        for i in cases {
             let o = super::float_str_to_int_string(Cow::Borrowed(i));
-            assert_eq!(o.is_ok(), ok);
-            if ok {
-                assert_eq!(o.unwrap(), *e);
-            }
+            assert!(o.is_err());
+        }
+    }
+
+    #[test]
+    fn test_valid_get_valid_int_prefix() {
+        let cases = vec![(".1", "0"),
+                         (".0", "0"),
+                         ("123", "123"),
+                         ("123e1", "1230"),
+                         ("123.1e2", "12310"),
+                         ("123.45e5", "12345000"),
+                         ("123.45678e5", "12345678"),
+                         ("123.456789e5", "12345678"),
+                         ("-123.45678e5", "-12345678"),
+                         ("+123.45678e5", "+12345678")];
+
+        for (i, e) in cases {
+            let o = super::float_str_to_int_string(Cow::Borrowed(i));
+            assert_eq!(o.unwrap(), *e);
         }
     }
 }
