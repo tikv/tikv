@@ -103,8 +103,6 @@ fn read_messages<T: Storage>(raft: &mut Raft<T>) -> Vec<Message> {
     raft.msgs.drain(..).collect()
 }
 
-// ents_with_config creates a raft state machine with a sequence of log entries at
-// the given terms.
 fn ents_with_config(terms: Vec<u64>, pre_vote: bool) -> Interface {
     let store = MemStorage::new();
     for (i, term) in terms.iter().enumerate() {
@@ -571,16 +569,16 @@ fn test_progress_paused() {
 }
 
 #[test]
-fn test_leader_election_no_pre_vote() {
-    test_leader_election(false);
+fn test_leader_election() {
+    test_leader_election_with_config(false);
 }
 
 #[test]
 fn test_leader_election_pre_vote() {
-    test_leader_election(true);
+    test_leader_election_with_config(true);
 }
 
-fn test_leader_election(pre_vote: bool) {
+fn test_leader_election_with_config(pre_vote: bool) {
     let mut tests = vec![
         (Network::new_with_config(vec![None, None, None], pre_vote), StateRole::Leader, 1),
         (Network::new_with_config(vec![None, None, NOP_STEPPER], pre_vote), StateRole::Leader, 1),
@@ -631,20 +629,20 @@ fn test_leader_election(pre_vote: bool) {
 }
 
 #[test]
-fn test_leader_cycle_no_pre_vote() {
-    test_leader_cycle(false)
+fn test_leader_cycle() {
+    test_leader_cycle_with_config(false)
 }
 
 #[test]
 fn test_leader_cycle_pre_vote() {
-    test_leader_cycle(true)
+    test_leader_cycle_with_config(true)
 }
 
 // test_leader_cycle verifies that each node in a cluster can campaign
 // and be elected in turn. This ensures that elections (including
 // pre-vote) work when not starting from a clean state (as they do in
 // test_leader_election)
-fn test_leader_cycle(pre_vote: bool) {
+fn test_leader_cycle_with_config(pre_vote: bool) {
     let mut network = Network::new_with_config(vec![None, None, None], pre_vote);
     for campaigner_id in 1..4 {
         network.send(vec![new_message(campaigner_id, campaigner_id, MessageType::MsgHup, 0)]);
@@ -669,20 +667,20 @@ fn test_leader_cycle(pre_vote: bool) {
 
 
 #[test]
-fn test_leader_election_overwrite_newer_logs_no_pre_vote() {
-    test_leader_election_overwrite_newer_logs(false);
+fn test_leader_election_overwrite_newer_logs() {
+    test_leader_election_overwrite_newer_logs_with_config(false);
 }
 
 #[test]
 fn test_leader_election_overwrite_newer_logs_pre_vote() {
-    test_leader_election_overwrite_newer_logs(true);
+    test_leader_election_overwrite_newer_logs_with_config(true);
 }
 
 // test_leader_election_overwrite_newer_logs tests a scenario in which a
 // newly-elected leader does *not* have the newest (i.e. highest term)
 // log entries, and must overwrite higher-term log entries with
 // lower-term ones.
-fn test_leader_election_overwrite_newer_logs(pre_vote: bool) {
+fn test_leader_election_overwrite_newer_logs_with_config(pre_vote: bool) {
     // This network represents the results of the following sequence of
     // events:
     // - Node 1 won the election in term 1.
