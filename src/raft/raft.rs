@@ -202,7 +202,7 @@ pub struct Raft<T: Storage> {
     heartbeat_elapsed: usize,
 
     pub check_quorum: bool,
-    pub pre_vote: bool,
+    pre_vote: bool,
 
     heartbeat_timeout: usize,
     election_timeout: usize,
@@ -396,6 +396,7 @@ impl<T: Storage> Raft<T> {
             // do not attach term to MsgPropose, MsgReadIndex
             // proposals are a way to forward to the leader and
             // should be treated as local message.
+            // MsgReadIndex is also forwarded to leader.
             if m.get_msg_type() != MessageType::MsgPropose &&
                m.get_msg_type() != MessageType::MsgReadIndex {
                 m.set_term(self.term);
