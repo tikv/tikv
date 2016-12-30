@@ -150,7 +150,7 @@ impl Into<errorpb::Error> for Error {
                 }
                 errorpb.mut_not_leader().set_region_id(region_id);
             }
-            Error::StoreNotMatch(to_store_id, my_store_id) => {
+            Error::StoreNotMatch(_to_store_id, _my_store_id) => {
                 errorpb.mut_store_not_match();
             }
             Error::KeyNotInRegion(key, region) => {
