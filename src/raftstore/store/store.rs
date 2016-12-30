@@ -1087,10 +1087,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // we will call the callback with timeout error.
     }
 
-    fn validate_store_id(&self,msg:&RaftCmdRequest) -> Result<()> {
+    fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
         let store_id = msg.get_header().get_peer().get_store_id();
         if store_id != self.store.get_id() {
-            return Err(Error::StoreNotMatch( store_id, self.store.get_id()));
+            return Err(Error::StoreNotMatch(store_id, self.store.get_id()));
         }
         Ok(())
     }
