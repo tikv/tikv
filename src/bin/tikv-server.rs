@@ -645,7 +645,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config:
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
-    let network_monitor = SimpleNetworkMonitor::new(ch.clone()).unwrap();
+    let network_monitor = SimpleNetworkMonitor::new(cfg.network_monitor_max_store_number,
+                                                    cfg.network_monitor_keepalive_timeout,
+                                                    cfg.network_monitor_connection_timeout,
+                                                    ch.clone())
+        .unwrap();
 
     let store_path = &cfg.storage.path;
     let mut lock_path = Path::new(store_path).to_path_buf();

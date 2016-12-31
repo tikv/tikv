@@ -152,7 +152,11 @@ impl Simulator for ServerCluster {
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let network_monitor = SimpleNetworkMonitor::new(sendch.clone()).unwrap();
+        let network_monitor = SimpleNetworkMonitor::new(cfg.network_monitor_max_store_number,
+                                                        cfg.network_monitor_keepalive_timeout,
+                                                        cfg.network_monitor_connection_timeout,
+                                                        sendch.clone())
+            .unwrap();
         let trans = ServerTransport::new(sendch.clone());
 
         let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();

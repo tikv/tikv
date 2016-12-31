@@ -50,7 +50,7 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 // Renew the network status between current server and remote servers in a low rate,
 // so that the network manitoring takes low cost.
-const DEFAULT_RENEW_NETWORK_STAT_INTERVAL: u64 = 6 * 60 * 1000; // 6 min
+const DEFAULT_RENEW_NETWORK_STAT_INTERVAL: u64 = 30 * 1000; // 30 seconds
 const DEFAULT_RENEW_NETWORK_STAT_MAX_STORE_NUMBER: usize = 200;
 
 #[derive(Debug, Clone)]
