@@ -143,7 +143,7 @@ fn test_scheduler_leader_change_twice() {
         })
         .unwrap();
     // Sleep a while, the prewrite should be blocked at snapshot stage.
-    thread::sleep(Duration::from_millis(50));
+    thread::sleep(Duration::from_millis(200));
     // Transfer leader twice, then unblock snapshot.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
