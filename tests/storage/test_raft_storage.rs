@@ -19,11 +19,13 @@ use std::thread;
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Engine, Snapshot, Modify, Mutation, make_key, ALL_CFS, Options};
 use tikv::storage::engine::{self, Callback, Result};
+use tikv::storage::txn::{self};
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::util::*;
+
 use super::sync_storage::SyncStorage;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
@@ -69,6 +71,7 @@ fn test_raft_storage() {
 #[test]
 fn test_raft_storage_store_not_match() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
+
     let key = make_key(b"key");
     assert_eq!(storage.get(ctx.clone(), &key, 5).unwrap(), None);
     storage.prewrite(ctx.clone(),
@@ -83,9 +86,19 @@ fn test_raft_storage_store_not_match() {
     // Test store not match.
     let mut peer = ctx.get_peer().clone();
     let store_id = peer.get_store_id();
+
     peer.set_store_id(store_id + 1);
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
+    let res =storage.get(ctx.clone(), &key, 20);
+     if let storage::Error::Txn(
+         txn::Error::Engine(
+             engine::Error::Request(ref e))) = *res.as_ref()
+        .err().unwrap() {
+        assert!(e.has_store_not_match());
+    } else {
+        panic!("expect store_not_match, but got {:?}", res);
+    }
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(storage.scan(ctx.clone(), key.clone(), 1, false, 20).is_err());
     assert!(storage.scan_lock(ctx.clone(), 20).is_err());
