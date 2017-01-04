@@ -113,9 +113,7 @@ impl Channel<RaftMessage> for ChannelTransport {
                 if is_snapshot {
                     // should report snapshot finish.
                     let core = self.rl();
-                    core.snapshot_status_senders
-                        .get(&from_store)
-                        .unwrap()
+                    core.snapshot_status_senders[&from_store]
                         .lock()
                         .unwrap()
                         .send(SnapshotStatusMsg {
