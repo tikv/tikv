@@ -35,8 +35,7 @@ use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
-use storage::{CF_RAFT, CF_WRITE};
-use storage::types::Key;
+use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.

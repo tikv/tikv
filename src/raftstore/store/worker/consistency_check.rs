@@ -20,8 +20,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 use raftstore::store::{keys, Msg};
 use raftstore::store::engine::{Snapshot, Iterable, Peekable};
-use storage::{CF_RAFT, CF_WRITE};
-use storage::types::Key;
+use storage::CF_RAFT;
 use util::worker::Runnable;
 
 use super::metrics::*;
