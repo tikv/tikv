@@ -263,7 +263,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto#679b4719adb44bb55780ad2480f29a0f234b039e"
+source = "git+https://github.com/pingcap/kvproto#aded150330d960713683e2dde11cf345ae7bf183"
 dependencies = [
  "protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -643,7 +643,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#38084aeaf922fb5d41284865d64b2113f3ae5f1c"
+source = "git+https://github.com/pingcap/tipb.git#378c9b0cba112f6f7335b3c86df6fd76c0dcfb78"
 dependencies = [
  "protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

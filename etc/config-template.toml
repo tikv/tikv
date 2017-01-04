@@ -176,7 +176,7 @@ level0-stop-writes-trigger = 16
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.
-write-buffer-size = "64MB"
+write-buffer-size = "128MB"
 
 # The maximum number of write buffers that are built up in memory.
 max-write-buffer-number = 5
@@ -186,36 +186,42 @@ max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
 
 # Control maximum total data size for base level (level 1).
-max-bytes-for-level-base = "64MB"
+max-bytes-for-level-base = "128MB"
 
 # Target file size for compaction.
-target-file-size-base = "16MB"
+target-file-size-base = "32MB"
 
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read
 block-cache-size = "1GB"
+
+# Indicating if we'd put index/filter blocks to the block cache.
+# If not specified, each "table reader" object will pre-load index/filter block
+# during table initialization.
+# cache-index-and-filter-blocks = true
 
 # options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
-block-size = "16KB"
-write-buffer-size = "64MB"
+block-size = "64KB"
+write-buffer-size = "128MB"
 max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
-max-bytes-for-level-base = "64MB"
-target-file-size-base = "16MB"
+max-bytes-for-level-base = "128MB"
+target-file-size-base = "32MB"
 block-cache-size = "256MB"
+# cache-index-and-filter-blocks = true
 
 # options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.
 [rocksdb.raftcf]
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
-block-size = "16KB"
-write-buffer-size = "64MB"
+block-size = "64KB"
+write-buffer-size = "128MB"
 max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
-max-bytes-for-level-base = "64MB"
-target-file-size-base = "16MB"
+max-bytes-for-level-base = "128MB"
+target-file-size-base = "32MB"
 block-cache-size = "256MB"
 
 [storage]
@@ -225,7 +231,7 @@ scheduler-notify-capacity = 10240
 # maximum number of messages can be processed in one tick
 scheduler-messages-per-tick = 1024
 
-scheduler-concurrency = 102400
+scheduler-concurrency = 1024000
 
 # scheduler's worker pool size
 scheduler-worker-pool-size = 4

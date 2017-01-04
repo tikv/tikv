@@ -22,7 +22,8 @@ use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, Cmd
 use kvproto::kvrpcpb::{CmdRawGetResponse, CmdRawPutResponse, CmdRawDeleteResponse};
 use kvproto::msgpb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult};
+use storage::{Engine, Storage, Key, Value, KvPair, Mutation, Callback, Result as StorageResult,
+              Options};
 use storage::Error as StorageError;
 use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
@@ -60,12 +61,14 @@ impl StoreHandler {
         let start_key = req.get_start_key();
         debug!("start_key [{}]", escape(&start_key));
         let cb = self.make_cb(StoreHandler::cmd_scan_done, on_resp);
+        let mut options = Options::default();
+        options.key_only = req.get_key_only();
         self.store
             .async_scan(msg.take_context(),
                         Key::from_raw(start_key),
                         req.get_limit() as usize,
-                        req.get_key_only(),
                         req.get_version(),
+                        options,
                         cb)
             .map_err(Error::Storage)
     }
@@ -86,12 +89,15 @@ impl StoreHandler {
             })
             .collect();
         let cb = self.make_cb(StoreHandler::cmd_prewrite_done, on_resp);
+        let mut options = Options::default();
+        options.lock_ttl = req.get_lock_ttl();
+        options.skip_constraint_check = req.get_skip_constraint_check();
         self.store
             .async_prewrite(msg.take_context(),
                             mutations,
                             req.get_primary_lock().to_vec(),
                             req.get_start_version(),
-                            req.get_lock_ttl(),
+                            options,
                             cb)
             .map_err(Error::Storage)
     }

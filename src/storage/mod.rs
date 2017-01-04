@@ -43,6 +43,14 @@ pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 
+// Short value max len must <= 255.
+pub const SHORT_VALUE_MAX_LEN: usize = 64;
+pub const SHORT_VALUE_PREFIX: u8 = b'v';
+
+pub fn is_short_value(value: &[u8]) -> bool {
+    value.len() <= SHORT_VALUE_MAX_LEN
+}
+
 #[derive(Debug, Clone)]
 pub enum Mutation {
     Put((Key, Value)),
@@ -86,15 +94,15 @@ pub enum Command {
         ctx: Context,
         start_key: Key,
         limit: usize,
-        key_only: bool,
         start_ts: u64,
+        options: Options,
     },
     Prewrite {
         ctx: Context,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
-        lock_ttl: u64,
+        options: Options,
     },
     Commit {
         ctx: Context,
@@ -126,6 +134,7 @@ pub enum Command {
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
+    RawGet { ctx: Context, key: Key },
 }
 
 impl Display for Command {
@@ -191,6 +200,9 @@ impl Display for Command {
                        safe_point,
                        ctx)
             }
+            Command::RawGet { ref ctx, ref key } => {
+                write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
+            }
         }
     }
 }
@@ -207,7 +219,8 @@ impl Command {
             Command::Get { .. } |
             Command::BatchGet { .. } |
             Command::Scan { .. } |
-            Command::ScanLock { .. } => true,
+            Command::ScanLock { .. } |
+            Command::RawGet { .. } => true,
             Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
@@ -226,6 +239,7 @@ impl Command {
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => "gc",
+            Command::RawGet { .. } => "raw_get",
         }
     }
 
@@ -240,7 +254,8 @@ impl Command {
             Command::Rollback { ref ctx, .. } |
             Command::ScanLock { ref ctx, .. } |
             Command::ResolveLock { ref ctx, .. } |
-            Command::Gc { ref ctx, .. } => ctx,
+            Command::Gc { ref ctx, .. } |
+            Command::RawGet { ref ctx, .. } => ctx,
         }
     }
 
@@ -255,12 +270,30 @@ impl Command {
             Command::Rollback { ref mut ctx, .. } |
             Command::ScanLock { ref mut ctx, .. } |
             Command::ResolveLock { ref mut ctx, .. } |
-            Command::Gc { ref mut ctx, .. } => ctx,
+            Command::Gc { ref mut ctx, .. } |
+            Command::RawGet { ref mut ctx, .. } => ctx,
         }
     }
 }
 
 use util::transport::SendCh;
+
+#[derive(Default)]
+pub struct Options {
+    pub lock_ttl: u64,
+    pub skip_constraint_check: bool,
+    pub key_only: bool,
+}
+
+impl Options {
+    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
+        Options {
+            lock_ttl: lock_ttl,
+            skip_constraint_check: skip_constraint_check,
+            key_only: key_only,
+        }
+    }
+}
 
 struct StorageHandle {
     handle: Option<thread::JoinHandle<()>>,
@@ -391,16 +424,16 @@ impl Storage {
                       ctx: Context,
                       start_key: Key,
                       limit: usize,
-                      key_only: bool,
                       start_ts: u64,
+                      options: Options,
                       callback: Callback<Vec<Result<KvPair>>>)
                       -> Result<()> {
         let cmd = Command::Scan {
             ctx: ctx,
             start_key: start_key,
             limit: limit,
-            key_only: key_only,
             start_ts: start_ts,
+            options: options,
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
@@ -413,7 +446,7 @@ impl Storage {
                           mutations: Vec<Mutation>,
                           primary: Vec<u8>,
                           start_ts: u64,
-                          lock_ttl: u64,
+                          options: Options,
                           callback: Callback<Vec<Result<()>>>)
                           -> Result<()> {
         let cmd = Command::Prewrite {
@@ -421,7 +454,7 @@ impl Storage {
             mutations: mutations,
             primary: primary,
             start_ts: start_ts,
-            lock_ttl: lock_ttl,
+            options: options,
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Booleans(callback)));
@@ -534,14 +567,11 @@ impl Storage {
                          key: Vec<u8>,
                          callback: Callback<Option<Vec<u8>>>)
                          -> Result<()> {
-        try!(self.engine
-            .async_snapshot(&ctx,
-                            box move |(_, res): (_, engine::Result<_>)| {
-                                callback(res.and_then(|snap: Box<Snapshot>| {
-                                        snap.get(&Key::from_encoded(key))
-                                    })
-                                    .map_err(Error::from))
-                            }));
+        let cmd = Command::RawGet {
+            ctx: ctx,
+            key: Key::from_encoded(key),
+        };
+        try!(self.send(cmd, StorageCb::SingleValue(callback)));
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["get"]).inc();
         Ok(())
     }
@@ -717,7 +747,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            0,
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -759,7 +789,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            0,
+                            Options::default(),
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -780,7 +810,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            0,
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -794,8 +824,8 @@ mod tests {
         storage.async_scan(Context::new(),
                         make_key(b"\x00"),
                         1000,
-                        false,
                         5,
+                        Options::default(),
                         expect_scan(tx.clone(),
                                     vec![
             Some((b"a".to_vec(), b"aa".to_vec())),
@@ -821,7 +851,7 @@ mod tests {
             ],
                             b"a".to_vec(),
                             1,
-                            0,
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -856,14 +886,14 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            0,
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
-                            0,
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -898,7 +928,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                             b"x".to_vec(),
                             105,
-                            0,
+                            Options::default(),
                             expect_fail(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -922,7 +952,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            0,
+                            Options::default(),
                             expect_too_busy(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
@@ -939,7 +969,7 @@ mod tests {
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
-                            0,
+                            Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
