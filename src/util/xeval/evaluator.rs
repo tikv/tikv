@@ -134,6 +134,7 @@ impl Evaluator {
             ExprType::Case => self.eval_case_when(ctx, expr),
             ExprType::If => self.eval_if(ctx, expr),
             ExprType::Coalesce => self.eval_coalesce(ctx, expr),
+            ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             _ => Ok(Datum::Null),
         }
@@ -370,6 +371,19 @@ impl Evaluator {
             }
         }
         Ok(Datum::Null)
+    }
+
+    fn eval_if_null(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 2 {
+            return Err(Error::Expr(format!("expect 2 operands, got {}", children.len())));
+        }
+        let left = try!(self.eval(ctx, &children[0]));
+        if left == Datum::Null {
+            Ok(try!(self.eval(ctx, &children[1])))
+        } else {
+            Ok(left)
+        }
     }
 
     fn eval_is_null(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -864,6 +878,18 @@ mod test {
          b"not-null".as_ref().into()),
         (coalesce(vec![Datum::Null, b"not-null".as_ref().into(),
          b"not-null-2".as_ref().into(), Datum::Null]), b"not-null".as_ref().into()),
+    ]);
+
+    test_eval!(test_eval_if_null,
+               vec![
+            (build_expr(vec![Datum::Null, b"right".as_ref().into()], ExprType::IfNull),
+                b"right".as_ref().into()),
+            (build_expr(vec![b"left".as_ref().into(), b"right".as_ref().into()], ExprType::IfNull),
+                b"left".as_ref().into()),
+            (build_expr(vec![b"left".as_ref().into(), Datum::Null], ExprType::IfNull),
+                b"left".as_ref().into()),
+            (build_expr(vec![Datum::Null, Datum::Null], ExprType::IfNull),
+                Datum::Null),
     ]);
 
     test_eval!(test_eval_is_null,
