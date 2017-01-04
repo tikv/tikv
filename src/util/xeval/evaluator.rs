@@ -136,6 +136,7 @@ impl Evaluator {
             ExprType::Coalesce => self.eval_coalesce(ctx, expr),
             ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
+            ExprType::NullIf => self.eval_null_if(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -393,6 +394,18 @@ impl Evaluator {
         }
         let d = try!(self.eval(ctx, &children[0]));
         Ok((d == Datum::Null).into())
+    }
+
+    fn eval_null_if(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let (left, right) = try!(self.eval_two_children(ctx, expr));
+        if left == Datum::Null || right == Datum::Null {
+            return Ok(left);
+        }
+        if let Ordering::Equal = try!(left.cmp(ctx, &right)) {
+            Ok(Datum::Null)
+        } else {
+            Ok(left)
+        }
     }
 }
 
@@ -897,6 +910,18 @@ mod test {
         (build_expr(vec![b"abc".as_ref().into()], ExprType::IsNull), false.into()),
         (build_expr(vec![Datum::Null], ExprType::IsNull), true.into()),
         (build_expr(vec![Datum::I64(0)], ExprType::IsNull), false.into()),
+    ]);
+
+    test_eval!(test_eval_null_if,
+               vec![
+         (build_expr(vec![b"abc".as_ref().into(), b"abc".as_ref().into()], ExprType::NullIf),
+            Datum::Null),
+         (build_expr(vec![Datum::Null, Datum::Null], ExprType::NullIf),
+            Datum::Null),
+         (build_expr(vec![123i64.into(), 111i64.into()], ExprType::NullIf),
+            123i64.into()),
+         (build_expr(vec![123i64.into(), Datum::Null], ExprType::NullIf),
+            123i64.into()),
     ]);
 
     fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {
