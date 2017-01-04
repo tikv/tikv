@@ -11,14 +11,19 @@ use super::cluster::{Cluster, Simulator};
 use super::transport_simulate::*;
 use super::util::*;
 
-fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64) {
-    for _ in 1..100 {
-        if cluster.get_down_peers().len() != count as usize {
-            sleep(Duration::from_millis(10));
-        } else {
-            break;
+fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
         }
+        sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
     }
+    panic!("got {:?}, want {} peers which should include {:?}",
+           peers,
+           count,
+           peer);
 }
 
 fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -29,15 +34,13 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     for len in 1..3 {
         let id = len;
         cluster.stop_node(id);
-        wait_down_peers(cluster, len);
-        let down_peers = cluster.get_down_peers();
-        assert!(down_peers.contains_key(&id));
+        wait_down_peers(cluster, len, Some(id));
     }
 
     // Restart 1, 2
     cluster.run_node(1);
     cluster.run_node(2);
-    wait_down_peers(cluster, 0);
+    wait_down_peers(cluster, 0, None);
 
     cluster.stop_node(1);
 
@@ -47,7 +50,7 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     // by at lease 1 second.
     util::sleep_ms(1000);
 
-    wait_down_peers(cluster, 1);
+    wait_down_peers(cluster, 1, Some(1));
     let down_secs = cluster.get_down_peers()[&1].get_down_seconds();
     let timer = Instant::now();
     let leader = cluster.leader_of_region(1).unwrap();
@@ -59,15 +62,15 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_transfer_leader(1, new_leader);
     // new leader should reset all down peer list.
-    wait_down_peers(cluster, 0);
-    wait_down_peers(cluster, 1);
+    wait_down_peers(cluster, 0, None);
+    wait_down_peers(cluster, 1, Some(1));
     assert!(cluster.get_down_peers()[&1].get_down_seconds() <
             down_secs + timer.elapsed().as_secs());
 
     // Ensure that node will not reuse the previous peer heartbeats.
     cluster.must_transfer_leader(1, leader);
-    wait_down_peers(cluster, 0);
-    wait_down_peers(cluster, 1);
+    wait_down_peers(cluster, 0, None);
+    wait_down_peers(cluster, 1, Some(1));
     assert!(cluster.get_down_peers()[&1].get_down_seconds() < timer.elapsed().as_secs() + 1);
 }
 

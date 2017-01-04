@@ -2,7 +2,7 @@
 
 
 [![Build Status](https://travis-ci.org/pingcap/tikv.svg?branch=master)](https://travis-ci.org/pingcap/tikv) [![CircleCI Status](https://circleci.com/gh/pingcap/tikv.svg?style=shield&circle-token=36bab0a8e43edb0941b31c38557d2d9d0d58f708)](https://circleci.com/gh/pingcap/tikv) [![Coverage Status](https://coveralls.io/repos/github/pingcap/tikv/badge.svg?branch=master)](https://coveralls.io/github/pingcap/tikv)
-![Project Status](https://img.shields.io/badge/status-beta-yellow.svg)
+![Project Status](https://img.shields.io/badge/status-rc-yellow.svg)
 
 TiKV (The pronunciation is: /'taɪkeɪvi:/ tai-K-V, etymology: titanium) is a distributed Key-Value database which is based on the design of Google Spanner and HBase, but it is much simpler without dependency on any distributed file system. With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, it guarantees data consistency. Placement Driver which is introduced to implement sharding enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: select ... for update), and externally consistent reads and writes in distributed transactions. See [TiKV-server software stack](#tikv-server-software-stack) for more information. TiKV has the following primary features:
 
@@ -49,7 +49,7 @@ If you want to dive into TiDB, see [development build guide](https://github.com/
 
 + Read the [deployment doc](https://github.com/pingcap/docs/blob/master/op-guide/binary-deployment.md#multi-nodes-deployment) on how to run the TiDB project.
 + Learn the [configuration explanations](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
-+ Use [Docker](https://github.com/pingcap/docs/blob/master/op-guide/docker.md) to run the TiDB project.
++ Use [Docker](https://github.com/pingcap/docs/blob/master/op-guide/docker-deployment.md) to run the TiDB project.
 
 ### Contributing
 

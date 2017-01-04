@@ -84,6 +84,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_snapshot_validation_failure_total",
+            "Total number of raftstore snapshot validation failure.",
+            &["type"]
+        ).unwrap();
+
     pub static ref PEER_RAFT_PROCESS_NANOS_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_raftstore_raft_process_nanos_total",

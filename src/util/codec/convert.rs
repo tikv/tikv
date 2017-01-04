@@ -105,8 +105,8 @@ fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> 
                 break;
             }
         } else if c == '.' {
-            if saw_dot {
-                // "1.1."
+            if saw_dot || e_idx > 0 {
+                // "1.1." or "1e1.1"
                 break;
             }
             saw_dot = true;
@@ -301,6 +301,7 @@ mod test {
                          ("123..34", "123."),
                          ("123.23E-10", "123.23E-10"),
                          ("1.1e1.3", "1.1e1"),
+                         ("11e1.3", "11e1"),
                          ("1.1e-13a", "1.1e-13"),
                          ("1.", "1."),
                          (".1", ".1"),
