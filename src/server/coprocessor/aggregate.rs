@@ -9,8 +9,8 @@ use super::Result;
 
 pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
     match expr.get_tp() {
-        ExprType::Count => Ok(box 0),
-        ExprType::First => Ok(box None),
+        ExprType::Count => Ok(box Count { c: 0 }),
+        ExprType::First => Ok(box First { e: None }),
         ExprType::Sum => Ok(box Sum { res: None }),
         ExprType::Avg => {
             Ok(box Avg {
@@ -32,7 +32,9 @@ pub trait AggrFunc {
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()>;
 }
 
-type Count = u64;
+struct Count {
+    c: u64,
+}
 
 impl AggrFunc for Count {
     fn update(&mut self, _: &EvalContext, args: Vec<Datum>) -> Result<()> {
@@ -41,32 +43,34 @@ impl AggrFunc for Count {
                 return Ok(());
             }
         }
-        *self += 1;
+        self.c += 1;
         Ok(())
     }
 
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
-        collector.push(Datum::U64(*self));
+        collector.push(Datum::U64(self.c));
         Ok(())
     }
 }
 
-type First = Option<Datum>;
+struct First {
+    e: Option<Datum>,
+}
 
 impl AggrFunc for First {
     fn update(&mut self, _: &EvalContext, mut args: Vec<Datum>) -> Result<()> {
-        if self.is_some() {
+        if self.e.is_some() {
             return Ok(());
         }
         if args.len() != 1 {
             return Err(box_err!("Wrong number of args for AggFuncFirstRow: {}", args.len()));
         }
-        *self = args.pop();
+        self.e = args.pop();
         Ok(())
     }
 
     fn calc(&mut self, collector: &mut Vec<Datum>) -> Result<()> {
-        collector.push(self.take().unwrap_or(Datum::Null));
+        collector.push(self.e.take().unwrap_or(Datum::Null));
         Ok(())
     }
 }

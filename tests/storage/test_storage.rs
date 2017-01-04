@@ -604,19 +604,20 @@ fn inc(store: &SyncStorage, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
             }
         };
         let next = number + 1;
-        if let Err(_) = store.prewrite(Context::new(),
-                                       vec![Mutation::Put((make_key(key),
-                                                           next.to_string().into_bytes()))],
-                                       key.to_vec(),
-                                       start_ts) {
+        if store.prewrite(Context::new(),
+                      vec![Mutation::Put((make_key(key), next.to_string().into_bytes()))],
+                      key.to_vec(),
+                      start_ts)
+            .is_err() {
             backoff(i);
             continue;
         }
         let commit_ts = oracle.get_ts();
-        if let Err(_) = store.commit(Context::new(),
-                                     vec![key_address.clone()],
-                                     start_ts,
-                                     commit_ts) {
+        if store.commit(Context::new(),
+                    vec![key_address.clone()],
+                    start_ts,
+                    commit_ts)
+            .is_err() {
             backoff(i);
             continue;
         }
@@ -674,12 +675,12 @@ fn inc_multi(store: &SyncStorage, oracle: &Oracle, n: usize) -> bool {
             let next = number + 1;
             mutations.push(Mutation::Put((key.clone(), next.to_string().into_bytes())));
         }
-        if let Err(_) = store.prewrite(Context::new(), mutations, b"k0".to_vec(), start_ts) {
+        if store.prewrite(Context::new(), mutations, b"k0".to_vec(), start_ts).is_err() {
             backoff(i);
             continue;
         }
         let commit_ts = oracle.get_ts();
-        if let Err(_) = store.commit(Context::new(), keys, start_ts, commit_ts) {
+        if store.commit(Context::new(), keys, start_ts, commit_ts).is_err() {
             backoff(i);
             continue;
         }
