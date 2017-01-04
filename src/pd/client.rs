@@ -119,7 +119,7 @@ impl RpcClientCore {
         for _ in 0..MAX_PD_SEND_RETRY_COUNT {
             // If no stream, try connect first.
             if self.stream.is_none() {
-                if let Err(_) = self.try_connect() {
+                if self.try_connect().is_err() {
                     // TODO: figure out a better way to do backoff
                     thread::sleep(Duration::from_millis(50));
                     continue;
