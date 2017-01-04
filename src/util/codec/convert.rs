@@ -90,7 +90,7 @@ fn handle_truncate(ctx: &EvalContext, is_truncated: bool) -> Result<()> {
 
 fn get_valid_int_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
     let vs = try!(get_valid_float_prefix(ctx, s));
-    float_str_to_int_string(Cow::Borrowed(vs))
+    float_str_to_int_string(vs)
 }
 
 fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> {
@@ -143,7 +143,7 @@ fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> 
 /// It converts a valid float string into valid integer string which can be
 /// parsed by `i64::from_str`, we can't parse float first then convert it to string
 /// because precision will be lost.
-fn float_str_to_int_string(valid_float: Cow<str>) -> Result<Cow<str>> {
+fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, str>> {
     let mut dot_idx = None;
     let mut e_idx = None;
     for (i, c) in valid_float.chars().enumerate() {
@@ -155,58 +155,62 @@ fn float_str_to_int_string(valid_float: Cow<str>) -> Result<Cow<str>> {
     }
 
     if dot_idx.is_none() && e_idx.is_none() {
-        return Ok(valid_float);
+        return Ok(Cow::Borrowed(valid_float));
     }
 
-    let mut int_cnt;
-    let mut digits = String::with_capacity(valid_float.len());
+    let mut int_cnt: usize;
+    let mut digits_cnt: usize;
 
     if dot_idx.is_none() {
-        digits.push_str(&valid_float[..e_idx.unwrap()]);
-        int_cnt = digits.len() as i64;
+        digits_cnt = e_idx.unwrap();
+        int_cnt = digits_cnt;
     } else {
-        digits.push_str(&valid_float[..dot_idx.unwrap()]);
-        int_cnt = digits.len() as i64;
+        digits_cnt = dot_idx.unwrap();
+        int_cnt = digits_cnt;
 
         if e_idx.is_none() {
-            digits.push_str(&valid_float[dot_idx.unwrap() + 1..]);
+            digits_cnt += valid_float.len() - (dot_idx.unwrap() + 1);
         } else {
-            digits.push_str(&valid_float[dot_idx.unwrap() + 1..e_idx.unwrap()]);
+            digits_cnt += (e_idx.unwrap() - dot_idx.unwrap()) - 1;
         }
     }
     if e_idx.is_some() {
         let exp = box_try!((&valid_float[e_idx.unwrap() + 1..]).parse::<i64>());
-        if exp > 0 && int_cnt > (i64::MAX - exp) {
+        if exp > 0 && int_cnt as i64 > (i64::MAX - exp) {
             // (exp + incCnt) overflows MaxInt64.
             return Err(box_err!("[1264] Data Out of Range"));
         }
-        int_cnt += exp;
+        // TOOD: what if exp < 0?
+        int_cnt += exp as usize;
     }
-    if int_cnt <= 0 || (int_cnt == 1 && (digits.starts_with('-') || digits.starts_with('+'))) {
+    if int_cnt <= 0 ||
+       (int_cnt == 1 && (valid_float.starts_with('-') || valid_float.starts_with('+'))) {
         return Ok(Cow::Borrowed("0"));
     }
     let mut valid_int = String::new();
-    if int_cnt <= digits.len() as i64 {
-        valid_int.push_str(&digits[..int_cnt as usize]);
+    let digits = valid_float.chars()
+        .take(e_idx.unwrap_or(valid_float.len()))
+        .filter(|c| c.is_digit(10) || *c == '-' || *c == '+');
+    if int_cnt == digits_cnt {
+        valid_int.extend(digits.take(int_cnt as usize));
     } else {
-        let extra_zero_count = int_cnt - digits.len() as i64;
+        let extra_zero_count = int_cnt - digits_cnt;
         if extra_zero_count > MAX_ZERO_COUNT {
             // Return overflow to avoid allocating too much memory.
             // TODO: refactor errors
             return Err(box_err!("[1264] Data Out of Range"));
         }
-        valid_int.push_str(&digits);
+        valid_int.extend(digits);
         valid_int.extend((0..extra_zero_count).map(|_| '0'));
     }
     Ok(Cow::Owned(valid_int))
 }
 
-const MAX_ZERO_COUNT: i64 = 20;
+const MAX_ZERO_COUNT: usize = 20;
 
 #[cfg(test)]
 mod test {
     use std::f64::EPSILON;
-    use std::borrow::Cow;
 
     use chrono::FixedOffset;
 
@@ -324,7 +328,7 @@ mod test {
         let cases = vec!["1e21", "1e9223372036854775807"];
 
         for i in cases {
-            let o = super::float_str_to_int_string(Cow::Borrowed(i));
+            let o = super::float_str_to_int_string(i);
             assert!(o.is_err());
         }
     }
@@ -343,7 +347,7 @@ mod test {
                          ("+123.45678e5", "+12345678")];
 
         for (i, e) in cases {
-            let o = super::float_str_to_int_string(Cow::Borrowed(i));
+            let o = super::float_str_to_int_string(i);
             assert_eq!(o.unwrap(), *e);
         }
     }
