@@ -132,6 +132,7 @@ impl Evaluator {
             ExprType::IntDiv => self.eval_arith(ctx, expr, Datum::checked_int_div),
             ExprType::Mod => self.eval_arith(ctx, expr, Datum::checked_rem),
             ExprType::Case => self.eval_case_when(ctx, expr),
+            ExprType::If => self.eval_if(ctx, expr),
             ExprType::Coalesce => self.eval_coalesce(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             _ => Ok(Datum::Null),
@@ -346,6 +347,19 @@ impl Evaluator {
             return self.eval(ctx, &chunk[1]).map_err(From::from);
         }
         Ok(Datum::Null)
+    }
+
+    fn eval_if(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 3 {
+            return Err(Error::Expr(format!("expect 3 operands, got {}", children.len())));
+        }
+        let cond = try!(self.eval(ctx, &children[0]));
+        let d = match try!(cond.into_bool(ctx)) {
+            Some(true) => try!(self.eval(ctx, &children[1])),
+            _ => try!(self.eval(ctx, &children[2])),
+        };
+        Ok(d)
     }
 
     fn eval_coalesce(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -814,6 +828,33 @@ mod test {
             Datum::I64(0), b"case2".as_ref().into(),
             Datum::I64(1), b"case3".as_ref().into()
         ]), b"case3".as_ref().into()),
+    ]);
+
+    test_eval!(test_eval_if,
+               vec![
+                (build_expr(vec![true.into(), b"expr1".as_ref().into(), b"expr2".as_ref().into()],
+                    ExprType::If), b"expr1".as_ref().into()),
+                (build_expr(vec![false.into(), b"expr1".as_ref().into(), b"expr2".as_ref().into()],
+                    ExprType::If), b"expr2".as_ref().into()),
+                (build_expr(vec![Datum::Null, b"expr1".as_ref().into(), b"expr2".as_ref().into()],
+                    ExprType::If), b"expr2".as_ref().into()),
+                (build_expr(vec![true.into(), Datum::Null, b"expr2".as_ref().into()],
+                    ExprType::If), Datum::Null),
+                (build_expr(vec![false.into(), b"expr1".as_ref().into(), Datum::Null],
+                    ExprType::If), Datum::Null),
+                (build_expr_r(vec![
+                    build_expr(vec![true.into(), Datum::Null, true.into()], ExprType::If),
+                    build_expr(vec![
+                            true.into(),
+                            b"expr1".as_ref().into(),
+                            b"expr2".as_ref().into()
+                        ],ExprType::If),
+                    build_expr(vec![
+                            false.into(),
+                            b"expr1".as_ref().into(),
+                            b"expr2".as_ref().into()
+                        ],ExprType::If),
+                ], ExprType::If), b"expr2".as_ref().into()),
     ]);
 
     test_eval!(test_eval_coalesce,
