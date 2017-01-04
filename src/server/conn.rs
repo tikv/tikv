@@ -25,6 +25,7 @@ use super::server::Server;
 use util::codec::rpc;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
+use super::network_monitor::NetworkMonitor;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
 use util::buf::PipeBuffer;
@@ -96,19 +97,21 @@ impl Conn {
         }
     }
 
-    pub fn reregister<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
+    pub fn reregister<T, S, N>(&mut self, event_loop: &mut EventLoop<Server<T, S, N>>) -> Result<()>
         where T: RaftStoreRouter,
-              S: StoreAddrResolver
+              S: StoreAddrResolver,
+              N: NetworkMonitor
     {
         try!(event_loop.reregister(&self.sock, self.token, self.interest, PollOpt::edge()));
         Ok(())
     }
 
-    pub fn on_readable<T, S>(&mut self,
-                             event_loop: &mut EventLoop<Server<T, S>>)
-                             -> Result<Vec<ConnData>>
+    pub fn on_readable<T, S, N>(&mut self,
+                                event_loop: &mut EventLoop<Server<T, S, N>>)
+                                -> Result<Vec<ConnData>>
         where T: RaftStoreRouter,
-              S: StoreAddrResolver
+              S: StoreAddrResolver,
+              N: NetworkMonitor
     {
         let mut bufs = vec![];
         match self.conn_type {
@@ -119,12 +122,13 @@ impl Conn {
         Ok(bufs)
     }
 
-    fn handshake<T, S>(&mut self,
-                       event_loop: &mut EventLoop<Server<T, S>>,
-                       bufs: &mut Vec<ConnData>)
-                       -> Result<()>
+    fn handshake<T, S, N>(&mut self,
+                          event_loop: &mut EventLoop<Server<T, S, N>>,
+                          bufs: &mut Vec<ConnData>)
+                          -> Result<()>
         where T: RaftStoreRouter,
-              S: StoreAddrResolver
+              S: StoreAddrResolver,
+              N: NetworkMonitor
     {
         let mut data = match try!(self.read_one_message()) {
             Some(data) => data,
@@ -151,9 +155,10 @@ impl Conn {
         self.read_rpc(event_loop, bufs)
     }
 
-    fn read_snapshot<T, S>(&mut self, _: &mut EventLoop<Server<T, S>>) -> Result<()>
+    fn read_snapshot<T, S, N>(&mut self, _: &mut EventLoop<Server<T, S, N>>) -> Result<()>
         where T: RaftStoreRouter,
-              S: StoreAddrResolver
+              S: StoreAddrResolver,
+              N: NetworkMonitor
     {
         // all content should be read, ignore any read operation.
         if self.recv_buffer.is_none() {
@@ -224,12 +229,13 @@ impl Conn {
         }))
     }
 
-    fn read_rpc<T, S>(&mut self,
-                      _: &mut EventLoop<Server<T, S>>,
-                      bufs: &mut Vec<ConnData>)
-                      -> Result<()>
+    fn read_rpc<T, S, N>(&mut self,
+                         _: &mut EventLoop<Server<T, S, N>>,
+                         bufs: &mut Vec<ConnData>)
+                         -> Result<()>
         where T: RaftStoreRouter,
-              S: StoreAddrResolver
+              S: StoreAddrResolver,
+              N: NetworkMonitor
     {
         loop {
             // Because we use the edge trigger, so here we must read whole data.
@@ -242,9 +248,12 @@ impl Conn {
         Ok(())
     }
 
-    pub fn on_writable<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
+    pub fn on_writable<T, S, N>(&mut self,
+                                event_loop: &mut EventLoop<Server<T, S, N>>)
+                                -> Result<()>
         where T: RaftStoreRouter,
-              S: StoreAddrResolver
+              S: StoreAddrResolver,
+              N: NetworkMonitor
     {
         try!(self.send_buffer.write_to(&mut self.sock));
         if !self.send_buffer.is_empty() {
@@ -264,12 +273,13 @@ impl Conn {
     }
 
 
-    pub fn append_write_buf<T, S>(&mut self,
-                                  event_loop: &mut EventLoop<Server<T, S>>,
-                                  msg: ConnData)
-                                  -> Result<()>
+    pub fn append_write_buf<T, S, N>(&mut self,
+                                     event_loop: &mut EventLoop<Server<T, S, N>>,
+                                     msg: ConnData)
+                                     -> Result<()>
         where T: RaftStoreRouter,
-              S: StoreAddrResolver
+              S: StoreAddrResolver,
+              N: NetworkMonitor
     {
         msg.encode_to(&mut self.send_buffer).unwrap();
 

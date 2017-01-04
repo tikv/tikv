@@ -33,7 +33,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
-use pd::PdClient;
+use pd::{INVALID_ID, PdClient};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
@@ -56,7 +56,7 @@ use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, Consist
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
-use super::transport::Transport;
+use super::transport::{Transport, NetworkMonitorTransport, RenewNetworkStat};
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
 
@@ -73,7 +73,12 @@ pub struct StoreChannel {
     pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
 }
 
-pub struct Store<T: Transport, C: PdClient + 'static> {
+pub struct StoreTransport<T: Transport, N: NetworkMonitorTransport> {
+    pub trans: T,
+    pub network_monitor_trans: N,
+}
+
+pub struct Store<T: Transport, N: NetworkMonitorTransport, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
@@ -95,7 +100,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     pd_worker: Worker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
 
-    trans: T,
+    store_trans: StoreTransport<T, N>,
+
     pd_client: Arc<C>,
 
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
@@ -108,10 +114,13 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
 
     start_time: Timespec,
     is_busy: bool,
+
+    renew_network_stat_key: Option<Key>,
 }
 
-pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
+pub fn create_event_loop<T, N, C>(cfg: &Config) -> Result<EventLoop<Store<T, N, C>>>
     where T: Transport,
+          N: NetworkMonitorTransport,
           C: PdClient
 {
     let mut builder = EventLoopBuilder::new();
@@ -136,15 +145,15 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
     Ok(())
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T: Transport, N: NetworkMonitorTransport, C: PdClient> Store<T, N, C> {
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
-               trans: T,
+               store_trans: StoreTransport<T, N>,
                pd_client: Arc<C>,
                mgr: SnapManager)
-               -> Result<Store<T, C>> {
+               -> Result<Store<T, N, C>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
 
@@ -169,7 +178,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             consistency_check_worker: Worker::new("consistency check worker"),
             region_ranges: BTreeMap::new(),
             pending_regions: vec![],
-            trans: trans,
+            store_trans: store_trans,
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
@@ -177,6 +186,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
+            renew_network_stat_key: None,
         };
         try!(s.init());
         Ok(s)
@@ -278,6 +288,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
+        self.register_renew_network_stat_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -678,7 +689,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         gc_msg.set_to_peer(from_peer.clone());
         gc_msg.set_region_epoch(cur_epoch.clone());
         gc_msg.set_is_tombstone(true);
-        if let Err(e) = self.trans.send(gc_msg) {
+        if let Err(e) = self.store_trans.trans.send(gc_msg) {
             error!("[region {}] send gc message failed {:?}", region_id, e);
         }
     }
@@ -759,7 +770,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
         let (wb, append_res) = {
-            let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
+            let mut ctx = ReadyContext::new(&mut self.raft_metrics,
+                                            &self.store_trans.trans,
+                                            pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
                     peer.handle_raft_ready_append(&mut ctx);
@@ -781,7 +794,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .get_mut(&region_id)
                 .unwrap()
                 .post_raft_ready_append(&mut self.raft_metrics,
-                                        &self.trans,
+                                        &self.store_trans.trans,
                                         &mut ready,
                                         invoke_ctx);
             ready_results.push((region_id, ready, res));
@@ -1563,6 +1576,67 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.raft_group.report_unreachable(to_peer_id);
         }
     }
+
+    fn register_renew_network_stat_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::RenewNetworkStat,
+                                       self.cfg.renew_network_stat_tick_interval) {
+            error!("{} register renew network stat tick err: {:?}", self.tag, e);
+        }
+    }
+
+    fn on_renew_network_stat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        if self.region_ranges.is_empty() {
+            self.register_renew_network_stat_tick(event_loop);
+            return;
+        }
+
+        let mut all_remote_store_ids = Vec::with_capacity(self.cfg
+            .renew_network_stat_max_store_number);
+        let key = self.renew_network_stat_key.take();
+        let start_key = match key.as_ref() {
+            Some(k) => {
+                if self.region_ranges.range(Excluded(k), Unbounded::<&Key>).next().is_some() {
+                    Excluded(k)
+                } else {
+                    Unbounded::<&Key>
+                }
+            }
+            None => Unbounded::<&Key>,
+        };
+        let mut count = 0;
+        let mut last_region_id = INVALID_ID;
+        let store_id = self.store.get_id();
+        for (_, &region_id) in self.region_ranges
+            .range(start_key, Unbounded::<&Key>) {
+            let mut region = self.region_peers[&region_id].region().clone();
+            let _ = util::remove_peer(&mut region, store_id);
+            let remote_store_ids: Vec<u64> =
+                region.get_peers().iter().map(|x| x.get_store_id()).collect();
+            count += remote_store_ids.len();
+            if count > self.cfg.renew_network_stat_max_store_number {
+                break;
+            }
+            last_region_id = region_id;
+            all_remote_store_ids.extend(remote_store_ids);
+        }
+        if last_region_id != INVALID_ID {
+            self.renew_network_stat_key = Some(enc_end_key(self.region_peers[&last_region_id]
+                .region()));
+        }
+
+        let stat = RenewNetworkStat {
+            store_id: store_id,
+            remote_store_ids: all_remote_store_ids,
+        };
+        if let Err(e) = self.store_trans.network_monitor_trans.send(stat) {
+            error!("{} failed to send renew network stat, err {:?}",
+                   self.tag,
+                   e);
+        }
+
+        self.register_renew_network_stat_tick(event_loop);
+    }
 }
 
 // Consistency Check implementation.
@@ -1610,7 +1684,7 @@ fn verify_and_store_hash(region_id: u64,
     true
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T: Transport, N: NetworkMonitorTransport, C: PdClient> Store<T, N, C> {
     fn register_consistency_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::ConsistencyCheck,
@@ -1741,7 +1815,8 @@ fn new_compute_hash_request(region_id: u64, peer: metapb::Peer) -> RaftCmdReques
     request
 }
 
-fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
+        fn register_timer<T: Transport, N: NetworkMonitorTransport, C: PdClient>(
+            event_loop: &mut EventLoop<Store<T, N, C>>,
                                              tick: Tick,
                                              delay: u64)
                                              -> Result<()> {
@@ -1768,7 +1843,7 @@ fn new_compact_log_request(region_id: u64,
     request
 }
 
-impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
+impl<T: Transport, N: NetworkMonitorTransport, C: PdClient> mio::Handler for Store<T, N, C> {
     type Timeout = Tick;
     type Message = Msg;
 
@@ -1813,6 +1888,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::RenewNetworkStat => self.on_renew_network_stat_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
@@ -1842,7 +1918,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T: Transport, N: NetworkMonitorTransport, C: PdClient> Store<T, N, C> {
     /// load the target peer of request as mutable borrow.
     fn mut_target_peer(&mut self, request: &RaftCmdRequest) -> Result<&mut Peer> {
         let region_id = request.get_header().get_region_id();

@@ -34,6 +34,7 @@ use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
+use super::network_monitor::NetworkMonitor;
 use raft::SnapshotStatus;
 use util::sockopt::SocketOpt;
 use super::metrics::*;
@@ -42,9 +43,10 @@ const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
-pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
+pub fn create_event_loop<T, S, N>(config: &Config) -> Result<EventLoop<Server<T, S, N>>>
     where T: RaftStoreRouter,
-          S: StoreAddrResolver
+          S: StoreAddrResolver,
+          N: NetworkMonitor
 {
     let mut builder = EventLoopBuilder::new();
     builder.notify_capacity(config.notify_capacity);
@@ -65,7 +67,13 @@ pub struct ServerChannel<T: RaftStoreRouter + 'static> {
     pub snapshot_status_sender: Sender<SnapshotStatusMsg>,
 }
 
-pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
+// A help structure to bundle all the help workers for `Server`.
+pub struct ServerHelper<S: StoreAddrResolver, N: NetworkMonitor> {
+    pub resolver: S,
+    pub network_monitor: N,
+}
+
+pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver, N: NetworkMonitor> {
     listener: TcpListener,
     // We use HashMap instead of common use mio slab to avoid token reusing.
     // In our raft server, a client with token 1 sends a raft command, we will
@@ -92,12 +100,12 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
-    resolver: S,
+    helper: ServerHelper<S, N>,
 
     cfg: Config,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
+impl<T: RaftStoreRouter, S: StoreAddrResolver, N: NetworkMonitor> Server<T, S, N> {
     // Create a server with already initialized engines.
     // Now some tests use 127.0.0.1:0 but we need real listening
     // address in Node before creating the Server, so we first
@@ -108,9 +116,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                listener: TcpListener,
                storage: Storage,
                ch: ServerChannel<T>,
-               resolver: S,
+               helper: ServerHelper<S, N>,
                snap_mgr: SnapManager)
-               -> Result<Server<T, S>> {
+               -> Result<Server<T, S, N>> {
         try!(event_loop.register(&listener,
                                  SERVER_TOKEN,
                                  EventSet::readable(),
@@ -133,7 +141,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
-            resolver: resolver,
+            helper: helper,
             cfg: cfg.clone(),
         };
 
@@ -275,6 +283,14 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 box_try!(self.end_point_worker.schedule(EndPointTask::Request(req)));
                 Ok(())
             }
+            MessageType::StatReq => {
+                RECV_MSG_COUNTER.with_label_values(&["stat_req"]).inc();
+                self.helper.network_monitor.send_request(msg.take_stat_req())
+            }
+            MessageType::StatResp => {
+                RECV_MSG_COUNTER.with_label_values(&["stat_resp"]).inc();
+                self.helper.network_monitor.send_response(msg.take_stat_resp())
+            }
             _ => {
                 RECV_MSG_COUNTER.with_label_values(&["invalid"]).inc();
                 Err(box_err!("unsupported message {:?} for token {:?} with msg id {}",
@@ -403,7 +419,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 error!("send store sock msg err {:?}", e);
             }
         };
-        if let Err(e) = self.resolver.resolve(store_id, cb) {
+        if let Err(e) = self.helper.resolver.resolve(store_id, cb) {
             error!("try to resolve err {:?}", e);
         }
     }
@@ -495,6 +511,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         self.write_data(event_loop, token, data)
     }
 
+    fn on_renew_network_stat(&self, store_id: u64, remote_store_ids: Vec<u64>) {
+        if let Err(e) = self.helper.network_monitor.renew_network_stat(store_id, remote_store_ids) {
+            error!("renew network stat for store {} failed {:?}", store_id, e);
+        }
+    }
+
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter {
         let region_id = data.msg.get_raft().get_region_id();
         let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
@@ -547,7 +569,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
+impl<T: RaftStoreRouter, S: StoreAddrResolver, N: NetworkMonitor> Handler for Server<T, S, N> {
     type Timeout = Msg;
     type Message = Msg;
 
@@ -577,6 +599,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
                 self.on_resolve_result(event_loop, store_id, sock_addr, data)
+            }
+            Msg::RenewNetworkStat { store_id, remote_store_ids } => {
+                self.on_renew_network_stat(store_id, remote_store_ids)
             }
             Msg::CloseConn { token } => self.remove_conn(event_loop, token),
         }
@@ -653,9 +678,11 @@ mod tests {
     use super::super::{Msg, ConnData, Result, Config};
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
+    use super::super::network_monitor::NetworkMonitor;
     use storage::Storage;
     use kvproto::msgpb::{Message, MessageType};
     use kvproto::raft_serverpb::RaftMessage;
+    use kvproto::statpb::{Request as StatRequest, Response as StatResponse};
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::{self, Msg as StoreMsg};
 
@@ -666,6 +693,22 @@ mod tests {
     impl StoreAddrResolver for MockResolver {
         fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
             cb.call_box((Ok(self.addr),));
+            Ok(())
+        }
+    }
+
+    struct MockNetworkMonitor;
+
+    impl NetworkMonitor for MockNetworkMonitor {
+        fn renew_network_stat(&self, _: u64, _: Vec<u64>) -> Result<()> {
+            Ok(())
+        }
+
+        fn send_request(&self, _: StatRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn send_response(&self, _: StatResponse) -> Result<()> {
             Ok(())
         }
     }
@@ -709,6 +752,7 @@ mod tests {
         let listener = TcpListener::bind(&addr).unwrap();
 
         let resolver = MockResolver { addr: listener.local_addr().unwrap() };
+        let network_monitor = MockNetworkMonitor {};
 
         let cfg = Config::new();
         let mut event_loop = create_event_loop(&cfg).unwrap();
@@ -725,12 +769,16 @@ mod tests {
             raft_router: router,
             snapshot_status_sender: snapshot_status_sender,
         };
+        let helper = ServerHelper {
+            resolver: resolver,
+            network_monitor: network_monitor,
+        };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
                                      storage,
                                      ch,
-                                     resolver,
+                                     helper,
                                      store::new_snap_mgr("", None))
             .unwrap();
 

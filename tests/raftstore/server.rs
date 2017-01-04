@@ -23,8 +23,9 @@ use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
-use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
+use tikv::server::{self, ServerChannel, ServerHelper, Server, ServerTransport, create_event_loop,
+                   Msg, bind};
+use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, SimpleNetworkMonitor};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::Msg as StoreMsg;
@@ -49,6 +50,7 @@ pub struct ServerCluster {
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, SimulateServerTransport>,
+    network_monitor_transports: HashMap<u64, DummyNetworkMonitorTransport>,
     store_chs: HashMap<u64, SendCh<StoreMsg>>,
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
@@ -65,6 +67,7 @@ impl ServerCluster {
             handles: HashMap::new(),
             addrs: HashMap::new(),
             sim_trans: HashMap::new(),
+            network_monitor_transports: HashMap::new(),
             conns: Mutex::new(HashMap::new()),
             msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
@@ -149,6 +152,11 @@ impl Simulator for ServerCluster {
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
+        let network_monitor = SimpleNetworkMonitor::new(cfg.network_monitor_max_store_number,
+                                                        cfg.network_monitor_keepalive_timeout,
+                                                        cfg.network_monitor_connection_timeout,
+                                                        sendch.clone())
+            .unwrap();
         let trans = ServerTransport::new(sendch.clone());
 
         let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
@@ -156,9 +164,11 @@ impl Simulator for ServerCluster {
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
         let snap_mgr = store::new_snap_mgr(tmp_str, Some(node.get_sendch()));
 
+        let network_monitor_transport = DummyNetworkMonitorTransport::new();
         node.start(store_event_loop,
                    engine.clone(),
                    simulate_trans.clone(),
+                   network_monitor_transport.clone(),
                    snap_mgr.clone())
             .unwrap();
         let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
@@ -172,6 +182,7 @@ impl Simulator for ServerCluster {
 
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
+        self.network_monitor_transports.insert(node_id, network_monitor_transport);
 
         let mut store = create_raft_storage(sim_router.clone(), engine, &cfg).unwrap();
         store.start(&cfg.storage).unwrap();
@@ -181,12 +192,16 @@ impl Simulator for ServerCluster {
             raft_router: sim_router.clone(),
             snapshot_status_sender: node.get_snapshot_status_sender(),
         };
+        let server_helper = ServerHelper {
+            resolver: resolver,
+            network_monitor: network_monitor,
+        };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
                                      listener,
                                      store,
                                      server_chan,
-                                     resolver,
+                                     server_helper,
                                      snap_mgr)
             .unwrap();
 

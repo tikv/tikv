@@ -139,6 +139,7 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
+    network_monitor_transports: HashMap<u64, DummyNetworkMonitorTransport>,
 }
 
 impl NodeCluster {
@@ -148,6 +149,7 @@ impl NodeCluster {
             pd_client: pd_client,
             nodes: HashMap::new(),
             simulate_trans: HashMap::new(),
+            network_monitor_transports: HashMap::new(),
         }
     }
 }
@@ -180,7 +182,14 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone()).unwrap();
+        let network_monitor_transport = DummyNetworkMonitorTransport::new();
+
+        node.start(event_loop,
+                   engine,
+                   simulate_trans.clone(),
+                   network_monitor_transport.clone(),
+                   snap_mgr.clone())
+            .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         debug!("node_id: {} tmp: {:?}",
                node_id,
@@ -198,6 +207,7 @@ impl Simulator for NodeCluster {
             .insert(node_id, Mutex::new(node.get_snapshot_status_sender()));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
+        self.network_monitor_transports.insert(node_id, network_monitor_transport);
 
         node_id
     }

@@ -25,8 +25,9 @@ use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
 use util::transport::SendCh;
-use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, Store, Config as StoreConfig,
-                       keys, Peekable, Transport, SnapManager};
+use raftstore::store::{self, Msg, SnapshotStatusMsg, StoreChannel, StoreTransport, Store,
+                       Config as StoreConfig, keys, Peekable, Transport, NetworkMonitorTransport,
+                       SnapManager};
 use super::Result;
 use super::config::Config;
 use storage::{Storage, RaftKv};
@@ -59,11 +60,12 @@ pub struct Node<C: PdClient + 'static> {
 impl<C> Node<C>
     where C: PdClient
 {
-    pub fn new<T>(event_loop: &mut EventLoop<Store<T, C>>,
-                  cfg: &Config,
-                  pd_client: Arc<C>)
-                  -> Node<C>
-        where T: Transport + 'static
+    pub fn new<T, N>(event_loop: &mut EventLoop<Store<T, N, C>>,
+                     cfg: &Config,
+                     pd_client: Arc<C>)
+                     -> Node<C>
+        where T: Transport + 'static,
+              N: NetworkMonitorTransport + 'static
     {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
@@ -94,13 +96,15 @@ impl<C> Node<C>
         }
     }
 
-    pub fn start<T>(&mut self,
-                    event_loop: EventLoop<Store<T, C>>,
-                    engine: Arc<DB>,
-                    trans: T,
-                    snap_mgr: SnapManager)
-                    -> Result<()>
-        where T: Transport + 'static
+    pub fn start<T, N>(&mut self,
+                       event_loop: EventLoop<Store<T, N, C>>,
+                       engine: Arc<DB>,
+                       trans: T,
+                       network_monitor_trans: N,
+                       snap_mgr: SnapManager)
+                       -> Result<()>
+        where T: Transport + 'static,
+              N: NetworkMonitorTransport + 'static
     {
         let bootstrapped = try!(self.check_cluster_bootstrapped());
         let mut store_id = try!(self.check_store(&engine));
@@ -125,7 +129,12 @@ impl<C> Node<C>
         }
 
         // inform pd.
-        try!(self.start_store(event_loop, store_id, engine, trans, snap_mgr));
+        try!(self.start_store(event_loop,
+                              store_id,
+                              engine,
+                              trans,
+                              network_monitor_trans,
+                              snap_mgr));
         try!(self.pd_client
             .put_store(self.store.clone()));
         Ok(())
@@ -226,14 +235,16 @@ impl<C> Node<C>
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    fn start_store<T>(&mut self,
-                      mut event_loop: EventLoop<Store<T, C>>,
-                      store_id: u64,
-                      db: Arc<DB>,
-                      trans: T,
-                      snap_mgr: SnapManager)
-                      -> Result<()>
-        where T: Transport + 'static
+    fn start_store<T, N>(&mut self,
+                         mut event_loop: EventLoop<Store<T, N, C>>,
+                         store_id: u64,
+                         db: Arc<DB>,
+                         trans: T,
+                         network_monitor_trans: N,
+                         snap_mgr: SnapManager)
+                         -> Result<()>
+        where T: Transport + 'static,
+              N: NetworkMonitorTransport + 'static
     {
         info!("start raft store {} thread", store_id);
 
@@ -251,14 +262,19 @@ impl<C> Node<C>
         self.snapshot_status_sender = Some(snapshot_tx);
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
-            let ch = StoreChannel {
+            let store_ch = StoreChannel {
                 sender: sender,
                 snapshot_status_receiver: snapshot_rx,
             };
-            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
+            let store_trans = StoreTransport {
+                trans: trans,
+                network_monitor_trans: network_monitor_trans,
             };
+            let mut store =
+                match Store::new(store_ch, store, cfg, db, store_trans, pd_client, snap_mgr) {
+                    Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                    Ok(s) => s,
+                };
             tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);

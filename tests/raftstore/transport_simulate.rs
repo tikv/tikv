@@ -14,7 +14,7 @@
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Result, Error};
-use tikv::raftstore::store::{Msg as StoreMsg, Transport};
+use tikv::raftstore::store::{Msg as StoreMsg, Transport, NetworkMonitorTransport, RenewNetworkStat};
 use tikv::server::transport::*;
 use tikv::util::HandyRwLock;
 use tikv::util::transport;
@@ -174,6 +174,21 @@ impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
 
     fn try_send(&self, m: StoreMsg) -> Result<()> {
         Channel::send(self, m)
+    }
+}
+#[derive(Clone)]
+pub struct DummyNetworkMonitorTransport;
+
+impl DummyNetworkMonitorTransport {
+    pub fn new() -> DummyNetworkMonitorTransport {
+        DummyNetworkMonitorTransport {}
+    }
+}
+
+impl NetworkMonitorTransport for DummyNetworkMonitorTransport {
+    fn send(&self, _: RenewNetworkStat) -> Result<()> {
+        // Just swallow the stat
+        Ok(())
     }
 }
 

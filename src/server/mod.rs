@@ -33,13 +33,15 @@ pub mod transport;
 pub mod node;
 pub mod resolve;
 pub mod snap;
+pub mod network_monitor;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID};
 pub use self::errors::{Result, Error};
-pub use self::server::{ServerChannel, Server, create_event_loop, bind};
+pub use self::server::{ServerChannel, ServerHelper, Server, create_event_loop, bind};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver};
+pub use self::network_monitor::{Event, NetworkMonitor, SimpleNetworkMonitor};
 
 pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
 
@@ -102,6 +104,8 @@ impl Display for ConnData {
             MessageType::CopResp => write!(f, "[{}] coprocessor response", self.msg_id),
             MessageType::PdReq => write!(f, "[{}] pd request", self.msg_id),
             MessageType::PdResp => write!(f, "[{}] pd response", self.msg_id),
+            MessageType::StatReq => write!(f, "[{}] stat request", self.msg_id),
+            MessageType::StatResp => write!(f, "[{}] stat response", self.msg_id),
             MessageType::None => write!(f, "[{}] invalid message", self.msg_id),
         }
     }
@@ -126,6 +130,11 @@ pub enum Msg {
         store_id: u64,
         sock_addr: Result<SocketAddr>,
         data: ConnData,
+    },
+    // Tell network monitor to renew store info.
+    RenewNetworkStat {
+        store_id: u64,
+        remote_store_ids: Vec<u64>,
     },
     CloseConn { token: Token },
 }

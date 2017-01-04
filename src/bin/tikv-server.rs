@@ -47,11 +47,12 @@ use prometheus::{Encoder, TextEncoder};
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::transport::SendCh;
-use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
-                   Config, bind, create_event_loop, create_raft_storage, Msg};
+use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, ServerHelper,
+                   Server, Node, Config, bind, create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
+use tikv::server::{NetworkMonitor, SimpleNetworkMonitor};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
@@ -504,7 +505,12 @@ fn build_raftkv(config: &toml::Value,
     let snap_path = snap_path.to_str().unwrap().to_owned();
     let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
 
-    node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
+    node.start(event_loop,
+               engine.clone(),
+               trans.clone(),
+               trans,
+               snap_mgr.clone())
+        .unwrap();
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
 
     (node,
@@ -557,12 +563,13 @@ fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, 
     util::config::parse_store_labels(&labels).unwrap()
 }
 
-fn start_server<T, S>(mut server: Server<T, S>,
-                      mut el: EventLoop<Server<T, S>>,
-                      engine: Arc<DB>,
-                      backup_path: &str)
+fn start_server<T, S, N>(mut server: Server<T, S, N>,
+                         mut el: EventLoop<Server<T, S, N>>,
+                         engine: Arc<DB>,
+                         backup_path: &str)
     where T: RaftStoreRouter,
-          S: StoreAddrResolver + Send + 'static
+          S: StoreAddrResolver + Send + 'static,
+          N: NetworkMonitor + Send + 'static
 {
     let ch = server.get_sendch();
     let h = thread::Builder::new()
@@ -638,6 +645,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config:
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
+    let network_monitor = SimpleNetworkMonitor::new(cfg.network_monitor_max_store_number,
+                                                    cfg.network_monitor_keepalive_timeout,
+                                                    cfg.network_monitor_connection_timeout,
+                                                    ch.clone())
+        .unwrap();
 
     let store_path = &cfg.storage.path;
     let mut lock_path = Path::new(store_path).to_path_buf();
@@ -666,12 +678,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config:
         raft_router: raft_router,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
+    let server_helper = ServerHelper {
+        resolver: resolver,
+        network_monitor: network_monitor,
+    };
     let svr = Server::new(&mut event_loop,
                           &cfg,
                           listener,
                           store,
                           server_chan,
-                          resolver,
+                          server_helper,
                           snap_mgr)
         .unwrap();
     start_server(svr, event_loop, engine, backup_path);

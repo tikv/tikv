@@ -48,6 +48,10 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // Disable consistency check by default as it will hurt performance.
 // We should turn on this only in our tests.
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
+// Renew the network status between current server and remote servers in a low rate,
+// so that the network manitoring takes low cost.
+const DEFAULT_RENEW_NETWORK_STAT_INTERVAL: u64 = 30 * 1000; // 30 seconds
+const DEFAULT_RENEW_NETWORK_STAT_MAX_STORE_NUMBER: usize = 200;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -110,6 +114,13 @@ pub struct Config {
 
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_tick_interval: u64,
+
+    // Interval (ms) to renew the network status between current server and remote servers.
+    pub renew_network_stat_tick_interval: u64,
+
+    // On every `renew_network_stat_tick_interval`, the network status between current server and
+    // at most `renew_network_stat_max_store_number` remote store will be renewed.
+    pub renew_network_stat_max_store_number: usize,
 }
 
 impl Default for Config {
@@ -142,6 +153,8 @@ impl Default for Config {
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
+            renew_network_stat_tick_interval: DEFAULT_RENEW_NETWORK_STAT_INTERVAL,
+            renew_network_stat_max_store_number: DEFAULT_RENEW_NETWORK_STAT_MAX_STORE_NUMBER,
         }
     }
 }

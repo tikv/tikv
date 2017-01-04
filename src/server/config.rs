@@ -25,6 +25,9 @@ const DEFAULT_END_POINT_CONCURRENCY: usize = 8;
 const DEFAULT_MESSAGES_PER_TICK: usize = 256;
 const DEFAULT_SEND_BUFFER_SIZE: usize = 128 * 1024;
 const DEFAULT_RECV_BUFFER_SIZE: usize = 128 * 1024;
+const DEFAULT_NETWORK_MONITOR_MAX_STORE_NUMBER: usize = 10000;
+const DEFAULT_NETWORK_MONITOR_KEEPALIVE_TIMETOUT_SEC: u64 = 60;
+const DEFAULT_NETWORK_MONITOR_CONNECTION_TIMEOUT_SEC: u64 = 5 * 60;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -46,6 +49,9 @@ pub struct Config {
     pub storage: StorageConfig,
     pub raft_store: RaftStoreConfig,
     pub end_point_concurrency: usize,
+    pub network_monitor_max_store_number: usize,
+    pub network_monitor_keepalive_timeout: u64, // in second
+    pub network_monitor_connection_timeout: u64, // in second
 }
 
 impl Default for Config {
@@ -62,6 +68,9 @@ impl Default for Config {
             end_point_concurrency: DEFAULT_END_POINT_CONCURRENCY,
             storage: StorageConfig::default(),
             raft_store: RaftStoreConfig::default(),
+            network_monitor_max_store_number: DEFAULT_NETWORK_MONITOR_MAX_STORE_NUMBER,
+            network_monitor_keepalive_timeout: DEFAULT_NETWORK_MONITOR_KEEPALIVE_TIMETOUT_SEC,
+            network_monitor_connection_timeout: DEFAULT_NETWORK_MONITOR_CONNECTION_TIMEOUT_SEC,
         }
     }
 }

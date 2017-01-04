@@ -14,7 +14,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use raftstore::store::{Msg as StoreMsg, Transport, Callback};
+use raftstore::store::{Msg as StoreMsg, Transport, NetworkMonitorTransport, RenewNetworkStat,
+                       Callback};
 use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::msgpb::{Message, MessageType};
@@ -146,6 +147,16 @@ impl Transport for ServerTransport {
         try!(self.ch.try_send(Msg::SendStore {
             store_id: to_store_id,
             data: ConnData::new(self.alloc_msg_id(), req),
+        }));
+        Ok(())
+    }
+}
+
+impl NetworkMonitorTransport for ServerTransport {
+    fn send(&self, stat: RenewNetworkStat) -> RaftStoreResult<()> {
+        try!(self.ch.try_send(Msg::RenewNetworkStat {
+            store_id: stat.store_id,
+            remote_store_ids: stat.remote_store_ids,
         }));
         Ok(())
     }

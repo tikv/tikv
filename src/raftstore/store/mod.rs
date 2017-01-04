@@ -29,9 +29,9 @@ mod metrics;
 mod local_metrics;
 
 pub use self::msg::{Msg, Callback, Tick, SnapshotStatusMsg};
-pub use self::store::{StoreChannel, Store, create_event_loop};
+pub use self::store::{StoreChannel, StoreTransport, Store, create_event_loop};
 pub use self::config::Config;
-pub use self::transport::Transport;
+pub use self::transport::{Transport, NetworkMonitorTransport, RenewNetworkStat};
 pub use self::peer::Peer;
 pub use self::bootstrap::{bootstrap_store, bootstrap_region, write_region, clear_region};
 pub use self::engine::{Peekable, Iterable, Mutable};
