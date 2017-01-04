@@ -133,6 +133,7 @@ impl Evaluator {
             ExprType::Mod => self.eval_arith(ctx, expr, Datum::checked_rem),
             ExprType::Case => self.eval_case_when(ctx, expr),
             ExprType::Coalesce => self.eval_coalesce(ctx, expr),
+            ExprType::IsNull => self.eval_is_null(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -355,6 +356,15 @@ impl Evaluator {
             }
         }
         Ok(Datum::Null)
+    }
+
+    fn eval_is_null(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 1 {
+            return Err(Error::Expr(format!("expect 1 operand, got {}", children.len())));
+        }
+        let d = try!(self.eval(ctx, &children[0]));
+        Ok((d == Datum::Null).into())
     }
 }
 
@@ -813,6 +823,13 @@ mod test {
          b"not-null".as_ref().into()),
         (coalesce(vec![Datum::Null, b"not-null".as_ref().into(),
          b"not-null-2".as_ref().into(), Datum::Null]), b"not-null".as_ref().into()),
+    ]);
+
+    test_eval!(test_eval_is_null,
+               vec![
+        (build_expr(vec![b"abc".as_ref().into()], ExprType::IsNull), false.into()),
+        (build_expr(vec![Datum::Null], ExprType::IsNull), true.into()),
+        (build_expr(vec![Datum::I64(0)], ExprType::IsNull), false.into()),
     ]);
 
     fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {
