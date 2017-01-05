@@ -108,28 +108,24 @@ impl<T: RaftStoreRouter> ConnHandler<T> {
     }
 
     pub fn remove_conn<H: Handler>(&mut self, event_loop: &mut EventLoop<H>, token: Token) {
-        let conn = self.conns.remove(&token);
-        match conn {
-            Some(mut conn) => {
-                CONNECTION_GAUGE.dec();
-                debug!("remove connection token {:?}", token);
-                // if connected to remote store, remove this too.
-                if let Some(conn_key) = conn.conn_key {
-                    warn!("remove store connection for store {} with token {:?}",
-                          conn_key.store_id,
-                          token);
-                    self.store_tokens.remove(&conn_key);
-                }
-
-                if let Err(e) = event_loop.deregister(&conn.sock) {
-                    error!("deregister conn err {:?}", e);
-                }
-
-                conn.close();
+        if let Some(mut conn) = self.conns.remove(&token) {
+            CONNECTION_GAUGE.dec();
+            debug!("remove connection token {:?}", token);
+            // if connected to remote store, remove this too.
+            if let Some(conn_key) = conn.conn_key {
+                warn!("remove store connection for store {} with token {:?}",
+                      conn_key.store_id,
+                      token);
+                self.store_tokens.remove(&conn_key);
             }
-            None => {
-                debug!("missing connection for token {}", token.as_usize());
+
+            if let Err(e) = event_loop.deregister(&conn.sock) {
+                error!("deregister conn err {:?}", e);
             }
+
+            conn.close();
+        } else {
+            debug!("missing connection for token {}", token.as_usize());
         }
     }
 
@@ -286,11 +282,11 @@ impl<T: RaftStoreRouter> ConnHandler<T> {
 
     fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
         let ch = self.sendch.clone();
-        box move |res: Message| {
-            let tp = res.get_msg_type();
+        box move |m: Message| {
+            let tp = m.get_msg_type();
             if let Err(e) = ch.send(Msg::WriteData {
                 token: token,
-                data: ConnData::new(msg_id, res),
+                data: ConnData::new(msg_id, m),
             }) {
                 error!("send {:?} resp failed with token {:?}, msg id {}, err {:?}",
                        tp,
