@@ -271,7 +271,7 @@ pub fn cut_idx_key<'a>(mut key: &'a [u8], col_ids: &[i64]) -> Result<(ValDict<'a
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::codec::mysql::*;
+    use util::codec::mysql::types;
     use util::codec::datum::{self, Datum};
     use util::codec::number::NumberEncoder;
     use tipb::schema::ColumnInfo;

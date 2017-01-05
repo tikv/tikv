@@ -38,7 +38,7 @@ impl Handler for CountHandler {
 fn mio_must_send(sender: &Sender<u32>, n: u32) {
     loop {
         // Send may return notify error, we must retry.
-        if let Ok(_) = sender.send(n) {
+        if sender.send(n).is_ok() {
             return;
         }
     }
