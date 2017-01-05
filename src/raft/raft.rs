@@ -1282,12 +1282,18 @@ impl<T: Storage> Raft<T> {
                 self.send(m);
             }
             MessageType::MsgTimeoutNow => {
-                info!("{} [term {}] received MsgTimeoutNow from {} and starts an election to \
-                       get leadership.",
-                      self.tag,
-                      self.term,
-                      m.get_from());
-                self.campaign(CAMPAIGN_TRANSFER);
+                if self.promotable() {
+                    info!("{} [term {}] received MsgTimeoutNow from {} and starts an election to \
+                           get leadership.",
+                          self.tag,
+                          self.term,
+                          m.get_from());
+                    self.campaign(CAMPAIGN_TRANSFER);
+                } else {
+                    info!("{} received MsgTimeoutNow from {} but is not promotable",
+                          self.id,
+                          m.get_from());
+                }
             }
             MessageType::MsgReadIndex => {
                 if self.leader_id == INVALID_ID {
