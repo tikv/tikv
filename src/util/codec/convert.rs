@@ -183,7 +183,7 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
         // TOOD: what if exp < 0?
         int_cnt += exp as usize;
     }
-    if int_cnt <= 0 ||
+    if int_cnt == 0 ||
        (int_cnt == 1 && (valid_float.starts_with('-') || valid_float.starts_with('+'))) {
         return Ok(Cow::Borrowed("0"));
     }
