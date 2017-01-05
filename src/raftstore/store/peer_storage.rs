@@ -52,7 +52,6 @@ pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
-pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
 #[derive(Debug)]
 pub enum SnapState {

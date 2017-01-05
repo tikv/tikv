@@ -374,7 +374,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     fn send_snapshot_sock(&mut self, sock_addr: SocketAddr, data: ConnData) {
         let rep = self.new_snapshot_reporter(&data);
         let cb = box move |res: Result<()>| {
-            if let Err(_) = res {
+            if res.is_err() {
                 rep.report(SnapshotStatus::Failure);
             } else {
                 rep.report(SnapshotStatus::Finish);
