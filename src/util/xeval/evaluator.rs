@@ -27,16 +27,33 @@ use tipb::expression::{Expr, ExprType};
 use tipb::select::SelectRequest;
 use chrono::FixedOffset;
 
+/// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
+/// truncate error.
+/// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
+/// Read-only statements should ignore truncate error, write statements should not ignore
+/// truncate error.
+pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
+/// `FLAG_TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
+/// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
+/// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
+pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
+
 #[derive(Debug)]
 /// Some global variables needed in an evaluation.
 pub struct EvalContext {
     /// timezone to use when parse/calculate time.
     pub tz: FixedOffset,
+    pub ignore_truncate: bool,
+    pub truncate_as_warning: bool,
 }
 
 impl Default for EvalContext {
     fn default() -> EvalContext {
-        EvalContext { tz: FixedOffset::east(0) }
+        EvalContext {
+            tz: FixedOffset::east(0),
+            ignore_truncate: false,
+            truncate_as_warning: false,
+        }
     }
 }
 
@@ -52,7 +69,16 @@ impl EvalContext {
             None => return Err(Error::Eval(format!("invalid tz offset {}", offset))),
             Some(tz) => tz,
         };
-        Ok(EvalContext { tz: tz })
+
+        let flags = sel.get_flags();
+
+        let e = EvalContext {
+            tz: tz,
+            ignore_truncate: (flags & FLAG_IGNORE_TRUNCATE) > 0,
+            truncate_as_warning: (flags & FLAG_TRUNCATE_AS_WARNING) > 0,
+        };
+
+        Ok(e)
     }
 }
 
@@ -106,7 +132,11 @@ impl Evaluator {
             ExprType::IntDiv => self.eval_arith(ctx, expr, Datum::checked_int_div),
             ExprType::Mod => self.eval_arith(ctx, expr, Datum::checked_rem),
             ExprType::Case => self.eval_case_when(ctx, expr),
+            ExprType::If => self.eval_if(ctx, expr),
             ExprType::Coalesce => self.eval_coalesce(ctx, expr),
+            ExprType::IfNull => self.eval_if_null(ctx, expr),
+            ExprType::IsNull => self.eval_is_null(ctx, expr),
+            ExprType::NullIf => self.eval_null_if(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -227,7 +257,7 @@ impl Evaluator {
         if d == Datum::Null {
             return Ok(Datum::Null);
         }
-        let b = try!(d.into_bool());
+        let b = try!(d.into_bool(ctx));
         Ok((b.map(|v| !v)).into())
     }
 
@@ -262,8 +292,8 @@ impl Evaluator {
                                  expr: &Expr)
                                  -> Result<(Option<bool>, Option<bool>)> {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
-        let left_bool = try!(left.into_bool());
-        let right_bool = try!(right.into_bool());
+        let left_bool = try!(left.into_bool(ctx));
+        let right_bool = try!(right.into_bool(ctx));
         Ok((left_bool, right_bool))
     }
 
@@ -300,10 +330,10 @@ impl Evaluator {
     }
 
     fn eval_arith<F>(&mut self, ctx: &EvalContext, expr: &Expr, f: F) -> Result<Datum>
-        where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
+        where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
     {
         let (left, right) = try!(self.eval_two_children(ctx, expr));
-        eval_arith(left, right, f)
+        eval_arith(ctx, left, right, f)
     }
 
     fn eval_case_when(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -313,12 +343,25 @@ impl Evaluator {
                 // else statement
                 return Ok(res);
             }
-            if !try!(res.into_bool()).unwrap_or(false) {
+            if !try!(res.into_bool(ctx)).unwrap_or(false) {
                 continue;
             }
             return self.eval(ctx, &chunk[1]).map_err(From::from);
         }
         Ok(Datum::Null)
+    }
+
+    fn eval_if(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 3 {
+            return Err(Error::Expr(format!("expect 3 operands, got {}", children.len())));
+        }
+        let cond = try!(self.eval(ctx, &children[0]));
+        let d = match try!(cond.into_bool(ctx)) {
+            Some(true) => try!(self.eval(ctx, &children[1])),
+            _ => try!(self.eval(ctx, &children[2])),
+        };
+        Ok(d)
     }
 
     fn eval_coalesce(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -330,21 +373,55 @@ impl Evaluator {
         }
         Ok(Datum::Null)
     }
+
+    fn eval_if_null(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 2 {
+            return Err(Error::Expr(format!("expect 2 operands, got {}", children.len())));
+        }
+        let left = try!(self.eval(ctx, &children[0]));
+        if left == Datum::Null {
+            Ok(try!(self.eval(ctx, &children[1])))
+        } else {
+            Ok(left)
+        }
+    }
+
+    fn eval_is_null(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 1 {
+            return Err(Error::Expr(format!("expect 1 operand, got {}", children.len())));
+        }
+        let d = try!(self.eval(ctx, &children[0]));
+        Ok((d == Datum::Null).into())
+    }
+
+    fn eval_null_if(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let (left, right) = try!(self.eval_two_children(ctx, expr));
+        if left == Datum::Null || right == Datum::Null {
+            return Ok(left);
+        }
+        if let Ordering::Equal = try!(left.cmp(ctx, &right)) {
+            Ok(Datum::Null)
+        } else {
+            Ok(left)
+        }
+    }
 }
 
 #[inline]
-pub fn eval_arith<F>(left: Datum, right: Datum, f: F) -> Result<Datum>
-    where F: FnOnce(Datum, Datum) -> codec::Result<Datum>
+pub fn eval_arith<F>(ctx: &EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
+    where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
 {
-    let left = try!(left.into_arith());
-    let right = try!(right.into_arith());
+    let left = try!(left.into_arith(ctx));
+    let right = try!(right.into_arith(ctx));
 
     let (left, right) = try!(Datum::coerce(left, right));
     if left == Datum::Null || right == Datum::Null {
         return Ok(Datum::Null);
     }
 
-    f(left, right).map_err(From::from)
+    f(left, ctx, right).map_err(From::from)
 }
 
 /// Check if `target` is in `value_list`.
@@ -780,6 +857,33 @@ mod test {
         ]), b"case3".as_ref().into()),
     ]);
 
+    test_eval!(test_eval_if,
+               vec![
+                (build_expr(vec![true.into(), b"expr1".as_ref().into(), b"expr2".as_ref().into()],
+                    ExprType::If), b"expr1".as_ref().into()),
+                (build_expr(vec![false.into(), b"expr1".as_ref().into(), b"expr2".as_ref().into()],
+                    ExprType::If), b"expr2".as_ref().into()),
+                (build_expr(vec![Datum::Null, b"expr1".as_ref().into(), b"expr2".as_ref().into()],
+                    ExprType::If), b"expr2".as_ref().into()),
+                (build_expr(vec![true.into(), Datum::Null, b"expr2".as_ref().into()],
+                    ExprType::If), Datum::Null),
+                (build_expr(vec![false.into(), b"expr1".as_ref().into(), Datum::Null],
+                    ExprType::If), Datum::Null),
+                (build_expr_r(vec![
+                    build_expr(vec![true.into(), Datum::Null, true.into()], ExprType::If),
+                    build_expr(vec![
+                            true.into(),
+                            b"expr1".as_ref().into(),
+                            b"expr2".as_ref().into()
+                        ],ExprType::If),
+                    build_expr(vec![
+                            false.into(),
+                            b"expr1".as_ref().into(),
+                            b"expr2".as_ref().into()
+                        ],ExprType::If),
+                ], ExprType::If), b"expr2".as_ref().into()),
+    ]);
+
     test_eval!(test_eval_coalesce,
                vec![
         (coalesce(vec![Datum::Null, Datum::Null, Datum::Null]), Datum::Null),
@@ -787,6 +891,37 @@ mod test {
          b"not-null".as_ref().into()),
         (coalesce(vec![Datum::Null, b"not-null".as_ref().into(),
          b"not-null-2".as_ref().into(), Datum::Null]), b"not-null".as_ref().into()),
+    ]);
+
+    test_eval!(test_eval_if_null,
+               vec![
+            (build_expr(vec![Datum::Null, b"right".as_ref().into()], ExprType::IfNull),
+                b"right".as_ref().into()),
+            (build_expr(vec![b"left".as_ref().into(), b"right".as_ref().into()], ExprType::IfNull),
+                b"left".as_ref().into()),
+            (build_expr(vec![b"left".as_ref().into(), Datum::Null], ExprType::IfNull),
+                b"left".as_ref().into()),
+            (build_expr(vec![Datum::Null, Datum::Null], ExprType::IfNull),
+                Datum::Null),
+    ]);
+
+    test_eval!(test_eval_is_null,
+               vec![
+        (build_expr(vec![b"abc".as_ref().into()], ExprType::IsNull), false.into()),
+        (build_expr(vec![Datum::Null], ExprType::IsNull), true.into()),
+        (build_expr(vec![Datum::I64(0)], ExprType::IsNull), false.into()),
+    ]);
+
+    test_eval!(test_eval_null_if,
+               vec![
+         (build_expr(vec![b"abc".as_ref().into(), b"abc".as_ref().into()], ExprType::NullIf),
+            Datum::Null),
+         (build_expr(vec![Datum::Null, Datum::Null], ExprType::NullIf),
+            Datum::Null),
+         (build_expr(vec![123i64.into(), 111i64.into()], ExprType::NullIf),
+            123i64.into()),
+         (build_expr(vec![123i64.into(), Datum::Null], ExprType::NullIf),
+            123i64.into()),
     ]);
 
     fn in_expr(target: Datum, mut list: Vec<Datum>) -> Expr {

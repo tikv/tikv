@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::fmt::{self, Display, Formatter};
-use std::str::FromStr;
+use std::str::{self, FromStr};
 use std::io::Write;
 use std::ops::{Deref, DerefMut, Add, Sub, Mul, Div, Rem};
 use std::{cmp, i64, u64, i32, u32, mem};
@@ -20,8 +20,7 @@ use std::cmp::Ordering;
 
 use byteorder::ReadBytesExt;
 
-use util::codec::{Result, Error, TEN_POW};
-use util::codec::convert;
+use util::codec::{Result, Error, TEN_POW, convert};
 use util::codec::bytes::BytesDecoder;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1427,7 +1426,7 @@ impl Decimal {
         }
 
         if end_idx + 1 < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
-            let exp = try!(convert::bytes_to_int(&bs[end_idx + 1..]));
+            let exp = try!(convert::bytes_to_int_without_context(&bs[end_idx + 1..]));
             if exp > i32::MAX as i64 / 2 {
                 d.reset_to_zero();
                 return Ok(Res::Overflow(d.unwrap()));

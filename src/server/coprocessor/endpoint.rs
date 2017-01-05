@@ -536,7 +536,7 @@ impl SelectContextCore {
         }
         try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.cond_cols, h));
         let res = box_try!(self.eval.eval(&self.ctx, self.sel.get_field_where()));
-        let b = box_try!(res.into_bool());
+        let b = box_try!(res.into_bool(&self.ctx));
         Ok(b.map_or(true, |v| !v))
     }
 
