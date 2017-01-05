@@ -610,7 +610,7 @@ fn test_leader_election_with_config(pre_vote: bool) {
         m.set_to(1);
         m.set_msg_type(MessageType::MsgHup);
         network.send(vec![m]);
-        let raft = network.peers.get(&1).unwrap();
+        let raft = &network.peers[&1];
         let (exp_state, exp_term) = if state == StateRole::Candidate && pre_vote {
             // In pre-vote mode, an election that fails to complete
             // leaves the node in pre-candidate state without advancing
