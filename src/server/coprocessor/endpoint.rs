@@ -735,12 +735,18 @@ impl<'a> SelectContext<'a> {
             } else {
                 range.get_start().to_vec()
             };
+            let upper_bound = if !desc && range.has_end() {
+                Some(Key::from_raw(range.get_end()).encoded().clone())
+            } else {
+                None
+            };
             let mut scanner = try!(self.snap.scanner(if desc {
                                                          ScanMode::Backward
                                                      } else {
                                                          ScanMode::Forward
                                                      },
-                                                     self.key_only()));
+                                                     self.key_only(),
+                                                     upper_bound));
             while limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
@@ -810,12 +816,18 @@ impl<'a> SelectContext<'a> {
         } else {
             r.get_start().to_vec()
         };
+        let upper_bound = if !desc && r.has_end() {
+            Some(Key::from_raw(r.get_end()).encoded().clone())
+        } else {
+            None
+        };
         let mut scanner = try!(self.snap.scanner(if desc {
                                                      ScanMode::Backward
                                                  } else {
                                                      ScanMode::Forward
                                                  },
-                                                 self.key_only()));
+                                                 self.key_only(),
+                                                 upper_bound));
         while row_cnt < limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
                 try!(check_if_outdated(deadline, REQ_TYPE_SELECT));

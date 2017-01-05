@@ -39,7 +39,7 @@ impl<'a> MvccTxn<'a> {
     pub fn new(snapshot: &'a Snapshot, start_ts: u64, mode: Option<ScanMode>) -> MvccTxn<'a> {
         MvccTxn {
             // Todo: use session variable to indicate fill cache or not
-            reader: MvccReader::new(snapshot, mode, true /* fill_cache */),
+            reader: MvccReader::new(snapshot, mode, true /* fill_cache */, None),
             start_ts: start_ts,
             writes: vec![],
             write_size: 0,
@@ -752,14 +752,14 @@ mod tests {
 
     fn must_locked(engine: &Engine, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), None, true);
+        let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         let lock = reader.load_lock(&make_key(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
     }
 
     fn must_unlocked(engine: &Engine, key: &[u8]) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), None, true);
+        let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         assert!(reader.load_lock(&make_key(key)).unwrap().is_none());
     }
 
@@ -774,7 +774,7 @@ mod tests {
 
     fn must_seek_write_none(engine: &Engine, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), None, true);
+        let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         assert!(reader.seek_write(&make_key(key), ts).unwrap().is_none());
     }
 
@@ -785,7 +785,7 @@ mod tests {
                        commit_ts: u64,
                        write_type: WriteType) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), None, true);
+        let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         let (t, write) = reader.seek_write(&make_key(key), ts).unwrap().unwrap();
         assert_eq!(t, commit_ts);
         assert_eq!(write.start_ts, start_ts);
@@ -794,7 +794,7 @@ mod tests {
 
     fn must_reverse_seek_write_none(engine: &Engine, key: &[u8], ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), None, true);
+        let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         assert!(reader.reverse_seek_write(&make_key(key), ts).unwrap().is_none());
     }
 
@@ -805,7 +805,7 @@ mod tests {
                                commit_ts: u64,
                                write_type: WriteType) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), None, true);
+        let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         let (t, write) = reader.reverse_seek_write(&make_key(key), ts).unwrap().unwrap();
         assert_eq!(t, commit_ts);
         assert_eq!(write.start_ts, start_ts);
@@ -814,14 +814,14 @@ mod tests {
 
     fn must_get_commit_ts(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), None, true);
+        let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         assert_eq!(reader.get_txn_commit_ts(&make_key(key), start_ts).unwrap().unwrap(),
                    commit_ts);
     }
 
     fn must_get_commit_ts_none(engine: &Engine, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), None, true);
+        let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         assert!(reader.get_txn_commit_ts(&make_key(key), start_ts).unwrap().is_none());
     }
 
@@ -833,7 +833,7 @@ mod tests {
         let expect = (keys.into_iter().map(make_key).collect(),
                       next_start.map(|x| make_key(x).append_ts(0)));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Mixed), false);
+        let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Mixed), false, None);
         assert_eq!(reader.scan_keys(start.map(make_key), limit).unwrap(),
                    expect);
     }
