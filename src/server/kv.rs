@@ -32,6 +32,7 @@ use util::escape;
 
 use super::{Result, Error, OnResponse};
 
+#[derive(Clone)]
 pub struct StoreHandler {
     pub store: Storage,
 }

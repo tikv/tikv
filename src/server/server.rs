@@ -11,36 +11,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
-use std::option::Option;
+use std::collections::HashSet;
 use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
+use std::thread::Builder;
 
 use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::msgpb::{MessageType, Message};
 use super::{Msg, ConnData};
-use super::conn::Conn;
-use super::{Result, OnResponse, Config};
+use super::conn::StoreConnKey;
+use super::{Result, Config};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use super::kv::StoreHandler;
-use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
+use super::coprocessor::{EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use raft::SnapshotStatus;
-use util::sockopt::SocketOpt;
 use super::metrics::*;
+use super::conn_loop::{ConnHandler, ClientLoop, create_client_event_loop};
+pub use super::conn_loop::ServerChannel;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
+const DEFAULT_CLIENT_CONN_LOOP_NUM: usize = 3;
 
 pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
@@ -59,29 +59,12 @@ pub fn bind(addr: &str) -> Result<TcpListener> {
     Ok(listener)
 }
 
-// A helper structure to bundle all senders for messages to raftstore.
-pub struct ServerChannel<T: RaftStoreRouter + 'static> {
-    pub raft_router: T,
-    pub snapshot_status_sender: Sender<SnapshotStatusMsg>,
-}
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     listener: TcpListener,
-    // We use HashMap instead of common use mio slab to avoid token reusing.
-    // In our raft server, a client with token 1 sends a raft command, we will
-    // propose this command, execute it then send the response to the client with
-    // token 1. But before the response, the client connection is broken and another
-    // new client connects, mio slab may reuse the token 1 for it. So the subsequent
-    // response will be sent to the new client.
-    // To avoid this, we use the HashMap instead and can guarantee the token id is
-    // unique and can't be reused.
-    conns: HashMap<Token, Conn>,
     conn_token_counter: usize,
     sendch: SendCh<Msg>,
 
-    // store id -> Token
-    // This is for communicating with other raft stores.
-    store_tokens: HashMap<u64, Token>,
     store_resolving: HashSet<u64>,
 
     ch: ServerChannel<T>,
@@ -95,6 +78,9 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     resolver: S,
 
     cfg: Config,
+
+    conn_handler: ConnHandler<T>,
+    client_loop_channels: Vec<SendCh<Msg>>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -121,12 +107,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 
+        let conn_handler = ConnHandler::new(sendch.clone(),
+                                            cfg,
+                                            store_handler.clone(),
+                                            ch.clone(),
+                                            end_point_worker.scheduler(),
+                                            snap_worker.scheduler());
+
+
         let svr = Server {
             listener: listener,
             sendch: sendch,
-            conns: HashMap::new(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
-            store_tokens: HashMap::new(),
             store_resolving: HashSet::new(),
             ch: ch,
             store: store_handler,
@@ -135,6 +127,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             snap_worker: snap_worker,
             resolver: resolver,
             cfg: cfg.clone(),
+            client_loop_channels: vec![],
+            conn_handler: conn_handler,
         };
 
         Ok(svr)
@@ -146,15 +140,41 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                           self.cfg.end_point_concurrency);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
-        let ch = self.get_sendch();
-        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
+        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone());
         box_try!(self.snap_worker.start(snap_runner));
+
+        try!(self.run_client_loops());
 
         info!("TiKV is ready to serve");
 
         try!(event_loop.run(self));
         Ok(())
     }
+
+    fn run_client_loops(&mut self) -> Result<()> {
+        for _ in 0..DEFAULT_CLIENT_CONN_LOOP_NUM {
+            let mut event_loop = try!(create_client_event_loop(&self.cfg));
+            let mut client_loop = ClientLoop::new(&mut event_loop,
+                                                  &self.cfg,
+                                                  self.store.clone(),
+                                                  self.ch.clone(),
+                                                  self.end_point_worker.scheduler(),
+                                                  self.snap_worker.scheduler());
+
+            let ch = client_loop.get_sendch();
+
+            let _ = try!(Builder::new()
+                .name("client-conn-loop".to_owned())
+                .spawn(move || if let Err(e) = event_loop.run(&mut client_loop) {
+                    panic!("run client loop failed: {}", e);
+                }));
+
+            self.client_loop_channels.push(ch);
+        }
+
+        Ok(())
+    }
+
 
     pub fn get_sendch(&self) -> SendCh<Msg> {
         self.sendch.clone()
@@ -168,227 +188,68 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         Ok(addr)
     }
 
-    fn remove_conn(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
-        let conn = self.conns.remove(&token);
-        CONNECTION_GAUGE.set(self.conns.len() as f64);
-        match conn {
-            Some(mut conn) => {
-                debug!("remove connection token {:?}", token);
-                // if connected to remote store, remove this too.
-                if let Some(store_id) = conn.store_id {
-                    warn!("remove store connection for store {} with token {:?}",
-                          store_id,
-                          token);
-                    self.store_tokens.remove(&store_id);
-                }
-
-                if let Err(e) = event_loop.deregister(&conn.sock) {
-                    error!("deregister conn err {:?}", e);
-                }
-
-                conn.close();
-            }
-            None => {
-                debug!("missing connection for token {}", token.as_usize());
-            }
-        }
-    }
-
-    fn add_new_conn(&mut self,
-                    event_loop: &mut EventLoop<Self>,
-                    sock: TcpStream,
-                    store_id: Option<u64>)
-                    -> Result<Token> {
+    fn gen_token(&mut self) -> Token {
         let new_token = Token(self.conn_token_counter);
         self.conn_token_counter += 1;
-
-        // TODO: check conn max capacity.
-
-        try!(sock.set_nodelay(true));
-        try!(sock.set_send_buffer_size(self.cfg.send_buffer_size));
-        try!(sock.set_recv_buffer_size(self.cfg.recv_buffer_size));
-
-        try!(event_loop.register(&sock,
-                                 new_token,
-                                 EventSet::readable() | EventSet::hup(),
-                                 PollOpt::edge()));
-
-        let conn = Conn::new(sock, new_token, store_id, self.snap_worker.scheduler());
-        self.conns.insert(new_token, conn);
-        debug!("register conn {:?}", new_token);
-
-        CONNECTION_GAUGE.set(self.conns.len() as f64);
-
-        Ok(new_token)
+        new_token
     }
 
-    fn on_conn_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) -> Result<()> {
-        let msgs = try!(match self.conns.get_mut(&token) {
-            None => {
-                debug!("missing conn for token {:?}", token);
-                return Ok(());
-            }
-            Some(conn) => conn.on_readable(event_loop),
-        });
-
-        if msgs.is_empty() {
-            // Read no message, no need to handle.
-            return Ok(());
-        }
-
-        for msg in msgs {
-            try!(self.on_conn_msg(token, msg))
-        }
-
-        Ok(())
-    }
-
-    fn on_conn_msg(&mut self, token: Token, data: ConnData) -> Result<()> {
-        let msg_id = data.msg_id;
-        let mut msg = data.msg;
-
-        let msg_type = msg.get_msg_type();
-        match msg_type {
-            MessageType::Raft => {
-                RECV_MSG_COUNTER.with_label_values(&["raft"]).inc();
-                try!(self.ch.raft_router.send_raft_msg(msg.take_raft()));
-                Ok(())
-            }
-            MessageType::Cmd => {
-                RECV_MSG_COUNTER.with_label_values(&["cmd"]).inc();
-                self.on_raft_command(msg.take_cmd_req(), token, msg_id)
-            }
-            MessageType::KvReq => {
-                RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
-                let req = msg.take_kv_req();
-                debug!("notify Request token[{:?}] msg_id[{}] type[{:?}]",
-                       token,
-                       msg_id,
-                       req.get_field_type());
-                let on_resp = self.make_response_cb(token, msg_id);
-                self.store.on_request(req, on_resp)
-            }
-            MessageType::CopReq => {
-                RECV_MSG_COUNTER.with_label_values(&["coprocessor"]).inc();
-                let on_resp = self.make_response_cb(token, msg_id);
-                let req = RequestTask::new(msg.take_cop_req(), on_resp);
-                box_try!(self.end_point_worker.schedule(EndPointTask::Request(req)));
-                Ok(())
-            }
-            _ => {
-                RECV_MSG_COUNTER.with_label_values(&["invalid"]).inc();
-                Err(box_err!("unsupported message {:?} for token {:?} with msg id {}",
-                             msg_type,
-                             token,
-                             msg_id))
-            }
-        }
-    }
-
-    fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
-        trace!("handle raft command {:?}", msg);
-        let on_resp = self.make_response_cb(token, msg_id);
-        let cb = box move |resp| {
-            let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CmdResp);
-            resp_msg.set_cmd_resp(resp);
-
-            on_resp.call_box((resp_msg,));
-        };
-
-        try!(self.ch.raft_router.send_command(msg, cb));
-
-        Ok(())
-    }
-
-    fn on_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
-        match token {
-            SERVER_TOKEN => {
-                loop {
-                    // For edge trigger, we must accept all connections until None.
-                    let sock = match self.listener.accept() {
-                        Err(e) => {
-                            error!("accept error: {:?}", e);
-                            return;
-                        }
-                        Ok(None) => {
-                            debug!("no connection, accept later.");
-                            return;
-                        }
-                        Ok(Some((sock, addr))) => {
-                            debug!("accept conn {}", addr);
-                            sock
-                        }
-                    };
-
-                    if let Err(e) = self.add_new_conn(event_loop, sock, None) {
-                        error!("register conn err {:?}", e);
-                    }
+    fn on_accpet(&mut self, _: &mut EventLoop<Self>) {
+        loop {
+            // For edge trigger, we must accept all connections until None.
+            let sock = match self.listener.accept() {
+                Err(e) => {
+                    error!("accept error: {:?}", e);
+                    return;
                 }
-            }
-            token => {
-                if let Err(e) = self.on_conn_readable(event_loop, token) {
-                    debug!("handle read conn for token {:?} err {:?}, remove", token, e);
-                    self.remove_conn(event_loop, token);
+                Ok(None) => {
+                    debug!("no connection, accept later.");
+                    return;
                 }
+                Ok(Some((sock, addr))) => {
+                    debug!("accept conn {}", addr);
+                    sock
+                }
+            };
+
+            let new_token = self.gen_token();
+            let index = new_token.as_usize() % DEFAULT_CLIENT_CONN_LOOP_NUM;
+            let ch = self.client_loop_channels[index].clone();
+            if let Err(e) = ch.try_send(Msg::Connect {
+                token: new_token,
+                sock: sock,
+            }) {
+                error!("register conn err {:?}", e);
             }
-
-        }
-    }
-
-    fn on_writable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
-        let res = match self.conns.get_mut(&token) {
-            None => {
-                debug!("missing conn for token {:?}", token);
-                return;
-            }
-            Some(conn) => conn.on_writable(event_loop),
-        };
-
-        if let Err(e) = res {
-            debug!("handle write conn err {:?}, remove", e);
-            self.remove_conn(event_loop, token);
-        }
-    }
-
-    fn write_data(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
-        let res = match self.conns.get_mut(&token) {
-            None => {
-                debug!("missing conn for token {:?}", token);
-                return;
-            }
-            Some(conn) => conn.append_write_buf(event_loop, data),
-        };
-
-        if let Err(e) = res {
-            debug!("handle write data err {:?}, remove", e);
-            self.remove_conn(event_loop, token);
         }
     }
 
     fn try_connect(&mut self,
                    event_loop: &mut EventLoop<Self>,
                    sock_addr: SocketAddr,
-                   store_id_opt: Option<u64>)
+                   conn_key: StoreConnKey)
                    -> Result<Token> {
         let sock = try!(TcpStream::connect(&sock_addr));
-        let token = try!(self.add_new_conn(event_loop, sock, store_id_opt));
-        Ok(token)
+        let new_token = self.gen_token();
+        try!(self.conn_handler
+            .add_new_conn(event_loop, new_token, sock, Some(conn_key)));
+        Ok(new_token)
     }
 
     fn connect_store(&mut self,
                      event_loop: &mut EventLoop<Self>,
-                     store_id: u64,
+                     conn_key: StoreConnKey,
                      sock_addr: SocketAddr)
                      -> Result<Token> {
+        let store_id = conn_key.store_id;
         // We may already create the connection before.
-        if let Some(token) = self.store_tokens.get(&store_id).cloned() {
+        if let Some(token) = self.conn_handler.store_tokens.get(&conn_key).cloned() {
             debug!("token already exists for store {}, reuse", store_id);
             return Ok(token);
         }
 
-        let token = try!(self.try_connect(event_loop, sock_addr, Some(store_id)));
-        self.store_tokens.insert(store_id, token);
+        let token = try!(self.try_connect(event_loop, sock_addr, conn_key));
+        self.conn_handler.store_tokens.insert(conn_key, token);
         Ok(token)
     }
 
@@ -431,9 +292,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             return self.resolve_store(store_id, data);
         }
 
+        let conn_key = StoreConnKey::new(store_id, data.get_region_id());
         // check the corresponding token for store.
-        if let Some(token) = self.store_tokens.get(&store_id).cloned() {
-            return self.write_data(event_loop, token, data);
+        if let Some(token) = self.conn_handler.store_tokens.get(&conn_key).cloned() {
+            return self.conn_handler.write_data(event_loop, token, data);
         }
 
         // No connection, try to resolve it.
@@ -483,7 +345,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             return self.send_snapshot_sock(sock_addr, data);
         }
 
-        let token = match self.connect_store(event_loop, store_id, sock_addr) {
+        let conn_key = StoreConnKey::new(store_id, data.get_region_id());
+        let token = match self.connect_store(event_loop, conn_key, sock_addr) {
             Ok(token) => token,
             Err(e) => {
                 self.report_unreachable(data);
@@ -492,7 +355,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
         };
 
-        self.write_data(event_loop, token, data)
+        self.conn_handler.write_data(event_loop, token, data)
     }
 
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter {
@@ -528,23 +391,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             cb(Err(box_err!("failed to schedule snapshot")));
         }
     }
-
-    fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
-        let ch = self.sendch.clone();
-        box move |res: Message| {
-            let tp = res.get_msg_type();
-            if let Err(e) = ch.send(Msg::WriteData {
-                token: token,
-                data: ConnData::new(msg_id, res),
-            }) {
-                error!("send {:?} resp failed with token {:?}, msg id {}, err {:?}",
-                       tp,
-                       token,
-                       msg_id,
-                       e);
-            }
-        }
-    }
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
@@ -552,33 +398,23 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     type Message = Msg;
 
     fn ready(&mut self, event_loop: &mut EventLoop<Self>, token: Token, events: EventSet) {
-        if events.is_error() {
-            self.remove_conn(event_loop, token);
-            return;
+        if token == SERVER_TOKEN {
+            return self.on_accpet(event_loop);
         }
 
-        if events.is_readable() {
-            self.on_readable(event_loop, token);
-        }
-
-        if events.is_writable() {
-            self.on_writable(event_loop, token);
-        }
-
-        if events.is_hup() {
-            self.remove_conn(event_loop, token);
-        }
+        self.conn_handler.on_ready(event_loop, token, events);
     }
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
+            Msg::WriteData { token, data } => self.conn_handler.write_data(event_loop, token, data),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
                 self.on_resolve_result(event_loop, store_id, sock_addr, data)
             }
-            Msg::CloseConn { token } => self.remove_conn(event_loop, token),
+            Msg::CloseConn { token } => self.conn_handler.remove_conn(event_loop, token),
+            _ => error!("invalid msg {:?}", msg),
         }
     }
 
@@ -597,10 +433,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
         if !el.is_running() {
-            self.end_point_worker.stop();
-            self.snap_worker.stop();
-            if let Err(e) = self.store.stop() {
-                error!("failed to stop store: {:?}", e);
+            for ch in self.client_loop_channels.drain(..) {
+                if let Err(e) = ch.try_send(Msg::Quit) {
+                    error!("failed to stop client loop: {:?}", e);
+                }
+
+                self.end_point_worker.stop();
+                self.snap_worker.stop();
+                if let Err(e) = self.store.stop() {
+                    error!("failed to stop store: {:?}", e);
+                }
             }
         }
     }
@@ -745,7 +587,7 @@ mod tests {
 
         let ch = server.get_sendch();
         let h = thread::spawn(move || {
-            event_loop.run(&mut server).unwrap();
+            server.run(&mut event_loop).unwrap();
         });
 
         let mut msg = Message::new();
