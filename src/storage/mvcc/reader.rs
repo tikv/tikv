@@ -82,6 +82,7 @@ impl<'a> MvccReader<'a> {
                 None => Ok(None),
             }
         } else {
+            // For Get(key)
             match try!(self.snapshot.get_cf(CF_LOCK, &key)) {
                 Some(v) => Ok(Some(try!(Lock::parse(&v)))),
                 None => Ok(None),
@@ -116,6 +117,7 @@ impl<'a> MvccReader<'a> {
                     .iter_cf(CF_WRITE, None, self.fill_cache, self.get_scan_mode(false))));
             }
         } else {
+            // normal get,scn_mode=none
             let upper_bound_key = key.append_ts(0u64);
             let upper_bound = upper_bound_key.encoded().as_slice();
             self.write_cursor = Some(try!(self.snapshot

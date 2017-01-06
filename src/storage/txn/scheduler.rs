@@ -530,7 +530,7 @@ impl Scheduler {
         match *cmd {
             Command::Prewrite { ref mutations, .. } => {
                 let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-                self.latches.gen_lock(&keys)
+                self.latches.gen_lock(&keys) // lock all keys
             }
             Command::Commit { ref keys, .. } |
             Command::Rollback { ref keys, .. } => self.latches.gen_lock(keys),
@@ -554,7 +554,7 @@ impl Scheduler {
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
         if readcmd {
-            self.worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
+            self.worker_pool.execute(move || process_read(cid, cmd, ch, snapshot)); // TODO move
         } else {
             self.worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
         }
@@ -583,15 +583,15 @@ impl Scheduler {
     /// Event handler for new command.
     ///
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
-    /// acquired,  the method initiates a get snapshot operation for furthur processing; otherwise,
+    /// acquired,  the method initiates a get snapshot operation for further processing; otherwise,
     /// the method adds the command to the waiting queue(s).   The command will be handled later in
     /// `lock_and_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
-    /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
+    /// 2) there may be non-conflicting commands running concurrently, but it doesn't matter.
     fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();
+        SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();  // TODO:
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
         let lock = self.gen_lock(&cmd);
@@ -604,9 +604,16 @@ impl Scheduler {
         self.cmd_ctxs.len() >= self.sched_too_busy_threshold
     }
 
+    /// process receive new cmd
+    /// 1) check flow control
+    ///     -- we only control write flow now
+    /// 2) schedule_command--start to handle a new cmd
+    ///      -- check & get lock
+    ///      -- get snapshot
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
         if !cmd.readonly() && self.too_busy() {
+            // read can wait; reject when system is too busy for those cmd except read
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
         } else {
@@ -751,7 +758,7 @@ impl Scheduler {
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
-    /// the method initiates a get snapshot operation for furthur processing.
+    /// the method initiates a get snapshot operation for further processing.
     fn lock_and_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
             self.get_snapshot(cid);

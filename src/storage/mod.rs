@@ -307,9 +307,13 @@ pub struct Storage {
 }
 
 impl Storage {
+    /// from engine, init and return storage.
+    /// 1) init channel to send & deliver msg cmd
+    /// 2) init handler
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
+        // channel used to send & deliver msg cmd
         let sendch = SendCh::new(event_loop.channel(), "kv-storage");
 
         info!("storage {:?} started.", engine);
@@ -322,12 +326,18 @@ impl Storage {
             })),
         })
     }
-
+    /// new storage with config
+    /// check and create storage with config
     pub fn new(config: &Config) -> Result<Storage> {
         let engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
         Storage::from_engine(engine, config)
     }
 
+    /// start
+    /// storage start to work
+    /// 1) check handle
+    /// 2) check & init Scheduler with config
+    /// 3) start scheduler
     pub fn start(&mut self, config: &Config) -> Result<()> {
         let mut handle = self.handle.lock().unwrap();
         if handle.handle.is_some() {
@@ -368,8 +378,10 @@ impl Storage {
             return Err(box_err!("failed to ask sched to quit: {:?}", e));
         }
 
+
         let h = handle.handle.take().unwrap();
         if let Err(e) = h.join() {
+            // Waits for the associated thread to finish.
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
 

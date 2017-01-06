@@ -109,13 +109,16 @@ impl Latches {
             match front {
                 Some(cid) => {
                     if cid == who {
+                        // owned by who,get current lock.
                         acquired_count += 1;
                     } else {
+                        // if current lock owned by other one,push who in queue.
                         latch.waiting.push_back(who);
                         break;
                     }
                 }
                 None => {
+                    // no one in the queue,get the lock.
                     latch.waiting.push_back(who);
                     acquired_count += 1;
                 }

@@ -242,6 +242,7 @@ impl<'a> Cursor<'a> {
     fn reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
         assert!(self.scan_mode != ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
+            // key not exist if min_key is bigger than current key
             try!(self.iter.validate_key(key));
             return Ok(false);
         }

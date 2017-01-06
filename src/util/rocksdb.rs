@@ -42,6 +42,10 @@ pub fn open_opt(opts: Options,
     DB::open_cf(opts, path, cfs, &cfs_ref_opts)
 }
 
+
+/// new engine
+/// check and prepare db & column families, load open column families in $cfs
+///     --fn new_engine_opt
 pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     let opts = Options::new();
     let mut cfs_opts = vec![];
@@ -51,6 +55,10 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     new_engine_opt(opts, path, cfs, cfs_opts)
 }
 
+/// check column families.
+/// create db when not exist
+/// create column in needed_cfs when not exist
+/// remove columns not in needed_cfs
 fn check_column_families(path: &str,
                          needed_cfs: &[&str],
                          cfs_opts: &[&Options])
@@ -111,6 +119,12 @@ fn check_column_families(path: &str,
     Ok(())
 }
 
+/// new engine opt:
+/// 1) create db if not exist
+/// 2) make sure all cfs exist
+///     -- remove those column families which are  not in $cfs,
+///     -- create new column families in $cfs which is not exist
+/// 3) open all column families in cfs
 pub fn new_engine_opt(mut opts: Options,
                       path: &str,
                       cfs: &[&str],
