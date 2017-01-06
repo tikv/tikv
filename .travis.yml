@@ -17,7 +17,7 @@ matrix:
             packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
     - os: osx
       rust: nightly
-      env: COMPILER=clang++ RUSTC_DATE=2016-12-19
+      env: COMPILER=clang++ RUSTC_DATE=2016-12-19 CXX=clang++
 
 install:
   - export LOCAL_DIR=$HOME/.cache/
