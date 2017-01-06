@@ -20,8 +20,6 @@ use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
 
 
-type Kv<'a> = (&'a [u8], &'a [u8]);
-
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
