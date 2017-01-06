@@ -10,7 +10,7 @@ matrix:
   include:
     - os: linux
       rust: nightly
-      env: COMPILER=g++-4.8 RUSTC_DATE=2016-12-19
+      env: COMPILER=g++-4.8 RUSTC_DATE=2016-12-19 CXX=g++-4.8
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
