@@ -14,13 +14,13 @@
 use rand::{self, Rng, ThreadRng};
 use std::io::{self, Write};
 use std::env;
+use std::fmt::Arguments;
 use std::fs::File;
 use std::sync::Mutex;
 
-use tikv::util::{self, logger};
+use tikv::util;
+use tikv::util::logger::{self, LogWriter};
 
-use time;
-use log::{self, LogLevelFilter, Log, LogMetadata, LogRecord};
 
 /// A random generator of kv.
 /// Every iter should be taken in µs. See also `benches::bench_kv_iter`.
@@ -62,42 +62,19 @@ pub fn generate_random_kvs(n: usize, key_len: usize, value_len: usize) -> Vec<(V
 
 /// A logger that add a test case tag before each line of log.
 struct CaseTraceLogger {
-    level: LogLevelFilter,
     f: Option<Mutex<File>>,
 }
 
-impl Log for CaseTraceLogger {
-    fn enabled(&self, meta: &LogMetadata) -> bool {
-        meta.level() <= self.level
-    }
-
-    fn log(&self, record: &LogRecord) {
-        if self.enabled(record.metadata()) {
-            let tag = util::get_tag_from_thread_name().unwrap_or("".into());
-            let t = time::now();
-            // TODO allow formatter to be configurable.
-            let _ = if let Some(ref out) = self.f {
-                write!(out.lock().unwrap(),
-                       "{} {},{:03} {}:{} - {:5} - {}\n",
-                       tag,
-                       time::strftime("%Y-%m-%d %H:%M:%S", &t).unwrap(),
-                       t.tm_nsec / 1000_000,
-                       record.location().file().rsplit('/').nth(0).unwrap(),
-                       record.location().line(),
-                       record.level(),
-                       record.args())
-            } else {
-                write!(io::stderr(),
-                       "{} {},{:03} {}:{} - {:5} - {}\n",
-                       tag,
-                       time::strftime("%Y-%m-%d %H:%M:%S", &t).unwrap(),
-                       t.tm_nsec / 1000_000,
-                       record.location().file().rsplit('/').nth(0).unwrap(),
-                       record.location().line(),
-                       record.level(),
-                       record.args())
-            };
-        }
+impl LogWriter for CaseTraceLogger {
+    fn write(&self, args: Arguments) {
+        let tag = util::get_tag_from_thread_name().unwrap_or("".into());
+        let _ = if let Some(ref out) = self.f {
+            let mut w = out.lock().unwrap();
+            write!(w, "{} {}", tag, args)
+        } else {
+            let mut w = io::stderr();
+            write!(w, "{} {}", tag, args)
+        };
     }
 }
 
@@ -113,14 +90,7 @@ impl Drop for CaseTraceLogger {
 pub fn init_log() {
     let output = env::var("LOG_FILE").ok();
     let level = logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or("debug".to_owned()));
-
+    let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
-    let _ = log::set_logger(move |filter| {
-        filter.set(level);
-        let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
-        Box::new(CaseTraceLogger {
-            level: level,
-            f: writer,
-        })
-    });
+    let _ = logger::init_log(CaseTraceLogger { f: writer }, level);
 }

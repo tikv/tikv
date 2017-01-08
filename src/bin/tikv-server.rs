@@ -45,7 +45,9 @@ use fs2::FileExt;
 use prometheus::{Encoder, TextEncoder};
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
-use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::logger::{self, StderrLogger};
+use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
                    Config, bind, create_event_loop, create_raft_storage, Msg};
@@ -140,10 +142,13 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     let log_file_path = get_flag_string(matches, "f")
         .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
 
+    let level_filter = logger::get_level_by_string(&level);
     if log_file_path.is_empty() {
-        util::init_log(logger::get_level_by_string(&level)).unwrap();
+        let w = StderrLogger;
+        logger::init_log(w, level_filter).unwrap();
     } else {
-        file_log::init(&level, &log_file_path).unwrap();
+        let w = RotatingFileLogger::new(&log_file_path).unwrap();
+        logger::init_log(w, level_filter).unwrap();
     }
 }
 

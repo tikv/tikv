@@ -15,14 +15,13 @@ use std::time::{SystemTime, Duration, UNIX_EPOCH};
 use time::{self, Timespec, Tm};
 use std::fs::{self, OpenOptions, File};
 use std::io::{self, Write};
+use std::fmt::Arguments;
 use std::path::Path;
 use std::sync::Mutex;
-use log::{self, LogLevelFilter, Log, LogMetadata, LogRecord, SetLoggerError};
 
-use super::logger;
+use super::logger::LogWriter;
 
 const ONE_DAY_SECONDS: u64 = 60 * 60 * 24;
-const NANOSECONDS_PER_MILLISECOND: i32 = 1_000_000;
 
 fn systemtime_to_tm(t: SystemTime) -> Tm {
     let duration = t.duration_since(UNIX_EPOCH).unwrap();
@@ -109,52 +108,26 @@ impl RotatingFileLoggerCore {
     }
 }
 
-pub fn init(level: &str, file_path: &str) -> Result<(), SetLoggerError> {
-    let l = logger::get_level_by_string(level);
-    log::set_logger(|max_log_level| {
-        max_log_level.set(l);
-        Box::new(RotatingFileLogger::new(level, file_path).unwrap())
-    })
-}
-
 /// A log implemetation which writes to file and rotates by day.
 pub struct RotatingFileLogger {
-    level: LogLevelFilter,
     core: Mutex<RotatingFileLoggerCore>,
 }
 
 impl RotatingFileLogger {
-    pub fn new(level: &str, file_path: &str) -> io::Result<RotatingFileLogger> {
+    pub fn new(file_path: &str) -> io::Result<RotatingFileLogger> {
         let core = try!(RotatingFileLoggerCore::new(file_path));
-        let ret = RotatingFileLogger {
-            level: logger::get_level_by_string(level),
-            core: Mutex::new(core),
-        };
+        let ret = RotatingFileLogger { core: Mutex::new(core) };
         Ok(ret)
     }
 }
 
-impl Log for RotatingFileLogger {
-    fn enabled(&self, metadata: &LogMetadata) -> bool {
-        metadata.level() <= self.level
-    }
-
-    fn log(&self, record: &LogRecord) {
-        if self.enabled(record.metadata()) {
-            let mut core = self.core.lock().unwrap();
-            if core.should_rollover() {
-                core.do_rollover()
-            };
-            let now = time::now();
-            let _ = write!(core.file,
-                           "{},{:03} {}:{} - {:5} - {}\n",
-                           time::strftime("%Y-%m-%d %H:%M:%S", &now).unwrap(),
-                           now.tm_nsec / NANOSECONDS_PER_MILLISECOND,
-                           record.location().file().rsplit('/').nth(0).unwrap(),
-                           record.location().line(),
-                           record.level(),
-                           record.args());
-        }
+impl LogWriter for RotatingFileLogger {
+    fn write(&self, args: Arguments) {
+        let mut core = self.core.lock().unwrap();
+        if core.should_rollover() {
+            core.do_rollover()
+        };
+        let _ = core.file.write_fmt(args);
     }
 }
 
