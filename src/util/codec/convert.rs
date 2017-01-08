@@ -146,10 +146,21 @@ fn get_valid_float_prefix<'a>(ctx: &EvalContext, s: &'a str) -> Result<&'a str> 
 fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, str>> {
     let mut dot_idx = None;
     let mut e_idx = None;
+    let mut int_cnt: i64 = 0;
+    let mut digits_cnt: i64 = 0;
+
     for (i, c) in valid_float.chars().enumerate() {
         match c {
             '.' => dot_idx = Some(i),
             'e' | 'E' => e_idx = Some(i),
+            '0'...'9' => {
+                if e_idx.is_none() {
+                    if dot_idx.is_none() {
+                        int_cnt += 1;
+                    }
+                    digits_cnt += 1;
+                }
+            }
             _ => (),
         }
     }
@@ -158,55 +169,53 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
         return Ok(Cow::Borrowed(valid_float));
     }
 
-    let mut int_cnt: usize;
-    let mut digits_cnt: usize;
-
-    if dot_idx.is_none() {
-        digits_cnt = e_idx.unwrap();
-        int_cnt = digits_cnt;
-    } else {
-        digits_cnt = dot_idx.unwrap();
-        int_cnt = digits_cnt;
-
-        if e_idx.is_none() {
-            digits_cnt += valid_float.len() - (dot_idx.unwrap() + 1);
-        } else {
-            digits_cnt += (e_idx.unwrap() - dot_idx.unwrap()) - 1;
+    if e_idx.is_none() {
+        if int_cnt == 0 {
+            return Ok(Cow::Borrowed("0"));
         }
+        return Ok(Cow::Borrowed(&valid_float[..dot_idx.unwrap()]));
     }
-    if e_idx.is_some() {
-        let exp = box_try!((&valid_float[e_idx.unwrap() + 1..]).parse::<i64>());
-        if exp > 0 && int_cnt as i64 > (i64::MAX - exp) {
-            // (exp + incCnt) overflows MaxInt64.
-            return Err(box_err!("[1264] Data Out of Range"));
-        }
-        // TOOD: what if exp < 0?
-        int_cnt += exp as usize;
+
+    let exp = box_try!((&valid_float[e_idx.unwrap() + 1..]).parse::<i64>());
+    if exp > 0 && int_cnt > (i64::MAX - exp) {
+        // (exp + inc_cnt) overflows MaxInt64.
+        // TODO: refactor errors
+        return Err(box_err!("[1264] Data Out of Range"));
     }
-    if int_cnt == 0 ||
-       (int_cnt == 1 && (valid_float.starts_with('-') || valid_float.starts_with('+'))) {
+    if int_cnt + exp <= 0 {
         return Ok(Cow::Borrowed("0"));
     }
-    let mut valid_int = String::new();
-    let digits = valid_float.chars()
-        .take(e_idx.unwrap_or(valid_float.len()))
-        .filter(|c| c.is_digit(10) || *c == '-' || *c == '+');
-    if int_cnt == digits_cnt {
-        valid_int.extend(digits.take(int_cnt as usize));
-    } else {
-        let extra_zero_count = int_cnt - digits_cnt;
-        if extra_zero_count > MAX_ZERO_COUNT {
-            // Return overflow to avoid allocating too much memory.
-            // TODO: refactor errors
-            return Err(box_err!("[1264] Data Out of Range"));
-        }
-        valid_int.extend(digits);
-        valid_int.extend((0..extra_zero_count).map(|_| '0'));
+
+    let mut valid_int = String::from(&valid_float[..e_idx.unwrap()]);
+    if dot_idx.is_some() {
+        valid_int.remove(dot_idx.unwrap());
     }
+
+    let extra_zero_count = exp + int_cnt - digits_cnt;
+    if extra_zero_count > MAX_ZERO_COUNT {
+        // Return overflow to avoid allocating too much memory.
+        // TODO: refactor errors
+        return Err(box_err!("[1264] Data Out of Range"));
+    }
+
+    if extra_zero_count >= 0 {
+        valid_int.extend((0..extra_zero_count).map(|_| '0'));
+    } else {
+        let len = valid_int.len();
+        if extra_zero_count >= len as i64 {
+            return Ok(Cow::Borrowed("0"));
+        }
+        valid_int.truncate((len as i64 + extra_zero_count) as usize);
+    }
+
+    while valid_int.starts_with('0') && valid_int.len() > 1 {
+        valid_int.remove(0);
+    }
+
     Ok(Cow::Owned(valid_int))
 }
 
-const MAX_ZERO_COUNT: usize = 20;
+const MAX_ZERO_COUNT: i64 = 20;
 
 #[cfg(test)]
 mod test {
