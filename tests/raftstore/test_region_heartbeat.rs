@@ -27,7 +27,7 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<
 }
 
 fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.max_peer_down_duration = Duration::from_millis(500);
+    cluster.cfg.raft_store.max_peer_down_duration = Duration::from_secs(1);
     cluster.run();
 
     // Kill 1, 2
@@ -51,6 +51,7 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     util::sleep_ms(1000);
 
     wait_down_peers(cluster, 1, Some(1));
+    let down_secs = cluster.get_down_peers()[&1].get_down_seconds();
     let timer = Instant::now();
     let leader = cluster.leader_of_region(1).unwrap();
     let new_leader = if leader.get_id() == 2 {
@@ -63,7 +64,8 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     // new leader should reset all down peer list.
     wait_down_peers(cluster, 0, None);
     wait_down_peers(cluster, 1, Some(1));
-    assert!(cluster.get_down_peers()[&1].get_down_seconds() < timer.elapsed().as_secs() + 1);
+    assert!(cluster.get_down_peers()[&1].get_down_seconds() <
+            down_secs + timer.elapsed().as_secs());
 
     // Ensure that node will not reuse the previous peer heartbeats.
     cluster.must_transfer_leader(1, leader);
