@@ -145,7 +145,10 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
 fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) -> bool {
     match get_toml_int_opt(config, name) {
         Some(i) => {
-            assert!(i >= 0 && i <= usize::MAX as i64);
+            assert!(i >= 0 && i as u64 <= usize::MAX as u64,
+                    "{}: {} is invalid.",
+                    name,
+                    i);
             *target = i as usize;
             true
         }
@@ -159,7 +162,7 @@ fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) -> bool {
 fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
     match get_toml_int_opt(config, name) {
         Some(i) => {
-            assert!(i > 0);
+            assert!(i > 0, "{}: {} is invalid", name, i);
             *target = i as u64;
         }
         None => info!("{} keep default {}", name, *target),
