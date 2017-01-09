@@ -55,6 +55,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let (key, value) = (b"k3", b"v3");
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
+    must_get_equal(&engine_3, b"k3", b"v3");
 
     let engine_2 = cluster.get_engine(2);
     must_get_none(&engine_2, b"k1");
