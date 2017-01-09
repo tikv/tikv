@@ -152,6 +152,14 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.raft_heartbeat_ticks == 0 {
+            return Err(box_err!("heartbeat tick must greater than 0"));
+        }
+
+        if self.raft_election_timeout_ticks <= self.raft_heartbeat_ticks {
+            return Err(box_err!("election tick must be greater than heartbeat tick"));
+        }
+
         if self.raft_log_gc_threshold < 1 {
             return Err(box_err!("raft log gc threshold must >= 1, not {}",
                                 self.raft_log_gc_threshold));
