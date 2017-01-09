@@ -786,6 +786,56 @@ mod tests {
     }
 
     #[test]
+    fn test_get_put_long_value() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       100,
+                       expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut long_value = "1234".to_string();
+        loop {
+            if long_value.len() > SHORT_VALUE_MAX_LEN {
+                break;
+            }
+            long_value.push_str("1234");
+        }
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"x"),
+                                                long_value.clone().into_bytes().to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            Options::default(),
+                            expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_commit(Context::new(),
+                          vec![make_key(b"x")],
+                          100,
+                          101,
+                          expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       100,
+                       expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       101,
+                       expect_get_val(tx.clone(), long_value.into_bytes().to_vec()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
     fn test_put_with_err() {
         let config = Config::new();
         // New engine lack of some column families.
