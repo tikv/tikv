@@ -91,6 +91,7 @@ fn test_update_term_from_message(state: StateRole) {
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
     match state {
         StateRole::Follower => r.become_follower(1, 2),
+        StateRole::PreCandidate => r.become_pre_candidate(),
         StateRole::Candidate => r.become_candidate(),
         StateRole::Leader => {
             r.become_candidate();
@@ -780,8 +781,10 @@ fn test_leader_sync_follower_log() {
         // first node needs the vote from the third node to become the leader.
         let mut n = Network::new(vec![Some(lead), Some(follower), NOP_STEPPER]);
         n.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+        // The election occurs in the term after the one we loaded with
+        // lead.load_state above.
         let mut m = new_message(3, 1, MessageType::MsgRequestVoteResponse, 0);
-        m.set_term(1);
+        m.set_term(term + 1);
         n.send(vec![m]);
 
         let mut m = new_message(1, 1, MessageType::MsgPropose, 0);
