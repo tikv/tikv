@@ -31,11 +31,7 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     // construct large raft entry
-    let mut large_value: Vec<u8> = Vec::with_capacity(max_size + 1);
-    for _ in 0..max_size + 1 {
-        large_value.push(b'v');
-    }
-
+    let large_value = vec![b'v'; max_size + 1];
     let res = cluster.put(b"key", large_value.as_slice());
     assert!(res.as_ref().err().unwrap().has_raft_entry_too_large());
 }
