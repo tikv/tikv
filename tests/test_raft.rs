@@ -2910,3 +2910,17 @@ fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64
     }
     assert_eq!(r.lead_transferee, None);
 }
+
+// test_transfer_non_member verifies that when a MsgTimeoutNow arrives at
+// a node that has been removed from the group, nothing happens.
+// (previously, if the node also got votes, it would panic as it
+// transitioned to StateRole::Leader)
+#[test]
+fn test_transfer_non_member() {
+    let mut raft = new_test_raft(1, vec![2, 3, 4], 5, 1, new_storage());
+    raft.step(new_message(2, 1, MessageType::MsgTimeoutNow, 0)).expect("");;
+
+    raft.step(new_message(2, 1, MessageType::MsgRequestVoteResponse, 0)).expect("");;
+    raft.step(new_message(3, 1, MessageType::MsgRequestVoteResponse, 0)).expect("");;
+    assert_eq!(raft.state, StateRole::Follower);
+}
