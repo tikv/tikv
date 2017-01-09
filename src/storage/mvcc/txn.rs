@@ -98,6 +98,14 @@ impl<'a> MvccTxn<'a> {
         self.reader.get(key, self.start_ts)
     }
 
+    /// prewrite
+    /// 1. check whether current write conflict
+    /// 2. check lock
+    ///    -----if lock already exist in lock column
+    ///         and return error if not belong to current transaction's lock
+    /// 3. set lock in Lock Column Family
+    ///      --- set value in lock if current value is short
+    /// 4. insert data into default column family with ts on value is not short
     pub fn prewrite(&mut self,
                     mutation: Mutation,
                     primary: &[u8],
@@ -149,6 +157,11 @@ impl<'a> MvccTxn<'a> {
         Ok(())
     }
 
+    /// commit transaction
+    /// 1. load lock for current key
+    ///    --- return error on lock not find
+    /// 2. insert into write cf for current key and commit_ts
+    /// 3. remove lock from lock cf
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
         let (lock_type, short_value) = match try!(self.reader.load_lock(key)) {
             Some(ref mut lock) if lock.ts == self.start_ts => {
