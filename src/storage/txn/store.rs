@@ -29,14 +29,14 @@ impl<'a> SnapshotStore<'a> {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let mut reader = MvccReader::new(self.snapshot, None, true);
+        let mut reader = MvccReader::new(self.snapshot, None, true, None);
         let v = try!(reader.get(key, self.start_ts));
         Ok(v)
     }
 
     pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
         // TODO: sort the keys and use ScanMode::Forward
-        let mut reader = MvccReader::new(self.snapshot, None, true);
+        let mut reader = MvccReader::new(self.snapshot, None, true, None);
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
@@ -46,8 +46,12 @@ impl<'a> SnapshotStore<'a> {
 
     /// Create a scanner.
     /// when key_only is true, all the returned value will be empty.
-    pub fn scanner(&self, mode: ScanMode, key_only: bool) -> Result<StoreScanner> {
-        let mut reader = MvccReader::new(self.snapshot, Some(mode), true);
+    pub fn scanner(&self,
+                   mode: ScanMode,
+                   key_only: bool,
+                   upper_bound: Option<Vec<u8>>)
+                   -> Result<StoreScanner> {
+        let mut reader = MvccReader::new(self.snapshot, Some(mode), true, upper_bound);
         reader.set_key_only(key_only);
         Ok(StoreScanner {
             reader: reader,

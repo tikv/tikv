@@ -4,26 +4,20 @@ cache:
   directories:
   - $HOME/.cache/
   - $HOME/.cargo/
+  - $TRAVIS_BUILD_DIR/target
 
 matrix:
   include:
     - os: linux
       rust: nightly
-      env: COMPILER=g++-4.8 RUSTC_DATE=2016-10-06
-      addons:
-         apt:
-            sources: ['ubuntu-toolchain-r-test']
-            packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
-    - os: linux
-      rust: nightly
-      env: COMPILER=g++-4.8 RUSTC_DATE=2016-08-06 ENABLE_FEATURES=default SKIP_TESTS=true
+      env: COMPILER=g++-4.8 RUSTC_DATE=2016-12-19 CXX=g++-4.8
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
             packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
     - os: osx
       rust: nightly
-      env: COMPILER=clang++ RUSTC_DATE=2016-10-06
+      env: COMPILER=clang++ RUSTC_DATE=2016-12-19 CXX=clang++
 
 install:
   - export LOCAL_DIR=$HOME/.cache/
@@ -31,6 +25,7 @@ install:
   - export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:$LOCAL_DIR/lib
   - export LIBRARY_PATH=${LIBRARY_PATH}:$LOCAL_DIR/lib
   - export DYLD_LIBRARY_PATH=${DY_LIBRARY_PATH}:$LOCAL_DIR/lib
+  - export CXXFLAGS=-I$LOCAL_DIR/include
   - make -f travis-build/Makefile prepare_${TRAVIS_OS_NAME}
 
 script:
