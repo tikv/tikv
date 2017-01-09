@@ -308,8 +308,8 @@ pub struct Storage {
 
 impl Storage {
     /// from engine, init and return storage.
-    /// 1) init channel to send & deliver msg cmd
-    /// 2) init handler
+    /// 1. init channel to send & deliver msg cmd
+    /// 2. init handler
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let event_loop = try!(create_event_loop(config.sched_notify_capacity,
                                                 config.sched_msg_per_tick));
@@ -335,9 +335,9 @@ impl Storage {
 
     /// start
     /// storage start to work
-    /// 1) check handle
-    /// 2) check & init Scheduler with config
-    /// 3) start scheduler
+    /// 1. check handle
+    /// 2. check & init Scheduler with config
+    /// 3. start scheduler
     pub fn start(&mut self, config: &Config) -> Result<()> {
         let mut handle = self.handle.lock().unwrap();
         if handle.handle.is_some() {

@@ -56,9 +56,9 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
 }
 
 /// check column families.
-/// create db when not exist
-/// create column in needed_cfs when not exist
-/// remove columns not in needed_cfs
+/// 1. create db when not exist
+/// 2. create column in needed_cfs when not exist
+/// 3. remove columns not in needed_cfs
 fn check_column_families(path: &str,
                          needed_cfs: &[&str],
                          cfs_opts: &[&Options])
@@ -120,11 +120,11 @@ fn check_column_families(path: &str,
 }
 
 /// new engine opt:
-/// 1) create db if not exist
-/// 2) make sure all cfs exist
+/// 1. create db if not exist
+/// 2. make sure all cfs exist
 ///     -- remove those column families which are  not in $cfs,
 ///     -- create new column families in $cfs which is not exist
-/// 3) open all column families in cfs
+/// 3. open all column families in cfs
 pub fn new_engine_opt(mut opts: Options,
                       path: &str,
                       cfs: &[&str],

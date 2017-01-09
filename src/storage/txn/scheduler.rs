@@ -605,9 +605,9 @@ impl Scheduler {
     }
 
     /// process receive new cmd
-    /// 1) check flow control
+    /// 1. check flow control
     ///     -- we only control write flow now
-    /// 2) schedule_command--start to handle a new cmd
+    /// 2. schedule_command--start to handle a new cmd
     ///      -- check & get lock
     ///      -- get snapshot
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {

@@ -240,8 +240,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 
     /// async snapshot
-    /// 1) make request to get snapshot from local store
-    /// 2) run cb
+    /// 1. make request to get snapshot from local store
+    /// 2. run cb
     fn async_snapshot(&self, ctx: &Context, cb: Callback<Box<Snapshot>>) -> engine::Result<()> {
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
