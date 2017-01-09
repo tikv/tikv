@@ -512,7 +512,7 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
     }
 
-    pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError>  {
+    pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
         let resp = self.request(key,
                                 vec![new_put_cf_cmd("default", key, value)],
                                 false,

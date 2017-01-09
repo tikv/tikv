@@ -31,8 +31,8 @@ fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     // construct large raft entry
-    let mut large_value: Vec<u8> = Vec::with_capacity(max_size+1);
-    for _ in 0..max_size+1 {
+    let mut large_value: Vec<u8> = Vec::with_capacity(max_size + 1);
+    for _ in 0..max_size + 1 {
         large_value.push(b'v');
     }
 
