@@ -162,7 +162,7 @@ fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
     }
 }
 
-fn cfg_dur(target: &mut Duration, config: &toml::Value, name: &str) {
+fn cfg_duration(target: &mut Duration, config: &toml::Value, name: &str) {
     match get_toml_int_opt(config, name) {
         Some(i) => {
             assert!(i > 0);
@@ -481,9 +481,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
-    cfg_dur(&mut cfg.raft_store.max_peer_down_duration,
-            config,
-            "raftstore.max-peer-down-duration");
+    cfg_duration(&mut cfg.raft_store.max_peer_down_duration,
+                 config,
+                 "raftstore.max-peer-down-duration");
     cfg_u64(&mut cfg.raft_store.pd_heartbeat_tick_interval,
             config,
             "raftstore.pd-heartbeat-tick-interval");
