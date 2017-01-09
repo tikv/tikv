@@ -32,6 +32,7 @@ extern crate prometheus;
 use std::process;
 use std::{env, thread};
 use std::fs::{self, File};
+use std::usize;
 use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
@@ -117,22 +118,58 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
     s
 }
 
-fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
-    let i = match config.lookup(name) {
-        Some(&toml::Value::Integer(i)) => i,
+fn get_toml_int_opt(config: &toml::Value, name: &str) -> Option<i64> {
+    let res = match config.lookup(name) {
+        Some(&toml::Value::Integer(i)) => Some(i),
         Some(&toml::Value::String(ref s)) => {
-            util::config::parse_readable_int(s)
-                .unwrap_or_else(|e| exit_with_err(format!("{} parse failed {:?}", name, e)))
+            Some(util::config::parse_readable_int(s)
+                .unwrap_or_else(|e| exit_with_err(format!("{} parse failed {:?}", name, e))))
         }
-        None => {
-            info!("{} use default {:?}", name, default);
-            default.unwrap_or_else(|| exit_with_err(format!("please specify {}", name)))
-        }
+        None => None,
         _ => exit_with_err(format!("{} int or readable int is excepted", name)),
     };
-    info!("toml value {} : {}", name, i);
+    if let Some(i) = res {
+        info!("toml value {} : {:?}", name, i);
+    }
+    res
+}
 
-    i
+fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
+    get_toml_int_opt(config, name).unwrap_or_else(|| {
+        let i = default.unwrap_or_else(|| exit_with_err(format!("please specify {}", name)));
+        info!("{} use default {:?}", name, default);
+        i
+    })
+}
+
+fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) {
+    match get_toml_int_opt(config, name) {
+        Some(i) => {
+            assert!(i >= 0 && i <= usize::MAX as i64);
+            *target = i as usize;
+        }
+        None => info!("{} keep default {}", name, *target),
+    }
+}
+
+fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
+    match get_toml_int_opt(config, name) {
+        Some(i) => {
+            assert!(i > 0);
+            *target = i as u64;
+        }
+        None => info!("{} keep default {}", name, *target),
+    }
+}
+
+fn cfg_dur(target: &mut Duration, config: &toml::Value, name: &str) {
+    match get_toml_int_opt(config, name) {
+        Some(i) => {
+            assert!(i > 0);
+            *target = Duration::from_millis(i as u64);
+        }
+        None => info!("{} keep default {:?}", name, *target),
+    }
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
@@ -382,17 +419,18 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
-    cfg.notify_capacity = get_toml_int(config, "server.notify-capacity", Some(40960)) as usize;
-
-    cfg.end_point_concurrency =
-        get_toml_int(config, "server.end-point-concurrency", Some(8)) as usize;
-    cfg.messages_per_tick = get_toml_int(config, "server.messages-per-tick", Some(4096)) as usize;
+    cfg_usize(&mut cfg.notify_capacity, config, "server.notify-capacity");
+    cfg_usize(&mut cfg.end_point_concurrency,
+              config,
+              "server.end-point-concurrency");
+    cfg_usize(&mut cfg.messages_per_tick,
+              config,
+              "server.messages-per-tick");
     let capacity = get_flag_int(matches, "capacity")
-        .unwrap_or_else(|| get_toml_int(config, "server.capacity", Some(0)));
-    assert!(capacity >= 0);
-
-    if capacity > 0 {
-        cfg.raft_store.capacity = capacity as u64;
+        .or_else(|| get_toml_int_opt(config, "server.capacity"));
+    if let Some(cap) = capacity {
+        assert!(cap >= 0);
+        cfg.raft_store.capacity = cap as u64;
     }
 
     // Set advertise address for outer node and client use.
@@ -401,84 +439,72 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
         .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.to_owned())));
     check_advertise_address(&cfg.advertise_addr);
 
-    cfg.send_buffer_size =
-        get_toml_int(config, "server.send-buffer-size", Some(128 * 1024)) as usize;
-    cfg.recv_buffer_size =
-        get_toml_int(config, "server.recv-buffer-size", Some(128 * 1024)) as usize;
+    cfg_usize(&mut cfg.send_buffer_size, config, "server.send-buffer-size");
+    cfg_usize(&mut cfg.recv_buffer_size, config, "server.recv-buffer-size");
 
-    cfg.raft_store.notify_capacity =
-        get_toml_int(config, "raftstore.notify-capacity", Some(40960)) as usize;
-    cfg.raft_store.messages_per_tick =
-        get_toml_int(config, "raftstore.messages-per-tick", Some(4096)) as usize;
-    let interval = get_toml_int(config,
-                                "raftstore.split-region-check-tick-interval",
-                                Some(10000));
-    cfg.raft_store.split_region_check_tick_interval = interval as u64;
-    cfg.raft_store.region_split_size =
-        get_toml_int(config,
-                     "raftstore.region-split-size",
-                     Some(64 * 1024 * 1024)) as u64;
-    cfg.raft_store.region_max_size =
-        get_toml_int(config, "raftstore.region-max-size", Some(80 * 1024 * 1024)) as u64;
-
-    cfg.raft_store.region_check_size_diff =
-        get_toml_int(config,
-                     "raftstore.region-split-check-diff",
-                     Some(8 * 1024 * 1024)) as u64;
-
-    cfg.raft_store.raft_log_gc_tick_interval =
-        get_toml_int(config, "raftstore.raft-log-gc-tick-interval", Some(10_000)) as u64;
-
-    cfg.raft_store.raft_log_gc_threshold =
-        get_toml_int(config, "raftstore.raft-log-gc-threshold", Some(50)) as u64;
-
-    let default_size_limit = cfg.raft_store.raft_log_gc_count_limit as i64;
-    cfg.raft_store.raft_log_gc_count_limit =
-        get_toml_int(config,
-                     "raftstore.raft-log-gc-count-limit",
-                     Some(default_size_limit)) as u64;
-
-    cfg.raft_store.raft_log_gc_size_limit =
-        get_toml_int(config,
-                     "raftstore.raft-log-gc-size-limit",
-                     Some(48 * 1024 * 1024)) as u64;
-
-    cfg.raft_store.region_compact_check_interval =
-        get_toml_int(config,
-                     "raftstore.region-compact-check-interval",
-                     Some(300_000)) as u64;
-
-    cfg.raft_store.region_compact_delete_keys_count =
-        get_toml_int(config,
-                     "raftstore.region-compact-delete-keys-count",
-                     Some(1_000_000)) as u64;
-
-    cfg.raft_store.lock_cf_compact_interval =
-        get_toml_int(config, "raftstore.lock-cf-compact-interval", Some(600_000)) as u64;
-
-    let max_peer_down_millis =
-        get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
-    cfg.raft_store.max_peer_down_duration = Duration::from_millis(max_peer_down_millis);
-
-    cfg.raft_store.pd_heartbeat_tick_interval =
-        get_toml_int(config, "raftstore.pd-heartbeat-tick-interval", Some(60_000)) as u64;
-
-    cfg.raft_store.pd_store_heartbeat_tick_interval =
-        get_toml_int(config,
-                     "raftstore.pd-store-heartbeat-tick-interval",
-                     Some(10_000)) as u64;
-
-    cfg.raft_store.consistency_check_tick_interval =
-        get_toml_int(config, "raftstore.consistency-check-interval", Some(0)) as u64;
-
-    cfg.storage.sched_notify_capacity =
-        get_toml_int(config, "storage.scheduler-notify-capacity", Some(10240)) as usize;
-    cfg.storage.sched_msg_per_tick =
-        get_toml_int(config, "storage.scheduler-messages-per-tick", Some(1024)) as usize;
-    cfg.storage.sched_concurrency =
-        get_toml_int(config, "storage.scheduler-concurrency", Some(102400)) as usize;
-    cfg.storage.sched_worker_pool_size =
-        get_toml_int(config, "storage.scheduler-worker-pool-size", Some(4)) as usize;
+    cfg_usize(&mut cfg.raft_store.notify_capacity,
+              config,
+              "raftstore.notify-capacity");
+    cfg_usize(&mut cfg.raft_store.messages_per_tick,
+              config,
+              "raftstore.messages-per-tick");
+    cfg_u64(&mut cfg.raft_store.split_region_check_tick_interval,
+            config,
+            "raftstore.split-region-check-tick-interval");
+    cfg_u64(&mut cfg.raft_store.region_split_size,
+            config,
+            "raftstore.region-split-size");
+    cfg_u64(&mut cfg.raft_store.region_max_size,
+            config,
+            "raftstore.region-max-size");
+    cfg_u64(&mut cfg.raft_store.region_check_size_diff,
+            config,
+            "raftstore.region-split-check-diff");
+    cfg_u64(&mut cfg.raft_store.raft_log_gc_tick_interval,
+            config,
+            "raftstore.raft-log-gc-tick-interval");
+    cfg_u64(&mut cfg.raft_store.raft_log_gc_threshold,
+            config,
+            "raftstore.raft-log-gc-threshold");
+    cfg_u64(&mut cfg.raft_store.raft_log_gc_count_limit,
+            config,
+            "raftstore.raft-log-gc-count-limit");
+    cfg_u64(&mut cfg.raft_store.raft_log_gc_size_limit,
+            config,
+            "raftstore.raft-log-gc-size-limit");
+    cfg_u64(&mut cfg.raft_store.region_compact_check_interval,
+            config,
+            "raftstore.region-compact-check-interval");
+    cfg_u64(&mut cfg.raft_store.region_compact_delete_keys_count,
+            config,
+            "raftstore.region-compact-delete-keys-count");
+    cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
+            config,
+            "raftstore.lock-cf-compact-interval");
+    cfg_dur(&mut cfg.raft_store.max_peer_down_duration,
+            config,
+            "raftstore.max-peer-down-duration");
+    cfg_u64(&mut cfg.raft_store.pd_heartbeat_tick_interval,
+            config,
+            "raftstore.pd-heartbeat-tick-interval");
+    cfg_u64(&mut cfg.raft_store.pd_store_heartbeat_tick_interval,
+            config,
+            "raftstore.pd-store-heartbeat-tick-interval");
+    cfg_u64(&mut cfg.raft_store.consistency_check_tick_interval,
+            config,
+            "raftstore.consistency-check-interval");
+    cfg_usize(&mut cfg.storage.sched_notify_capacity,
+              config,
+              "storage.scheduler-notify-capacity");
+    cfg_usize(&mut cfg.storage.sched_msg_per_tick,
+              config,
+              "storage.scheduler-messages-per-tick");
+    cfg_usize(&mut cfg.storage.sched_concurrency,
+              config,
+              "storage.scheduler-concurrency");
+    cfg_usize(&mut cfg.storage.sched_worker_pool_size,
+              config,
+              "storage.scheduler-worker-pool-size");
 
     cfg
 }
