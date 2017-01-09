@@ -1388,15 +1388,21 @@ impl<T: Storage> Raft<T> {
                 self.send(m);
             }
             MessageType::MsgTimeoutNow => {
-                info!("{} [term {}] received MsgTimeoutNow from {} and starts an election to \
+                if self.promotable() {
+                    info!("{} [term {}] received MsgTimeoutNow from {} and starts an election to \
                        get leadership.",
-                      self.tag,
-                      self.term,
-                      m.get_from());
-                // Leadership trnasfers never use pre-vote even if self.pre_vote is true; we
-                // know we are not recovering from a partition so there is no need for the
-                // extra round trip.
-                self.campaign(CAMPAIGN_TRANSFER);
+                          self.tag,
+                          self.term,
+                          m.get_from());
+                    // Leadership trnasfers never use pre-vote even if self.pre_vote is true; we
+                    // know we are not recovering from a partition so there is no need for the
+                    // extra round trip.
+                    self.campaign(CAMPAIGN_TRANSFER);
+                } else {
+                    info!("{} received MsgTimeoutNow from {} but is not promotable",
+                          self.tag,
+                          m.get_from());
+                }
             }
             MessageType::MsgReadIndex => {
                 if self.leader_id == INVALID_ID {
