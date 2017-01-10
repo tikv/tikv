@@ -37,7 +37,7 @@ status=$?
 if [[ "$SKIP_TESTS" = "" ]]; then
     # start pd
     which pd-server
-    if [ $? -eq 0 ]; then
+    if [ $? -eq 0 ] && [[ "$TRAVIS" != "true" ]]; then
         # Separate PD clusters.
         pd-server --name="pd1" \
             --data-dir="default.pd1" \
