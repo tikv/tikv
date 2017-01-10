@@ -162,7 +162,7 @@ fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) -> bool {
 fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
     match get_toml_int_opt(config, name) {
         Some(i) => {
-            assert!(i > 0, "{}: {} is invalid", name, i);
+            assert!(i >= 0, "{}: {} is invalid", name, i);
             *target = i as u64;
         }
         None => info!("{} keep default {}", name, *target),
@@ -172,7 +172,7 @@ fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
 fn cfg_duration(target: &mut Duration, config: &toml::Value, name: &str) {
     match get_toml_int_opt(config, name) {
         Some(i) => {
-            assert!(i > 0);
+            assert!(i >= 0);
             *target = Duration::from_millis(i as u64);
         }
         None => info!("{} keep default {:?}", name, *target),
