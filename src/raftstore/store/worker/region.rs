@@ -269,8 +269,8 @@ impl Runner {
             }
         }
 
-        SNAPSHOT_KV_COUNET_GAUGE.set(snapshot_kv_count as f64);
-        SNAPSHOT_SIZE_GAUGE.set(snapshot_size as f64);
+        SNAPSHOT_KV_COUNT_HISTOGRAM.observe(snapshot_kv_count as f64);
+        SNAPSHOT_SIZE_HISTOGRAM.observe(snapshot_size as f64);
         box_try!(reader.validate());
 
         region_state.set_state(PeerState::Normal);
