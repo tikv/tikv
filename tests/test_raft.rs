@@ -544,15 +544,11 @@ fn test_progress_resume_by_heartbeat_resp() {
     raft.prs.get_mut(&2).unwrap().paused = true;
 
     raft.step(new_message(1, 1, MessageType::MsgBeat, 0)).expect("");
-    assert!(raft.prs[&2].paused,
-            "paused = {}, want true",
-            raft.prs[&2].paused);
+    assert!(raft.prs[&2].paused);
 
     raft.prs.get_mut(&2).unwrap().become_replicate();
     raft.step(new_message(2, 1, MessageType::MsgHeartbeatResponse, 0)).expect("");
-    assert!(!raft.prs[&2].paused,
-            "paused = {}, want false",
-            raft.prs[&2].paused);
+    assert!(!raft.prs[&2].paused);
 }
 
 #[test]
@@ -1454,7 +1450,7 @@ fn test_handle_heartbeat_resp() {
 
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
-    assert_eq!(msgs.len(), 0);
+    assert!(msgs.is_empty());
 }
 
 // test_msg_append_response_wait_reset verifies the waitReset behavior of a leader
