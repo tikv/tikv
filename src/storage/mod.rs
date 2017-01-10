@@ -730,6 +730,16 @@ mod tests {
         })
     }
 
+    fn generate_long_value() -> Vec<u8> {
+        let mut long_value = "1234".to_string();
+        loop {
+            if long_value.len() > SHORT_VALUE_MAX_LEN {
+                return long_value.into_bytes();
+            }
+            long_value.push_str("1234");
+        }
+    }
+
     fn expect_batch_get_vals(done: Sender<i32>,
                              pairs: Vec<Option<KvPair>>)
                              -> Callback<Vec<Result<KvPair>>> {
@@ -797,16 +807,9 @@ mod tests {
                        expect_get_none(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        let mut long_value = "1234".to_string();
-        loop {
-            if long_value.len() > SHORT_VALUE_MAX_LEN {
-                break;
-            }
-            long_value.push_str("1234");
-        }
+        let long_value = generate_long_value();
         storage.async_prewrite(Context::new(),
-                            vec![Mutation::Put((make_key(b"x"),
-                                                long_value.clone().into_bytes().to_vec()))],
+                            vec![Mutation::Put((make_key(b"x"), long_value.clone()))],
                             b"x".to_vec(),
                             100,
                             Options::default(),
@@ -829,7 +832,7 @@ mod tests {
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        101,
-                       expect_get_val(tx.clone(), long_value.into_bytes().to_vec()))
+                       expect_get_val(tx.clone(), long_value))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -864,11 +867,13 @@ mod tests {
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
+        let long_value = generate_long_value();
         storage.async_prewrite(Context::new(),
                             vec![
             Mutation::Put((make_key(b"a"), b"aa".to_vec())),
             Mutation::Put((make_key(b"b"), b"bb".to_vec())),
             Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+            Mutation::Put((make_key(b"d"),long_value.clone())),
             ],
                             b"a".to_vec(),
                             1,
@@ -877,7 +882,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage.async_commit(Context::new(),
-                          vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
+                          vec![make_key(b"a"), make_key(b"b"), make_key(b"c"), make_key(b"d")],
                           1,
                           2,
                           expect_ok(tx.clone()))
@@ -893,7 +898,56 @@ mod tests {
             Some((b"a".to_vec(), b"aa".to_vec())),
             Some((b"b".to_vec(), b"bb".to_vec())),
             Some((b"c".to_vec(), b"cc".to_vec())),
+            Some((b"d".to_vec(), long_value.to_vec())),
             ]))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_scan_keys_only() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        let long_value = generate_long_value();
+        let key_a = make_key(b"a");
+        let key_b = make_key(b"b");
+        let key_c = make_key(b"c");
+        let key_d = make_key(b"d");
+        storage.async_prewrite(Context::new(),
+                            vec![
+                               Mutation::Put((key_a.clone(), b"aa".to_vec())),
+                               Mutation::Put((key_b.clone(), b"bb".to_vec())),
+                               Mutation::Put((key_c.clone(), b"cc".to_vec())),
+                               Mutation::Put((key_d.clone(), long_value.clone())),
+                               ],
+                            b"a".to_vec(),
+                            1,
+                            Options::default(),
+                            expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_commit(Context::new(),
+                          vec![key_a.clone(),key_b.clone(),key_c.clone(),key_d.clone(),],
+                          1,
+                          2,
+                          expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_scan(Context::new(),
+                        make_key(b"\x00"),
+                        1000,
+                        5,
+                        Options::new(5, false, true),
+                        expect_scan(tx.clone(),
+                                    vec![
+                                       Some((b"a".to_vec(), vec![])),
+                                       Some((b"b".to_vec(), vec![])),
+                                       Some((b"c".to_vec(), vec![])),
+                                       Some((b"d".to_vec(), vec![])),
+                                       ]))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
