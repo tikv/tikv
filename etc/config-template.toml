@@ -73,12 +73,6 @@ split-region-check-tick-interval = "5s"
 # It's recommanded to set it to 3/4 of region-split-size.
 # raft-log-gc-size-limit = "48MB"
 
-# Send a heartbeat message after every configured number of ticks.
-# raft-heartbeat-ticks = 10
-# Start an election if heartbeat is absent for configured number of ticks.
-# WARN: please keep this value consistent across the cluster, otherwise it may lead to data inconsistency.
-# raft-election-timeout-ticks = 50
-
 # When a peer hasn't been active for max-peer-down-duration,
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
