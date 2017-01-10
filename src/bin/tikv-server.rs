@@ -142,7 +142,7 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
     })
 }
 
-fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) {
+fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) -> bool {
     match get_toml_int_opt(config, name) {
         Some(i) => {
             assert!(i >= 0 && i as u64 <= usize::MAX as u64,
@@ -150,15 +150,19 @@ fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) {
                     name,
                     i);
             *target = i as usize;
+            true
         }
-        None => info!("{} keep default {}", name, *target),
+        None => {
+            info!("{} keep default {}", name, *target);
+            false
+        }
     }
 }
 
 fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
     match get_toml_int_opt(config, name) {
         Some(i) => {
-            assert!(i > 0, "{}: {} is invalid", name, i);
+            assert!(i >= 0, "{}: {} is invalid", name, i);
             *target = i as u64;
         }
         None => info!("{} keep default {}", name, *target),
@@ -168,7 +172,7 @@ fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
 fn cfg_duration(target: &mut Duration, config: &toml::Value, name: &str) {
     match get_toml_int_opt(config, name) {
         Some(i) => {
-            assert!(i > 0);
+            assert!(i >= 0);
             *target = Duration::from_millis(i as u64);
         }
         None => info!("{} keep default {:?}", name, *target),
@@ -451,6 +455,15 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_usize(&mut cfg.raft_store.messages_per_tick,
               config,
               "raftstore.messages-per-tick");
+    cfg_usize(&mut cfg.raft_store.raft_heartbeat_ticks,
+              config,
+              "raftstore.raft-heartbeat-ticks");
+    if cfg_usize(&mut cfg.raft_store.raft_election_timeout_ticks,
+                 config,
+                 "raftstore.raft-election-timeout-ticks") {
+        warn!("Election timeout ticks needs to be same across all the cluster, otherwise it may \
+               lead to inconsistency.");
+    }
     cfg_u64(&mut cfg.raft_store.split_region_check_tick_interval,
             config,
             "raftstore.split-region-check-tick-interval");
