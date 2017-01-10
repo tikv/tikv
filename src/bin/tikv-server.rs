@@ -214,6 +214,8 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
+    util::monitor_threads("tikv").unwrap();
+
     util::run_prometheus(Duration::from_millis(push_interval as u64),
                          &push_address,
                          &push_job);

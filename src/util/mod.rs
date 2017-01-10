@@ -40,7 +40,8 @@ pub mod time_monitor;
 pub mod file_log;
 pub mod clocktime;
 pub mod metrics;
-
+#[cfg(target_os="linux")]
+mod thread_metrics;
 
 pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     if entries.is_empty() {
@@ -376,21 +377,34 @@ pub fn run_prometheus(interval: Duration,
 
     let job = job.to_owned();
     let address = address.to_owned();
-    Some(thread::spawn(move || {
-        loop {
-            let metric_familys = prometheus::gather();
+    let handler = thread::Builder::new()
+        .name("PromePusher".to_owned())
+        .spawn(move || {
+            loop {
+                let metric_familys = prometheus::gather();
 
-            let res = prometheus::push_metrics(&job,
-                                               prometheus::hostname_grouping_key(),
-                                               &address,
-                                               metric_familys);
-            if let Err(e) = res {
-                error!("fail to push metrics: {}", e);
+                let res = prometheus::push_metrics(&job,
+                                                   prometheus::hostname_grouping_key(),
+                                                   &address,
+                                                   metric_familys);
+                if let Err(e) = res {
+                    error!("fail to push metrics: {}", e);
+                }
+
+                thread::sleep(interval);
             }
+        })
+        .unwrap();
 
-            thread::sleep(interval);
-        }
-    }))
+    Some(handler)
+}
+
+#[cfg(target_os="linux")]
+pub use self::thread_metrics::monitor_threads;
+
+#[cfg(not(target_os="linux"))]
+fn monitor_threads() -> io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
