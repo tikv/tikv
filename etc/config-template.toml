@@ -64,7 +64,7 @@ region-split-check-diff = "8MB"
 split-region-check-tick-interval = "5s"
 
 # When raft entry exceed the max size, reject to propose the entry.
-# raft-entry-max-size = "16MB"
+# raft-entry-max-size = "8MB"
 
 # Interval to gc unnecessary raft log.
 # raft-log-gc-tick-interval = "10s"
