@@ -232,6 +232,8 @@ impl Runner {
         let mut reader = box_try!(snap_file.reader());
 
         let timer = Instant::now();
+        let mut snapshot_size = 0;
+        let mut snapshot_kv_count = 0;
         // Write the snapshot into the region.
         loop {
             // TODO: avoid too many allocation
@@ -249,8 +251,10 @@ impl Runner {
                 let key = box_try!(reader.decode_compact_bytes());
                 if key.is_empty() {
                     box_try!(self.db.write(wb));
+                    snapshot_size += batch_size;
                     break;
                 }
+                snapshot_kv_count += 1;
                 box_try!(util::check_key_in_region(keys::origin_key(&key), &region));
                 batch_size += key.len();
                 let value = box_try!(reader.decode_compact_bytes());
@@ -258,11 +262,15 @@ impl Runner {
                 box_try!(wb.put_cf(handle, &key, &value));
                 if batch_size >= self.batch_size {
                     box_try!(self.db.write(wb));
+                    snapshot_size += batch_size;
                     wb = WriteBatch::new();
                     batch_size = 0;
                 }
             }
         }
+
+        SNAPSHOT_KV_COUNET_GAUGE.set(snapshot_kv_count as f64);
+        SNAPSHOT_SIZE_GAUGE.set(snapshot_size as f64);
         box_try!(reader.validate());
 
         region_state.set_state(PeerState::Normal);
