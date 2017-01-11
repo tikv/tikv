@@ -31,8 +31,7 @@ export LOG_FILE=tests.log
 export RUST_TEST_THREADS=1
 export RUSTFLAGS=-Dwarnings
 
-NO_RUN="--no-run" make test
-status=$?
+NO_RUN="--no-run" make test || exit $status
 
 if [[ "$SKIP_TESTS" = "" ]]; then
     # start pd
