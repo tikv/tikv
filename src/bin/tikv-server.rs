@@ -615,7 +615,7 @@ fn start_server<T, S>(mut server: Server<T, S>,
 {
     let ch = server.get_sendch();
     let h = thread::Builder::new()
-        .name("tikv-server".to_owned())
+        .name("tikv-eventloop".to_owned())
         .spawn(move || {
             server.run(&mut el).unwrap();
         })
