@@ -544,7 +544,6 @@ impl<T: Storage> Raft<T> {
                 continue;
             }
             self.send_heartbeat(id, ctx.clone());
-            self.prs.get_mut(&id).unwrap().resume()
         }
     }
 
@@ -1103,6 +1102,7 @@ impl<T: Storage> Raft<T> {
                 {
                     let pr = self.prs.get_mut(&m.get_from()).unwrap();
                     pr.recent_active = true;
+                    pr.resume();
 
                     // free one slot for the full inflights window to allow progress.
                     if pr.state == ProgressState::Replicate && pr.ins.full() {
