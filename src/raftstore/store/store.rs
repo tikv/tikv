@@ -1170,6 +1170,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .map(|p| p.matched)
                 .min()
                 .unwrap();
+            // When an election happened or a new peer is added, replicated_idx can be 0.
+            if replicated_idx > 0 {
+                let last_idx = peer.raft_group.raft.raft_log.last_index();
+                if last_idx < replicated_idx {
+                    panic!("{} < {}", last_idx, replicated_idx);
+                }
+                REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+            }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let compact_idx;

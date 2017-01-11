@@ -120,6 +120,14 @@ lazy_static! {
             &["type", "result"]
         ).unwrap();
 
+    pub static ref REGION_MAX_LOG_LAG: Histogram =
+        register_histogram!(
+            "tikv_raftstore_log_lag",
+            "Bucketed histogram of max lag log in a region",
+            vec![2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0,
+                    512.0, 1024.0, 5120.0, 10240.0]
+        ).unwrap();
+
     pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_engine_memory_bytes",
