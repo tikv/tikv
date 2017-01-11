@@ -23,29 +23,20 @@ use libc::{self, pid_t};
 /// monitor current process's threads.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = unsafe { libc::getpid() };
-    let tc = try!(ThreadsColletcor::new(pid, namespace));
+    let tc = ThreadsColletcor::new(pid, namespace);
     try!(prometheus::register(Box::new(tc)).map_err(|e| to_err(format!("{:?}", e))));
 
     Ok(())
 }
 
-// Refresh monitoring threads.
-const REFRESH_CNT: usize = 10;
-
-struct ThreadsCore {
-    refresh: usize,
-    thread_ids: Vec<(pid_t, String)>,
-    cpu_totals: CounterVec,
-}
-
 struct ThreadsColletcor {
     pid: pid_t,
     descs: Vec<Desc>,
-    core: Mutex<ThreadsCore>,
+    cpu_totals: Mutex<CounterVec>,
 }
 
 impl ThreadsColletcor {
-    fn new<S: Into<String>>(pid: pid_t, namespace: S) -> Result<ThreadsColletcor> {
+    fn new<S: Into<String>>(pid: pid_t, namespace: S) -> ThreadsColletcor {
         let cpu_totals = CounterVec::new(Opts::new("thread_cpu_seconds_total",
                                                    "Total user and system CPU time spent in \
                                                     seconds by threads.")
@@ -54,18 +45,11 @@ impl ThreadsColletcor {
             .unwrap();
         let descs = cpu_totals.desc().into_iter().cloned().collect();
 
-        let pairs = try!(get_threads(pid));
-        let core = ThreadsCore {
-            refresh: 0,
-            thread_ids: pairs,
-            cpu_totals: cpu_totals,
-        };
-
-        Ok(ThreadsColletcor {
+        ThreadsColletcor {
             pid: pid,
             descs: descs,
-            core: Mutex::new(core),
-        })
+            cpu_totals: Mutex::new(cpu_totals),
+        }
     }
 }
 
@@ -75,17 +59,12 @@ impl Collector for ThreadsColletcor {
     }
 
     fn collect(&self) -> Vec<proto::MetricFamily> {
-        let mut core = self.core.lock().unwrap();
-        core.refresh += 1;
-        if core.refresh >= REFRESH_CNT {
-            core.thread_ids = get_threads(self.pid).unwrap();
-            core.refresh = 0;
-        }
-
-        for &(tid, ref tname) in &core.thread_ids {
+        let cpu_totals = self.cpu_totals.lock().unwrap();
+        let pairs = get_threads(self.pid).unwrap();
+        for (tid, tname) in pairs {
             if let Ok((utime, stime)) = find_thread_cpu_time(self.pid, tid) {
                 let total = (utime + stime) / *CLK_TCK;
-                let cpu_total = core.cpu_totals.get_metric_with_label_values(&[tname]).unwrap();
+                let cpu_total = cpu_totals.get_metric_with_label_values(&[&tname]).unwrap();
                 let past = cpu_total.get();
                 let delta = total - past;
                 if delta > 0.0 {
@@ -93,7 +72,8 @@ impl Collector for ThreadsColletcor {
                 }
             }
         }
-        core.cpu_totals.collect()
+
+        cpu_totals.collect()
     }
 }
 
@@ -111,8 +91,6 @@ fn get_threads(pid: pid_t) -> Result<Vec<(pid_t, String)>> {
         try!(fs::File::open(format!("/proc/{}/task/{}/comm", pid, tid))
             .and_then(|mut f| f.read_to_string(&mut tname)));
 
-        // Pop tail '\n'.
-        tname.pop();
         pairs.push((tid, sanitize_thread_name(tname)));
     }
 
@@ -125,7 +103,7 @@ fn sanitize_thread_name(name: String) -> String {
     let mut san = String::with_capacity(name.len());
     for c in name.chars() {
         match c {
-            // Prometheus label characters `[a-zA-Z0-9_:]*`
+            // Prometheus label characters `[a-zA-Z0-9_:]`
             'a'...'z' | 'A'...'Z' | '0'...'9' | '_' | ':' => {
                 san.push(c);
             }
@@ -209,6 +187,7 @@ mod tests {
                     ("a-b", "a_b"),
                     ("Az_1:", "Az_1:"),
                     ("@123", "123"),
+                    ("t1\n", "t1"),
                     ("@", "unkonw_0")];
         for &(i, o) in &case {
             assert_eq!(super::sanitize_thread_name(i.to_owned()), o);

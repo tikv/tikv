@@ -378,7 +378,7 @@ pub fn run_prometheus(interval: Duration,
     let job = job.to_owned();
     let address = address.to_owned();
     let handler = thread::Builder::new()
-        .name("PromePusher".to_owned())
+        .name("promepusher".to_owned())
         .spawn(move || {
             loop {
                 let metric_familys = prometheus::gather();
