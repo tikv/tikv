@@ -40,7 +40,7 @@ impl ThreadsColletcor {
                                                    "Total user and system CPU time spent in \
                                                     seconds by threads.")
                                              .namespace(namespace),
-                                         &["name"])
+                                         &["name", "tid"])
             .unwrap();
         let descs = cpu_totals.desc().into_iter().cloned().collect();
 
@@ -63,7 +63,9 @@ impl Collector for ThreadsColletcor {
         for (tid, tname) in pairs {
             if let Ok((utime, stime)) = find_thread_cpu_time(self.pid, tid) {
                 let total = (utime + stime) / *CLK_TCK;
-                let cpu_total = cpu_totals.get_metric_with_label_values(&[&tname]).unwrap();
+                let cpu_total =
+                    cpu_totals.get_metric_with_label_values(&[&tname, &format!("{}", tid)])
+                        .unwrap();
                 let past = cpu_total.get();
                 let delta = total - past;
                 if delta > 0.0 {
