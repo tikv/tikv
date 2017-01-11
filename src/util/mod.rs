@@ -13,18 +13,16 @@
 
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::io::{self, Write};
+use std::io;
 use std::{slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use time;
 use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
-use log::{self, Log, LogMetadata, LogRecord, SetLoggerError};
 
 #[macro_use]
 pub mod macros;
@@ -43,39 +41,6 @@ pub mod file_log;
 pub mod clocktime;
 pub mod metrics;
 
-pub use log::LogLevelFilter;
-
-pub fn init_log(level: LogLevelFilter) -> Result<(), SetLoggerError> {
-    log::set_logger(|filter| {
-        filter.set(level);
-        Box::new(DefaultLogger { level: level })
-    })
-}
-
-struct DefaultLogger {
-    level: LogLevelFilter,
-}
-
-impl Log for DefaultLogger {
-    fn enabled(&self, meta: &LogMetadata) -> bool {
-        meta.level() <= self.level
-    }
-
-    fn log(&self, record: &LogRecord) {
-        if self.enabled(record.metadata()) {
-            let t = time::now();
-            // TODO allow formatter to be configurable.
-            let _ = write!(io::stderr(),
-                           "{},{:03} {}:{} - {:5} - {}\n",
-                           time::strftime("%Y-%m-%d %H:%M:%S", &t).unwrap(),
-                           t.tm_nsec / 1000_000,
-                           record.location().file().rsplit('/').nth(0).unwrap(),
-                           record.location().line(),
-                           record.level(),
-                           record.args());
-        }
-    }
-}
 
 pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     if entries.is_empty() {

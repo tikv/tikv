@@ -1045,10 +1045,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         };
 
-        let store_id = msg.get_header().get_peer().get_store_id();
-        if store_id != self.store.get_id() {
-            bind_error(&mut resp,
-                       box_err!("mismatch store id {} != {}", store_id, self.store.get_id()));
+        if let Err(e) = self.validate_store_id(&msg) {
+            bind_error(&mut resp, e);
             return cb.call_box((resp,));
         }
 
@@ -1087,6 +1085,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
+    }
+
+    fn validate_store_id(&self, msg: &RaftCmdRequest) -> Result<()> {
+        let store_id = msg.get_header().get_peer().get_store_id();
+        if store_id != self.store.get_id() {
+            return Err(Error::StoreNotMatch(store_id, self.store.get_id()));
+        }
+        Ok(())
     }
 
     fn validate_region(&self, msg: &RaftCmdRequest) -> Result<()> {
@@ -1236,7 +1242,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::CompactCheck,
                                        self.cfg.region_compact_check_interval) {
             error!("{} register compact check tick err: {:?}", self.tag, e);
-        };
+        }
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {

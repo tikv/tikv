@@ -28,19 +28,24 @@ pub struct MvccReader<'a> {
     key_only: bool,
 
     fill_cache: bool,
+    upper_bound: Option<Vec<u8>>,
 }
 
 impl<'a> MvccReader<'a> {
-    pub fn new(snapshot: &Snapshot, scan_mode: Option<ScanMode>, fill_cache: bool) -> MvccReader {
+    pub fn new(snapshot: &Snapshot,
+               scan_mode: Option<ScanMode>,
+               fill_cache: bool,
+               upper_bound: Option<Vec<u8>>)
+               -> MvccReader {
         MvccReader {
             snapshot: snapshot,
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
-            // when scan_mode is some, use total-order-seek mode
             scan_mode: scan_mode,
             key_only: false,
             fill_cache: fill_cache,
+            upper_bound: upper_bound,
         }
     }
 
@@ -211,9 +216,8 @@ impl<'a> MvccReader<'a> {
         if self.write_cursor.is_none() {
             self.write_cursor = Some(try!(self.snapshot
                 .iter_cf(CF_WRITE,
-                         None,
+                         self.upper_bound.as_ref().map(|v| v.as_slice()),
                          self.fill_cache,
-                         true,
                          self.get_scan_mode(false))));
         }
         Ok(())
@@ -222,7 +226,10 @@ impl<'a> MvccReader<'a> {
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
             self.lock_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_LOCK, None, true, true, self.get_scan_mode(true))));
+                .iter_cf(CF_LOCK,
+                         self.upper_bound.as_ref().map(|v| v.as_slice()),
+                         true,
+                         self.get_scan_mode(true))));
         }
         Ok(())
     }

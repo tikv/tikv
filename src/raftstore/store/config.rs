@@ -32,13 +32,13 @@ const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
 const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 5 * 60 * 1000; // 5 min
 const REGION_COMPACT_DELETE_KEYS_COUNT: u64 = 1_000_000;
-const PD_HEARTBEAT_TICK_INTERVAL: u64 = 5000;
+const PD_HEARTBEAT_TICK_INTERVAL: u64 = 60000;
 const PD_STORE_HEARTBEAT_TICK_INTERVAL: u64 = 10000;
 const STORE_CAPACITY: u64 = u64::MAX;
-const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
+const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_MGR_GC_TICK_INTERVAL: u64 = 60000;
 const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 4 * 60 * 60; // 4 hours
-const DEFAULT_MESSAGES_PER_TICK: usize = 256;
+const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 const DEFAULT_LOCK_CF_COMPACT_INTERVAL: u64 = 10 * 60 * 1000; // 10 min
 // If the leader missing for over 2 hours,
@@ -152,6 +152,14 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.raft_heartbeat_ticks == 0 {
+            return Err(box_err!("heartbeat tick must greater than 0"));
+        }
+
+        if self.raft_election_timeout_ticks <= self.raft_heartbeat_ticks {
+            return Err(box_err!("election tick must be greater than heartbeat tick"));
+        }
+
         if self.raft_log_gc_threshold < 1 {
             return Err(box_err!("raft log gc threshold must >= 1, not {}",
                                 self.raft_log_gc_threshold));
