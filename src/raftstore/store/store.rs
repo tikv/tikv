@@ -800,16 +800,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   self.raft_metrics.ready.message - previous_ready_metrics.message,
                   self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot);
 
-        let mut written_count: u64 = 0;
         for (region_id, ready, mut res) in ready_results {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(ready, &mut res, &mut written_count);
+                .handle_raft_ready_apply(&mut self.raft_metrics, ready, &mut res);
             self.on_ready_result(region_id, res)
         }
-
-        WRITTEN_COUNT_HISTOGRAM.observe(written_count as f64);
 
         let dur = t.elapsed();
         if !self.is_busy {
