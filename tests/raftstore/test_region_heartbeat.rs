@@ -27,7 +27,7 @@ fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<
 }
 
 fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.max_peer_down_duration = Duration::from_millis(500);
+    cluster.cfg.raft_store.max_peer_down_duration = Duration::from_secs(1);
     cluster.run();
 
     // Kill 1, 2

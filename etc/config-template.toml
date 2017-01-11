@@ -80,10 +80,11 @@ split-region-check-tick-interval = "5s"
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
 
-# Interval to check whether start compaction for a region.
+# Interval to check whether start manual compaction for a region,
+# 0 means disable manual compaction.
 # region-compact-check-interval = "5m"
 # When delete keys of a region exceeds the size, a compaction will be started.
-# region-compact-delete-keys-count = 200000
+# region-compact-delete-keys-count = 1000000
 # Interval to check whether start lock compaction for a region.
 # lock-cf-compact-interval = "10m"
 
