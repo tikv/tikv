@@ -13,17 +13,107 @@
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
+use std::collections::BinaryHeap;
+use std::cmp::Ordering;
 
 use rocksdb::DB;
 
 use kvproto::metapb::RegionEpoch;
 use raftstore::store::{PeerStorage, keys, Msg};
 use raftstore::store::engine::Iterable;
+use raftstore::Result;
+use rocksdb::DBIterator;
 use util::escape;
 use util::transport::SendCh;
 use util::worker::Runnable;
+use storage::{CfName, LARGE_CFS};
 
 use super::metrics::*;
+
+#[derive(PartialEq, Eq)]
+struct KeyEntry {
+    key: Option<Vec<u8>>,
+    pos: usize,
+    value_size: usize,
+}
+
+impl KeyEntry {
+    fn new(key: Vec<u8>, pos: usize, value_size: usize) -> KeyEntry {
+        KeyEntry {
+            key: Some(key),
+            pos: pos,
+            value_size: value_size,
+        }
+    }
+
+    fn take(&mut self) -> KeyEntry {
+        KeyEntry::new(self.key.take().unwrap(), self.pos, self.value_size)
+    }
+
+    fn len(&self) -> usize {
+        self.key.as_ref().unwrap().len() + self.value_size
+    }
+}
+
+impl PartialOrd for KeyEntry {
+    fn partial_cmp(&self, rhs: &KeyEntry) -> Option<Ordering> {
+        // BinaryHeap is max heap, so we have to reverse order to get a min heap.
+        Some(self.key.as_ref().unwrap().cmp(rhs.key.as_ref().unwrap()).reverse())
+    }
+}
+
+impl Ord for KeyEntry {
+    fn cmp(&self, rhs: &KeyEntry) -> Ordering {
+        self.partial_cmp(rhs).unwrap()
+    }
+}
+
+struct MergedIterator<'a> {
+    iters: Vec<DBIterator<'a>>,
+    heap: BinaryHeap<KeyEntry>,
+}
+
+impl<'a> MergedIterator<'a> {
+    fn new(db: &'a DB,
+           cfs: &[CfName],
+           start_key: &[u8],
+           end_key: &[u8],
+           fill_cache: bool)
+           -> Result<MergedIterator<'a>> {
+        let mut iters = Vec::with_capacity(cfs.len());
+        let mut heap = BinaryHeap::with_capacity(cfs.len());
+        for (pos, cf) in cfs.into_iter().enumerate() {
+            let mut iter = try!(db.new_iterator_cf(cf, Some(end_key), fill_cache));
+            if iter.seek(start_key.into()) {
+                heap.push(KeyEntry::new(iter.key().to_vec(), pos, iter.value().len()));
+            }
+            iters.push(iter);
+        }
+        Ok(MergedIterator {
+            iters: iters,
+            heap: heap,
+        })
+    }
+
+    #[allow(should_implement_trait)]
+    fn next(&mut self) -> Option<KeyEntry> {
+        let pos = match self.heap.peek() {
+            None => return None,
+            Some(e) => e.pos,
+        };
+        let iter = &mut self.iters[pos];
+        if iter.next() {
+            // TODO: avoid copy key.
+            let e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len());
+            let mut front = self.heap.peek_mut().unwrap();
+            let res = front.take();
+            *front = e;
+            Some(res)
+        } else {
+            self.heap.pop()
+        }
+    }
+}
 
 /// Split checking task.
 pub struct Task {
@@ -80,17 +170,23 @@ impl Runnable<Task> for Runner {
         let mut split_key = vec![];
         let timer = CHECK_SPILT_HISTOGRAM.start_timer();
 
-        let res = task.engine.scan(&task.start_key,
-                                   &task.end_key,
-                                   false,
-                                   &mut |k, v| {
-            size += k.len() as u64;
-            size += v.len() as u64;
-            if split_key.is_empty() && size > self.split_size {
-                split_key = k.to_vec();
-            }
-            Ok(size < self.region_max_size)
-        });
+        let res = MergedIterator::new(task.engine.as_ref(),
+                                      LARGE_CFS,
+                                      &task.start_key,
+                                      &task.end_key,
+                                      false)
+            .map(|mut iter| {
+                while let Some(e) = iter.next() {
+                    size += e.len() as u64;
+                    if split_key.is_empty() && size > self.split_size {
+                        split_key = e.key.unwrap();
+                    }
+                    if size >= self.region_max_size {
+                        break;
+                    }
+                }
+            });
+
         if let Err(e) = res {
             error!("failed to scan split key of region {}: {:?}",
                    task.region_id,
