@@ -208,10 +208,6 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
         valid_int.truncate((len as i64 + extra_zero_count) as usize);
     }
 
-    while valid_int.starts_with('0') && valid_int.len() > 1 {
-        valid_int.remove(0);
-    }
-
     Ok(Cow::Owned(valid_int))
 }
 
