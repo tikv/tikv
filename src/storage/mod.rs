@@ -960,20 +960,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sched_1gc() {
-        let config = Config::new();
-        let mut storage = Storage::new(&config).unwrap();
-        storage.start(&config).unwrap();
-        let (tx1, rx1) = channel();
-        storage.async_gc(Context::new(), 1, expect_ok(tx1.clone())).unwrap();
-        let (tx2, rx2) = channel();
-        storage.async_gc(Context::new(), 1, expect_too_busy(tx2.clone())).unwrap();
-        rx2.recv().unwrap();
-        rx1.recv().unwrap();
-        storage.stop().unwrap();
-    }
-
-    #[test]
     fn test_cleanup() {
         let config = Config::new();
         let mut storage = Storage::new(&config).unwrap();

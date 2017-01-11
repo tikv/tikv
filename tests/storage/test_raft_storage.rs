@@ -11,20 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::thread;
 use tikv::util::HandyRwLock;
-use tikv::storage::{self, Storage, Engine, Snapshot, Modify, Mutation, make_key, ALL_CFS, Options};
-use tikv::storage::engine::{self, Callback, Result};
-use tikv::storage::txn;
+use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
+use tikv::storage::{txn, engine};
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::util::*;
+use storage::util;
 
 use super::sync_storage::SyncStorage;
 
@@ -147,13 +145,9 @@ fn test_scheduler_leader_change_twice() {
 
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let engine = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let block = Arc::new(AtomicBool::new(true));
-    let engine = BlockSnapshotEngine {
-        engine: engine,
-        block_snapshot: block.clone(),
-    };
+    let engine = util::BlockEngine::new(engine);
     let config = Default::default();
-    let mut storage = Storage::from_engine(box engine, &config).unwrap();
+    let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
 
     let mut ctx = Context::new();
@@ -162,6 +156,7 @@ fn test_scheduler_leader_change_twice() {
     ctx.set_peer(peers[0].clone());
 
     let (tx, rx) = channel();
+    engine.block_snapshot();
     storage.async_prewrite(ctx.clone(),
                         vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
                         b"k".to_vec(),
@@ -183,39 +178,7 @@ fn test_scheduler_leader_change_twice() {
     // Transfer leader twice, then unblock snapshot.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
-    block.store(false, Ordering::SeqCst);
+    engine.unblock_snapshot();
 
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
-}
-
-#[derive(Debug)]
-struct BlockSnapshotEngine {
-    engine: Box<Engine>,
-    block_snapshot: Arc<AtomicBool>,
-}
-
-impl Engine for BlockSnapshotEngine {
-    fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()> {
-        self.engine.async_write(ctx, batch, callback)
-    }
-
-    fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()> {
-        let block_snapshot = self.block_snapshot.clone();
-        self.engine.async_snapshot(ctx,
-                                   box move |res| {
-            thread::spawn(move || {
-                while block_snapshot.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                callback(res);
-            });
-        })
-    }
-
-    fn clone(&self) -> Box<Engine + 'static> {
-        box BlockSnapshotEngine {
-            engine: self.engine.clone(),
-            block_snapshot: self.block_snapshot.clone(),
-        }
-    }
 }
