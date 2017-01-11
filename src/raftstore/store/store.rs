@@ -1334,7 +1334,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::CompactCheck,
                                        self.cfg.region_compact_check_interval) {
             error!("{} register compact check tick err: {:?}", self.tag, e);
-        };
+        }
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
