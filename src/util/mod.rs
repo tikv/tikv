@@ -403,7 +403,7 @@ pub fn run_prometheus(interval: Duration,
 pub use self::thread_metrics::monitor_threads;
 
 #[cfg(not(target_os="linux"))]
-fn monitor_threads() -> io::Result<()> {
+pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
     Ok(())
 }
 
