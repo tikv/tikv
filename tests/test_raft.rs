@@ -534,19 +534,21 @@ fn test_progress_resume() {
     assert!(!p.paused, "paused= true, want false");
 }
 
-// test_progress_resume_by_heartbeat ensures raft.heartbeat reset progress.paused by heartbeat.
+// test_progress_resume_by_heartbeat_resp ensures raft.heartbeat reset progress.paused by
+// heartbeat response.
 #[test]
-fn test_progress_resume_by_heartbeat() {
+fn test_progress_resume_by_heartbeat_resp() {
     let mut raft = new_test_raft(1, vec![1, 2], 5, 1, new_storage());
     raft.become_candidate();
     raft.become_leader();
     raft.prs.get_mut(&2).unwrap().paused = true;
-    let mut m = Message::new();
-    m.set_from(1);
-    m.set_to(1);
-    m.set_msg_type(MessageType::MsgBeat);
-    raft.step(m).expect("");
-    assert!(!raft.prs[&2].paused, "paused = true, want false");
+
+    raft.step(new_message(1, 1, MessageType::MsgBeat, 0)).expect("");
+    assert!(raft.prs[&2].paused);
+
+    raft.prs.get_mut(&2).unwrap().become_replicate();
+    raft.step(new_message(2, 1, MessageType::MsgHeartbeatResponse, 0)).expect("");
+    assert!(!raft.prs[&2].paused);
 }
 
 #[test]
@@ -1433,32 +1435,22 @@ fn test_handle_heartbeat_resp() {
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].get_msg_type(), MessageType::MsgAppend);
 
-    // A second heartbeat response with no AppResp does not re-send because we are in the wait
-    // state.
+    // A second heartbeat response generates another MsgApp re-send
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
-    assert_eq!(msgs.len(), 0);
-
-    // Send a heartbeat to reset the wait state; next heartbeat will re-send MsgApp.
-    sm.bcast_heartbeat();
-    sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
-    msgs = sm.read_messages();
-    assert_eq!(msgs.len(), 2);
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
-    assert_eq!(msgs[1].get_msg_type(), MessageType::MsgAppend);
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgAppend);
 
     // Once we have an MsgAppResp, heartbeats no longer send MsgApp.
     let mut m = new_message(2, 0, MessageType::MsgAppendResponse, 0);
-    m.set_index(msgs[1].get_index() + msgs[1].get_entries().len() as u64);
+    m.set_index(msgs[0].get_index() + msgs[0].get_entries().len() as u64);
     sm.step(m).expect("");
     // Consume the message sent in response to MsgAppResp
     sm.read_messages();
 
-    sm.bcast_heartbeat(); // reset wait state
     sm.step(new_message(2, 0, MessageType::MsgHeartbeatResponse, 0)).expect("");
     msgs = sm.read_messages();
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
+    assert!(msgs.is_empty());
 }
 
 // test_msg_append_response_wait_reset verifies the waitReset behavior of a leader
@@ -2210,13 +2202,17 @@ fn test_send_append_for_progress_probe() {
     r.prs.get_mut(&2).unwrap().become_probe();
 
     // each round is a heartbeat
-    for _ in 0..3 {
-        // we expect that raft will only send out one msgAPP per heartbeat timeout
-        r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
-        r.send_append(2);
-        let mut msg = r.read_messages();
-        assert_eq!(msg.len(), 1);
-        assert_eq!(msg[0].get_index(), 0);
+    for i in 0..3 {
+        if i == 0 {
+            // we expect that raft will only send out one msgAPP on the first
+            // loop. After that, the follower is paused until a heartbeat response is
+            // received.
+            r.append_entry(&mut [new_entry(0, 0, SOME_DATA)]);
+            r.send_append(2);
+            let msg = r.read_messages();
+            assert_eq!(msg.len(), 1);
+            assert_eq!(msg[0].get_index(), 0);
+        }
 
         assert!(r.prs[&2].paused);
         for _ in 0..10 {
@@ -2229,11 +2225,20 @@ fn test_send_append_for_progress_probe() {
         for _ in 0..r.get_heartbeat_timeout() {
             r.step(new_message(1, 1, MessageType::MsgBeat, 0)).expect("");
         }
+        assert!(r.prs[&2].paused);
+
         // consume the heartbeat
-        msg = r.read_messages();
+        let msg = r.read_messages();
         assert_eq!(msg.len(), 1);
         assert_eq!(msg[0].get_msg_type(), MessageType::MsgHeartbeat);
     }
+
+    // a heartbeat response will allow another message to be sent
+    r.step(new_message(2, 1, MessageType::MsgHeartbeatResponse, 0)).expect("");
+    let msg = r.read_messages();
+    assert_eq!(msg.len(), 1);
+    assert_eq!(msg[0].get_index(), 0);
+    assert!(r.prs[&2].paused);
 }
 
 #[test]
@@ -2909,4 +2914,18 @@ fn check_leader_transfer_state(r: &Raft<MemStorage>, state: StateRole, lead: u64
                lead);
     }
     assert_eq!(r.lead_transferee, None);
+}
+
+// test_transfer_non_member verifies that when a MsgTimeoutNow arrives at
+// a node that has been removed from the group, nothing happens.
+// (previously, if the node also got votes, it would panic as it
+// transitioned to StateRole::Leader)
+#[test]
+fn test_transfer_non_member() {
+    let mut raft = new_test_raft(1, vec![2, 3, 4], 5, 1, new_storage());
+    raft.step(new_message(2, 1, MessageType::MsgTimeoutNow, 0)).expect("");;
+
+    raft.step(new_message(2, 1, MessageType::MsgRequestVoteResponse, 0)).expect("");;
+    raft.step(new_message(3, 1, MessageType::MsgRequestVoteResponse, 0)).expect("");;
+    assert_eq!(raft.state, StateRole::Follower);
 }
