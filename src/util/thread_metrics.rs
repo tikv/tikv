@@ -14,7 +14,6 @@
 use std::fs;
 use std::io::{Result, Error, ErrorKind, Read};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, ATOMIC_USIZE_INIT, Ordering};
 
 use prometheus::{self, Opts, CounterVec, Desc, proto, Collector};
 
@@ -91,17 +90,15 @@ fn get_threads(pid: pid_t) -> Result<Vec<(pid_t, String)>> {
         try!(fs::File::open(format!("/proc/{}/task/{}/comm", pid, tid))
             .and_then(|mut f| f.read_to_string(&mut tname)));
 
-        pairs.push((tid, sanitize_thread_name(tname)));
+        pairs.push((tid, sanitize_thread_name(tid, tname)));
     }
 
     Ok(pairs)
 }
 
-static TH_CNT: AtomicUsize = ATOMIC_USIZE_INIT;
-
-fn sanitize_thread_name(name: String) -> String {
-    let mut san = String::with_capacity(name.len());
-    for c in name.chars() {
+fn sanitize_thread_name(tid: pid_t, tname: String) -> String {
+    let mut san = String::with_capacity(tname.len());
+    for c in tname.chars() {
         match c {
             // Prometheus label characters `[a-zA-Z0-9_:]`
             'a'...'z' | 'A'...'Z' | '0'...'9' | '_' | ':' => {
@@ -113,7 +110,7 @@ fn sanitize_thread_name(name: String) -> String {
     }
 
     if san.is_empty() {
-        format!("unkonw_{}", TH_CNT.fetch_add(1, Ordering::Relaxed))
+        format!("{}", tid)
     } else {
         san
     }
@@ -187,10 +184,11 @@ mod tests {
                     ("a-b", "a_b"),
                     ("Az_1:", "Az_1:"),
                     ("@123", "123"),
-                    ("t1\n", "t1"),
-                    ("@", "unkonw_0")];
+                    ("t1\n", "t1")];
         for &(i, o) in &case {
-            assert_eq!(super::sanitize_thread_name(i.to_owned()), o);
+            assert_eq!(super::sanitize_thread_name(1, i.to_owned()), o);
         }
+
+        assert_eq!(super::sanitize_thread_name(1, "@#".to_owned()), "1");
     }
 }
