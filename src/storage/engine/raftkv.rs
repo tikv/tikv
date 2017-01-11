@@ -311,7 +311,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             })
             .map_err(|e| {
                 let tag = get_tag_from_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", tag]).inc();
+                ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
                 e.into()
             })
     }
