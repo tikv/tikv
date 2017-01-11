@@ -20,6 +20,7 @@
 #![feature(alloc)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
+#![feature(binary_heap_peek_mut)]
 #![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
