@@ -122,6 +122,9 @@ impl<'a> MvccTxn<'a> {
                     ttl: lock.ttl,
                 });
             }
+            // No need to overwrite the lock and data.
+            // If we use single delete, we can't put a key multiple times.
+            return Ok(());
         }
 
         let short_value = if let Mutation::Put((_, ref value)) = mutation {
