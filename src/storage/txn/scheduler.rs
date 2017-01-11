@@ -509,7 +509,7 @@ impl Scheduler {
     }
 
     fn insert_ctx(&mut self, ctx: RunningCtx) {
-        if ctx.tag == "gc" {
+        if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = true;
         }
         let cid = ctx.cid;
