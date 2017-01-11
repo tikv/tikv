@@ -39,7 +39,7 @@ use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
-use storage::{Key, Value, KvPair};
+use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::CbContext;
 use std::collections::HashMap;
 use mio::{self, EventLoop};
@@ -522,7 +522,7 @@ impl Scheduler {
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
-        if ctx.tag == "gc" {
+        if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = false;
         }
         SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
@@ -624,7 +624,7 @@ impl Scheduler {
             return;
         }
         // Allow 1 GC command at the same time.
-        if cmd.tag() == "gc" && self.has_gc_command {
+        if cmd.tag() == CMD_TAG_GC && self.has_gc_command {
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
             return;

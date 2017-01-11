@@ -774,20 +774,26 @@ fn test_storage_1gc() {
 
     engine.block_snapshot();
     let (tx1, rx1) = channel();
-    storage.async_gc(Context::new(), 1, box move |res: storage::Result<()>| {
-        assert!(res.is_ok());
-        tx1.send(1).unwrap();
-    }).unwrap();
+    storage.async_gc(Context::new(),
+                  1,
+                  box move |res: storage::Result<()>| {
+                      assert!(res.is_ok());
+                      tx1.send(1).unwrap();
+                  })
+        .unwrap();
 
     // Old GC command is blocked at snapshot stage, the other one will get ServerIsBusy error.
     let (tx2, rx2) = channel();
-    storage.async_gc(Context::new(), 1, box move |res: storage::Result<()>| {
-        match res {
-            Err(storage::Error::SchedTooBusy) => {}
-            _ => panic!("expect too busy"),
-        }
-        tx2.send(1).unwrap();
-    }).unwrap();
+    storage.async_gc(Context::new(),
+                  1,
+                  box move |res: storage::Result<()>| {
+            match res {
+                Err(storage::Error::SchedTooBusy) => {}
+                _ => panic!("expect too busy"),
+            }
+            tx2.send(1).unwrap();
+        })
+        .unwrap();
 
     rx2.recv().unwrap();
     engine.unblock_snapshot();

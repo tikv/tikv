@@ -57,7 +57,9 @@ impl BlockEngine {
 impl Engine for BlockEngine {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()> {
         let block_write = self.block_write.clone();
-        self.engine.async_write(ctx, batch, box move |res| {
+        self.engine.async_write(ctx,
+                                batch,
+                                box move |res| {
             thread::spawn(move || {
                 while block_write.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));

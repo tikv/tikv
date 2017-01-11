@@ -213,6 +213,8 @@ impl Debug for Command {
     }
 }
 
+pub const CMD_TAG_GC: &'static str = "gc";
+
 impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
@@ -238,7 +240,7 @@ impl Command {
             Command::Rollback { .. } => "rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
-            Command::Gc { .. } => "gc",
+            Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
         }
     }
