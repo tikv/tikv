@@ -532,7 +532,7 @@ mod tests {
                         15,
                         15,
                         WriteType::Rollback);
-        must_reverse_seek_write_none(engine.as_ref(), k, 15);
+        must_reverse_seek_write(engine.as_ref(), k, 15, 15, 15, WriteType::Rollback);
         must_get_commit_ts(engine.as_ref(), k, 5, 10);
         must_get_commit_ts_none(engine.as_ref(), k, 15);
 
