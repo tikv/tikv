@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::time::Duration;
-use std::{thread, cmp, fs};
+use std::{thread, fs};
 use rand::{self, Rng};
 
 use kvproto::eraftpb::MessageType;
@@ -22,6 +22,7 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util;
 use tikv::pd::PdClient;
+use tikv::storage::{CF_DEFAULT, CF_WRITE};
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
 use super::transport_simulate::*;
@@ -95,24 +96,30 @@ fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>,
                                limit: u64,
                                range: &mut Iterator<Item = u64>)
                                -> Vec<u8> {
+    put_cf_till_size(cluster, CF_DEFAULT, limit, range)
+}
+
+fn put_cf_till_size<T: Simulator>(cluster: &mut Cluster<T>,
+                                  cf: &'static str,
+                                  limit: u64,
+                                  range: &mut Iterator<Item = u64>)
+                                  -> Vec<u8> {
+    assert!(limit > 0);
     let mut len = 0;
     let mut rng = rand::thread_rng();
-    let mut max_key = vec![];
+    let mut key = vec![];
     while len < limit {
         let key_id = range.next().unwrap();
         let key_str = format!("{:09}", key_id);
-        let key = key_str.into_bytes();
+        key = key_str.into_bytes();
         let mut value = vec![0; 64];
         rng.fill_bytes(&mut value);
-        cluster.must_put(&key, &value);
+        cluster.must_put_cf(cf, &key, &value);
         // plus 1 for the extra encoding prefix
         len += key.len() as u64 + 1;
         len += value.len() as u64;
-        if max_key < key {
-            max_key = key;
-        }
     }
-    max_key
+    key
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -138,10 +145,10 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     assert_eq!(region, target);
 
-    let final_key = put_till_size(cluster,
-                                  REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
-                                  &mut range);
-    let max_key = cmp::max(last_key, final_key);
+    let max_key = put_cf_till_size(cluster,
+                                   CF_WRITE,
+                                   REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
+                                   &mut range);
 
     thread::sleep(Duration::from_secs(1));
 
