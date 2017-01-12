@@ -39,7 +39,7 @@ use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
-use storage::{Key, Value, KvPair};
+use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::CbContext;
 use std::collections::HashMap;
 use mio::{self, EventLoop};
@@ -214,6 +214,8 @@ pub struct Scheduler {
 
     // worker pool
     worker_pool: ThreadPool,
+
+    has_gc_command: bool,
 }
 
 impl Scheduler {
@@ -233,6 +235,7 @@ impl Scheduler {
             sched_too_busy_threshold: sched_too_busy_threshold,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
+            has_gc_command: false,
         }
     }
 }
@@ -506,6 +509,9 @@ impl Scheduler {
     }
 
     fn insert_ctx(&mut self, ctx: RunningCtx) {
+        if ctx.tag == CMD_TAG_GC {
+            self.has_gc_command = true;
+        }
         let cid = ctx.cid;
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
@@ -516,6 +522,9 @@ impl Scheduler {
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
+        if ctx.tag == CMD_TAG_GC {
+            self.has_gc_command = false;
+        }
         SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
         ctx
     }
@@ -612,9 +621,16 @@ impl Scheduler {
         if !cmd.readonly() && self.too_busy() {
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
-        } else {
-            self.schedule_command(cmd, callback);
+            return;
         }
+        // Allow 1 GC command at the same time.
+        if cmd.tag() == CMD_TAG_GC && self.has_gc_command {
+            execute_callback(callback,
+                             ProcessResult::Failed { err: StorageError::SchedTooBusy });
+            return;
+
+        }
+        self.schedule_command(cmd, callback);
     }
 
     /// Tries to acquire all the required latches for a command.
