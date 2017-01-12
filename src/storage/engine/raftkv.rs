@@ -69,6 +69,43 @@ quick_error! {
     }
 }
 
+fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
+    if header.has_not_leader() {
+        "not_leader"
+    } else if header.has_region_not_found() {
+        "region_not_found"
+    } else if header.has_key_not_in_region() {
+        "key_not_in_region"
+    } else if header.has_stale_epoch() {
+        "stale_epoch"
+    } else if header.has_server_is_busy() {
+        "server_is_busy"
+    } else {
+        "other"
+    }
+}
+
+fn get_tag_from_error(e: &Error) -> &'static str {
+    match *e {
+        Error::RequestFailed(ref header) => get_tag_from_header(header),
+        Error::Io(_) => "io",
+        Error::RocksDb(_) => "rocksdb",
+        Error::Server(_) => "server",
+        Error::InvalidResponse(_) => "invalid_resp",
+        Error::InvalidRequest(_) => "invalid_req",
+        Error::Timeout(_) => "timeout",
+    }
+}
+
+fn get_tag_from_engine_error(e: &engine::Error) -> &'static str {
+    match *e {
+        engine::Error::Request(ref header) => get_tag_from_header(header),
+        engine::Error::RocksDb(_) => "rocksdb",
+        engine::Error::Timeout(_) => "timeout",
+        engine::Error::Other(_) => "other",
+    }
+}
+
 pub type Result<T> = result::Result<T, Error>;
 
 impl From<Error> for engine::Error {
@@ -217,26 +254,31 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "all"]).inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["write"]).start_timer();
 
-        try!(self.exec_requests(ctx,
-                                reqs,
-                                box move |(cb_ctx, res)| {
-            match res {
-                Ok(CmdRes::Resp(_)) => {
-                    req_timer.observe_duration();
-                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "success"]).inc();
+        self.exec_requests(ctx,
+                           reqs,
+                           box move |(cb_ctx, res)| {
+                match res {
+                    Ok(CmdRes::Resp(_)) => {
+                        req_timer.observe_duration();
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "success"]).inc();
 
-                    cb((cb_ctx, Ok(())))
+                        cb((cb_ctx, Ok(())))
+                    }
+                    Ok(CmdRes::Snap(_)) => {
+                        cb((cb_ctx, Err(box_err!("unexpect snapshot, should mutate instead."))))
+                    }
+                    Err(e) => {
+                        let tag = get_tag_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", tag]).inc();
+                        cb((cb_ctx, Err(e)))
+                    }
                 }
-                Ok(CmdRes::Snap(_)) => {
-                    cb((cb_ctx, Err(box_err!("unexpect snapshot, should mutate instead."))))
-                }
-                Err(e) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "failed"]).inc();
-                    cb((cb_ctx, Err(e)))
-                }
-            }
-        }));
-        Ok(())
+            })
+            .map_err(|e| {
+                let tag = get_tag_from_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", tag]).inc();
+                e.into()
+            })
     }
 
     fn async_snapshot(&self, ctx: &Context, cb: Callback<Box<Snapshot>>) -> engine::Result<()> {
@@ -246,25 +288,32 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"]).start_timer();
 
-        try!(self.exec_requests(ctx,
-                                vec![req],
-                                box move |(cb_ctx, res)| {
-            match res {
-                Ok(CmdRes::Resp(r)) => {
-                    cb((cb_ctx, Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into())))
+        self.exec_requests(ctx,
+                           vec![req],
+                           box move |(cb_ctx, res)| {
+                match res {
+                    Ok(CmdRes::Resp(r)) => {
+                        cb((cb_ctx,
+                            Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into())))
+                    }
+                    Ok(CmdRes::Snap(s)) => {
+                        req_timer.observe_duration();
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"])
+                            .inc();
+                        cb((cb_ctx, Ok(box s)))
+                    }
+                    Err(e) => {
+                        let tag = get_tag_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
+                        cb((cb_ctx, Err(e)))
+                    }
                 }
-                Ok(CmdRes::Snap(s)) => {
-                    req_timer.observe_duration();
-                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"]).inc();
-                    cb((cb_ctx, Ok(box s)))
-                }
-                Err(e) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "failed"]).inc();
-                    cb((cb_ctx, Err(e)))
-                }
-            }
-        }));
-        Ok(())
+            })
+            .map_err(|e| {
+                let tag = get_tag_from_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
+                e.into()
+            })
     }
 
     fn clone(&self) -> Box<Engine> {
