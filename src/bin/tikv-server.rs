@@ -45,7 +45,7 @@ use mio::EventLoop;
 use fs2::FileExt;
 use prometheus::{Encoder, TextEncoder};
 
-use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
+use tikv::storage::{Storage, TEMP_DIR, ALL_CFS, CF_LOCK};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
@@ -539,9 +539,14 @@ fn build_raftkv(config: &toml::Value,
                         get_rocksdb_raftlog_cf_option(config)];
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine =
-        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), ALL_CFS, cfs_opts)
-            .unwrap());
+    // Trigger manual compact lock cf before start TiKV to sanitized for single
+    // delete, because the lock key may overwrite in old version TiKV.
+    let engine = Arc::new(rocksdb_util::new_engine_opt(opts,
+                                                       db_path.to_str().unwrap(),
+                                                       ALL_CFS,
+                                                       cfs_opts,
+                                                       &[CF_LOCK])
+        .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
     let mut node = Node::new(&mut event_loop, cfg, pd_client);

@@ -237,6 +237,16 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
+                Modify::SingleDelete(cf, k) => {
+                    let mut delete = DeleteRequest::new();
+                    delete.set_key(k.encoded().to_owned());
+                    if cf != CF_DEFAULT {
+                        delete.set_cf(cf.to_string());
+                    }
+                    delete.set_single_delete(true);
+                    req.set_cmd_type(CmdType::Delete);
+                    req.set_delete(delete);
+                }
                 Modify::Put(cf, k, v) => {
                     let mut put = PutRequest::new();
                     put.set_key(k.encoded().to_owned());

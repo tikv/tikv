@@ -67,7 +67,7 @@ impl<'a> MvccTxn<'a> {
 
     fn unlock_key(&mut self, key: Key) {
         self.write_size += CF_LOCK.len() + key.encoded().len();
-        self.writes.push(Modify::Delete(CF_LOCK, key));
+        self.writes.push(Modify::SingleDelete(CF_LOCK, key));
     }
 
     fn put_value(&mut self, key: &Key, ts: u64, value: Value) {

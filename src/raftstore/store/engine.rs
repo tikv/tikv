@@ -525,7 +525,7 @@ mod tests {
         opt.compression(DBCompressionType::DBNo);
 
         let engine =
-            Arc::new(rocksdb::new_engine_opt(opt, path.path().to_str().unwrap(), &[], vec![])
+            Arc::new(rocksdb::new_engine_opt(opt, path.path().to_str().unwrap(), &[], vec![], &[])
                 .unwrap());
 
         let value = vec![0;1024];

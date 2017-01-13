@@ -115,6 +115,16 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     wb.delete_cf(handle, k.encoded())
                 }
             }
+            Modify::SingleDelete(cf, k) => {
+                if cf == CF_DEFAULT {
+                    trace!("EngineRocksdb: single_delete {}", k);
+                    wb.single_delete(k.encoded())
+                } else {
+                    trace!("EngineRocksdb: single_delete_cf {} {}", cf, k);
+                    let handle = try!(rocksdb::get_cf_handle(db, cf));
+                    wb.single_delete_cf(handle, k.encoded())
+                }
+            }
             Modify::Put(cf, k, v) => {
                 if cf == CF_DEFAULT {
                     trace!("EngineRocksdb: put {},{}", k, escape(&v));

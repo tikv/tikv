@@ -49,8 +49,7 @@ impl CbContext {
 pub enum Modify {
     Delete(CfName, Key), // normal delete
     Put(CfName, Key, Value),
-    // single delete has the prerequisites that
-    // the key exists and was not overwritten.
+    // single delete has the prerequisites that the key exists and was not overwritten.
     SingleDelete(CfName, Key),
 }
 

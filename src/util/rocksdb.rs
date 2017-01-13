@@ -48,7 +48,7 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
     for _ in 0..cfs.len() {
         cfs_opts.push(Options::new());
     }
-    new_engine_opt(opts, path, cfs, cfs_opts)
+    new_engine_opt(opts, path, cfs, cfs_opts, &[])
 }
 
 fn check_column_families(path: &str,
@@ -111,15 +111,35 @@ fn check_column_families(path: &str,
     Ok(())
 }
 
+pub fn pre_open(path: &str,
+                cfs: &[&str],
+                cfs_opts: &[&Options],
+                cfs_need_compact: &[&str])
+                -> Result<(), String> {
+    let mut opts = Options::new();
+    opts.create_if_missing(false);
+    let db = DB::open_cf(opts, path, cfs, cfs_opts).unwrap();
+
+    for cf in cfs_need_compact {
+        let cf_handle = get_cf_handle(&db, cf).unwrap();
+        db.compact_range_cf(cf_handle, None, None);
+    }
+
+    Ok(())
+}
+
 pub fn new_engine_opt(mut opts: Options,
                       path: &str,
                       cfs: &[&str],
-                      cfs_opts: Vec<Options>)
+                      cfs_opts: Vec<Options>,
+                      cfs_need_compact: &[&str])
                       -> Result<DB, String> {
     // Drop discarded column families and create new needed column families not exist yet.
     // If db not exist check_column_families will create it.
     let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
     try!(check_column_families(path, cfs, &cfs_ref_opts));
+
+    try!(pre_open(path, cfs, &cfs_ref_opts, cfs_need_compact));
 
     // opts is used as Rocksdb's DBOptions when call DB::open_cf
     opts.create_if_missing(false);

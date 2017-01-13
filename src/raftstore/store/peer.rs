@@ -1839,11 +1839,18 @@ impl Peer {
             self.size_diff_hint = 0;
         }
         let resp = Response::new();
+        let single_delete = req.get_delete().get_single_delete();
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
             rocksdb::get_cf_handle(&self.engine, cf)
-                .and_then(|handle| ctx.wb.delete_cf(handle, &key))
+                .and_then(|handle| {
+                    if single_delete {
+                        ctx.wb.single_delete_cf(handle, &key)
+                    } else {
+                        ctx.wb.delete_cf(handle, &key)
+                    }
+                })
                 .unwrap_or_else(|e| {
                     panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
                 });
@@ -1852,9 +1859,18 @@ impl Peer {
                 self.delete_keys_hint += 1;
             }
         } else {
-            ctx.wb.delete(&key).unwrap_or_else(|e| {
-                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
-            });
+            if single_delete {
+                ctx.wb.single_delete(&key).unwrap_or_else(|e| {
+                    panic!("{} failed to single delete {}: {:?}",
+                           self.tag,
+                           escape(&key),
+                           e)
+                });
+            } else {
+                ctx.wb.delete(&key).unwrap_or_else(|e| {
+                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
+                });
+            }
             self.delete_keys_hint += 1;
         }
 

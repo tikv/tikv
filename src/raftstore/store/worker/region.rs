@@ -31,7 +31,7 @@ use raftstore::store::engine::{Mutable, Snapshot, Iterable};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
 use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, keys, Peekable, util};
-use storage::CF_RAFT;
+use storage::{CF_RAFT, CF_LOCK};
 
 use super::metrics::*;
 
@@ -174,7 +174,11 @@ impl Runner {
                         break;
                     }
 
-                    box_try!(wb.delete_cf(handle, key));
+                    if cf == CF_LOCK {
+                        box_try!(wb.single_delete_cf(handle, key));
+                    } else {
+                        box_try!(wb.delete_cf(handle, key));
+                    }
                     size_cnt += key.len();
                     if size_cnt >= self.batch_size {
                         // Can't use write_without_wal here.
