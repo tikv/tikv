@@ -173,14 +173,14 @@ fn main() {
                 dump_mvcc_default(&db, key, key_encoded, start_ts);
             }
             CF_LOCK => {
-                dump_mvcc_lock(&db, key, key_encoded);
+                dump_mvcc_lock(&db, key, key_encoded, start_ts);
             }
             CF_WRITE => {
                 dump_mvcc_write(&db, key, key_encoded, start_ts);
             }
             "all" => {
                 dump_mvcc_default(&db, key, key_encoded, start_ts);
-                dump_mvcc_lock(&db, key, key_encoded);
+                dump_mvcc_lock(&db, key, key_encoded, start_ts);
                 dump_mvcc_write(&db, key, key_encoded, start_ts);
             }
             _ => {
@@ -265,15 +265,18 @@ fn dump_mvcc_default(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
     }
 }
 
-fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool) {
+fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
     let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, encoded, CF_LOCK);
+    let start_ts = start_ts.unwrap_or(u64::MIN);
     for kv in kvs {
         let lock = &kv.value;
-        println!("Key: {:?}", escape(kv.key.encoded()));
-        println!("Primary: {:?}", escape(lock.primary.as_slice()));
-        println!("Type: {:?}", lock.lock_type);
-        println!("Start_ts: {:?}", lock.ts);
-        println!("");
+        if start_ts == u64::MIN || start_ts == lock.ts {
+            println!("Key: {:?}", escape(kv.key.encoded()));
+            println!("Primary: {:?}", escape(lock.primary.as_slice()));
+            println!("Type: {:?}", lock.lock_type);
+            println!("Start_ts: {:?}", lock.ts);
+            println!("");
+        }
     }
 }
 
@@ -361,7 +364,7 @@ fn parse_ts_key_from_key(encode_key: Vec<u8>) -> (u64, String) {
 
     let key = String::from_utf8(key_vec.clone()).unwrap();
     // println!("ts:{:?},key_vec:{:?}",ts,key.clone());
-    return (ts, key);
+    (ts, key)
 }
 
 fn dump_range(db: DB,
@@ -396,6 +399,10 @@ fn dump_range(db: DB,
                         let value = Write::deserialize(&v);
                         // println!("ts:{},key:{:?}", value.start_ts, escape(k));
                         right_key = value.start_ts == start_ts
+                    }
+                    CF_LOCK => {
+                        let value = Lock::deserialize(&v);
+                        right_key = value.ts == start_ts
                     }
                     _ => {}
                 }
