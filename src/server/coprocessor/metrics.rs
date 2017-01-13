@@ -28,6 +28,13 @@ lazy_static! {
             &["type", "req"]
         ).unwrap();
 
+    pub static ref COPR_REQ_WAIT_TIME: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_request_wait_seconds",
+            "Bucketed histogram of coprocessor request wait duration",
+            &["type", "req"]
+        ).unwrap();
+
     pub static ref COPR_REQ_ERROR: CounterVec =
         register_counter_vec!(
             "tikv_coprocessor_request_error",

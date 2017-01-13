@@ -37,7 +37,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
-use util::{escape, duration_to_ms, Either};
+use util::{escape, duration_to_ms, duration_to_sec, Either};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
@@ -67,7 +67,7 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 pub struct Host {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
-    reqs: HashMap<u64, Vec<RequestTask>>,
+    reqs: HashMap<u64, (Instant, Vec<RequestTask>)>,
     last_req_id: u64,
     pool: ThreadPool,
     max_running_task_count: usize,
@@ -157,7 +157,7 @@ impl BatchRunnable<Task> for Host {
                     group.push(req);
                 }
                 Task::SnapRes(q_id, snap_res) => {
-                    let reqs = self.reqs.remove(&q_id).unwrap();
+                    let (timer, reqs) = self.reqs.remove(&q_id).unwrap();
                     let snap = match snap_res {
                         Ok(s) => s,
                         Err(e) => {
@@ -175,7 +175,7 @@ impl BatchRunnable<Task> for Host {
                     let len = reqs.len() as f64;
                     COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
                     self.pool.execute(move || {
-                        end_point.handle_requests(reqs);
+                        end_point.handle_requests(timer, reqs);
                         running_count.fetch_sub(1, Ordering::SeqCst);
                         COPR_PENDING_REQS.with_label_values(&["select"]).sub(len);
                     });
@@ -194,7 +194,7 @@ impl BatchRunnable<Task> for Host {
                 notify_batch_failed(e, reqs);
                 continue;
             }
-            self.reqs.insert(id, reqs);
+            self.reqs.insert(id, (Instant::now(), reqs));
         }
     }
 }
@@ -275,8 +275,11 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_requests(&self, reqs: Vec<RequestTask>) {
+    fn handle_requests(&self, timer: Instant, reqs: Vec<RequestTask>) {
         for t in reqs {
+            let wait_time = duration_to_sec(timer.elapsed());
+            COPR_REQ_WAIT_TIME.with_label_values(&["select", get_req_type_str(t.req.get_tp())])
+                .observe(wait_time);
             let now = Instant::now();
             if t.deadline <= now {
                 on_error(Error::Outdated(t.deadline, now, t.req.get_tp()), t.on_resp);
