@@ -639,7 +639,6 @@ impl Peer {
             });
         }
 
-        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
@@ -648,7 +647,6 @@ impl Peer {
                 panic!("{} failed to handle raft ready: {:?}", self.tag, e);
             }
         };
-        append_timer.observe_duration();
 
         ctx.ready_res.push((ready, invoke_ctx));
     }
