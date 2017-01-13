@@ -4,7 +4,6 @@ cache:
   directories:
   - $HOME/.cache/
   - $HOME/.cargo/
-  - $TRAVIS_BUILD_DIR/target
 
 matrix:
   include:

@@ -8,6 +8,8 @@ ifeq ($(ROCKSDB_SYS_PORTABLE),1)
 ENABLE_FEATURES += portable
 endif
 
+PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+
 DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
@@ -35,6 +37,12 @@ release:
 
 static_release:
 	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 make release
+
+# unlike test, this target will trace tests and output logs when fail test is detected.
+trace_test:
+	export CI=true && \
+	export SKIP_FORMAT_CHECK=true && \
+	${PROJECT_DIR}/travis-build/test.sh
 
 test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it

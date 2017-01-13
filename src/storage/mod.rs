@@ -41,6 +41,8 @@ pub const CF_DEFAULT: CfName = "default";
 pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
+// Cfs that should be very large generally.
+pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 
 // Short value max len must <= 255.
@@ -213,6 +215,8 @@ impl Debug for Command {
     }
 }
 
+pub const CMD_TAG_GC: &'static str = "gc";
+
 impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
@@ -238,7 +242,7 @@ impl Command {
             Command::Rollback { .. } => "rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
-            Command::Gc { .. } => "gc",
+            Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
         }
     }
