@@ -47,8 +47,11 @@ impl CbContext {
 
 #[derive(Debug)]
 pub enum Modify {
-    Delete(CfName, Key),
+    Delete(CfName, Key), // normal delete
     Put(CfName, Key, Value),
+    // single delete has the prerequisites that
+    // the key exists and was not overwritten.
+    SingleDelete(CfName, Key),
 }
 
 pub trait Engine: Send + Debug {
