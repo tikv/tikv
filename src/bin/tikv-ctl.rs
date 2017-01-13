@@ -88,6 +88,9 @@ fn main() {
                 .short("s")
                 .takes_value(true)
                 .help("set the scan start_ts as filter"))
+            .arg(Arg::with_name("commit_ts")
+                .takes_value(true)
+                .help("set the scan commit_ts as filter"))
             .arg(Arg::with_name("cf")
                 .short("c")
                 .takes_value(true)
@@ -119,7 +122,10 @@ fn main() {
             .arg(Arg::with_name("start_ts")
                 .short("s")
                 .takes_value(true)
-                .help("set start_ts as filter")));
+                .help("set start_ts as filter"))
+            .arg(Arg::with_name("commit_ts")
+                .takes_value(true)
+                .help("set commit_ts as filter")));
     let matches = app.clone().get_matches();
 
     let db_path = matches.value_of("db").unwrap();
@@ -156,17 +162,19 @@ fn main() {
         let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
         let cf_name = matches.value_of("cf").unwrap_or("default");
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
+        let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         if let Some(ref to) = to {
             if to <= &from {
                 panic!("The region's start pos must greater than the end pos.")
             }
         }
-        dump_range(db, from, to, limit, cf_name, start_ts);
+        dump_range(db, from, to, limit, cf_name, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let cf_name = matches.value_of("cf").unwrap_or("default");
         let key = matches.value_of("key").unwrap();
         let key_encoded = matches.is_present("encoded");
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
+        let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         println!("You are searching Key {}: ", key);
         match cf_name {
             CF_DEFAULT => {
@@ -176,12 +184,12 @@ fn main() {
                 dump_mvcc_lock(&db, key, key_encoded, start_ts);
             }
             CF_WRITE => {
-                dump_mvcc_write(&db, key, key_encoded, start_ts);
+                dump_mvcc_write(&db, key, key_encoded, start_ts, commit_ts);
             }
             "all" => {
                 dump_mvcc_default(&db, key, key_encoded, start_ts);
                 dump_mvcc_lock(&db, key, key_encoded, start_ts);
-                dump_mvcc_write(&db, key, key_encoded, start_ts);
+                dump_mvcc_write(&db, key, key_encoded, start_ts, commit_ts);
             }
             _ => {
                 println!("The cf: {} cannot be dumped", cf_name);
@@ -280,18 +288,24 @@ fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
     }
 }
 
-fn dump_mvcc_write(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
+fn dump_mvcc_write(db: &DB,
+                   key: &str,
+                   encoded: bool,
+                   start_ts: Option<u64>,
+                   commit_ts: Option<u64>) {
     let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, encoded, CF_WRITE);
     let start_ts = start_ts.unwrap_or(u64::MIN);
+    let commit_ts = commit_ts.unwrap_or(u64::MIN);
     for kv in kvs {
         let write = &kv.value;
-        let commit_ts = kv.key.decode_ts().unwrap();
+        let cmt_ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        if start_ts == u64::MIN || start_ts == write.start_ts {
+        if (start_ts == u64::MIN || start_ts == write.start_ts) &&
+           (commit_ts == u64::MIN || commit_ts == cmt_ts) {
             println!("Key: {:?}", escape(key.encoded()));
             println!("Type: {:?}", write.write_type);
             println!("Start_ts: {:?}", write.start_ts);
-            println!("Commit_ts: {:?}", commit_ts);
+            println!("Commit_ts: {:?}", cmt_ts);
             println!("Short value: {:?}", write.short_value);
             println!("");
         }
@@ -372,7 +386,8 @@ fn dump_range(db: DB,
               to: Option<String>,
               limit: Option<u64>,
               cf: &str,
-              start_ts: Option<u64>) {
+              start_ts: Option<u64>,
+              commit_ts: Option<u64>) {
     let from = unescape(&from);
     let to = to.map_or_else(|| vec![0xff], |s| unescape(&s));
     let limit = limit.unwrap_or(u64::MAX);
@@ -382,6 +397,7 @@ fn dump_range(db: DB,
     }
 
     let start_ts = start_ts.unwrap_or(u64::MIN);
+    let commit_ts = commit_ts.unwrap_or(u64::MIN);
     let mut cnt = 0;
     db.scan_cf(cf,
                  &from,
@@ -389,24 +405,25 @@ fn dump_range(db: DB,
                  true,
                  &mut |k, v| {
             let mut right_key = true;
-            if start_ts != u64::MIN {
-                match cf {
-                    CF_DEFAULT => {
-                        let (ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
-                        right_key = ts == start_ts;
-                    }
-                    CF_WRITE => {
-                        let value = Write::deserialize(&v);
-                        // println!("ts:{},key:{:?}", value.start_ts, escape(k));
-                        right_key = value.start_ts == start_ts
-                    }
-                    CF_LOCK => {
-                        let value = Lock::deserialize(&v);
-                        right_key = value.ts == start_ts
-                    }
-                    _ => {}
+            match cf {
+                CF_DEFAULT => {
+                    let (ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
+                    right_key = start_ts == u64::MIN || ts == start_ts;
                 }
+                CF_WRITE => {
+                    let value = Write::deserialize(&v);
+                    let (cmt_ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
+                    // println!("ts:{},key:{:?}", value.start_ts, escape(k));
+                    right_key = (start_ts == u64::MIN || value.start_ts == start_ts) &&
+                                (commit_ts == u64::MIN || commit_ts == cmt_ts);
+                }
+                CF_LOCK => {
+                    let value = Lock::deserialize(&v);
+                    right_key = start_ts == u64::MIN || value.ts == start_ts;
+                }
+                _ => {}
             }
+
             if right_key {
                 println!("key: {}, value len: {}", escape(k), v.len());
                 println!("{}", escape(v));
