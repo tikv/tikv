@@ -53,10 +53,10 @@ mod pd;
 use std::env;
 
 #[test]
-fn _0_travis_setup() {
-    // Set up travis test fail case log.
+fn _0_ci_setup() {
+    // Set up ci test fail case log.
     // The prefix "_" here is to guarantee running this case first.
-    if env::var("TRAVIS").is_ok() && env::var("LOG_FILE").is_ok() {
+    if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
         self::util::init_log();
     }
 }
