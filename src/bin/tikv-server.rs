@@ -497,6 +497,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
+    cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
+            config,
+            "raftstore.raft-entry-max-size");
     cfg_duration(&mut cfg.raft_store.max_peer_down_duration,
                  config,
                  "raftstore.max-peer-down-duration");
