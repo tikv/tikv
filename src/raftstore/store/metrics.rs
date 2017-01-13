@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, GaugeVec, Histogram, exponential_buckets};
+use prometheus::{CounterVec, Counter, GaugeVec, Histogram, exponential_buckets};
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
@@ -125,5 +125,11 @@ lazy_static! {
             "tikv_engine_memory_bytes",
             "Sizes of each column families.",
             &["cf", "type"]
+        ).unwrap();
+
+    pub static ref STORE_KEYS_WRITTEN_COUNTER: Counter =
+        register_counter!(
+            "tikv_engine_keys_written_count",
+            "Count of keys has been written for this interval"
         ).unwrap();
 }
