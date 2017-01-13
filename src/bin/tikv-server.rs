@@ -288,7 +288,8 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
         opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
 
-    let compaction_readahead_size = get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
+    let compaction_readahead_size =
+        get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
     opts
