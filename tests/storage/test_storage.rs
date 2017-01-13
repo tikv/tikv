@@ -13,14 +13,17 @@
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::thread;
 use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{Mutation, Key, KvPair, make_key};
+use tikv::storage::{self, Mutation, Key, KvPair, make_key, ALL_CFS, Storage};
+use tikv::storage::engine::{self, TEMP_DIR, Engine};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
+use storage::util;
 
 #[derive(Clone)]
 struct AssertionStorage(SyncStorage);
@@ -759,4 +762,40 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
             store.put_ok(b"key", b"value", oracle.get_ts(), oracle.get_ts());
         }
     });
+}
+
+#[test]
+fn test_storage_1gc() {
+    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+    let engine = util::BlockEngine::new(engine);
+    let config = Default::default();
+    let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
+    storage.start(&config).unwrap();
+
+    engine.block_snapshot();
+    let (tx1, rx1) = channel();
+    storage.async_gc(Context::new(),
+                  1,
+                  box move |res: storage::Result<()>| {
+                      assert!(res.is_ok());
+                      tx1.send(1).unwrap();
+                  })
+        .unwrap();
+
+    // Old GC command is blocked at snapshot stage, the other one will get ServerIsBusy error.
+    let (tx2, rx2) = channel();
+    storage.async_gc(Context::new(),
+                  1,
+                  box move |res: storage::Result<()>| {
+            match res {
+                Err(storage::Error::SchedTooBusy) => {}
+                _ => panic!("expect too busy"),
+            }
+            tx2.send(1).unwrap();
+        })
+        .unwrap();
+
+    rx2.recv().unwrap();
+    engine.unblock_snapshot();
+    rx1.recv().unwrap();
 }
