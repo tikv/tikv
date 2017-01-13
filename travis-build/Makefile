@@ -1,5 +1,7 @@
 SHELL=/bin/bash -o pipefail
 
+CI_BUILD_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+
 ${LOCAL_DIR}/lib/libgflags.a:
 	cd /tmp && \
 	curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz && \
@@ -67,7 +69,7 @@ prepare_brew:
 prepare_osx: ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_brew prepare_rust
 
 test_linux test_osx:
-	./travis-build/test.sh
+	export CI=true && ${CI_BUILD_DIR}/test.sh
 
 cover_linux:
 	export LOG_LEVEL=DEBUG && \
