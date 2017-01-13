@@ -213,7 +213,7 @@ impl Iterable for DB {
                     -> DBIterator {
         let mut readopts = ReadOptions::new();
         readopts.fill_cache(fill_cache);
-        readopts.total_order_seek(total_order_seek);
+        readopts.set_total_order_seek(total_order_seek);
         if let Some(key) = upper_bound {
             readopts.set_iterate_upper_bound(key);
         }
@@ -228,7 +228,7 @@ impl Iterable for DB {
                        -> Result<DBIterator> {
         let mut readopts = ReadOptions::new();
         readopts.fill_cache(fill_cache);
-        readopts.total_order_seek(total_order_seek);
+        readopts.set_total_order_seek(total_order_seek);
         if let Some(key) = upper_bound {
             readopts.set_iterate_upper_bound(key);
         }
@@ -266,7 +266,7 @@ impl Iterable for Snapshot {
                     -> DBIterator {
         let mut opt = ReadOptions::new();
         opt.fill_cache(fill_cache);
-        opt.total_order_seek(total_order_seek);
+        opt.set_total_order_seek(total_order_seek);
         if let Some(key) = upper_bound {
             opt.set_iterate_upper_bound(key);
         }
@@ -285,7 +285,7 @@ impl Iterable for Snapshot {
         let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
         let mut opt = ReadOptions::new();
         opt.fill_cache(fill_cache);
-        opt.total_order_seek(total_order_seek);
+        opt.set_total_order_seek(total_order_seek);
         if let Some(key) = upper_bound {
             opt.set_iterate_upper_bound(key);
         }

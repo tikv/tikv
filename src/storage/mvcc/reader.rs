@@ -218,6 +218,7 @@ impl<'a> MvccReader<'a> {
                 .iter_cf(CF_WRITE,
                          self.upper_bound.as_ref().map(|v| v.as_slice()),
                          self.fill_cache,
+                         true, // total-order-seek
                          self.get_scan_mode(false))));
         }
         Ok(())
@@ -229,6 +230,7 @@ impl<'a> MvccReader<'a> {
                 .iter_cf(CF_LOCK,
                          self.upper_bound.as_ref().map(|v| v.as_slice()),
                          true,
+                         true, // total-order-seek
                          self.get_scan_mode(true))));
         }
         Ok(())

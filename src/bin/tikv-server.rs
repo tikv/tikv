@@ -390,10 +390,12 @@ fn get_rocksdb_default_cf_option(config: &toml::Value) -> RocksdbOptions {
 
 fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
     let mut opt = get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, true, false);
-
+    // prefix extractor(trim the timestamp at tail) for write cf.
     opt.set_prefix_extractor("FixedSuffixSliceTransform",
                               Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
         .unwrap();
+    // create prefix bloom for memtable.
+    opt.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
     opt
 }
 
