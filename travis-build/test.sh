@@ -67,7 +67,7 @@ for l in sys.stdin:
     m = p.search(l)
     if m:
         cases.add(m.group(1).split(':')[-1])
-print('\n'.join(cases))
+print ('\n'.join(cases))
 "`; do
     echo find fail cases: $case
     grep $case $LOG_FILE | cut -d ' ' -f 2-
