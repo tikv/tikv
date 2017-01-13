@@ -804,7 +804,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(ready, &mut res);
+                .handle_raft_ready_apply(&mut self.raft_metrics, ready, &mut res);
             self.on_ready_result(region_id, res)
         }
 
