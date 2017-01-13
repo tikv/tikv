@@ -59,8 +59,7 @@ getopts = "0.2"
 regex = "0.1"
 
 [dependencies.rocksdb]
-git = "https://github.com/zhangjinpeng1987/rust-rocksdb.git"
-branch = "zhangjinpeng/total-order-seek"
+git = "https://github.com/ngaut/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
