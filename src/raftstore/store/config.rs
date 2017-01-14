@@ -50,6 +50,8 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // We should turn on this only in our tests.
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
+const DEFAULT_REPORT_WRITE_BYTES_INTERVAL: u64 = 30000; // 30 seconds
+
 #[derive(Debug, Clone)]
 pub struct Config {
     // store capacity.
@@ -113,6 +115,8 @@ pub struct Config {
 
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_tick_interval: u64,
+
+    pub report_write_bytes_interval: u64,
 }
 
 impl Default for Config {
@@ -146,6 +150,7 @@ impl Default for Config {
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
+            report_write_bytes_interval: DEFAULT_REPORT_WRITE_BYTES_INTERVAL,
         }
     }
 }

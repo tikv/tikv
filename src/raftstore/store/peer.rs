@@ -246,6 +246,8 @@ pub struct Peer {
 
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
+
+    pub bytes_written: u64,
 }
 
 impl Peer {
@@ -342,6 +344,7 @@ impl Peer {
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
+            bytes_written: 0,
         };
 
         peer.load_all_coprocessors();
@@ -1372,6 +1375,7 @@ impl Peer {
         }
 
         metrics.keys_written += ctx.wb.count() as u64;
+        self.bytes_written += ctx.wb.data_size() as u64;
 
         // Commit write and change storage fields atomically.
         self.mut_store()

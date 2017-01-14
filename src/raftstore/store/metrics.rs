@@ -140,4 +140,11 @@ lazy_static! {
             "tikv_engine_keys_written_count",
             "Count of keys has been written for this interval"
         ).unwrap();
+
+    pub static ref REGION_BYTES_WRITTEN_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_peer_region_bytes_written",
+            "Histogram of bytes written for regions",
+             exponential_buckets(256.0, 2.0, 20).unwrap()
+        ).unwrap();
 }
