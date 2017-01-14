@@ -67,7 +67,7 @@ const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 pub struct Host {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
-    reqs: HashMap<u64, (Instant, Vec<RequestTask>)>,
+    reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
     pool: ThreadPool,
     max_running_task_count: usize,
@@ -105,6 +105,9 @@ impl Display for Task {
 
 pub struct RequestTask {
     req: Request,
+    start_ts: Option<u64>,
+    wait_time: Option<f64>,
+    timer: Instant,
     // The deadline before which the task should be responded.
     deadline: Instant,
     on_resp: OnResponse,
@@ -112,11 +115,48 @@ pub struct RequestTask {
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
-        let deadline = Instant::now() + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+        let timer = Instant::now();
+        let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         RequestTask {
             req: req,
+            start_ts: None,
+            wait_time: None,
+            timer: timer,
             deadline: deadline,
             on_resp: on_resp,
+        }
+    }
+
+    #[inline]
+    fn check_outdated(&self) -> Result<()> {
+        check_if_outdated(self.deadline, self.req.get_tp())
+    }
+
+    fn start_handling(&mut self) {
+        if self.wait_time.is_some() {
+            return;
+        }
+        let wait_time = duration_to_sec(self.timer.elapsed());
+        COPR_REQ_WAIT_TIME.with_label_values(&["select", get_req_type_str(self.req.get_tp())])
+            .observe(wait_time);
+        self.wait_time = Some(wait_time);
+    }
+
+    fn finish_handling(&mut self) {
+        self.start_handling();
+
+        let handle_time = duration_to_sec(self.timer.elapsed());
+        let type_str = get_req_type_str(self.req.get_tp());
+        COPR_REQ_HISTOGRAM_VEC.with_label_values(&["select", type_str]).observe(handle_time);
+        let wait_time = self.wait_time.unwrap();
+        COPR_REQ_HANDLE_TIME.with_label_values(&["select", type_str])
+            .observe(handle_time - wait_time);
+        if handle_time > 1.0 {
+            info!("handle {} [{}] takes {:?} [waiting: {:?}]",
+                  self.start_ts.unwrap_or_default(),
+                  type_str,
+                  handle_time,
+                  wait_time);
         }
     }
 }
@@ -136,13 +176,11 @@ impl BatchRunnable<Task> for Host {
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
         let mut grouped_reqs = map![];
-        let now = Instant::now();
         for task in tasks.drain(..) {
             match task {
                 Task::Request(req) => {
-                    if req.deadline <= now {
-                        on_error(Error::Outdated(req.deadline, now, req.req.get_tp()),
-                                 req.on_resp);
+                    if let Err(e) = req.check_outdated() {
+                        on_error(e, req);
                         continue;
                     }
                     let key = {
@@ -157,7 +195,7 @@ impl BatchRunnable<Task> for Host {
                     group.push(req);
                 }
                 Task::SnapRes(q_id, snap_res) => {
-                    let (timer, reqs) = self.reqs.remove(&q_id).unwrap();
+                    let reqs = self.reqs.remove(&q_id).unwrap();
                     let snap = match snap_res {
                         Ok(s) => s,
                         Err(e) => {
@@ -175,7 +213,7 @@ impl BatchRunnable<Task> for Host {
                     let len = reqs.len() as f64;
                     COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
                     self.pool.execute(move || {
-                        end_point.handle_requests(timer, reqs);
+                        end_point.handle_requests(reqs);
                         running_count.fetch_sub(1, Ordering::SeqCst);
                         COPR_PENDING_REQS.with_label_values(&["select"]).sub(len);
                     });
@@ -194,12 +232,12 @@ impl BatchRunnable<Task> for Host {
                 notify_batch_failed(e, reqs);
                 continue;
             }
-            self.reqs.insert(id, (Instant::now(), reqs));
+            self.reqs.insert(id, reqs);
         }
     }
 }
 
-fn on_error(e: Error, cb: OnResponse) {
+fn err_resp(e: Error) -> Response {
     let mut resp = Response::new();
     match e {
         Error::Region(e) => {
@@ -222,11 +260,7 @@ fn on_error(e: Error, cb: OnResponse) {
             OUTDATED_REQ_WAIT_TIME.with_label_values(&["select", t])
                 .observe(elapsed.as_secs() as f64);
 
-            if cfg!(test) {
-                resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
-            } else {
-                return;
-            }
+            resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
         }
         Error::Full(allow) => {
             COPR_REQ_ERROR.with_label_values(&["select", "full"]).inc();
@@ -236,17 +270,20 @@ fn on_error(e: Error, cb: OnResponse) {
             resp.set_region_error(errorpb);
         }
     }
-    respond(resp, cb);
+    resp
+}
+
+fn on_error(e: Error, req: RequestTask) {
+    let resp = err_resp(e);
+    respond(resp, req)
 }
 
 fn notify_batch_failed<E: Into<Error> + Debug>(e: E, reqs: Vec<RequestTask>) {
     debug!("failed to handle batch request: {:?}", e);
-    on_error(e.into(),
-             box move |resp_msg: Message| {
-                 for t in reqs {
-                     (t.on_resp)(resp_msg.clone());
-                 }
-             });
+    let resp = err_resp(e.into());
+    for t in reqs {
+        respond(resp.clone(), t)
+    }
 }
 
 fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
@@ -257,11 +294,12 @@ fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
     Ok(())
 }
 
-fn respond(resp: Response, on_resp: OnResponse) {
+fn respond(resp: Response, mut t: RequestTask) {
+    t.finish_handling();
     let mut resp_msg = Message::new();
     resp_msg.set_msg_type(MessageType::CopResp);
     resp_msg.set_cop_resp(resp);
-    on_resp.call_box((resp_msg,));
+    (t.on_resp)(resp_msg)
 }
 
 pub struct TiDbEndPoint {
@@ -275,46 +313,40 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_requests(&self, timer: Instant, reqs: Vec<RequestTask>) {
+    fn handle_requests(&self, reqs: Vec<RequestTask>) {
         for t in reqs {
-            let wait_time = duration_to_sec(timer.elapsed());
-            COPR_REQ_WAIT_TIME.with_label_values(&["select", get_req_type_str(t.req.get_tp())])
-                .observe(wait_time);
-            let now = Instant::now();
-            if t.deadline <= now {
-                on_error(Error::Outdated(t.deadline, now, t.req.get_tp()), t.on_resp);
-            } else {
-                self.handle_request(t.req, t.deadline, t.on_resp);
+            match t.check_outdated() {
+                Err(e) => on_error(e, t),
+                Ok(_) => self.handle_request(t),
             }
         }
     }
 
-    fn handle_request(&self, req: Request, deadline: Instant, on_resp: OnResponse) {
-        let tp = req.get_tp();
+    fn handle_request(&self, mut t: RequestTask) {
+        t.start_handling();
+        let tp = t.req.get_tp();
         match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
                 let mut sel = SelectRequest::new();
-                if let Err(e) = sel.merge_from_bytes(req.get_data()) {
-                    on_error(box_err!(e), on_resp);
+                if let Err(e) = sel.merge_from_bytes(t.req.get_data()) {
+                    on_error(box_err!(e), t);
                     return;
                 }
-                match self.handle_select(req, deadline, sel) {
-                    Ok(r) => respond(r, on_resp),
-                    Err(e) => on_error(e, on_resp),
+                let start_ts = sel.get_start_ts();
+                t.start_ts = Some(start_ts);
+                match self.handle_select(&mut t, sel) {
+                    Ok(r) => respond(r, t),
+                    Err(e) => on_error(e, t),
                 }
             }
-            t => on_error(box_err!("unsupported tp {}", t), on_resp),
+            _ => on_error(box_err!("unsupported tp {}", tp), t),
         }
     }
 
-    pub fn handle_select(&self,
-                         mut req: Request,
-                         deadline: Instant,
-                         sel: SelectRequest)
-                         -> Result<Response> {
+    pub fn handle_select(&self, t: &mut RequestTask, sel: SelectRequest) -> Result<Response> {
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap));
-        let mut range = req.take_ranges().into_vec();
+        let mut range = t.req.take_ranges().into_vec();
         let desc = ctx.core.sel.get_order_by().first().map_or(false, |o| o.get_desc());
         debug!("scanning range: {:?}", range);
         if desc {
@@ -326,17 +358,11 @@ impl TiDbEndPoint {
             usize::MAX
         };
 
-        let select_histogram =
-            COPR_REQ_HISTOGRAM_VEC.with_label_values(&["select", get_req_type_str(req.get_tp())]);
-        let select_timer = select_histogram.start_timer();
-
-        let res = if req.get_tp() == REQ_TYPE_SELECT {
-            ctx.get_rows_from_sel(range, limit, desc, deadline)
+        let res = if t.req.get_tp() == REQ_TYPE_SELECT {
+            ctx.get_rows_from_sel(range, limit, desc, t.deadline)
         } else {
-            ctx.get_rows_from_idx(range, limit, desc, deadline)
+            ctx.get_rows_from_idx(range, limit, desc, t.deadline)
         };
-
-        select_timer.observe_duration();
 
         let mut resp = Response::new();
         let mut sel_resp = SelectResponse::new();
