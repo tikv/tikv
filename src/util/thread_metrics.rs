@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -59,9 +59,9 @@ impl Collector for ThreadsColletcor {
 
     fn collect(&self) -> Vec<proto::MetricFamily> {
         let cpu_totals = self.cpu_totals.lock().unwrap();
-        let pairs = get_threads(self.pid).unwrap();
-        for (tid, tname) in pairs {
-            if let Ok((utime, stime)) = find_thread_cpu_time(self.pid, tid) {
+        let tids = get_thread_ids(self.pid).unwrap();
+        for tid in tids {
+            if let Ok((tname, utime, stime)) = get_thread_stat(self.pid, tid) {
                 let total = (utime + stime) / *CLK_TCK;
                 let cpu_total =
                     cpu_totals.get_metric_with_label_values(&[&tname, &format!("{}", tid)])
@@ -78,62 +78,90 @@ impl Collector for ThreadsColletcor {
     }
 }
 
-fn get_threads(pid: pid_t) -> Result<Vec<(pid_t, String)>> {
-    let mut pairs = Vec::new();
-
+fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
+    let mut tids = Vec::new();
     let dirs = try!(fs::read_dir(format!("/proc/{}/task", pid)));
     for task in dirs {
         let tid = match try!(task).file_name().to_str() {
             Some(tid) => try!(tid.parse().map_err(|e| to_err(format!("{}", e)))),
-            None => return Err(to_err(format!("fail to read {} task", pid))),
+            None => {
+                error!("fail to read task of {}", pid);
+                continue;
+            }
         };
-
-        let mut tname = String::new();
-        try!(fs::File::open(format!("/proc/{}/task/{}/comm", pid, tid))
-            .and_then(|mut f| f.read_to_string(&mut tname)));
-
-        pairs.push((tid, sanitize_thread_name(tid, tname)));
+        tids.push(tid);
     }
 
-    Ok(pairs)
+    Ok(tids)
 }
 
-fn sanitize_thread_name(tid: pid_t, tname: String) -> String {
-    let mut san = String::with_capacity(tname.len());
-    for c in tname.chars() {
+fn get_thread_name(tid: pid_t, stat: &str) -> (String, usize) {
+    let mut space_cnt = 0;
+    let mut open_brkt = 0;
+    let mut name = String::with_capacity(THD_NAME_LEN);
+    for c in stat.chars() {
         match c {
+            // TODO: properly handle `)a(`.
+            '(' => open_brkt += 1,
+            ')' => {
+                if open_brkt > 0 {
+                    open_brkt -= 1;
+                    if open_brkt == 0 {
+                        break;
+                    }
+                }
+            }
             // Prometheus label characters `[a-zA-Z0-9_:]`
             'a'...'z' | 'A'...'Z' | '0'...'9' | '_' | ':' => {
-                san.push(c);
+                if open_brkt > 0 {
+                    name.push(c);
+                }
             }
-            '-' => san.push('_'),
+            '-' | ' ' => {
+                if open_brkt > 0 {
+                    if c == ' ' {
+                        space_cnt += 1;
+                    }
+                    name.push('_');
+                }
+            }
             _ => (),
         }
     }
 
-    if san.is_empty() {
-        format!("{}", tid)
-    } else {
-        san
+    if name.is_empty() {
+        name = format!("{}", tid)
     }
+
+    (name, space_cnt)
 }
 
 fn to_err(s: String) -> Error {
     Error::new(ErrorKind::Other, s)
 }
 
+// Thread name's length is restricted to 16 characters,
+// including the terminating null byte ('\0').
+const THD_NAME_LEN: usize = 16;
+
 // See more man proc.
+// Index of utime and stime.
 const CPU_INDEX: [usize; 2] = [14 - 1, 15 - 1];
 
-fn find_thread_cpu_time(pid: pid_t, tid: pid_t) -> Result<(f64, f64)> {
-    let mut buffer = String::new();
+fn get_thread_stat(pid: pid_t, tid: pid_t) -> Result<(String, f64, f64)> {
+    let mut stat = String::new();
     try!(fs::File::open(format!("/proc/{}/task/{}/stat", pid, tid))
-        .and_then(|mut f| f.read_to_string(&mut buffer)));
+        .and_then(|mut f| f.read_to_string(&mut stat)));
+    Ok(get_thread_stat_internal(tid, &stat))
+}
 
-    let stats: Vec<_> = buffer.split_whitespace().collect();
-    let utime = stats[CPU_INDEX[0]];
-    let stime = stats[CPU_INDEX[1]];
-    Ok((utime.parse().unwrap(), stime.parse().unwrap()))
+// Extracted from `get_thread_stat`, for test purpose.
+fn get_thread_stat_internal(tid: pid_t, stat: &str) -> (String, f64, f64) {
+    let (name, space_cnt) = get_thread_name(tid, stat);
+    let stats: Vec<_> = stat.split_whitespace().collect();
+    let utime = stats[CPU_INDEX[0] + space_cnt];
+    let stime = stats[CPU_INDEX[1] + space_cnt];
+    (name, utime.parse().unwrap(), stime.parse().unwrap())
 }
 
 lazy_static! {
@@ -153,9 +181,7 @@ mod tests {
     use libc;
 
     #[test]
-    fn test_get_thread_name() {
-        // Thread name's length is restricted to 16 characters,
-        // including the terminating null byte ('\0').
+    fn test_thread_stat() {
         let name = "theadnametest66";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
@@ -166,14 +192,14 @@ mod tests {
                 rx.recv().unwrap();
             })
             .unwrap();
-
         rx1.recv().unwrap();
-        let pid = unsafe { libc::getpid() };
-        let pairs = super::get_threads(pid).unwrap();
 
-        assert!(pairs.len() >= 1);
-        pairs.iter()
-            .find(|p| name == p.1)
+        let pid = unsafe { libc::getpid() };
+        let tids = super::get_thread_ids(pid).unwrap();
+        assert!(tids.len() >= 2);
+
+        tids.iter()
+            .find(|t| super::get_thread_stat(pid, **t).unwrap().0 == name)
             .unwrap();
 
         tx.send(()).unwrap();
@@ -181,16 +207,34 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_thread_name() {
-        let case = [("ok123", "ok123"),
-                    ("a-b", "a_b"),
-                    ("Az_1:", "Az_1:"),
-                    ("@123", "123"),
-                    ("t1\n", "t1")];
-        for &(i, o) in &case {
-            assert_eq!(super::sanitize_thread_name(1, i.to_owned()), o);
+    fn test_get_thread_name() {
+        let cases = [("(ok123)", "ok123", 0),
+                     ("(a-b)", "a_b", 0),
+                     ("(Az_1:)", "Az_1:", 0),
+                     ("(@123)", "123", 0),
+                     ("1 (ab) 1", "ab", 0),
+                     ("1 (a b) 1", "a_b", 1),
+                     ("1 ((a b )) 1", "a_b_", 2)];
+        for &(i, o, cnt) in &cases {
+            let (name, space_cnt) = super::get_thread_name(1, i);
+            assert_eq!(name, o);
+            assert_eq!(space_cnt, cnt);
         }
 
-        assert_eq!(super::sanitize_thread_name(1, "@#".to_owned()), "1");
+        assert_eq!(super::get_thread_name(1, "@#").0, "1");
+    }
+
+    #[test]
+    fn test_get_thread_stat() {
+        let sample = "2810 (test thd) S 2550 2621 2621 0 -1 4210688 2632 0 52 0 839 138 0 \
+                      0 20 0 4 0 13862 709652480 3647 18446744073709551615 4194304 4319028 \
+                      140732554845776 140732554845392 140439688777693 0 0 4096 16384 0 0 0 17 3 \
+                      0 0 245 0 0 6417696 6421000 8478720 140732554851684 140732554851747 \
+                      140732554851747 140732554854339 0";
+
+        let (name, utime, stime) = super::get_thread_stat_internal(2810, sample);
+        assert_eq!(name, "test_thd");
+        assert_eq!(utime as i64, 839);
+        assert_eq!(stime as i64, 138);
     }
 }
