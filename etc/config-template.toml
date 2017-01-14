@@ -146,7 +146,7 @@ stats-dump-period-sec = 600
 # Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
 # If you want to use rocksdb on multi disks or spinning disks, you should set value at
 # least 2MB;
-compaction_readahead_size = 0
+# compaction_readahead_size = 0
 
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
