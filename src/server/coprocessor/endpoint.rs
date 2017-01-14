@@ -30,8 +30,7 @@ use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
 
-use storage::{Engine, SnapshotStore};
-use storage::{engine, Snapshot, Key, ScanMode};
+use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode};
 use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
@@ -241,7 +240,8 @@ fn err_resp(e: Error) -> Response {
     let mut resp = Response::new();
     match e {
         Error::Region(e) => {
-            COPR_REQ_ERROR.with_label_values(&["select", "region"]).inc();
+            let tag = storage::get_tag_from_header(&e);
+            COPR_REQ_ERROR.with_label_values(&["select", tag]).inc();
             resp.set_region_error(e);
         }
         Error::Locked(info) => {
