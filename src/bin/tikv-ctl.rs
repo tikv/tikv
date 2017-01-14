@@ -404,14 +404,14 @@ fn dump_range(db: DB,
                     right_key = start_ts.is_none() || ts == start_ts.unwrap();
                 }
                 CF_WRITE => {
-                    let value = Write::deserialize(&(*v.clone()));
+                    let value = Write::deserialize(v.as_ref());
                     let (cmt_ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
                     // println!("ts:{},key:{:?}", value.start_ts, escape(k));
                     right_key = (start_ts.is_none() || value.start_ts == start_ts.unwrap()) &&
                                 (commit_ts.is_none() || cmt_ts == commit_ts.unwrap());
                 }
                 CF_LOCK => {
-                    let value = Lock::deserialize(&(*v.clone()));
+                    let value = Lock::deserialize(v.as_ref());
                     right_key = start_ts.is_none() || value.ts == start_ts.unwrap();
                 }
                 _ => {}
