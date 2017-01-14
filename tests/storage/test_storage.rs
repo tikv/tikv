@@ -617,20 +617,11 @@ fn test_txn_store_lock_primary() {
     store.rollback_ok(vec![b"p"], 1);
     store.resolve_lock_ok(1, None);
 
-    // txn3 wants to write "s".
-    store.prewrite_locked(vec![Mutation::Put((make_key(b"s"), b"s3".to_vec()))],
-                          b"s",
-                          3,
-                          vec![(b"s", b"p", 2)]);
-    // txn3 cleanups txn2'lock.
-    store.rollback_ok(vec![b"p"], 2);
-
-    // txn2 resends prewrite and commits ok, but in txn3's view it should be rolled back.
-    store.prewrite_ok(vec![Mutation::Put((make_key(b"p"), b"p2".to_vec())),
-                           Mutation::Put((make_key(b"s"), b"s2".to_vec()))],
+    // txn3 wants to write "p", "s", neither of them should be locked.
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"p"), b"p3".to_vec())),
+                           Mutation::Put((make_key(b"s"), b"s3".to_vec()))],
                       b"p",
-                      2);
-    store.commit_ok(vec![b"p", b"s"], 2, 4);
+                      3);
 }
 
 struct Oracle {
