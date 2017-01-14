@@ -131,7 +131,7 @@ impl RequestTask {
         check_if_outdated(self.deadline, self.req.get_tp())
     }
 
-    fn start_handling(&mut self) {
+    fn stop_record_waiting(&mut self) {
         if self.wait_time.is_some() {
             return;
         }
@@ -141,8 +141,8 @@ impl RequestTask {
         self.wait_time = Some(wait_time);
     }
 
-    fn finish_handling(&mut self) {
-        self.start_handling();
+    fn stop_record_handling(&mut self) {
+        self.stop_record_waiting();
 
         let handle_time = duration_to_sec(self.timer.elapsed());
         let type_str = get_req_type_str(self.req.get_tp());
@@ -295,7 +295,7 @@ fn check_if_outdated(deadline: Instant, tp: i64) -> Result<()> {
 }
 
 fn respond(resp: Response, mut t: RequestTask) {
-    t.finish_handling();
+    t.stop_record_handling();
     let mut resp_msg = Message::new();
     resp_msg.set_msg_type(MessageType::CopResp);
     resp_msg.set_cop_resp(resp);
@@ -323,7 +323,7 @@ impl TiDbEndPoint {
     }
 
     fn handle_request(&self, mut t: RequestTask) {
-        t.start_handling();
+        t.stop_record_waiting();
         let tp = t.req.get_tp();
         match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
