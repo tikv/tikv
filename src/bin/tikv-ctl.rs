@@ -260,11 +260,10 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
 
 fn dump_mvcc_default(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
     let kvs: Vec<MvccKv<Vec<u8>>> = gen_mvcc_iter(db, key, encoded, CF_DEFAULT);
-    let start_ts = start_ts.unwrap_or(u64::MIN);
     for kv in kvs {
         let ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        if start_ts == u64::MIN || start_ts == ts {
+        if start_ts.is_none() || start_ts.unwrap() == ts {
             println!("Key: {:?}", escape(key.encoded()));
             println!("Value: {:?}", escape(kv.value.as_slice()));
             println!("Start_ts: {:?}", ts);
@@ -275,10 +274,9 @@ fn dump_mvcc_default(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
 
 fn dump_mvcc_lock(db: &DB, key: &str, encoded: bool, start_ts: Option<u64>) {
     let kvs: Vec<MvccKv<Lock>> = gen_mvcc_iter(db, key, encoded, CF_LOCK);
-    let start_ts = start_ts.unwrap_or(u64::MIN);
     for kv in kvs {
         let lock = &kv.value;
-        if start_ts == u64::MIN || start_ts == lock.ts {
+        if start_ts.is_none() || start_ts.unwrap() == lock.ts {
             println!("Key: {:?}", escape(kv.key.encoded()));
             println!("Primary: {:?}", escape(lock.primary.as_slice()));
             println!("Type: {:?}", lock.lock_type);
@@ -294,14 +292,12 @@ fn dump_mvcc_write(db: &DB,
                    start_ts: Option<u64>,
                    commit_ts: Option<u64>) {
     let kvs: Vec<MvccKv<Write>> = gen_mvcc_iter(db, key, encoded, CF_WRITE);
-    let start_ts = start_ts.unwrap_or(u64::MIN);
-    let commit_ts = commit_ts.unwrap_or(u64::MIN);
     for kv in kvs {
         let write = &kv.value;
         let cmt_ts = kv.key.decode_ts().unwrap();
         let key = kv.key.truncate_ts().unwrap();
-        if (start_ts == u64::MIN || start_ts == write.start_ts) &&
-           (commit_ts == u64::MIN || commit_ts == cmt_ts) {
+        if (start_ts.is_none() || start_ts.unwrap() == write.start_ts) &&
+           (commit_ts.is_none() || commit_ts.unwrap() == cmt_ts) {
             println!("Key: {:?}", escape(key.encoded()));
             println!("Type: {:?}", write.write_type);
             println!("Start_ts: {:?}", write.start_ts);
@@ -395,9 +391,6 @@ fn dump_range(db: DB,
     if limit == 0 {
         return;
     }
-
-    let start_ts = start_ts.unwrap_or(u64::MIN);
-    let commit_ts = commit_ts.unwrap_or(u64::MIN);
     let mut cnt = 0;
     db.scan_cf(cf,
                  &from,
@@ -408,18 +401,18 @@ fn dump_range(db: DB,
             match cf {
                 CF_DEFAULT => {
                     let (ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
-                    right_key = start_ts == u64::MIN || ts == start_ts;
+                    right_key = start_ts.is_none() || ts == start_ts.unwrap();
                 }
                 CF_WRITE => {
-                    let value = Write::deserialize(&v);
+                    let value = Write::deserialize(&v.clone());
                     let (cmt_ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
                     // println!("ts:{},key:{:?}", value.start_ts, escape(k));
-                    right_key = (start_ts == u64::MIN || value.start_ts == start_ts) &&
-                                (commit_ts == u64::MIN || commit_ts == cmt_ts);
+                    right_key = (start_ts.is_none() || value.start_ts == start_ts.unwrap()) &&
+                                (commit_ts.is_none() || cmt_ts == commit_ts.unwrap());
                 }
                 CF_LOCK => {
-                    let value = Lock::deserialize(&v);
-                    right_key = start_ts == u64::MIN || value.ts == start_ts;
+                    let value = Lock::deserialize(&v.clone());
+                    right_key = start_ts.is_none() || value.ts == start_ts.unwrap();
                 }
                 _ => {}
             }
