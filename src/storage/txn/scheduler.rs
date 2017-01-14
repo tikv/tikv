@@ -400,16 +400,25 @@ fn process_write_impl(cid: u64,
         Command::Prewrite { ref mutations, ref primary, start_ts, ref options, .. } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, None);
             let mut results = vec![];
+            let mut has_lock = false;
             for m in mutations {
                 match txn.prewrite(m.clone(), primary, options) {
                     Ok(_) => results.push(Ok(())),
-                    e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
+                    e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        results.push(e.map_err(Error::from));
+                        has_lock = true;
+                    }
                     Err(e) => return Err(Error::from(e)),
                 }
             }
             let res = results.drain(..).map(|x| x.map_err(StorageError::from)).collect();
             let pr = ProcessResult::MultiRes { results: res };
-            (pr, txn.modifies())
+            if has_lock {
+                // Skip write stage if some keys are locked.
+                (pr, vec![])
+            } else {
+                (pr, txn.modifies())
+            }
         }
         Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, lock_ts, None);
