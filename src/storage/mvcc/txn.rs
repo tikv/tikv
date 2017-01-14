@@ -91,7 +91,7 @@ impl<'a> MvccTxn<'a> {
     fn delete_write(&mut self, key: &Key, ts: u64) {
         let key = key.append_ts(ts);
         self.write_size += CF_WRITE.len() + key.encoded().len();
-        self.writes.push(Modify::Delete(CF_WRITE, key));
+        self.writes.push(Modify::SingleDelete(CF_WRITE, key));
     }
 
     pub fn get(&mut self, key: &Key) -> Result<Option<Value>> {
