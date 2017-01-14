@@ -16,6 +16,7 @@ use server::transport::RaftStoreRouter;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
+use storage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
@@ -69,25 +70,9 @@ quick_error! {
     }
 }
 
-fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
-    if header.has_not_leader() {
-        "not_leader"
-    } else if header.has_region_not_found() {
-        "region_not_found"
-    } else if header.has_key_not_in_region() {
-        "key_not_in_region"
-    } else if header.has_stale_epoch() {
-        "stale_epoch"
-    } else if header.has_server_is_busy() {
-        "server_is_busy"
-    } else {
-        "other"
-    }
-}
-
 fn get_tag_from_error(e: &Error) -> &'static str {
     match *e {
-        Error::RequestFailed(ref header) => get_tag_from_header(header),
+        Error::RequestFailed(ref header) => storage::get_tag_from_header(header),
         Error::Io(_) => "io",
         Error::RocksDb(_) => "rocksdb",
         Error::Server(_) => "server",
@@ -99,7 +84,7 @@ fn get_tag_from_error(e: &Error) -> &'static str {
 
 fn get_tag_from_engine_error(e: &engine::Error) -> &'static str {
     match *e {
-        engine::Error::Request(ref header) => get_tag_from_header(header),
+        engine::Error::Request(ref header) => storage::get_tag_from_header(header),
         engine::Error::RocksDb(_) => "rocksdb",
         engine::Error::Timeout(_) => "timeout",
         engine::Error::Other(_) => "other",
