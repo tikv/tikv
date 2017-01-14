@@ -404,7 +404,7 @@ fn process_write_impl(cid: u64,
                 match txn.prewrite(m.clone(), primary, options) {
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {
-                        locks.push(e.map_err(Error::from));
+                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
                     }
                     Err(e) => return Err(Error::from(e)),
                 }
@@ -414,8 +414,7 @@ fn process_write_impl(cid: u64,
                 (pr, txn.modifies())
             } else {
                 // Skip write stage if some keys are locked.
-                let res = locks.drain(..).map(|x| x.map_err(StorageError::from)).collect();
-                let pr = ProcessResult::MultiRes { results: res };
+                let pr = ProcessResult::MultiRes { results: locks };
                 (pr, vec![])
             }
         }
