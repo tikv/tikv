@@ -499,6 +499,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
+    cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
+            config,
+            "raftstore.raft-entry-max-size");
     cfg_duration(&mut cfg.raft_store.max_peer_down_duration,
                  config,
                  "raftstore.max-peer-down-duration");
@@ -747,7 +750,7 @@ fn main() {
                 "log-file",
                 "set log file",
                 "if not set, output log to stdout");
-    opts.optflag("v", "version", "print version information");
+    opts.optflag("V", "version", "print version information");
     opts.optflag("h", "help", "print this help menu");
     opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
@@ -769,7 +772,7 @@ fn main() {
         print_usage(&program, opts);
         return;
     }
-    if matches.opt_present("v") {
+    if matches.opt_present("V") {
         let (hash, date) = util::build_info();
         println!("Git Commit Hash: {}", hash);
         println!("UTC Build Time:  {}", date);

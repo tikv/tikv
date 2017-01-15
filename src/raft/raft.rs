@@ -544,7 +544,6 @@ impl<T: Storage> Raft<T> {
                 continue;
             }
             self.send_heartbeat(id, ctx.clone());
-            self.prs.get_mut(&id).unwrap().resume()
         }
     }
 
@@ -1103,6 +1102,7 @@ impl<T: Storage> Raft<T> {
                 {
                     let pr = self.prs.get_mut(&m.get_from()).unwrap();
                     pr.recent_active = true;
+                    pr.resume();
 
                     // free one slot for the full inflights window to allow progress.
                     if pr.state == ProgressState::Replicate && pr.ins.full() {
@@ -1205,6 +1205,9 @@ impl<T: Storage> Raft<T> {
                 for e in m.mut_entries().iter_mut() {
                     if e.get_entry_type() == EntryType::EntryConfChange {
                         if self.pending_conf {
+                            info!("propose conf {:?} ignored since pending unapplied \
+                                   configuration",
+                                  e);
                             *e = Entry::new();
                             e.set_entry_type(EntryType::EntryNormal);
                         }
@@ -1564,6 +1567,7 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn add_node(&mut self, id: u64) {
+        self.pending_conf = false;
         if self.prs.contains_key(&id) {
             // Ignore any redundant addNode calls (which can happen because the
             // initial bootstrapping entries are applied twice).
@@ -1571,7 +1575,6 @@ impl<T: Storage> Raft<T> {
         }
         let last_index = self.raft_log.last_index();
         self.set_progress(id, 0, last_index + 1);
-        self.pending_conf = false;
     }
 
     pub fn remove_node(&mut self, id: u64) {

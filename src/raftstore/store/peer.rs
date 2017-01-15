@@ -235,6 +235,8 @@ pub struct Peer {
     pub last_compacted_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
+    // When entry exceed max size, reject to propose the entry.
+    pub raft_entry_max_size: u64,
 
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
@@ -336,6 +338,7 @@ impl Peer {
                 hash: vec![],
             },
             raft_log_size_hint: 0,
+            raft_entry_max_size: cfg.raft_entry_max_size,
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
@@ -639,7 +642,6 @@ impl Peer {
             });
         }
 
-        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
@@ -648,7 +650,6 @@ impl Peer {
                 panic!("{} failed to handle raft ready: {:?}", self.tag, e);
             }
         };
-        append_timer.observe_duration();
 
         ctx.ready_res.push((ready, invoke_ctx));
     }
@@ -678,7 +679,10 @@ impl Peer {
         }
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, result: &mut ReadyResult) {
+    pub fn handle_raft_ready_apply(&mut self,
+                                   metrics: &mut RaftMetrics,
+                                   mut ready: Ready,
+                                   result: &mut ReadyResult) {
         // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_commit_entries` directly, these updates
@@ -693,7 +697,7 @@ impl Peer {
             }
             vec![]
         } else {
-            self.handle_raft_commit_entries(&ready.committed_entries)
+            self.handle_raft_commit_entries(&ready.committed_entries, &mut metrics.ready)
         };
 
         self.raft_group.advance(ready);
@@ -920,6 +924,11 @@ impl Peer {
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
+        if data.len() as u64 > self.raft_entry_max_size {
+            error!("entry is too large, entry size {}", data.len());
+            return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
+        }
+
         let propose_index = self.next_proposal_index();
         try!(self.raft_group.propose(data));
         if self.next_proposal_index() == propose_index {
@@ -1131,7 +1140,8 @@ impl Peer {
     }
 
     fn handle_raft_commit_entries(&mut self,
-                                  committed_entries: &[eraftpb::Entry])
+                                  committed_entries: &[eraftpb::Entry],
+                                  mut metrics: &mut RaftReadyMetrics)
                                   -> Vec<ExecResult> {
         if committed_entries.is_empty() {
             return vec![];
@@ -1162,8 +1172,12 @@ impl Peer {
             self.raft_log_size_hint += entry.get_data().len() as u64;
 
             let res = match entry.get_entry_type() {
-                eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
-                eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
+                eraftpb::EntryType::EntryNormal => {
+                    self.handle_raft_entry_normal(entry, &mut metrics)
+                }
+                eraftpb::EntryType::EntryConfChange => {
+                    self.handle_raft_entry_conf_change(entry, &mut metrics)
+                }
             };
 
             if let Some(res) = res {
@@ -1178,14 +1192,17 @@ impl Peer {
         results
     }
 
-    fn handle_raft_entry_normal(&mut self, entry: &eraftpb::Entry) -> Option<ExecResult> {
+    fn handle_raft_entry_normal(&mut self,
+                                entry: &eraftpb::Entry,
+                                mut metrics: &mut RaftReadyMetrics)
+                                -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
 
         if !data.is_empty() {
             let cmd = parse_data_at(data, index, &self.tag);
-            return self.process_raft_cmd(index, term, cmd);
+            return self.process_raft_cmd(index, term, cmd, &mut metrics);
         }
 
         // when a peer become leader, it will send an empty entry.
@@ -1214,12 +1231,15 @@ impl Peer {
         None
     }
 
-    fn handle_raft_entry_conf_change(&mut self, entry: &eraftpb::Entry) -> Option<ExecResult> {
+    fn handle_raft_entry_conf_change(&mut self,
+                                     entry: &eraftpb::Entry,
+                                     mut metrics: &mut RaftReadyMetrics)
+                                     -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: eraftpb::ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        let (res, cc) = match self.process_raft_cmd(index, term, cmd) {
+        let (res, cc) = match self.process_raft_cmd(index, term, cmd, &mut metrics) {
             res @ Some(_) => (res, conf_change),
             // If failed, tell raft that the config change was aborted.
             None => (None, eraftpb::ConfChange::new()),
@@ -1259,7 +1279,8 @@ impl Peer {
     fn process_raft_cmd(&mut self,
                         index: u64,
                         term: u64,
-                        cmd: RaftCmdRequest)
+                        cmd: RaftCmdRequest,
+                        mut metrics: &mut RaftReadyMetrics)
                         -> Option<ExecResult> {
         if index == 0 {
             panic!("{} processing raft command needs a none zero index",
@@ -1269,7 +1290,7 @@ impl Peer {
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cmd_cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
-        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
+        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd, &mut metrics);
         timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
@@ -1332,7 +1353,8 @@ impl Peer {
     fn apply_raft_cmd(&mut self,
                       index: u64,
                       term: u64,
-                      req: &RaftCmdRequest)
+                      req: &RaftCmdRequest,
+                      metrics: &mut RaftReadyMetrics)
                       -> (RaftCmdResponse, Option<ExecResult>) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
@@ -1348,6 +1370,8 @@ impl Peer {
             ctx.save(self.region_id)
                 .unwrap_or_else(|e| panic!("{} failed to save apply context: {:?}", self.tag, e));
         }
+
+        metrics.keys_written += ctx.wb.count() as u64;
 
         // Commit write and change storage fields atomically.
         self.mut_store()

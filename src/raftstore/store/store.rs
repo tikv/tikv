@@ -758,6 +758,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
+        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
@@ -786,6 +787,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                         invoke_ctx);
             ready_results.push((region_id, ready, res));
         }
+        append_timer.observe_duration();
 
         let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
         self.sent_snapshot_count += sent_snapshot_count;
@@ -804,7 +806,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(ready, &mut res);
+                .handle_raft_ready_apply(&mut self.raft_metrics, ready, &mut res);
             self.on_ready_result(region_id, res)
         }
 
@@ -1170,6 +1172,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .map(|p| p.matched)
                 .min()
                 .unwrap();
+            // When an election happened or a new peer is added, replicated_idx can be 0.
+            if replicated_idx > 0 {
+                let last_idx = peer.raft_group.raft.raft_log.last_index();
+                assert!(last_idx >= replicated_idx,
+                        "expect last index {} >= replicated index {}",
+                        last_idx,
+                        replicated_idx);
+                REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+            }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let compact_idx;

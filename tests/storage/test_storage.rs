@@ -13,14 +13,17 @@
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::thread;
 use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{Mutation, Key, KvPair, make_key};
-use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
-use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
+use tikv::storage::{self, Mutation, Key, KvPair, make_key, ALL_CFS, Storage};
+use tikv::storage::engine::{self, TEMP_DIR, Engine};
+use tikv::storage::txn::{self, GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
+use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
+use storage::util;
 
 #[derive(Clone)]
 struct AssertionStorage(SyncStorage);
@@ -126,6 +129,27 @@ impl AssertionStorage {
 
     fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
         self.0.prewrite(Context::new(), mutations, primary.to_vec(), start_ts).unwrap();
+    }
+
+    fn prewrite_locked(&self,
+                       mutations: Vec<Mutation>,
+                       primary: &[u8],
+                       start_ts: u64,
+                       expect_locks: Vec<(&[u8], &[u8], u64)>) {
+        let res = self.0.prewrite(Context::new(), mutations, primary.to_vec(), start_ts).unwrap();
+        let locks: Vec<(&[u8], &[u8], u64)> = res.iter()
+            .filter_map(|x| {
+                if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ref key,
+                                                                              ref primary,
+                                                                              ts,
+                                                                              .. }))) = *x {
+                    Some((key.as_ref(), primary.as_ref(), ts))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(expect_locks, locks);
     }
 
     fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
@@ -575,6 +599,31 @@ fn test_txn_store_rawkv() {
     store.raw_get_ok(b"key".to_vec(), None);
 }
 
+#[test]
+fn test_txn_store_lock_primary() {
+    let store = new_assertion_storage();
+    // txn1 locks "p" then aborts.
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"p"), b"p1".to_vec()))],
+                      b"p",
+                      1);
+
+    // txn2 wants to write "p", "s".
+    store.prewrite_locked(vec![Mutation::Put((make_key(b"p"), b"p2".to_vec())),
+                               Mutation::Put((make_key(b"s"), b"s2".to_vec()))],
+                          b"p",
+                          2,
+                          vec![(b"p", b"p", 1)]);
+    // txn2 cleanups txn1's lock.
+    store.rollback_ok(vec![b"p"], 1);
+    store.resolve_lock_ok(1, None);
+
+    // txn3 wants to write "p", "s", neither of them should be locked.
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"p"), b"p3".to_vec())),
+                           Mutation::Put((make_key(b"s"), b"s3".to_vec()))],
+                      b"p",
+                      3);
+}
+
 struct Oracle {
     ts: AtomicUsize,
 }
@@ -759,4 +808,40 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
             store.put_ok(b"key", b"value", oracle.get_ts(), oracle.get_ts());
         }
     });
+}
+
+#[test]
+fn test_storage_1gc() {
+    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+    let engine = util::BlockEngine::new(engine);
+    let config = Default::default();
+    let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
+    storage.start(&config).unwrap();
+
+    engine.block_snapshot();
+    let (tx1, rx1) = channel();
+    storage.async_gc(Context::new(),
+                  1,
+                  box move |res: storage::Result<()>| {
+                      assert!(res.is_ok());
+                      tx1.send(1).unwrap();
+                  })
+        .unwrap();
+
+    // Old GC command is blocked at snapshot stage, the other one will get ServerIsBusy error.
+    let (tx2, rx2) = channel();
+    storage.async_gc(Context::new(),
+                  1,
+                  box move |res: storage::Result<()>| {
+            match res {
+                Err(storage::Error::SchedTooBusy) => {}
+                _ => panic!("expect too busy"),
+            }
+            tx2.send(1).unwrap();
+        })
+        .unwrap();
+
+    rx2.recv().unwrap();
+    engine.unblock_snapshot();
+    rx1.recv().unwrap();
 }

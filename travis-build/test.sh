@@ -19,8 +19,10 @@ panic() {
     exit 1
 }
 
-make format
-git diff-index --quiet HEAD -- || panic "\e[35mplease make format before creating a pr!!!\e[0m" 
+if [[ "$SKIP_FORMAT_CHECK" != "true" ]]; then
+    make format
+    git diff-index --quiet HEAD -- || panic "\e[35mplease make format before creating a pr!!!\e[0m" 
+fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
 
@@ -28,13 +30,12 @@ if [[ "$ENABLE_FEATURES" = "" ]]; then
     export ENABLE_FEATURES=dev
 fi
 export LOG_FILE=tests.log
-export RUST_TEST_THREADS=1
+if [[ "$TRAVIS" = "true" ]]; then
+    export RUST_TEST_THREADS=1
+fi
 export RUSTFLAGS=-Dwarnings
 
-NO_RUN="--no-run" make test
-status=$?
-
-if [[ "$SKIP_TESTS" = "" ]]; then
+if [[ "$SKIP_TESTS" != "true" ]]; then
     # start pd
     which pd-server
     if [ $? -eq 0 ] && [[ "$TRAVIS" != "true" ]]; then
@@ -53,7 +54,8 @@ if [[ "$SKIP_TESTS" = "" ]]; then
     fi
     make test 2>&1 | tee tests.out
 else
-    exit 0
+    NO_RUN="--no-run" make test
+    exit $?
 fi
 status=$?
 for case in `cat tests.out | python -c "import sys
@@ -65,7 +67,7 @@ for l in sys.stdin:
     m = p.search(l)
     if m:
         cases.add(m.group(1).split(':')[-1])
-print '\n'.join(cases)
+print ('\n'.join(cases))
 "`; do
     echo find fail cases: $case
     grep $case $LOG_FILE | cut -d ' ' -f 2-
@@ -74,7 +76,10 @@ print '\n'.join(cases)
     echo
 done
 
-# don't remove the tests.out, coverage counts on it.
 rm $LOG_FILE || true
+# don't remove the tests.out, coverage counts on it.
+if [[ "$TRAVIS" != "true" ]]; then
+    rm tests.out || true
+fi
 
 exit $status

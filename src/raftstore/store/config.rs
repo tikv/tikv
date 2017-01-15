@@ -21,6 +21,7 @@ const RAFT_HEARTBEAT_TICKS: usize = 10;
 const RAFT_ELECTION_TIMEOUT_TICKS: usize = 50;
 const RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 const RAFT_MAX_INFLIGHT_MSGS: usize = 256;
+const RAFT_ENTRY_MAX_SIZE: u64 = 8 * 1024 * 1024;
 const RAFT_LOG_GC_INTERVAL: u64 = 10000;
 const RAFT_LOG_GC_THRESHOLD: u64 = 50;
 // Assume the average size of entries is 1k.
@@ -62,6 +63,8 @@ pub struct Config {
     pub raft_election_timeout_ticks: usize,
     pub raft_max_size_per_msg: u64,
     pub raft_max_inflight_msgs: usize,
+    // When the entry exceed the max size, reject to propose it.
+    pub raft_entry_max_size: u64,
 
     // Interval to gc unnecessary raft log (ms).
     pub raft_log_gc_tick_interval: u64,
@@ -121,6 +124,7 @@ impl Default for Config {
             raft_election_timeout_ticks: RAFT_ELECTION_TIMEOUT_TICKS,
             raft_max_size_per_msg: RAFT_MAX_SIZE_PER_MSG,
             raft_max_inflight_msgs: RAFT_MAX_INFLIGHT_MSGS,
+            raft_entry_max_size: RAFT_ENTRY_MAX_SIZE,
             raft_log_gc_tick_interval: RAFT_LOG_GC_INTERVAL,
             raft_log_gc_threshold: RAFT_LOG_GC_THRESHOLD,
             raft_log_gc_count_limit: RAFT_LOG_GC_COUNT_LIMIT,
