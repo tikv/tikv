@@ -73,7 +73,7 @@ git = "https://github.com/carllerche/mio.git"
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
-features = ["nightly", "push"]
+features = ["nightly", "push", "process"]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

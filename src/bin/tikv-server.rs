@@ -214,6 +214,8 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
+    util::monitor_threads("tikv").unwrap();
+
     util::run_prometheus(Duration::from_millis(push_interval as u64),
                          &push_address,
                          &push_job);
@@ -616,7 +618,7 @@ fn start_server<T, S>(mut server: Server<T, S>,
 {
     let ch = server.get_sendch();
     let h = thread::Builder::new()
-        .name("tikv-server".to_owned())
+        .name("tikv-eventloop".to_owned())
         .spawn(move || {
             server.run(&mut el).unwrap();
         })
