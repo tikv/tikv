@@ -32,7 +32,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
+use util::{HandyRwLock, SlowTimer, duration_to_sec, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -392,7 +392,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let t = Instant::now();
+        let timer = self.raft_metrics.process_tick.start_timer();
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
@@ -437,9 +437,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.poll_snapshot_status();
 
-        PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
-            .inc_by(duration_to_nanos(t.elapsed()) as f64)
-            .unwrap();
+        timer.observe_duration();
 
         self.raft_metrics.flush();
 
@@ -821,9 +819,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
-            .inc_by(duration_to_nanos(dur) as f64)
-            .unwrap();
+        self.raft_metrics.process_ready.observe(duration_to_sec(dur) as f64);
+
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
 
