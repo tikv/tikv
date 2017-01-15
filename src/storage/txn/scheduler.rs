@@ -38,7 +38,7 @@ use prometheus::HistogramTimer;
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode};
 use kvproto::kvrpcpb::{Context, LockInfo};
-use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
+use storage::mvcc::{MvccTxn, ScanMetrics, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::CbContext;
 use std::collections::HashMap;
@@ -277,8 +277,9 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
         Command::Scan { ref start_key, limit, start_ts, ref options, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
+            let mut metrics = ScanMetrics::default();
             let res = snap_store.scanner(ScanMode::Forward, options.key_only, None)
-                .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
+                .and_then(|mut scanner| scanner.scan(start_key.clone(), limit, &mut metrics))
                 .and_then(|mut results| {
                     Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
                 });

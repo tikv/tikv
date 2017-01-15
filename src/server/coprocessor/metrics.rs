@@ -55,4 +55,11 @@ lazy_static! {
             "Total number of pending push down request.",
             &["type"]
         ).unwrap();
+
+    pub static ref COPR_SCAN_EFFICIENCY: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_scan_efficiency",
+            "Bucketed histogram of coprocessor request wait duration",
+            &["type"]
+        ).unwrap();
 }
