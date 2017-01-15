@@ -56,6 +56,8 @@ const REQUEST_CHECKPOINT: usize = 255;
 // to be actual started. Hence the queue should have at most REQUEST_MAX_HANDLE_SECS / 0.0001
 // batches.
 const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = REQUEST_MAX_HANDLE_SECS as usize * 10_000;
+// If handle time is larger than the lower bound, the query is considered as slow query.
+const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 const DEFAULT_ERROR_CODE: i32 = 1;
 
@@ -150,9 +152,9 @@ impl RequestTask {
         let wait_time = self.wait_time.unwrap();
         COPR_REQ_HANDLE_TIME.with_label_values(&["select", type_str])
             .observe(handle_time - wait_time);
-        if handle_time > 1.0 {
-            info!("handle {} [{}] takes {:?} [waiting: {:?}]",
-                  self.start_ts.unwrap_or_default(),
+        if handle_time > SLOW_QUERY_LOWER_BOUND {
+            info!("handle {:?} [{}] takes {:?} [waiting: {:?}]",
+                  self.start_ts,
                   type_str,
                   handle_time,
                   wait_time);
