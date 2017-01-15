@@ -28,6 +28,7 @@ use super::sync_storage::SyncStorage;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
     let mut cluster = new_server_cluster_with_cfs(0, 1, ALL_CFS);
+    cluster.cfg.raft_store.report_region_flow_interval = 100; // 100ms
     cluster.run();
     // make sure leader has been elected.
     assert_eq!(cluster.must_get(b""), None);
@@ -104,6 +105,7 @@ fn test_raft_storage_store_not_match() {
 #[test]
 fn test_engine_leader_change_twice() {
     let mut cluster = new_server_cluster_with_cfs(0, 3, ALL_CFS);
+    cluster.cfg.raft_store.report_region_flow_interval = 100; // 100ms
     cluster.run();
 
     let region = cluster.get_region(b"");
@@ -138,6 +140,7 @@ fn test_engine_leader_change_twice() {
 #[test]
 fn test_scheduler_leader_change_twice() {
     let mut cluster = new_server_cluster_with_cfs(0, 2, ALL_CFS);
+    cluster.cfg.raft_store.report_region_flow_interval = 100; // 100ms
     cluster.run();
 
     let region = cluster.get_region(b"");
