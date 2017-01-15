@@ -17,7 +17,7 @@ lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_request_duration_seconds",
-            "Bucketed histogram of coprocessor handle request duration",
+            "Bucketed histogram of coprocessor request duration",
             &["type", "req"]
         ).unwrap();
 
@@ -25,6 +25,20 @@ lazy_static! {
         register_histogram_vec!(
             "tikv_coprocessor_outdated_request_wait_seconds",
             "Bucketed histogram of outdated coprocessor request wait duration",
+            &["type", "req"]
+        ).unwrap();
+
+    pub static ref COPR_REQ_HANDLE_TIME: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_request_handle_seconds",
+            "Bucketed histogram of coprocessor handle request duration",
+            &["type", "req"]
+        ).unwrap();
+
+    pub static ref COPR_REQ_WAIT_TIME: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_request_wait_seconds",
+            "Bucketed histogram of coprocessor request wait duration",
             &["type", "req"]
         ).unwrap();
 

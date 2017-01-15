@@ -286,6 +286,14 @@ pub fn duration_to_ms(d: Duration) -> u64 {
     d.as_secs() * 1_000 + (nanos / 1_000_000)
 }
 
+/// Convert Duration to seconds.
+#[inline]
+pub fn duration_to_sec(d: Duration) -> f64 {
+    let nanos = d.subsec_nanos() as f64;
+    // Most of case, we can't have so large Duration, so here just panic if overflow now.
+    d.as_secs() as f64 + (nanos / 1_000_000_000.0)
+}
+
 /// Convert Duration to nanoseconds.
 #[inline]
 pub fn duration_to_nanos(d: Duration) -> u64 {
@@ -398,6 +406,7 @@ mod tests {
     use std::net::{SocketAddr, AddrParseError};
     use std::time::Duration;
     use std::rc::Rc;
+    use std::f64;
     use std::sync::atomic::{AtomicBool, Ordering};
     use super::*;
 
@@ -432,6 +441,9 @@ mod tests {
         for ms in tbl {
             let d = Duration::from_millis(ms);
             assert_eq!(ms, duration_to_ms(d));
+            let exp_sec = ms as f64 / 1000.0;
+            let act_sec = duration_to_sec(d);
+            assert!((act_sec - exp_sec).abs() < f64::EPSILON);
             assert_eq!(ms * 1_000_000, duration_to_nanos(d));
         }
     }
