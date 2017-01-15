@@ -156,13 +156,13 @@ impl RequestTask {
             .observe(handle_time - wait_time);
 
         let scanned_keys = self.scan_metrics.scanned_keys as f64;
-        COPR_SCAN_EFFICIENCY.with_label_values(&["scan"]).observe(scanned_keys);
+        COPR_SCAN_KEYS.with_label_values(&["select", type_str]).observe(scanned_keys);
         let efficiency = if self.scan_metrics.scanned_keys == 0 {
             0.0
         } else {
             1.0 - self.scan_metrics.skipped_keys as f64 / scanned_keys
         };
-        COPR_SCAN_EFFICIENCY.with_label_values(&["hit"]).observe(efficiency);
+        COPR_SCAN_EFFICIENCY.with_label_values(&["select", type_str]).observe(efficiency);
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!("handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, ranges: {:?}]",
