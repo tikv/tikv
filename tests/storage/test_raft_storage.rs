@@ -26,8 +26,8 @@ use storage::util;
 
 use super::sync_storage::SyncStorage;
 
-fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    let mut cluster = new_server_cluster_with_cfs(0, 1, ALL_CFS);
+pub fn new_raft_engine(count: usize) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
+    let mut cluster = new_server_cluster_with_cfs(0, count, ALL_CFS);
     cluster.run();
     // make sure leader has been elected.
     assert_eq!(cluster.must_get(b""), None);
@@ -40,9 +40,21 @@ fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
-
-    (cluster, SyncStorage::from_engine(engine, &Default::default()), ctx)
+    (cluster, engine, ctx)
 }
+
+pub fn new_raft_storage_with_store_count(count: usize)
+                                         -> (Cluster<ServerCluster>, SyncStorage, Context) {
+    let (cluster, engine, ctx) = new_raft_engine(count);
+    (cluster, SyncStorage::from_engine(engine, &Default::default()), ctx)
+
+}
+
+fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
+    new_raft_storage_with_store_count(1)
+}
+
+
 #[test]
 fn test_raft_storage() {
     let (_cluster, storage, mut ctx) = new_raft_storage();

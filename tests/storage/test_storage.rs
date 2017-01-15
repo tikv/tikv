@@ -23,32 +23,36 @@ use tikv::storage::{self, Mutation, Key, KvPair, make_key, ALL_CFS, Storage};
 use tikv::storage::engine::{self, TEMP_DIR, Engine};
 use tikv::storage::txn::{self, GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
+use super::test_raft_storage::new_raft_storage_with_store_count;
+use super::test_raft_storage::new_raft_engine;
+use raftstore::cluster::Cluster;
+use raftstore::server::ServerCluster;
 use storage::util;
 
 #[derive(Clone)]
-struct AssertionStorage(SyncStorage);
+struct AssertionStorage(SyncStorage, Context);
 
 impl AssertionStorage {
     fn get_none(&self, key: &[u8], ts: u64) {
         let key = make_key(key);
-        assert_eq!(self.0.get(Context::new(), &key, ts).unwrap(), None);
+        assert_eq!(self.0.get(self.1.clone(), &key, ts).unwrap(), None);
     }
 
     fn get_err(&self, key: &[u8], ts: u64) {
         let key = make_key(key);
-        assert!(self.0.get(Context::new(), &key, ts).is_err());
+        assert!(self.0.get(self.1.clone(), &key, ts).is_err());
     }
 
     fn get_ok(&self, key: &[u8], ts: u64, expect: &[u8]) {
         let key = make_key(key);
-        assert_eq!(self.0.get(Context::new(), &key, ts).unwrap().unwrap(),
+        assert_eq!(self.0.get(self.1.clone(), &key, ts).unwrap().unwrap(),
                    expect);
     }
 
     fn batch_get_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
         let keys: Vec<Key> = keys.into_iter().map(|x| make_key(x)).collect();
         let result: Vec<Vec<u8>> = self.0
-            .batch_get(Context::new(), &keys, ts)
+            .batch_get(self.1.clone(), &keys, ts)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap().1)
@@ -59,22 +63,22 @@ impl AssertionStorage {
 
     fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
         self.0
-            .prewrite(Context::new(),
+            .prewrite(self.1.clone(),
                       vec![Mutation::Put((make_key(key), value.to_vec()))],
                       key.to_vec(),
                       start_ts)
             .unwrap();
-        self.0.commit(Context::new(), vec![make_key(key)], start_ts, commit_ts).unwrap();
+        self.0.commit(self.1.clone(), vec![make_key(key)], start_ts, commit_ts).unwrap();
     }
 
     fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
         self.0
-            .prewrite(Context::new(),
+            .prewrite(self.1.clone(),
                       vec![Mutation::Delete(make_key(key))],
                       key.to_vec(),
                       start_ts)
             .unwrap();
-        self.0.commit(Context::new(), vec![make_key(key)], start_ts, commit_ts).unwrap();
+        self.0.commit(self.1.clone(), vec![make_key(key)], start_ts, commit_ts).unwrap();
     }
 
     fn scan_ok(&self,
@@ -83,7 +87,7 @@ impl AssertionStorage {
                ts: u64,
                expect: Vec<Option<(&[u8], &[u8])>>) {
         let key_address = make_key(start_key);
-        let result = self.0.scan(Context::new(), key_address, limit, false, ts).unwrap();
+        let result = self.0.scan(self.1.clone(), key_address, limit, false, ts).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter()
             .map(Result::ok)
             .collect();
@@ -99,7 +103,7 @@ impl AssertionStorage {
                         ts: u64,
                         expect: Vec<Option<&[u8]>>) {
         let key_address = make_key(start_key);
-        let result = self.0.scan(Context::new(), key_address, limit, true, ts).unwrap();
+        let result = self.0.scan(self.1.clone(), key_address, limit, true, ts).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter()
             .map(Result::ok)
             .collect();
@@ -128,7 +132,7 @@ impl AssertionStorage {
     }
 
     fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
-        self.0.prewrite(Context::new(), mutations, primary.to_vec(), start_ts).unwrap();
+        self.0.prewrite(self.1.clone(), mutations, primary.to_vec(), start_ts).unwrap();
     }
 
     fn prewrite_locked(&self,
@@ -136,7 +140,7 @@ impl AssertionStorage {
                        primary: &[u8],
                        start_ts: u64,
                        expect_locks: Vec<(&[u8], &[u8], u64)>) {
-        let res = self.0.prewrite(Context::new(), mutations, primary.to_vec(), start_ts).unwrap();
+        let res = self.0.prewrite(self.1.clone(), mutations, primary.to_vec(), start_ts).unwrap();
         let locks: Vec<(&[u8], &[u8], u64)> = res.iter()
             .filter_map(|x| {
                 if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ref key,
@@ -154,55 +158,95 @@ impl AssertionStorage {
 
     fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-        self.0.commit(Context::new(), keys, start_ts, commit_ts).unwrap();
+        self.0.commit(self.1.clone(), keys, start_ts, commit_ts).unwrap();
     }
 
     fn cleanup_ok(&self, key: &[u8], start_ts: u64) {
-        self.0.cleanup(Context::new(), make_key(key), start_ts).unwrap();
+        self.0.cleanup(self.1.clone(), make_key(key), start_ts).unwrap();
     }
 
     fn cleanup_err(&self, key: &[u8], start_ts: u64) {
-        assert!(self.0.cleanup(Context::new(), make_key(key), start_ts).is_err());
+        assert!(self.0.cleanup(self.1.clone(), make_key(key), start_ts).is_err());
     }
 
     fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-        self.0.rollback(Context::new(), keys, start_ts).unwrap();
+        self.0.rollback(self.1.clone(), keys, start_ts).unwrap();
     }
 
     fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: u64) {
         let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
-        assert!(self.0.rollback(Context::new(), keys, start_ts).is_err());
+        assert!(self.0.rollback(self.1.clone(), keys, start_ts).is_err());
     }
 
     fn scan_lock_ok(&self, max_ts: u64, expect: Vec<LockInfo>) {
-        assert_eq!(self.0.scan_lock(Context::new(), max_ts).unwrap(), expect);
+        assert_eq!(self.0.scan_lock(self.1.clone(), max_ts).unwrap(), expect);
     }
 
     fn resolve_lock_ok(&self, start_ts: u64, commit_ts: Option<u64>) {
-        self.0.resolve_lock(Context::new(), start_ts, commit_ts).unwrap();
+        self.0.resolve_lock(self.1.clone(), start_ts, commit_ts).unwrap();
     }
 
     fn gc_ok(&self, safe_point: u64) {
-        self.0.gc(Context::new(), safe_point).unwrap();
+        self.0.gc(self.1.clone(), safe_point).unwrap();
     }
 
     fn raw_get_ok(&self, key: Vec<u8>, value: Option<Vec<u8>>) {
-        assert_eq!(self.0.raw_get(Context::new(), key).unwrap(), value);
+        assert_eq!(self.0.raw_get(self.1.clone(), key).unwrap(), value);
     }
 
     fn raw_put_ok(&self, key: Vec<u8>, value: Vec<u8>) {
-        self.0.raw_put(Context::new(), key, value).unwrap();
+        self.0.raw_put(self.1.clone(), key, value).unwrap();
     }
 
     fn raw_delete_ok(&self, key: Vec<u8>) {
-        self.0.raw_delete(Context::new(), key).unwrap()
+        self.0.raw_delete(self.1.clone(), key).unwrap()
+    }
+
+    fn test_txn_store_gc(&self) {
+        self.put_ok(b"k", b"v1", 5, 10);
+        self.put_ok(b"k", b"v2", 15, 20);
+        self.gc_ok(30);
+        self.get_none(b"k", 15);
+        self.get_ok(b"k", 25, b"v2");
+    }
+
+    fn test_txn_store_gc_multiple_keys(&self, key_prefix_len: usize, n: usize) {
+        let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
+        let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
+        for k in &keys {
+            self.put_ok(k.as_bytes(), b"v1", 5, 10);
+            self.put_ok(k.as_bytes(), b"v2", 15, 20);
+        }
+        self.gc_ok(30);
+        for k in &keys {
+            self.get_none(k.as_bytes(), 15);
+        }
+    }
+
+    fn test_txn_store_gc3(&self) {
+        let key_len = 10_000;
+        let key = vec![b'k'; 10_000];
+        for k in 1u64..(MAX_TXN_WRITE_SIZE / key_len * 2) as u64 {
+            self.put_ok(&key, b"", k * 10, k * 10 + 5);
+        }
+        self.delete_ok(&key, 1000, 1050);
+        self.get_none(&key, 2000);
+        self.gc_ok(2000);
+        self.get_none(&key, 3000);
     }
 }
 
 fn new_assertion_storage() -> AssertionStorage {
-    AssertionStorage(SyncStorage::new(&Default::default()))
+    AssertionStorage(SyncStorage::new(&Default::default()), Context::new())
 }
+
+fn new_assertion_raft_storage() -> (Cluster<ServerCluster>, AssertionStorage) {
+    // TODO: create 3 may cause store not match?
+    let (cluster, sync_storage, ctx) = new_raft_storage_with_store_count(1);
+    (cluster, AssertionStorage(sync_storage, ctx))
+}
+
 
 #[test]
 fn test_txn_store_get() {
@@ -540,26 +584,16 @@ fn test_txn_store_resolve_lock2() {
 #[test]
 fn test_txn_store_gc() {
     let store = new_assertion_storage();
-    store.put_ok(b"k", b"v1", 5, 10);
-    store.put_ok(b"k", b"v2", 15, 20);
-    store.gc_ok(30);
-    store.get_none(b"k", 15);
-    store.get_ok(b"k", 25, b"v2");
+    let (_cluster, raft_store) = new_assertion_raft_storage();
+    store.test_txn_store_gc();
+    raft_store.test_txn_store_gc();
 }
 
 fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
-    let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
-    let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
-
     let store = new_assertion_storage();
-    for k in &keys {
-        store.put_ok(k.as_bytes(), b"v1", 5, 10);
-        store.put_ok(k.as_bytes(), b"v2", 15, 20);
-    }
-    store.gc_ok(30);
-    for k in &keys {
-        store.get_none(k.as_bytes(), 15);
-    }
+    store.test_txn_store_gc_multiple_keys(key_prefix_len, n);
+    let (_cluster, raft_store) = new_assertion_raft_storage();
+    raft_store.test_txn_store_gc_multiple_keys(key_prefix_len, n);
 }
 
 #[test]
@@ -575,16 +609,10 @@ fn test_txn_store_gc2() {
 
 #[test]
 fn test_txn_store_gc3() {
-    let key_len = 10_000;
-    let key = vec![b'k'; 10_000];
     let store = new_assertion_storage();
-    for k in 1u64..(MAX_TXN_WRITE_SIZE / key_len * 2) as u64 {
-        store.put_ok(&key, b"", k * 10, k * 10 + 5);
-    }
-    store.delete_ok(&key, 1000, 1050);
-    store.get_none(&key, 2000);
-    store.gc_ok(2000);
-    store.get_none(&key, 3000);
+    store.test_txn_store_gc3();
+    let (_cluster, raft_store) = new_assertion_raft_storage();
+    raft_store.test_txn_store_gc3();
 }
 
 #[test]
@@ -810,9 +838,7 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
     });
 }
 
-#[test]
-fn test_storage_1gc() {
-    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
     let engine = util::BlockEngine::new(engine);
     let config = Default::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
@@ -820,7 +846,7 @@ fn test_storage_1gc() {
 
     engine.block_snapshot();
     let (tx1, rx1) = channel();
-    storage.async_gc(Context::new(),
+    storage.async_gc(ctx.clone(),
                   1,
                   box move |res: storage::Result<()>| {
                       assert!(res.is_ok());
@@ -844,4 +870,13 @@ fn test_storage_1gc() {
     rx2.recv().unwrap();
     engine.unblock_snapshot();
     rx1.recv().unwrap();
+}
+#[test]
+fn test_storage_1gc() {
+    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+    // println!("test engine");
+    test_storage_1gc_with_engine(engine, Context::new());
+    // println!("test_raft_engine");
+    let (_cluster, raft_engine, ctx) = new_raft_engine(1);
+    test_storage_1gc_with_engine(raft_engine, ctx);
 }
