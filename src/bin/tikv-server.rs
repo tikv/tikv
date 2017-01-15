@@ -214,6 +214,8 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
+    util::monitor_threads("tikv").unwrap();
+
     util::run_prometheus(Duration::from_millis(push_interval as u64),
                          &push_address,
                          &push_job);
@@ -287,6 +289,10 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
             get_toml_int(config, "rocksdb.stats-dump-period-sec", Some(600));
         opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
+
+    let compaction_readahead_size =
+        get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
+    opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
     opts
 }
@@ -497,6 +503,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
+    cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
+            config,
+            "raftstore.raft-entry-max-size");
     cfg_duration(&mut cfg.raft_store.max_peer_down_duration,
                  config,
                  "raftstore.max-peer-down-duration");
@@ -613,7 +622,7 @@ fn start_server<T, S>(mut server: Server<T, S>,
 {
     let ch = server.get_sendch();
     let h = thread::Builder::new()
-        .name("tikv-server".to_owned())
+        .name("tikv-eventloop".to_owned())
         .spawn(move || {
             server.run(&mut el).unwrap();
         })

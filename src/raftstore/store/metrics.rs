@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, GaugeVec, Histogram, exponential_buckets};
+use prometheus::{CounterVec, Counter, GaugeVec, Histogram, HistogramVec, exponential_buckets};
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
@@ -91,11 +91,12 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref PEER_RAFT_PROCESS_NANOS_COUNTER_VEC: CounterVec =
-        register_counter_vec!(
-            "tikv_raftstore_raft_process_nanos_total",
-            "Total nanoseconds spent in raft processing.",
-            &["type"]
+    pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_raft_process_duration_secs",
+            "Bucketed histogram of peer processing raft duration",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_ENGINE_SIZE_GAUGE_VEC: GaugeVec =
@@ -120,10 +121,24 @@ lazy_static! {
             &["type", "result"]
         ).unwrap();
 
+    pub static ref REGION_MAX_LOG_LAG: Histogram =
+        register_histogram!(
+            "tikv_raftstore_log_lag",
+            "Bucketed histogram of log lag in a region",
+            vec![2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0,
+                    512.0, 1024.0, 5120.0, 10240.0]
+        ).unwrap();
+
     pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_engine_memory_bytes",
             "Sizes of each column families.",
             &["cf", "type"]
+        ).unwrap();
+
+    pub static ref STORE_KEYS_WRITTEN_COUNTER: Counter =
+        register_counter!(
+            "tikv_engine_keys_written_count",
+            "Count of keys has been written for this interval"
         ).unwrap();
 }

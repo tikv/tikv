@@ -32,7 +32,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChange, ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
+use util::{HandyRwLock, SlowTimer, duration_to_sec, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -403,7 +403,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let t = Instant::now();
+        let timer = self.raft_metrics.process_tick.start_timer();
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
@@ -448,9 +448,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.poll_snapshot_status();
 
-        PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
-            .inc_by(duration_to_nanos(t.elapsed()) as f64)
-            .unwrap();
+        timer.observe_duration();
 
         self.raft_metrics.flush();
 
@@ -790,6 +788,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
+        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
@@ -819,6 +818,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                         &mut self.apply_worker);
             ready_results.push((region_id, ready, res));
         }
+        append_timer.observe_duration();
 
         let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
         self.sent_snapshot_count += sent_snapshot_count;
@@ -838,6 +838,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.on_ready_apply_snapshot(apply_result);
             }
 
+            // record written bytes
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
@@ -854,9 +855,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
-            .inc_by(duration_to_nanos(dur) as f64)
-            .unwrap();
+        self.raft_metrics.process_ready.observe(duration_to_sec(dur) as f64);
+
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
 
@@ -1259,6 +1259,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .map(|p| p.matched)
                 .min()
                 .unwrap();
+            // When an election happened or a new peer is added, replicated_idx can be 0.
+            if replicated_idx > 0 {
+                let last_idx = peer.raft_group.raft.raft_log.last_index();
+                assert!(last_idx >= replicated_idx,
+                        "expect last index {} >= replicated index {}",
+                        last_idx,
+                        replicated_idx);
+                REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+            }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let compact_idx;

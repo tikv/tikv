@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+use prometheus::local::LocalHistogram;
+
 use super::metrics::*;
 
 /// The buffered metrics counters for raft ready handling.
@@ -20,6 +23,7 @@ pub struct RaftReadyMetrics {
     pub commit: u64,
     pub append: u64,
     pub snapshot: u64,
+    pub keys_written: u64,
 }
 
 impl RaftReadyMetrics {
@@ -49,6 +53,10 @@ impl RaftReadyMetrics {
                 .inc_by(self.snapshot as f64)
                 .unwrap();
             self.snapshot = 0;
+        }
+        if self.keys_written > 0 {
+            STORE_KEYS_WRITTEN_COUNTER.inc_by(self.keys_written as f64).unwrap();
+            self.keys_written = 0;
         }
     }
 }
@@ -177,11 +185,25 @@ impl RaftProposeMetrics {
 
 
 /// The buffered metrics counters for raft.
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct RaftMetrics {
     pub ready: RaftReadyMetrics,
     pub message: RaftMessageMetrics,
     pub propose: RaftProposeMetrics,
+    pub process_tick: LocalHistogram,
+    pub process_ready: LocalHistogram,
+}
+
+impl Default for RaftMetrics {
+    fn default() -> RaftMetrics {
+        RaftMetrics {
+            ready: Default::default(),
+            message: Default::default(),
+            propose: Default::default(),
+            process_tick: PEER_RAFT_PROCESS_DURATION.with_label_values(&["tick"]).local(),
+            process_ready: PEER_RAFT_PROCESS_DURATION.with_label_values(&["ready"]).local(),
+        }
+    }
 }
 
 impl RaftMetrics {
@@ -190,5 +212,7 @@ impl RaftMetrics {
         self.ready.flush();
         self.message.flush();
         self.propose.flush();
+        self.process_tick.flush();
+        self.process_ready.flush();
     }
 }

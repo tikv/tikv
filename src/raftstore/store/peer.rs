@@ -147,6 +147,8 @@ pub struct Peer {
     pub last_compacted_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
+    // When entry exceed max size, reject to propose the entry.
+    pub raft_entry_max_size: u64,
 
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
@@ -240,6 +242,7 @@ impl Peer {
                 hash: vec![],
             },
             raft_log_size_hint: 0,
+            raft_entry_max_size: cfg.raft_entry_max_size,
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
@@ -533,7 +536,6 @@ impl Peer {
             });
         }
 
-        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
@@ -542,7 +544,6 @@ impl Peer {
                 panic!("{} failed to handle raft ready: {:?}", self.tag, e);
             }
         };
-        append_timer.observe_duration();
 
         ctx.ready_res.push((ready, invoke_ctx));
     }
@@ -851,6 +852,11 @@ impl Peer {
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+
+        if data.len() as u64 > self.raft_entry_max_size {
+            error!("entry is too large, entry size {}", data.len());
+            return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
+        }
 
         let propose_index = self.next_proposal_index();
         try!(self.raft_group.propose(data));
