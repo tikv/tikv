@@ -65,6 +65,7 @@ type Key = Vec<u8>;
 const ROCKSDB_TOTAL_SST_FILES_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 const ROCKSDB_TABLE_READERS_MEM_PROPERTY: &'static str = "rocksdb.estimate-table-readers-mem";
 const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES_PROPERTY: &'static str = "rocksdb.cur-size-all-mem-tables";
+const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
 const MIO_TICK_RATIO: u64 = 10;
 
 // A helper structure to bundle all channels for messages to `Store`.
@@ -1410,6 +1411,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             // TODO: add cache usage and pinned usage.
+
+            if let Some(num_keys) = self.engine
+                .get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
+                STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC.with_label_values(&[cf])
+                    .set(num_keys as f64);
+            }
         }
 
         used_size += self.snap_mgr.rl().get_total_snap_size();

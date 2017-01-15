@@ -135,6 +135,13 @@ lazy_static! {
             &["cf", "type"]
         ).unwrap();
 
+    pub static ref STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_estimate_num_keys",
+            "Estimate num keys of each column families.",
+            &["cf"]
+        ).unwrap();
+
     pub static ref STORE_KEYS_WRITTEN_COUNTER: Counter =
         register_counter!(
             "tikv_engine_keys_written_count",
