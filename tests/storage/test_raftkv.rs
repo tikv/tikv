@@ -10,7 +10,6 @@ use raftstore::server::new_server_cluster_with_cfs;
 fn test_raftkv(read_quorum: bool) {
     let count = 1;
     let mut cluster = new_server_cluster_with_cfs(0, count, &["cf", CF_RAFT]);
-    cluster.cfg.raft_store.report_region_flow_interval = 100; // 100ms
     cluster.run();
 
     // make sure leader has been elected.
