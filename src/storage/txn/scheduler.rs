@@ -44,6 +44,7 @@ use storage::engine::CbContext;
 use std::collections::HashMap;
 use mio::{self, EventLoop};
 use util::transport::SendCh;
+use util::SlowTimer;
 use storage::engine::{Result as EngineResult, Callback as EngineCallback, Modify};
 use super::Result;
 use super::Error;
@@ -161,6 +162,7 @@ pub struct RunningCtx {
     tag: &'static str,
     latch_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
+    slow_timer: SlowTimer,
 }
 
 impl RunningCtx {
@@ -175,7 +177,14 @@ impl RunningCtx {
             tag: tag,
             latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer()),
             _timer: SCHED_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer(),
+            slow_timer: SlowTimer::new(),
         }
+    }
+}
+
+impl Drop for RunningCtx {
+    fn drop(&mut self) {
+        slow_log!(self.slow_timer, "scheduler handle command: {}", self.tag);
     }
 }
 
@@ -245,10 +254,12 @@ impl Scheduler {
 fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     debug!("process read cmd(cid={}) in worker pool.", cid);
     SCHED_WORKER_COUNTER_VEC.with_label_values(&[cmd.tag(), "read"]).inc();
+    let tag = cmd.tag();
 
     let pr = match cmd {
         // Gets from the snapshot.
         Command::Get { ref key, start_ts, .. } => {
+            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag]).observe(1f64);
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
             let res = snap_store.get(key);
             match res {
@@ -258,6 +269,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Batch gets from the snapshot.
         Command::BatchGet { ref keys, start_ts, .. } => {
+            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                .observe(keys.len() as f64);
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
             match snap_store.batch_get(keys) {
                 Ok(results) => {
@@ -280,6 +293,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             let res = snap_store.scanner(ScanMode::Forward, options.key_only, None)
                 .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
                 .and_then(|mut results| {
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                        .observe(results.len() as f64);
                     Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
                 });
             match res {
@@ -302,6 +317,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                         lock_info.set_key(try!(key.raw()));
                         locks.push(lock_info);
                     }
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                        .observe(locks.len() as f64);
                     Ok(locks)
                 });
             match res {
@@ -320,6 +337,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 .map_err(Error::from)
                 .and_then(|(v, next_scan_key)| {
                     let keys: Vec<Key> = v.into_iter().map(|x| x.0).collect();
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                        .observe(keys.len() as f64);
                     if keys.is_empty() {
                         Ok(None)
                     } else {
@@ -345,6 +364,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                        .observe(keys.len() as f64);
                     if keys.is_empty() {
                         Ok(None)
                     } else {
@@ -363,6 +384,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             }
         }
         Command::RawGet { ref key, .. } => {
+            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag]).observe(1f64);
             match snapshot.get(key) {
                 Ok(val) => ProcessResult::Value { value: val },
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },

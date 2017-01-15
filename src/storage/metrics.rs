@@ -55,6 +55,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_scheduler_kv_command_key_read",
+            "Bucketed histogram of keys read of a kv command",
+            &["type"]
+        ).unwrap();
+
     pub static ref RAWKV_COMMAND_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_storage_rawkv_command_total",
