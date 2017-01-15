@@ -248,6 +248,7 @@ pub struct Peer {
     election_timeout: TimeDuration,
 
     pub bytes_written: u64,
+    pub keys_written: u64,
 }
 
 impl Peer {
@@ -345,6 +346,7 @@ impl Peer {
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
             bytes_written: 0,
+            keys_written: 0,
         };
 
         peer.load_all_coprocessors();
@@ -1374,8 +1376,9 @@ impl Peer {
                 .unwrap_or_else(|e| panic!("{} failed to save apply context: {:?}", self.tag, e));
         }
 
-        metrics.keys_written += ctx.wb.count() as u64;
+        metrics.store_keys_written += ctx.wb.count() as u64;
         self.bytes_written += ctx.wb.data_size() as u64;
+        self.keys_written += ctx.wb.count() as u64;
 
         // Commit write and change storage fields atomically.
         self.mut_store()

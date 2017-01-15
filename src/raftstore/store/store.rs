@@ -59,6 +59,7 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
+use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
 
@@ -108,6 +109,9 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
 
     start_time: Timespec,
     is_busy: bool,
+
+    region_bytes_written: LocalHistogram,
+    region_keys_written: LocalHistogram,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -177,6 +181,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
+            region_bytes_written: REGION_BYTES_WRITTEN_HISTOGRAM.local(),
+            region_keys_written: REGION_KEYS_WRITTEN_HISTOGRAM.local(),
         };
         try!(s.init());
         Ok(s)
@@ -1159,12 +1165,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for (_, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 peer.bytes_written = 0;
+                peer.keys_written = 0;
                 continue;
             }
 
-            REGION_BYTES_WRITTEN_HISTOGRAM.observe(peer.bytes_written as f64);
+            self.region_bytes_written.observe(peer.bytes_written as f64);
+            self.region_keys_written.observe(peer.keys_written as f64);
             peer.bytes_written = 0;
+            peer.keys_written = 0;
         }
+        self.region_bytes_written.flush();
+        self.region_keys_written.flush();
 
         self.register_report_write_bytes_tick(event_loop);
     }
