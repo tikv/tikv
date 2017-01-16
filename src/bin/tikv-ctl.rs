@@ -366,14 +366,12 @@ fn dump_all_region_info(db: DB, skip_tombstone: bool) {
         .unwrap();
 }
 
-fn parse_ts_key_from_key(encode_key: Vec<u8>) -> (u64, String) {
+fn parse_ts_key_from_key(encode_key: Vec<u8>) -> (u64, Vec<u8>) {
     let item_key = Key::from_encoded(encode_key);
     let ts = item_key.decode_ts().unwrap();
     let item_key = item_key.truncate_ts().unwrap();
-    let key_vec = item_key.encoded();
-
-    let key = String::from_utf8(key_vec.clone()).unwrap();
-    (ts, key)
+    let key = item_key.encoded();
+    (ts, key.clone())
 }
 
 fn dump_range(db: DB,
