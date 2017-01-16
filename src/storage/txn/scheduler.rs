@@ -160,6 +160,7 @@ pub struct RunningCtx {
     lock: Lock,
     callback: Option<StorageCb>,
     tag: &'static str,
+    ts: u64,
     latch_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
     slow_timer: SlowTimer,
@@ -169,12 +170,14 @@ impl RunningCtx {
     /// Creates a context for a running command.
     pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> RunningCtx {
         let tag = cmd.tag();
+        let ts = cmd.ts();
         RunningCtx {
             cid: cid,
             cmd: Some(cmd),
             lock: lock,
             callback: Some(cb),
             tag: tag,
+            ts: ts,
             latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer()),
             _timer: SCHED_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer(),
             slow_timer: SlowTimer::new(),
@@ -184,7 +187,10 @@ impl RunningCtx {
 
 impl Drop for RunningCtx {
     fn drop(&mut self) {
-        slow_log!(self.slow_timer, "scheduler handle command: {}", self.tag);
+        slow_log!(self.slow_timer,
+                  "scheduler handle command: {}, ts: {}",
+                  self.tag,
+                  self.ts);
     }
 }
 
