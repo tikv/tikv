@@ -23,6 +23,16 @@ pub struct ScanMetrics {
     pub skipped_keys: u64,
 }
 
+impl ScanMetrics {
+    pub fn efficiency(&self) -> f64 {
+        if self.scanned_keys == 0 {
+            0.0
+        } else {
+            1.0 - self.skipped_keys as f64 / self.scanned_keys as f64
+        }
+    }
+}
+
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
     // cursors are used for speeding up scans.
