@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use storage::{Key, Value, KvPair, Snapshot, ScanMode};
-use storage::mvcc::{MvccReader, Error as MvccError};
+use storage::mvcc::{MvccReader, ScanMetrics, Error as MvccError};
 use super::{Error, Result};
 
 pub struct SnapshotStore<'a> {
@@ -66,12 +66,15 @@ pub struct StoreScanner<'a> {
 }
 
 impl<'a> StoreScanner<'a> {
-    pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(try!(self.reader.seek(key, self.start_ts)))
+    pub fn seek(&mut self, key: Key, metrics: &mut ScanMetrics) -> Result<Option<(Key, Value)>> {
+        Ok(try!(self.reader.seek(key, self.start_ts, metrics)))
     }
 
-    pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
-        Ok(try!(self.reader.reverse_seek(key, self.start_ts)))
+    pub fn reverse_seek(&mut self,
+                        key: Key,
+                        metrics: &mut ScanMetrics)
+                        -> Result<Option<(Key, Value)>> {
+        Ok(try!(self.reader.reverse_seek(key, self.start_ts, metrics)))
     }
 
     #[inline]
@@ -90,10 +93,14 @@ impl<'a> StoreScanner<'a> {
         }
     }
 
-    pub fn scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
+    pub fn scan(&mut self,
+                mut key: Key,
+                limit: usize,
+                metrics: &mut ScanMetrics)
+                -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         while results.len() < limit {
-            match self.seek(key) {
+            match self.seek(key, metrics) {
                 Ok(Some((k, v))) => {
                     results.push(Ok((try!(k.raw()), v)));
                     key = k;
@@ -107,10 +114,14 @@ impl<'a> StoreScanner<'a> {
         Ok(results)
     }
 
-    pub fn reverse_scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
+    pub fn reverse_scan(&mut self,
+                        mut key: Key,
+                        limit: usize,
+                        metrics: &mut ScanMetrics)
+                        -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         while results.len() < limit {
-            match self.reverse_seek(key) {
+            match self.reverse_seek(key, metrics) {
                 Ok(Some((k, v))) => {
                     results.push(Ok((try!(k.raw()), v)));
                     key = k;

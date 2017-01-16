@@ -207,7 +207,7 @@ mod tests {
         assert!(tids.len() >= 2);
 
         tids.iter()
-            .find(|t| super::get_thread_stat(pid, **t).unwrap().0 == name)
+            .find(|t| super::get_thread_stat(pid, **t).map(|stat| stat.0 == name).unwrap_or(false))
             .unwrap();
 
         tx.send(()).unwrap();
