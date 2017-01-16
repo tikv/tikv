@@ -61,7 +61,7 @@ lazy_static! {
             "tikv_coprocessor_scan_keys",
             "Bucketed histogram of coprocessor per request scan keys",
             &["type", "req"],
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
+            exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref COPR_SCAN_EFFICIENCY: HistogramVec =

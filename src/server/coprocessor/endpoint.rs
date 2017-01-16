@@ -759,6 +759,7 @@ impl<'a> SelectContext<'a> {
     fn get_rows_from_range(&mut self, range: KeyRange, limit: usize, desc: bool) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
+            self.scan_metrics.scanned_keys += 1;
             let value = match try!(self.snap.get(&Key::from_raw(range.get_start()))) {
                 None => return Ok(0),
                 Some(v) => v,
