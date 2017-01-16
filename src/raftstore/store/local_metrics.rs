@@ -23,7 +23,6 @@ pub struct RaftReadyMetrics {
     pub commit: u64,
     pub append: u64,
     pub snapshot: u64,
-    pub keys_written: u64,
 }
 
 impl RaftReadyMetrics {
@@ -53,10 +52,6 @@ impl RaftReadyMetrics {
                 .inc_by(self.snapshot as f64)
                 .unwrap();
             self.snapshot = 0;
-        }
-        if self.keys_written > 0 {
-            STORE_KEYS_WRITTEN_COUNTER.inc_by(self.keys_written as f64).unwrap();
-            self.keys_written = 0;
         }
     }
 }

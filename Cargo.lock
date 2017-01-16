@@ -23,7 +23,7 @@ dependencies = [
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 0.1.70 (registry+https://github.com/rust-lang/crates.io-index)",
- "rocksdb 0.3.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
+ "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
  "rustc-serialize 0.3.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "signal 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -296,7 +296,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#021160937418be973ed2372845c7f74fb4b7be1d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#61382deb52e85fa3f45deec2dbd200d0e3e8b23b"
 dependencies = [
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -470,17 +470,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "procinfo"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = [
- "byteorder 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
- "nom 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "rustc_version 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
 name = "prometheus"
 version = "0.2.8"
 source = "git+https://github.com/pingcap/rust-prometheus.git#321b90748174b722b55d7e79eb1e085f017a3dd7"
@@ -490,7 +479,6 @@ dependencies = [
  "hyper 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
- "procinfo 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -538,10 +526,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/ngaut/rust-rocksdb.git#021160937418be973ed2372845c7f74fb4b7be1d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#61382deb52e85fa3f45deec2dbd200d0e3e8b23b"
 dependencies = [
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
- "librocksdb_sys 0.1.0 (git+https://github.com/ngaut/rust-rocksdb.git)",
+ "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -806,7 +794,7 @@ dependencies = [
 "checksum lazy_static 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "49247ec2a285bb3dcb23cbd9c35193c025e7251bfce77c1d5da97e6362dffe7f"
 "checksum libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)" = "e32a70cf75e5846d53a673923498228bbec6a8624708a9ea5645f075d6276122"
 "checksum libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)" = "408014cace30ee0f767b1c4517980646a573ec61a57957aeeabcac8ac0a02e8d"
-"checksum librocksdb_sys 0.1.0 (git+https://github.com/ngaut/rust-rocksdb.git)" = "<none>"
+"checksum librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git)" = "<none>"
 "checksum log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)" = "ab83497bf8bf4ed2a74259c1c802351fcd67a65baa86394b6ba73c36f4838054"
 "checksum matches 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "15305656809ce5a4805b1ff2946892810992197ce1270ff79baded852187942e"
 "checksum memchr 0.1.11 (registry+https://github.com/rust-lang/crates.io-index)" = "d8b629fb514376c675b98c1421e80b151d3817ac42d7c667717d282761418d20"
@@ -825,7 +813,6 @@ dependencies = [
 "checksum num-rational 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)" = "48cdcc9ff4ae2a8296805ac15af88b3d88ce62128ded0cb74ffb63a587502a84"
 "checksum num-traits 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)" = "51eab148f171aefad295f8cece636fc488b9b392ef544da31ea4b8ef6b9e9c39"
 "checksum num_cpus 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)" = "cee7e88156f3f9e19bdd598f8d6c9db7bf4078f99f8381f43a55b09648d1a6e3"
-"checksum procinfo 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f42e8578852a3306838981aedad8c5642ba794929aa12af0c9eb6c072b77af6c"
 "checksum prometheus 0.2.8 (git+https://github.com/pingcap/rust-prometheus.git)" = "<none>"
 "checksum protobuf 1.0.23 (registry+https://github.com/rust-lang/crates.io-index)" = "0cf9bb92f38828ff1e0a7f828a0ec261ffdd5c9ef86b9b3bc7b1eef13495b563"
 "checksum quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7ac990ab4e038dd8481a5e3fd00641067fcfc674ad663f3222752ed5284e05d4"
@@ -833,7 +820,7 @@ dependencies = [
 "checksum rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)" = "2791d88c6defac799c3f20d74f094ca33b9332612d9aef9078519c82e4fe04a5"
 "checksum regex 0.1.70 (registry+https://github.com/rust-lang/crates.io-index)" = "bd76238a728b22c47576b70f478ae13ee4f7094a83e7f11ffedcb67d77f928c4"
 "checksum regex-syntax 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "841591b1e05609a643e3b4d0045fce04f701daba7151ddcd3ad47b080693d5a9"
-"checksum rocksdb 0.3.0 (git+https://github.com/ngaut/rust-rocksdb.git)" = "<none>"
+"checksum rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)" = "<none>"
 "checksum rustc-demangle 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "662b2795f21ff17df7c4c50c1d955c8b5fa9eaddd1cf1bb32f8de2372ffd989b"
 "checksum rustc-serialize 0.3.19 (registry+https://github.com/rust-lang/crates.io-index)" = "6159e4e6e559c81bd706afe9c8fd68f547d3e851ce12e76b1de7914bab61691b"
 "checksum rustc_version 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "c5f5376ea5e30ce23c03eb77cbe4962b988deead10910c372b226388b594c084"
