@@ -248,6 +248,22 @@ impl Command {
         }
     }
 
+    pub fn ts(&self) -> u64 {
+        match *self {
+            Command::Get { start_ts, .. } |
+            Command::BatchGet { start_ts, .. } |
+            Command::Scan { start_ts, .. } |
+            Command::Prewrite { start_ts, .. } |
+            Command::Cleanup { start_ts, .. } |
+            Command::Rollback { start_ts, .. } |
+            Command::ResolveLock { start_ts, .. } => start_ts,
+            Command::Commit { lock_ts, .. } => lock_ts,
+            Command::ScanLock { max_ts, .. } => max_ts,
+            Command::Gc { safe_point, .. } => safe_point,
+            Command::RawGet { .. } => 0,
+        }
+    }
+
     pub fn get_context(&self) -> &Context {
         match *self {
             Command::Get { ref ctx, .. } |

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, Gauge, HistogramVec};
+use prometheus::{CounterVec, Gauge, HistogramVec, exponential_buckets};
 
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: CounterVec =
@@ -53,6 +53,14 @@ lazy_static! {
             "tikv_scheduler_latch_wait_duration_seconds",
             "Bucketed histogram of latch wait",
             &["type"]
+        ).unwrap();
+
+    pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_scheduler_kv_command_key_read",
+            "Bucketed histogram of keys read of a kv command",
+            &["type"],
+            exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 
     pub static ref RAWKV_COMMAND_COUNTER_VEC: CounterVec =
