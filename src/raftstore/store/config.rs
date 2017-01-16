@@ -179,6 +179,10 @@ impl Config {
                                 self.region_split_size));
         }
 
+        if self.capacity == 0 {
+            return Err(box_err!("actual capacity must be greater than 0"));
+        }
+
         Ok(())
     }
 }
