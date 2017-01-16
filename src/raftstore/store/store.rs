@@ -111,8 +111,8 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     start_time: Timespec,
     is_busy: bool,
 
-    region_bytes_written: LocalHistogram,
-    region_keys_written: LocalHistogram,
+    region_written_bytes: LocalHistogram,
+    region_written_keys: LocalHistogram,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -182,8 +182,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
-            region_bytes_written: REGION_BYTES_WRITTEN_HISTOGRAM.local(),
-            region_keys_written: REGION_KEYS_WRITTEN_HISTOGRAM.local(),
+            region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
+            region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
         };
         try!(s.init());
         Ok(s)
@@ -1162,18 +1162,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
         for (_, peer) in &mut self.region_peers {
             if !peer.is_leader() {
-                peer.bytes_written = 0;
-                peer.keys_written = 0;
+                peer.written_bytes = 0;
+                peer.written_keys = 0;
                 continue;
             }
 
-            self.region_bytes_written.observe(peer.bytes_written as f64);
-            self.region_keys_written.observe(peer.keys_written as f64);
-            peer.bytes_written = 0;
-            peer.keys_written = 0;
+            self.region_written_bytes.observe(peer.written_bytes as f64);
+            self.region_written_keys.observe(peer.written_keys as f64);
+            peer.written_bytes = 0;
+            peer.written_keys = 0;
         }
-        self.region_bytes_written.flush();
-        self.region_keys_written.flush();
+        self.region_written_bytes.flush();
+        self.region_written_keys.flush();
 
         self.register_report_region_flow_tick(event_loop);
     }

@@ -143,22 +143,22 @@ lazy_static! {
             &["cf"]
         ).unwrap();
 
-    pub static ref STORE_KEYS_WRITTEN_COUNTER: Counter =
+    pub static ref STORE_WRITTEN_KEYS_COUNTER: Counter =
         register_counter!(
-            "tikv_engine_keys_written_count",
+            "tikv_engine_written_keys_count",
             "Count of keys has been written for this interval"
         ).unwrap();
 
-    pub static ref REGION_BYTES_WRITTEN_HISTOGRAM: Histogram =
+    pub static ref REGION_WRITTEN_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_region_bytes_written",
+            "tikv_region_written_bytes",
             "Histogram of bytes written for regions",
              exponential_buckets(256.0, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref REGION_KEYS_WRITTEN_HISTOGRAM: Histogram =
+    pub static ref REGION_WRITTEN_KEYS_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_region_keys_written",
+            "tikv_region_written_keys",
             "Histogram of keys written for regions",
              exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
