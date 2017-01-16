@@ -59,6 +59,7 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
+use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
 
@@ -109,6 +110,9 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
 
     start_time: Timespec,
     is_busy: bool,
+
+    region_written_bytes: LocalHistogram,
+    region_written_keys: LocalHistogram,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -178,6 +182,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
+            region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
+            region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
         };
         try!(s.init());
         Ok(s)
@@ -279,6 +285,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
+        self.register_report_region_flow_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -805,7 +812,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(&mut self.raft_metrics, ready, &mut res);
+                .handle_raft_ready_apply(ready, &mut res);
             self.on_ready_result(region_id, res)
         }
 
@@ -1142,6 +1149,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // whole raft logic, and we can send truncate log command to compact it.
             error!("{} register raft gc log tick err: {:?}", self.tag, e);
         };
+    }
+
+    fn register_report_region_flow_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::ReportRegionFlow,
+                                       self.cfg.report_region_flow_interval) {
+            error!("{} register raft gc log tick err: {:?}", self.tag, e);
+        };
+    }
+
+    fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
+        for (_, peer) in &mut self.region_peers {
+            if !peer.is_leader() {
+                peer.written_bytes = 0;
+                peer.written_keys = 0;
+                continue;
+            }
+
+            self.region_written_bytes.observe(peer.written_bytes as f64);
+            self.region_written_keys.observe(peer.written_keys as f64);
+            peer.written_bytes = 0;
+            peer.written_keys = 0;
+        }
+        self.region_written_bytes.flush();
+        self.region_written_keys.flush();
+
+        self.register_report_region_flow_tick(event_loop);
     }
 
     #[allow(if_same_then_else)]
@@ -1834,6 +1868,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::ReportRegionFlow => self.on_report_region_flow(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
