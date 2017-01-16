@@ -59,7 +59,7 @@ getopts = "0.2"
 regex = "0.1"
 
 [dependencies.rocksdb]
-git = "https://github.com/ngaut/rust-rocksdb.git"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
@@ -73,7 +73,7 @@ git = "https://github.com/carllerche/mio.git"
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
-features = ["nightly", "push", "process"]
+features = ["nightly", "push"]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
