@@ -373,7 +373,6 @@ fn parse_ts_key_from_key(encode_key: Vec<u8>) -> (u64, String) {
     let key_vec = item_key.encoded();
 
     let key = String::from_utf8(key_vec.clone()).unwrap();
-    // println!("ts:{:?},key_vec:{:?}",ts,key.clone());
     (ts, key)
 }
 
@@ -406,7 +405,6 @@ fn dump_range(db: DB,
                 CF_WRITE => {
                     let value = Write::deserialize(v.as_ref());
                     let (cmt_ts, _) = parse_ts_key_from_key(escape(k).into_bytes());
-                    // println!("ts:{},key:{:?}", value.start_ts, escape(k));
                     right_key = (start_ts.is_none() || value.start_ts == start_ts.unwrap()) &&
                                 (commit_ts.is_none() || cmt_ts == commit_ts.unwrap());
                 }
