@@ -1373,9 +1373,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(stats) => stats,
         };
 
-        let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
-
-        stats.set_capacity(capacity);
+        if self.cfg.capacity == 0 {
+            stats.set_capacity(disk_stats.total_space());
+        } else {
+            let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
+            stats.set_capacity(capacity);
+        }
 
         // Must get the total SST file size here.
         let mut used_size: u64 = 0;

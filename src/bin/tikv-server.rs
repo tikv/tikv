@@ -443,17 +443,7 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
         .or_else(|| get_toml_int_opt(config, "server.capacity"));
     if let Some(cap) = capacity {
         assert!(cap >= 0);
-        if cap == 0 {
-            let store_path = get_flag_string(matches, "s").unwrap_or_else(|| {
-                get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned()))
-            });
-            match fs2::statvfs(&store_path) {
-                Ok(stats) => cfg.raft_store.capacity = stats.total_space(),
-                Err(e) => error!("get disk stat for {} failed: {}", store_path, e),
-            }
-        } else {
-            cfg.raft_store.capacity = cap as u64;
-        }
+        cfg.raft_store.capacity = cap as u64;
     }
 
     // Set advertise address for outer node and client use.
