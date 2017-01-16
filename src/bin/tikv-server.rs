@@ -214,6 +214,8 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
+    util::monitor_threads("tikv").unwrap();
+
     util::run_prometheus(Duration::from_millis(push_interval as u64),
                          &push_address,
                          &push_job);
@@ -287,6 +289,10 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
             get_toml_int(config, "rocksdb.stats-dump-period-sec", Some(600));
         opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
+
+    let compaction_readahead_size =
+        get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
+    opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
     opts
 }
@@ -616,7 +622,7 @@ fn start_server<T, S>(mut server: Server<T, S>,
 {
     let ch = server.get_sendch();
     let h = thread::Builder::new()
-        .name("tikv-server".to_owned())
+        .name("tikv-eventloop".to_owned())
         .spawn(move || {
             server.run(&mut el).unwrap();
         })
