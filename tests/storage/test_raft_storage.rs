@@ -23,37 +23,12 @@ use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::util::*;
 use storage::util;
-
 use super::sync_storage::SyncStorage;
-
-pub fn new_raft_engine(count: usize) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
-    let mut cluster = new_server_cluster_with_cfs(0, count, ALL_CFS);
-    cluster.run();
-    // make sure leader has been elected.
-    assert_eq!(cluster.must_get(b""), None);
-
-    let region = cluster.get_region(b"");
-    let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
-    let engine = cluster.sim.rl().storages[&leader_id.get_id()].clone();
-
-    let mut ctx = Context::new();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(region.get_peers()[0].clone());
-    (cluster, engine, ctx)
-}
-
-pub fn new_raft_storage_with_store_count(count: usize)
-                                         -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    let (cluster, engine, ctx) = new_raft_engine(count);
-    (cluster, SyncStorage::from_engine(engine, &Default::default()), ctx)
-
-}
+use super::util::new_raft_storage_with_store_count;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    new_raft_storage_with_store_count(1)
+    new_raft_storage_with_store_count(1, "")
 }
-
 
 #[test]
 fn test_raft_storage() {

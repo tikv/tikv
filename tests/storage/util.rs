@@ -15,9 +15,14 @@ use std::time::Duration;
 use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tikv::storage::{Engine, Snapshot, Modify};
+use tikv::storage::{Engine, Snapshot, Modify, ALL_CFS};
 use tikv::storage::engine::{Callback, Result};
 use kvproto::kvrpcpb::Context;
+use raftstore::cluster::Cluster;
+use raftstore::server::ServerCluster;
+use raftstore::server::new_server_cluster_with_cfs;
+use tikv::util::HandyRwLock;
+use super::sync_storage::SyncStorage;
 
 #[derive(Debug)]
 pub struct BlockEngine {
@@ -89,4 +94,26 @@ impl Engine for BlockEngine {
             block_snapshot: self.block_snapshot.clone(),
         }
     }
+}
+
+pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
+    let mut cluster = new_server_cluster_with_cfs(0, count, ALL_CFS);
+    cluster.run();
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(b""), None);
+    let region = cluster.get_region(key.as_bytes());
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader.clone());
+    (cluster, engine, ctx)
+}
+
+pub fn new_raft_storage_with_store_count(count: usize,
+                                         key: &str)
+                                         -> (Cluster<ServerCluster>, SyncStorage, Context) {
+    let (cluster, engine, ctx) = new_raft_engine(count, key);
+    (cluster, SyncStorage::from_engine(engine, &Default::default()), ctx)
 }
