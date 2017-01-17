@@ -669,9 +669,9 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, result: &mut ReadyResult) {
-        // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
+        // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
-        // snapshot. If we call `handle_raft_commit_entries` directly, these updates
+        // snapshot. If we call `handle_raft_committed_entries` directly, these updates
         // will be written to disk. Because we apply snapshot asynchronously, so these
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
@@ -683,7 +683,7 @@ impl Peer {
             }
             vec![]
         } else {
-            self.handle_raft_commit_entries(ready.committed_entries.take().unwrap())
+            self.handle_raft_committed_entries(ready.committed_entries.take().unwrap())
         };
 
         self.raft_group.advance(ready);
@@ -1125,9 +1125,9 @@ impl Peer {
         Ok(())
     }
 
-    fn handle_raft_commit_entries(&mut self,
-                                  committed_entries: Vec<eraftpb::Entry>)
-                                  -> Vec<ExecResult> {
+    fn handle_raft_committed_entries(&mut self,
+                                     committed_entries: Vec<eraftpb::Entry>)
+                                     -> Vec<ExecResult> {
         if committed_entries.is_empty() {
             return vec![];
         }
