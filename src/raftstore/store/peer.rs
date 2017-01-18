@@ -36,7 +36,7 @@ use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use util::{escape, SlowTimer, rocksdb, clocktime};
-use pd::{PdClient, INVALID_ID};
+use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
 use super::store::Store;
 use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state,
@@ -255,9 +255,7 @@ impl Peer {
     // If we create the peer actively, like bootstrap/split/merge region, we should
     // use this function to create the peer. The region must contain the peer info
     // for this store.
-    pub fn create<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                             region: &metapb::Region)
-                                             -> Result<Peer> {
+    pub fn create<T, C>(store: &mut Store<T, C>, region: &metapb::Region) -> Result<Peer> {
         let store_id = store.store_id();
         let peer_id = match util::find_peer(region, store_id) {
             None => {
@@ -275,10 +273,7 @@ impl Peer {
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
     // will be retrieved later after applying snapshot.
-    pub fn replicate<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                                region_id: u64,
-                                                peer_id: u64)
-                                                -> Result<Peer> {
+    pub fn replicate<T, C>(store: &mut Store<T, C>, region_id: u64, peer_id: u64) -> Result<Peer> {
         // We will remove tombstone key when apply snapshot
         info!("[region {}] replicate peer with id {}", region_id, peer_id);
 
@@ -287,10 +282,7 @@ impl Peer {
         Peer::new(store, &region, peer_id)
     }
 
-    fn new<T: Transport, C: PdClient>(store: &mut Store<T, C>,
-                                      region: &metapb::Region,
-                                      peer_id: u64)
-                                      -> Result<Peer> {
+    fn new<T, C>(store: &mut Store<T, C>, region: &metapb::Region, peer_id: u64) -> Result<Peer> {
         if peer_id == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }
@@ -445,17 +437,9 @@ impl Peer {
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
-        if !ready.messages.is_empty() {
-            metrics.message += ready.messages.len() as u64;
-        }
-
-        if !ready.committed_entries.is_empty() {
-            metrics.commit += ready.committed_entries.len() as u64;
-        }
-
-        if !ready.entries.is_empty() {
-            metrics.append += ready.entries.len() as u64;
-        }
+        metrics.message += ready.messages.len() as u64;
+        metrics.commit += ready.committed_entries.as_ref().map_or(0, |v| v.len() as u64);
+        metrics.append += ready.entries.len() as u64;
 
         if !raft::is_empty_snap(&ready.snapshot) {
             metrics.snapshot += 1;
@@ -685,9 +669,9 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, result: &mut ReadyResult) {
-        // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
+        // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
-        // snapshot. If we call `handle_raft_commit_entries` directly, these updates
+        // snapshot. If we call `handle_raft_committed_entries` directly, these updates
         // will be written to disk. Because we apply snapshot asynchronously, so these
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
@@ -699,7 +683,7 @@ impl Peer {
             }
             vec![]
         } else {
-            self.handle_raft_commit_entries(&ready.committed_entries)
+            self.handle_raft_committed_entries(ready.committed_entries.take().unwrap())
         };
 
         self.raft_group.advance(ready);
@@ -1141,9 +1125,9 @@ impl Peer {
         Ok(())
     }
 
-    fn handle_raft_commit_entries(&mut self,
-                                  committed_entries: &[eraftpb::Entry])
-                                  -> Vec<ExecResult> {
+    fn handle_raft_committed_entries(&mut self,
+                                     committed_entries: Vec<eraftpb::Entry>)
+                                     -> Vec<ExecResult> {
         if committed_entries.is_empty() {
             return vec![];
         }
@@ -1189,7 +1173,7 @@ impl Peer {
         results
     }
 
-    fn handle_raft_entry_normal(&mut self, entry: &eraftpb::Entry) -> Option<ExecResult> {
+    fn handle_raft_entry_normal(&mut self, entry: eraftpb::Entry) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
@@ -1225,7 +1209,7 @@ impl Peer {
         None
     }
 
-    fn handle_raft_entry_conf_change(&mut self, entry: &eraftpb::Entry) -> Option<ExecResult> {
+    fn handle_raft_entry_conf_change(&mut self, entry: eraftpb::Entry) -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: eraftpb::ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
