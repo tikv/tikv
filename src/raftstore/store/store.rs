@@ -1217,7 +1217,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
-            let compact_idx;
+            let mut compact_idx;
             if applied_idx > first_idx &&
                applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit {
                 compact_idx = applied_idx;
@@ -1228,6 +1228,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             } else {
                 compact_idx = replicated_idx;
+            }
+
+            // Have no idea why subtract 1 here, but original code did this by magic.
+            assert!(compact_idx > 0);
+            compact_idx -= 1;
+            if compact_idx <= first_idx {
+                continue;
             }
 
             let term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
