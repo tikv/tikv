@@ -897,7 +897,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             start_idx: peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
         };
-        peer.last_compacted_idx = state.get_index() + 1;
+        peer.last_compacted_idx = task.end_idx;
         if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
@@ -1230,8 +1230,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 compact_idx = replicated_idx;
             }
 
+            let term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
+
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
             if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
@@ -1814,13 +1816,15 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
 
 fn new_compact_log_request(region_id: u64,
                            peer: metapb::Peer,
-                           compact_index: u64)
+                           compact_index: u64,
+                           compact_term: u64)
                            -> RaftCmdRequest {
     let mut request = new_admin_request(region_id, peer);
 
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
+    admin.mut_compact_log().set_compact_term(compact_term);
     request.set_admin_request(admin);
     request
 }

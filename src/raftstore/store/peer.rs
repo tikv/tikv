@@ -39,8 +39,8 @@ use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
 use super::store::Store;
-use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state,
-                          InvokeContext};
+use super::peer_storage::{self, PeerStorage, ApplySnapResult, write_initial_state,
+                          write_peer_state, InvokeContext, compact_raft_log};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -1687,7 +1687,7 @@ impl Peer {
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::new();
 
-        let first_index = self.get_store().first_index();
+        let first_index = peer_storage::first_index(&ctx.apply_state);
         if compact_index <= first_index {
             debug!("{} compact index {} <= first index {}, no need to compact",
                    self.tag,
@@ -1696,8 +1696,20 @@ impl Peer {
             return Ok((resp, None));
         }
 
+        let compact_term = req.get_compact_log().get_compact_term();
+        if compact_term == 0 {
+            info!("{} compact term missing in {:?}, skip.",
+                  self.tag,
+                  req.get_compact_log());
+            // old format compact log command, safe to ignore.
+            return Err(box_err!("command format is outdated, please upgrade leader."));
+        }
+
         // compact failure is safe to be omitted, no need to assert.
-        try!(self.get_store().compact(&mut ctx.apply_state, compact_index));
+        try!(compact_raft_log(&self.get_store().tag,
+                              &mut ctx.apply_state,
+                              compact_index,
+                              compact_term));
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
 
