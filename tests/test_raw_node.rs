@@ -65,7 +65,7 @@ fn new_ready(ss: Option<SoftState>,
         ss: ss,
         hs: hs,
         entries: entries,
-        committed_entries: committed_entries,
+        committed_entries: Some(committed_entries),
         ..Default::default()
     }
 }
@@ -228,7 +228,7 @@ fn test_raw_node_propose_add_duplicate_node() {
         raw_node.propose_conf_change(cc).expect("");
         let rd = raw_node.ready();
         s.wl().append(&rd.entries).expect("");
-        for e in &rd.committed_entries {
+        for e in rd.committed_entries.as_ref().unwrap() {
             if e.get_entry_type() == EntryType::EntryConfChange {
                 let conf_change = protobuf::parse_from_bytes(e.get_data()).unwrap();
                 raw_node.apply_conf_change(conf_change);
