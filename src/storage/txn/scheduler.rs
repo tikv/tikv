@@ -881,6 +881,13 @@ mod tests {
                                      ctx: Context::new(),
                                      max_ts: 5,
                                  },
+                                 Command::ResolveLock {
+                                     ctx: Context::new(),
+                                     start_ts: 10,
+                                     commit_ts: Some(20),
+                                     scan_key: None,
+                                     keys: vec![],
+                                 },
                                  Command::Gc {
                                      ctx: Context::new(),
                                      safe_point: 5,
