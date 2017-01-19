@@ -582,7 +582,8 @@ impl Scheduler {
                 self.latches.gen_lock(&keys)
             }
             Command::Commit { ref keys, .. } |
-            Command::Rollback { ref keys, .. } => self.latches.gen_lock(keys),
+            Command::Rollback { ref keys, .. } |
+            Command::ResolveLock { ref keys, .. } => self.latches.gen_lock(keys),
             Command::Cleanup { ref key, .. } => self.latches.gen_lock(&[key]),
             _ => Lock::new(vec![]),
         }

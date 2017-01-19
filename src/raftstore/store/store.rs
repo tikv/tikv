@@ -75,7 +75,7 @@ pub struct StoreChannel {
     pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
 }
 
-pub struct Store<T: Transport, C: PdClient + 'static> {
+pub struct Store<T, C: 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
@@ -141,7 +141,7 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
     Ok(())
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T, C> Store<T, C> {
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
                cfg: Config,
@@ -273,46 +273,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        try!(self.snap_mgr.wl().init());
-
-        self.register_raft_base_tick(event_loop);
-        self.register_raft_gc_log_tick(event_loop);
-        self.register_split_region_check_tick(event_loop);
-        self.register_compact_check_tick(event_loop);
-        self.register_pd_heartbeat_tick(event_loop);
-        self.register_pd_store_heartbeat_tick(event_loop);
-        self.register_snap_mgr_gc_tick(event_loop);
-        self.register_compact_lock_cf_tick(event_loop);
-        self.register_consistency_check_tick(event_loop);
-        self.register_report_region_flow_tick(event_loop);
-
-        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
-                                                       self.cfg.region_max_size,
-                                                       self.cfg.region_split_size);
-        box_try!(self.split_check_worker.start(split_check_runner));
-
-        let runner = RegionRunner::new(self.engine.clone(),
-                                       self.snap_mgr.clone(),
-                                       self.cfg.snap_apply_batch_size);
-        box_try!(self.region_worker.start(runner));
-
-        let raftlog_gc_runner = RaftlogGcRunner;
-        box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
-
-        let compact_runner = CompactRunner::new(self.engine.clone());
-        box_try!(self.compact_worker.start(compact_runner));
-
-        let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
-        box_try!(self.pd_worker.start(pd_runner));
-
-        let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
-        box_try!(self.consistency_check_worker.start(consistency_check_runner));
-
-        try!(event_loop.run(self));
-        Ok(())
-    }
-
     pub fn get_sendch(&self) -> SendCh<Msg> {
         self.sendch.clone()
     }
@@ -388,6 +348,48 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   status);
             peer.raft_group.report_snapshot(to_peer_id, status)
         }
+    }
+}
+
+impl<T: Transport, C: PdClient> Store<T, C> {
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
+        try!(self.snap_mgr.wl().init());
+
+        self.register_raft_base_tick(event_loop);
+        self.register_raft_gc_log_tick(event_loop);
+        self.register_split_region_check_tick(event_loop);
+        self.register_compact_check_tick(event_loop);
+        self.register_pd_heartbeat_tick(event_loop);
+        self.register_pd_store_heartbeat_tick(event_loop);
+        self.register_snap_mgr_gc_tick(event_loop);
+        self.register_compact_lock_cf_tick(event_loop);
+        self.register_consistency_check_tick(event_loop);
+        self.register_report_region_flow_tick(event_loop);
+
+        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
+                                                       self.cfg.region_max_size,
+                                                       self.cfg.region_split_size);
+        box_try!(self.split_check_worker.start(split_check_runner));
+
+        let runner = RegionRunner::new(self.engine.clone(),
+                                       self.snap_mgr.clone(),
+                                       self.cfg.snap_apply_batch_size);
+        box_try!(self.region_worker.start(runner));
+
+        let raftlog_gc_runner = RaftlogGcRunner;
+        box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
+
+        let compact_runner = CompactRunner::new(self.engine.clone());
+        box_try!(self.compact_worker.start(compact_runner));
+
+        let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
+        box_try!(self.pd_worker.start(pd_runner));
+
+        let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
+        box_try!(self.consistency_check_worker.start(consistency_check_runner));
+
+        try!(event_loop.run(self));
+        Ok(())
     }
 
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
@@ -895,7 +897,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             start_idx: peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
         };
-        peer.last_compacted_idx = state.get_index() + 1;
+        peer.last_compacted_idx = task.end_idx;
         if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
@@ -1215,7 +1217,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
-            let compact_idx;
+            let mut compact_idx;
             if applied_idx > first_idx &&
                applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit {
                 compact_idx = applied_idx;
@@ -1228,8 +1230,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 compact_idx = replicated_idx;
             }
 
+            // Have no idea why subtract 1 here, but original code did this by magic.
+            assert!(compact_idx > 0);
+            compact_idx -= 1;
+            if compact_idx < first_idx {
+                // In case compact_idx == first_idx before subtraction.
+                continue;
+            }
+
+            let term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
+
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
             if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
@@ -1816,13 +1828,15 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
 
 fn new_compact_log_request(region_id: u64,
                            peer: metapb::Peer,
-                           compact_index: u64)
+                           compact_index: u64,
+                           compact_term: u64)
                            -> RaftCmdRequest {
     let mut request = new_admin_request(region_id, peer);
 
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
+    admin.mut_compact_log().set_compact_term(compact_term);
     request.set_admin_request(admin);
     request
 }
