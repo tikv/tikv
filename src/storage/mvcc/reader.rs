@@ -17,6 +17,22 @@ use super::{Error, Result};
 use super::lock::Lock;
 use super::write::{Write, WriteType};
 
+#[derive(Clone, Default, Debug)]
+pub struct ScanMetrics {
+    pub scanned_keys: u64,
+    pub skipped_keys: u64,
+}
+
+impl ScanMetrics {
+    pub fn efficiency(&self) -> f64 {
+        if self.scanned_keys == 0 {
+            0.0
+        } else {
+            1.0 - self.skipped_keys as f64 / self.scanned_keys as f64
+        }
+    }
+}
+
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
     // cursors are used for speeding up scans.
@@ -218,7 +234,11 @@ impl<'a> MvccReader<'a> {
         Ok(())
     }
 
-    pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
+    pub fn seek(&mut self,
+                mut key: Key,
+                ts: u64,
+                metrics: &mut ScanMetrics)
+                -> Result<Option<(Key, Value)>> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());
         try!(self.create_lock_cursor());
@@ -259,14 +279,20 @@ impl<'a> MvccReader<'a> {
                     }
                 }
             };
+            metrics.scanned_keys += 1;
             if let Some(v) = try!(self.get(&key, ts)) {
                 return Ok(Some((key, v)));
             }
+            metrics.skipped_keys += 1;
             key = key.append_ts(0);
         }
     }
 
-    pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
+    pub fn reverse_seek(&mut self,
+                        mut key: Key,
+                        ts: u64,
+                        metrics: &mut ScanMetrics)
+                        -> Result<Option<(Key, Value)>> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());
         try!(self.create_lock_cursor());
@@ -307,9 +333,11 @@ impl<'a> MvccReader<'a> {
                     }
                 }
             };
+            metrics.scanned_keys += 1;
             if let Some(v) = try!(self.get(&key, ts)) {
                 return Ok(Some((key, v)));
             }
+            metrics.skipped_keys += 1;
         }
     }
 

@@ -15,6 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use std::result;
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -26,6 +27,7 @@ use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::errorpb::Error as PbError;
 use tikv::pd::PdClient;
 use tikv::util::{HandyRwLock, escape, rocksdb};
 use tikv::util::transport::SendCh;
@@ -522,6 +524,18 @@ impl<T: Simulator> Cluster<T> {
         }
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
+    }
+
+    pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
+        let resp = self.request(key,
+                                vec![new_put_cf_cmd("default", key, value)],
+                                false,
+                                Duration::from_secs(5));
+        if resp.get_header().has_error() {
+            Err(resp.get_header().get_error().clone())
+        } else {
+            Ok(())
+        }
     }
 
     pub fn must_delete(&mut self, key: &[u8]) {
