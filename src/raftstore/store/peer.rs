@@ -1697,6 +1697,7 @@ impl Peer {
         }
 
         let compact_term = req.get_compact_log().get_compact_term();
+        // TODO: add unit tests to cover all the message integrity checks.
         if compact_term == 0 {
             info!("{} compact term missing in {:?}, skip.",
                   self.tag,

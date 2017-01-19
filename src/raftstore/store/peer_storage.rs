@@ -91,7 +91,8 @@ pub fn compact_raft_log(tag: &str,
                             compact_index,
                             state.get_applied_index()));
     }
-    // we don't actually compact the log now, we add an async task to do it.
+
+    // we don't actually delete the logs now, we add an async task to do it.
 
     state.mut_truncated_state().set_index(compact_index);
     state.mut_truncated_state().set_term(compact_term);
