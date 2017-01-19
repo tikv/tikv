@@ -1233,7 +1233,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Have no idea why subtract 1 here, but original code did this by magic.
             assert!(compact_idx > 0);
             compact_idx -= 1;
-            if compact_idx <= first_idx {
+            if compact_idx < first_idx {
+                // In case compact_idx == first_idx before subtraction.
                 continue;
             }
 
