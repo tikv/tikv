@@ -78,6 +78,17 @@ fn test_wrong_store_id<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(!result.unwrap().get_header().get_error().get_message().is_empty());
 }
 
+fn test_put_large_entry<T: Simulator>(cluster: &mut Cluster<T>) {
+    let max_size: usize = 1024;
+    cluster.cfg.raft_store.raft_entry_max_size = max_size as u64;
+
+    cluster.run();
+
+    let large_value = vec![b'v'; max_size + 1];
+    let res = cluster.put(b"key", large_value.as_slice());
+    assert!(res.as_ref().err().unwrap().has_raft_entry_too_large());
+}
+
 #[test]
 fn test_node_put() {
     let mut cluster = new_node_cluster(0, 1);
@@ -112,4 +123,16 @@ fn test_server_delete() {
 fn test_server_wrong_store_id() {
     let mut cluster = new_server_cluster(0, 1);
     test_wrong_store_id(&mut cluster);
+}
+
+#[test]
+fn test_node_put_large_entry() {
+    let mut cluster = new_node_cluster(0, 1);
+    test_put_large_entry(&mut cluster);
+}
+
+#[test]
+fn test_server_put_large_entry() {
+    let mut cluster = new_server_cluster(0, 1);
+    test_put_large_entry(&mut cluster);
 }

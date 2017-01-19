@@ -1,5 +1,7 @@
 SHELL=/bin/bash -o pipefail
 
+CI_BUILD_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+
 ${LOCAL_DIR}/lib/libgflags.a:
 	cd /tmp && \
 	curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz && \
@@ -15,9 +17,9 @@ ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so:
 	export CPLUS_INCLUDE_PATH="${CPLUS_INCLUDE_PATH}:${LOCAL_DIR}/include" && \
 	export CXX=${COMPILER} && \
 	cd /tmp && \
-	curl -L https://github.com/facebook/rocksdb/archive/4.12.fb.tar.gz -o rocksdb.tar.gz && \
+	curl -L https://github.com/facebook/rocksdb/archive/v5.0.1.tar.gz -o rocksdb.tar.gz && \
 	tar xf rocksdb.tar.gz && \
-	cd rocksdb-4.12.fb && \
+	cd rocksdb-5.0.1 && \
 	INSTALL_PATH=${LOCAL_DIR} make install-shared
 
 # TODO: use offical archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
@@ -67,7 +69,7 @@ prepare_brew:
 prepare_osx: ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_brew prepare_rust
 
 test_linux test_osx:
-	./travis-build/test.sh
+	export CI=true && ${CI_BUILD_DIR}/test.sh
 
 cover_linux:
 	export LOG_LEVEL=DEBUG && \

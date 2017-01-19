@@ -8,6 +8,7 @@ machine:
     DYLD_LIBRARY_PATH: "$DYLD_LIBRARY_PATH:$HOME/.local/lib"
     LDFLAGS: "-L$HOME/.local/lib"
     CPPFLAGS: "-I$HOME/.local/include"
+    CXXFLAGS: "-I$HOME/.local/include"
     PKG_CONFIG_PATH: "$PKG_CONFIG_PATH:$HOME/.local/lib/pkgconfig"
     RUSTC_DATE: "2016-12-19"
     LOCAL_PREFIX: "$HOME/.local"
@@ -59,9 +60,9 @@ dependencies:
       if [[ ! -e $HOME/.local/lib/librocksdb.so ]]; then
         export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
         cd /tmp && \
-        curl -L https://github.com/facebook/rocksdb/archive/4.12.fb.tar.gz -o rocksdb.tar.gz && \
+        curl -L https://github.com/facebook/rocksdb/archive/v5.0.1.tar.gz -o rocksdb.tar.gz && \
         tar xf rocksdb.tar.gz && \
-        cd rocksdb-4.12.fb && \
+        cd rocksdb-5.0.1 && \
         INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared;
       fi
   post:

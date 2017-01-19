@@ -17,6 +17,22 @@ use super::{Error, Result};
 use super::lock::Lock;
 use super::write::{Write, WriteType};
 
+#[derive(Clone, Default, Debug)]
+pub struct ScanMetrics {
+    pub scanned_keys: u64,
+    pub skipped_keys: u64,
+}
+
+impl ScanMetrics {
+    pub fn efficiency(&self) -> f64 {
+        if self.scanned_keys == 0 {
+            0.0
+        } else {
+            1.0 - self.skipped_keys as f64 / self.scanned_keys as f64
+        }
+    }
+}
+
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
     // cursors are used for speeding up scans.
@@ -28,10 +44,15 @@ pub struct MvccReader<'a> {
     key_only: bool,
 
     fill_cache: bool,
+    upper_bound: Option<Vec<u8>>,
 }
 
 impl<'a> MvccReader<'a> {
-    pub fn new(snapshot: &Snapshot, scan_mode: Option<ScanMode>, fill_cache: bool) -> MvccReader {
+    pub fn new(snapshot: &Snapshot,
+               scan_mode: Option<ScanMode>,
+               fill_cache: bool,
+               upper_bound: Option<Vec<u8>>)
+               -> MvccReader {
         MvccReader {
             snapshot: snapshot,
             data_cursor: None,
@@ -40,6 +61,7 @@ impl<'a> MvccReader<'a> {
             scan_mode: scan_mode,
             key_only: false,
             fill_cache: fill_cache,
+            upper_bound: upper_bound,
         }
     }
 
@@ -193,7 +215,10 @@ impl<'a> MvccReader<'a> {
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
             self.write_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_WRITE, None, self.fill_cache, self.get_scan_mode(false))));
+                .iter_cf(CF_WRITE,
+                         self.upper_bound.as_ref().map(|v| v.as_slice()),
+                         self.fill_cache,
+                         self.get_scan_mode(false))));
         }
         Ok(())
     }
@@ -201,12 +226,19 @@ impl<'a> MvccReader<'a> {
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
             self.lock_cursor = Some(try!(self.snapshot
-                .iter_cf(CF_LOCK, None, true, self.get_scan_mode(true))));
+                .iter_cf(CF_LOCK,
+                         self.upper_bound.as_ref().map(|v| v.as_slice()),
+                         true,
+                         self.get_scan_mode(true))));
         }
         Ok(())
     }
 
-    pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
+    pub fn seek(&mut self,
+                mut key: Key,
+                ts: u64,
+                metrics: &mut ScanMetrics)
+                -> Result<Option<(Key, Value)>> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());
         try!(self.create_lock_cursor());
@@ -247,14 +279,20 @@ impl<'a> MvccReader<'a> {
                     }
                 }
             };
+            metrics.scanned_keys += 1;
             if let Some(v) = try!(self.get(&key, ts)) {
                 return Ok(Some((key, v)));
             }
+            metrics.skipped_keys += 1;
             key = key.append_ts(0);
         }
     }
 
-    pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
+    pub fn reverse_seek(&mut self,
+                        mut key: Key,
+                        ts: u64,
+                        metrics: &mut ScanMetrics)
+                        -> Result<Option<(Key, Value)>> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());
         try!(self.create_lock_cursor());
@@ -295,9 +333,11 @@ impl<'a> MvccReader<'a> {
                     }
                 }
             };
+            metrics.scanned_keys += 1;
             if let Some(v) = try!(self.get(&key, ts)) {
                 return Ok(Some((key, v)));
             }
+            metrics.skipped_keys += 1;
         }
     }
 

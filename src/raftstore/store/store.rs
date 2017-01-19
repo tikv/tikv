@@ -32,7 +32,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
+use util::{HandyRwLock, SlowTimer, duration_to_sec, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -59,12 +59,14 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
+use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILES_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 const ROCKSDB_TABLE_READERS_MEM_PROPERTY: &'static str = "rocksdb.estimate-table-readers-mem";
 const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES_PROPERTY: &'static str = "rocksdb.cur-size-all-mem-tables";
+const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
 const MIO_TICK_RATIO: u64 = 10;
 
 // A helper structure to bundle all channels for messages to `Store`.
@@ -73,7 +75,7 @@ pub struct StoreChannel {
     pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
 }
 
-pub struct Store<T: Transport, C: PdClient + 'static> {
+pub struct Store<T, C: 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
@@ -108,6 +110,9 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
 
     start_time: Timespec,
     is_busy: bool,
+
+    region_written_bytes: LocalHistogram,
+    region_written_keys: LocalHistogram,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -136,7 +141,7 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
     Ok(())
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T, C> Store<T, C> {
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
                cfg: Config,
@@ -177,6 +182,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
+            region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
+            region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
         };
         try!(s.init());
         Ok(s)
@@ -266,45 +273,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
-    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        try!(self.snap_mgr.wl().init());
-
-        self.register_raft_base_tick(event_loop);
-        self.register_raft_gc_log_tick(event_loop);
-        self.register_split_region_check_tick(event_loop);
-        self.register_compact_check_tick(event_loop);
-        self.register_pd_heartbeat_tick(event_loop);
-        self.register_pd_store_heartbeat_tick(event_loop);
-        self.register_snap_mgr_gc_tick(event_loop);
-        self.register_compact_lock_cf_tick(event_loop);
-        self.register_consistency_check_tick(event_loop);
-
-        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
-                                                       self.cfg.region_max_size,
-                                                       self.cfg.region_split_size);
-        box_try!(self.split_check_worker.start(split_check_runner));
-
-        let runner = RegionRunner::new(self.engine.clone(),
-                                       self.snap_mgr.clone(),
-                                       self.cfg.snap_apply_batch_size);
-        box_try!(self.region_worker.start(runner));
-
-        let raftlog_gc_runner = RaftlogGcRunner;
-        box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
-
-        let compact_runner = CompactRunner::new(self.engine.clone());
-        box_try!(self.compact_worker.start(compact_runner));
-
-        let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
-        box_try!(self.pd_worker.start(pd_runner));
-
-        let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
-        box_try!(self.consistency_check_worker.start(consistency_check_runner));
-
-        try!(event_loop.run(self));
-        Ok(())
-    }
-
     pub fn get_sendch(&self) -> SendCh<Msg> {
         self.sendch.clone()
     }
@@ -381,6 +349,48 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             peer.raft_group.report_snapshot(to_peer_id, status)
         }
     }
+}
+
+impl<T: Transport, C: PdClient> Store<T, C> {
+    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
+        try!(self.snap_mgr.wl().init());
+
+        self.register_raft_base_tick(event_loop);
+        self.register_raft_gc_log_tick(event_loop);
+        self.register_split_region_check_tick(event_loop);
+        self.register_compact_check_tick(event_loop);
+        self.register_pd_heartbeat_tick(event_loop);
+        self.register_pd_store_heartbeat_tick(event_loop);
+        self.register_snap_mgr_gc_tick(event_loop);
+        self.register_compact_lock_cf_tick(event_loop);
+        self.register_consistency_check_tick(event_loop);
+        self.register_report_region_flow_tick(event_loop);
+
+        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
+                                                       self.cfg.region_max_size,
+                                                       self.cfg.region_split_size);
+        box_try!(self.split_check_worker.start(split_check_runner));
+
+        let runner = RegionRunner::new(self.engine.clone(),
+                                       self.snap_mgr.clone(),
+                                       self.cfg.snap_apply_batch_size);
+        box_try!(self.region_worker.start(runner));
+
+        let raftlog_gc_runner = RaftlogGcRunner;
+        box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
+
+        let compact_runner = CompactRunner::new(self.engine.clone());
+        box_try!(self.compact_worker.start(compact_runner));
+
+        let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
+        box_try!(self.pd_worker.start(pd_runner));
+
+        let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());
+        box_try!(self.consistency_check_worker.start(consistency_check_runner));
+
+        try!(event_loop.run(self));
+        Ok(())
+    }
 
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
@@ -391,7 +401,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        let t = Instant::now();
+        let timer = self.raft_metrics.process_tick.start_timer();
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.get_store().is_applying() {
                 peer.raft_group.tick();
@@ -436,9 +446,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.poll_snapshot_status();
 
-        PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["tick"])
-            .inc_by(duration_to_nanos(t.elapsed()) as f64)
-            .unwrap();
+        timer.observe_duration();
 
         self.raft_metrics.flush();
 
@@ -758,6 +766,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
+        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
@@ -786,6 +795,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                         invoke_ctx);
             ready_results.push((region_id, ready, res));
         }
+        append_timer.observe_duration();
 
         let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
         self.sent_snapshot_count += sent_snapshot_count;
@@ -818,9 +828,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        PEER_RAFT_PROCESS_NANOS_COUNTER_VEC.with_label_values(&["ready"])
-            .inc_by(duration_to_nanos(dur) as f64)
-            .unwrap();
+        self.raft_metrics.process_ready.observe(duration_to_sec(dur) as f64);
+
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
 
@@ -1144,6 +1153,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    fn register_report_region_flow_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::ReportRegionFlow,
+                                       self.cfg.report_region_flow_interval) {
+            error!("{} register raft gc log tick err: {:?}", self.tag, e);
+        };
+    }
+
+    fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
+        for (_, peer) in &mut self.region_peers {
+            if !peer.is_leader() {
+                peer.written_bytes = 0;
+                peer.written_keys = 0;
+                continue;
+            }
+
+            self.region_written_bytes.observe(peer.written_bytes as f64);
+            self.region_written_keys.observe(peer.written_keys as f64);
+            peer.written_bytes = 0;
+            peer.written_keys = 0;
+        }
+        self.region_written_bytes.flush();
+        self.region_written_keys.flush();
+
+        self.register_report_region_flow_tick(event_loop);
+    }
+
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
@@ -1170,6 +1206,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 .map(|p| p.matched)
                 .min()
                 .unwrap();
+            // When an election happened or a new peer is added, replicated_idx can be 0.
+            if replicated_idx > 0 {
+                let last_idx = peer.raft_group.raft.raft_log.last_index();
+                assert!(last_idx >= replicated_idx,
+                        "expect last index {} >= replicated index {}",
+                        last_idx,
+                        replicated_idx);
+                REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+            }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let compact_idx;
@@ -1242,7 +1287,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::CompactCheck,
                                        self.cfg.region_compact_check_interval) {
             error!("{} register compact check tick err: {:?}", self.tag, e);
-        };
+        }
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
@@ -1399,6 +1444,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             // TODO: add cache usage and pinned usage.
+
+            if let Some(num_keys) = self.engine
+                .get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
+                STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC.with_label_values(&[cf])
+                    .set(num_keys as f64);
+            }
         }
 
         used_size += self.snap_mgr.rl().get_total_snap_size();
@@ -1819,6 +1870,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::ReportRegionFlow => self.on_report_region_flow(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }
