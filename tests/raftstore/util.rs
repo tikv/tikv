@@ -87,6 +87,7 @@ pub fn new_store_cfg() -> Config {
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: Duration::from_secs(3),
         report_region_flow_interval: 100, // 100ms
+        leader_accelerate_campaign_after_split_ticks: 20,
         ..Config::default()
     }
 }

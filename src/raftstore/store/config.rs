@@ -51,6 +51,7 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
 const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
+const DEFAULT_LEADER_ACCELERATE_CAMPAIGN_AFTER_SPLIT_TICKS: usize = 30;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -117,6 +118,12 @@ pub struct Config {
     pub consistency_check_tick_interval: u64,
 
     pub report_region_flow_interval: u64,
+
+    /// For the peer which is the leader of the region before split,
+    /// `leader_accelerate_campaign_after_split_ticks` specifies the tick number to be accelerated
+    /// after the region split, so that the peer of new split region may campaign and become leader
+    /// earlier than other follower peers.
+    pub leader_accelerate_campaign_after_split_ticks: usize,
 }
 
 impl Default for Config {
@@ -151,6 +158,8 @@ impl Default for Config {
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
+            leader_accelerate_campaign_after_split_ticks:
+                DEFAULT_LEADER_ACCELERATE_CAMPAIGN_AFTER_SPLIT_TICKS,
         }
     }
 }
@@ -182,6 +191,12 @@ impl Config {
             return Err(box_err!("region max size {} must >= split size {}",
                                 self.region_max_size,
                                 self.region_split_size));
+        }
+        if self.leader_accelerate_campaign_after_split_ticks > self.raft_election_timeout_ticks {
+            return Err(box_err!("leader comapaign after split ticks {} must <= election timeout \
+                                 {}",
+                                self.leader_accelerate_campaign_after_split_ticks,
+                                self.raft_election_timeout_ticks));
         }
 
         Ok(())
