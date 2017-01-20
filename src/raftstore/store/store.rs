@@ -144,7 +144,7 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
 impl<T, C> Store<T, C> {
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
-               cfg: Config,
+               mut cfg: Config,
                engine: Arc<DB>,
                trans: T,
                pd_client: Arc<C>,

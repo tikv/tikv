@@ -51,7 +51,6 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
 const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
-const DEFAULT_LEADER_ACCELERATE_CAMPAIGN_AFTER_SPLIT_TICKS: usize = RAFT_ELECTION_TIMEOUT_TICKS - 1;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -158,8 +157,7 @@ impl Default for Config {
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
-            leader_accelerate_campaign_after_split_ticks:
-                DEFAULT_LEADER_ACCELERATE_CAMPAIGN_AFTER_SPLIT_TICKS,
+            leader_accelerate_campaign_after_split_ticks: RAFT_ELECTION_TIMEOUT_TICKS - 1,
         }
     }
 }
@@ -169,7 +167,7 @@ impl Config {
         Config::default()
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&mut self) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
         }
@@ -192,12 +190,7 @@ impl Config {
                                 self.region_max_size,
                                 self.region_split_size));
         }
-        if self.leader_accelerate_campaign_after_split_ticks > self.raft_election_timeout_ticks {
-            return Err(box_err!("leader comapaign after split ticks {} must <= election timeout \
-                                 {}",
-                                self.leader_accelerate_campaign_after_split_ticks,
-                                self.raft_election_timeout_ticks));
-        }
+        self.leader_accelerate_campaign_after_split_ticks = self.raft_election_timeout_ticks - 1;
 
         Ok(())
     }

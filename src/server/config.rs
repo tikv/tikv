@@ -71,7 +71,7 @@ impl Config {
         Config::default()
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&mut self) -> Result<()> {
         try!(self.raft_store.validate());
 
         Ok(())
