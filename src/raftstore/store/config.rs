@@ -122,7 +122,7 @@ pub struct Config {
     /// `leader_accelerate_campaign_after_split_ticks` specifies the tick number to be accelerated
     /// after the region split, so that the peer of new split region may campaign and become leader
     /// earlier than other follower peers.
-    pub leader_accelerate_campaign_after_split_ticks: usize,
+    pub accelerate_campaign_after_split_ticks: usize,
 }
 
 impl Default for Config {
@@ -157,7 +157,7 @@ impl Default for Config {
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
-            leader_accelerate_campaign_after_split_ticks: RAFT_ELECTION_TIMEOUT_TICKS - 1,
+            accelerate_campaign_after_split_ticks: RAFT_ELECTION_TIMEOUT_TICKS - 1,
         }
     }
 }
@@ -190,7 +190,7 @@ impl Config {
                                 self.region_max_size,
                                 self.region_split_size));
         }
-        self.leader_accelerate_campaign_after_split_ticks = self.raft_election_timeout_ticks - 1;
+        self.accelerate_campaign_after_split_ticks = self.raft_election_timeout_ticks - 1;
 
         Ok(())
     }
