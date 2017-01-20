@@ -807,10 +807,16 @@ fn main() {
         let addr = get_toml_string(&config,
                                    "server.addr",
                                    Some(DEFAULT_LISTENING_ADDR.to_owned()));
-        if let Err(e) = util::config::check_addr(&addr) {
+        let addr_ = if addr.starts_with("http://") {
+            let (_, a) = addr.split_at(7);
+            a.to_owned()
+        } else {
+            addr
+        };
+        if let Err(e) = util::config::check_addr(&addr_) {
             exit_with_err(format!("{:?}", e));
         }
-        addr
+        addr_
     });
 
     let pd_endpoints = get_flag_string(&matches, "pd")
