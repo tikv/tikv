@@ -764,7 +764,7 @@ fn main() {
     opts.optopt("",
                 "capacity",
                 "set the store capacity",
-                "default: 0 (unlimited)");
+                "default: 0 (disk capacity)");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
     opts.optopt("",
                 "labels",
