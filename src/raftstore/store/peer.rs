@@ -1394,6 +1394,8 @@ impl Peer {
                 }
                 ExecResult::SplitRegion { ref left, .. } => {
                     storage.region = left.clone();
+                    self.size_diff_hint = 0;
+                    self.delete_keys_hint = 0;
                 }
             }
         }
@@ -1659,9 +1661,6 @@ impl Peer {
         for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
             let peer_id = new_peer_ids[index];
             peer.set_id(peer_id);
-
-            // Add this peer to cache.
-            self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
         }
 
         // update region version
@@ -1681,9 +1680,6 @@ impl Peer {
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());
         resp.mut_split().set_right(new_region.clone());
-
-        self.size_diff_hint = 0;
-        self.delete_keys_hint = 0;
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 

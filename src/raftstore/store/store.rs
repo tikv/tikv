@@ -933,6 +933,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              right: metapb::Region) {
         let new_region_id = right.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
+            // Add new peers to cache.
+            for meta in right.get_peers() {
+                self.peer_cache.borrow_mut().insert(meta.get_id(), meta.to_owned());
+            }
             // If the store received a raft msg with the new region raft group
             // before splitting, it will creates a uninitialized peer.
             // We can remove this uninitialized peer directly.
