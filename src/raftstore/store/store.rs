@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
-use std::{cmp, u64};
+use std::u64;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
@@ -1422,8 +1422,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(stats) => stats,
         };
 
-        let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
-
+        let disk_cap = disk_stats.total_space();
+        let capacity = if self.cfg.capacity == 0 || disk_cap < self.cfg.capacity {
+            disk_cap
+        } else {
+            self.cfg.capacity
+        };
         stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
