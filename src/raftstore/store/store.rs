@@ -144,7 +144,7 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
 impl<T, C> Store<T, C> {
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
-               mut cfg: Config,
+               cfg: Config,
                engine: Arc<DB>,
                trans: T,
                pd_client: Arc<C>,
@@ -937,7 +937,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // since there is no leader established during one election timeout after the split.
                 let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
-                    for _ in 0..self.cfg.accelerate_campaign_after_split_ticks {
+                    for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
                         new_peer.raft_group.tick()
                     }
                 }

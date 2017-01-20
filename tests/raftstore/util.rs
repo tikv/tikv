@@ -74,11 +74,10 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
 }
 
 pub fn new_store_cfg() -> Config {
-    let election_timeout_ticks = 25;
     Config {
         raft_base_tick_interval: 10,
         raft_heartbeat_ticks: 2,
-        raft_election_timeout_ticks: election_timeout_ticks,
+        raft_election_timeout_ticks: 25,
         raft_log_gc_tick_interval: 100,
         raft_log_gc_threshold: 1,
         pd_heartbeat_tick_interval: 20,
@@ -88,7 +87,6 @@ pub fn new_store_cfg() -> Config {
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: Duration::from_secs(3),
         report_region_flow_interval: 100, // 100ms
-        accelerate_campaign_after_split_ticks: election_timeout_ticks - 1,
         ..Config::default()
     }
 }

@@ -117,12 +117,6 @@ pub struct Config {
     pub consistency_check_tick_interval: u64,
 
     pub report_region_flow_interval: u64,
-
-    /// For the peer which is the leader of the region before split,
-    /// `leader_accelerate_campaign_after_split_ticks` specifies the tick number to be accelerated
-    /// after the region split, so that the peer of new split region may campaign and become leader
-    /// earlier than other follower peers.
-    pub accelerate_campaign_after_split_ticks: usize,
 }
 
 impl Default for Config {
@@ -157,7 +151,6 @@ impl Default for Config {
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
-            accelerate_campaign_after_split_ticks: RAFT_ELECTION_TIMEOUT_TICKS - 1,
         }
     }
 }
@@ -167,7 +160,15 @@ impl Config {
         Config::default()
     }
 
-    pub fn validate(&mut self) -> Result<()> {
+    /// For the peer which is the leader of the region before split,
+    /// `leader_accelerate_campaign_after_split_ticks` specifies the tick number to be accelerated
+    /// after the region split, so that the peer of new split region may campaign and become leader
+    /// earlier than other follower peers.
+    pub fn accelerate_campaign_after_split_ticks(&self) -> usize {
+        self.raft_election_timeout_ticks - 1
+    }
+
+    pub fn validate(&self) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
         }
@@ -190,7 +191,6 @@ impl Config {
                                 self.region_max_size,
                                 self.region_split_size));
         }
-        self.accelerate_campaign_after_split_ticks = self.raft_election_timeout_ticks - 1;
 
         Ok(())
     }
