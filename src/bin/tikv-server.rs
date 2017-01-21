@@ -815,17 +815,14 @@ fn main() {
 
     let pd_endpoints = get_flag_string(&matches, "pd")
         .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
-    for addr in pd_endpoints.split(',').map(|s| s.trim()).filter(|s| !s.is_empty())
-        .map(|s|
-             if s.starts_with("http://") {
-                 &s[7..]
-             } else {
-                 s
-             }) {
-            if let Err(e) = util::config::check_addr(addr) {
-                panic!("{:?}", e);
-            }
+    for addr in pd_endpoints.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| if s.starts_with("http://") { &s[7..] } else { s }) {
+        if let Err(e) = util::config::check_addr(addr) {
+            panic!("{:?}", e);
         }
+    }
 
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
     let cluster_id = pd_client.cluster_id;
