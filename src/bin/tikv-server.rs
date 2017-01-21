@@ -807,25 +807,25 @@ fn main() {
         let addr = get_toml_string(&config,
                                    "server.addr",
                                    Some(DEFAULT_LISTENING_ADDR.to_owned()));
-        let addr_ = if addr.starts_with("http://") {
-            let (_, a) = addr.split_at(7);
-            a.to_owned()
-        } else {
-            addr
-        };
-        if let Err(e) = util::config::check_addr(&addr_) {
+        if let Err(e) = util::config::check_addr(&addr) {
             exit_with_err(format!("{:?}", e));
         }
-        addr_
+        addr
     });
 
     let pd_endpoints = get_flag_string(&matches, "pd")
         .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
-    for addr in pd_endpoints.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        if let Err(e) = util::config::check_addr(addr) {
-            panic!("{:?}", e);
+    for addr in pd_endpoints.split(',').map(|s| s.trim()).filter(|s| !s.is_empty())
+        .map(|s|
+             if s.starts_with("http://") {
+                 &s[7..]
+             } else {
+                 s
+             }) {
+            if let Err(e) = util::config::check_addr(addr) {
+                panic!("{:?}", e);
+            }
         }
-    }
 
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
     let cluster_id = pd_client.cluster_id;
