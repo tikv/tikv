@@ -712,8 +712,9 @@ fn main() {
                 "zone=example-zone,disk=example-disk");
 
     let matches = opts.parse(&args[1..]).unwrap_or_else(|e| {
+        println!("opts parse failed, {:?}", e);
         print_usage(&program, &opts);
-        exit_with_err(format!("opts parse failed, {:?}", e));
+        process::exit(1);
     });
     if matches.opt_present("h") {
         print_usage(&program, &opts);
