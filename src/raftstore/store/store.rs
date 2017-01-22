@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
-use std::{cmp, u64};
+use std::u64;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
@@ -897,7 +897,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             start_idx: peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
         };
-        peer.last_compacted_idx = state.get_index() + 1;
+        peer.last_compacted_idx = task.end_idx;
         if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
@@ -926,16 +926,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("create new split region {:?} err {:?}", right, e);
             }
             Ok(mut new_peer) => {
-                // If the peer for the region before split is leader,
-                // we can force the new peer for the new split region to campaign
-                // to become the leader too.
+                // If this peer is the leader of the region before split, it's intuitional for
+                // it to become the leader of new split region.
+                // The ticks are accelerated here, so that the peer for the new split region
+                // comes to campaign earlier than the other follower peers. And then it's more
+                // likely for this peer to become the leader of the new split region.
+                // If the other follower peers applies logs too slowly, they may fail to vote the
+                // `MsgRequestVote` from this peer on its campaign.
+                // In this worst case scenario, the new split raft group will not be available
+                // since there is no leader established during one election timeout after the split.
                 let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
-                    if let Err(e) = new_peer.raft_group.campaign() {
-                        error!("[region {}] peer {:?} campaigns  err {:?}",
-                               new_region_id,
-                               new_peer.peer,
-                               e);
+                    for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
+                        new_peer.raft_group.tick()
                     }
                 }
 
@@ -1217,7 +1220,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
-            let compact_idx;
+            let mut compact_idx;
             if applied_idx > first_idx &&
                applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit {
                 compact_idx = applied_idx;
@@ -1230,8 +1233,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 compact_idx = replicated_idx;
             }
 
+            // Have no idea why subtract 1 here, but original code did this by magic.
+            assert!(compact_idx > 0);
+            compact_idx -= 1;
+            if compact_idx < first_idx {
+                // In case compact_idx == first_idx before subtraction.
+                continue;
+            }
+
+            let term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
+
             // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
             if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
@@ -1409,8 +1422,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(stats) => stats,
         };
 
-        let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
-
+        let disk_cap = disk_stats.total_space();
+        let capacity = if self.cfg.capacity == 0 || disk_cap < self.cfg.capacity {
+            disk_cap
+        } else {
+            self.cfg.capacity
+        };
         stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
@@ -1814,13 +1831,15 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
 
 fn new_compact_log_request(region_id: u64,
                            peer: metapb::Peer,
-                           compact_index: u64)
+                           compact_index: u64,
+                           compact_term: u64)
                            -> RaftCmdRequest {
     let mut request = new_admin_request(region_id, peer);
 
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::CompactLog);
     admin.mut_compact_log().set_compact_index(compact_index);
+    admin.mut_compact_log().set_compact_term(compact_term);
     request.set_admin_request(admin);
     request
 }
