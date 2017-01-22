@@ -379,7 +379,7 @@ impl<T: Simulator> Cluster<T> {
         for (id, engine) in &self.engines {
             if !condition(engine) {
                 debug!("store {} is not qualified yet.", id);
-                return;
+                continue;
             }
             debug!("store {} is qualified", id);
             qualified_cnt += 1;
