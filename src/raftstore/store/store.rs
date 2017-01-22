@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
-use std::{cmp, u64};
+use std::u64;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
@@ -59,12 +59,14 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
+use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
 
 const ROCKSDB_TOTAL_SST_FILES_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 const ROCKSDB_TABLE_READERS_MEM_PROPERTY: &'static str = "rocksdb.estimate-table-readers-mem";
 const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES_PROPERTY: &'static str = "rocksdb.cur-size-all-mem-tables";
+const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
 const MIO_TICK_RATIO: u64 = 10;
 
 // A helper structure to bundle all channels for messages to `Store`.
@@ -111,6 +113,9 @@ pub struct Store<T, C: 'static> {
 
     start_time: Timespec,
     is_busy: bool,
+
+    region_written_bytes: LocalHistogram,
+    region_written_keys: LocalHistogram,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -182,6 +187,8 @@ impl<T, C> Store<T, C> {
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
+            region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
+            region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
         };
         try!(s.init());
         Ok(s)
@@ -362,6 +369,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_snap_mgr_gc_tick(event_loop);
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
+        self.register_report_region_flow_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -962,7 +970,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             start_idx: peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
         };
-        peer.last_compacted_idx = state.get_index() + 1;
+        peer.last_compacted_idx = task.end_idx;
         if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
@@ -996,16 +1004,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("create new split region {:?} err {:?}", right, e);
             }
             Ok(mut new_peer) => {
-                // If the peer for the region before split is leader,
-                // we can force the new peer for the new split region to campaign
-                // to become the leader too.
+                // If this peer is the leader of the region before split, it's intuitional for
+                // it to become the leader of new split region.
+                // The ticks are accelerated here, so that the peer for the new split region
+                // comes to campaign earlier than the other follower peers. And then it's more
+                // likely for this peer to become the leader of the new split region.
+                // If the other follower peers applies logs too slowly, they may fail to vote the
+                // `MsgRequestVote` from this peer on its campaign.
+                // In this worst case scenario, the new split raft group will not be available
+                // since there is no leader established during one election timeout after the split.
                 let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
-                    if let Err(e) = new_peer.raft_group.campaign() {
-                        error!("[region {}] peer {:?} campaigns  err {:?}",
-                               new_region_id,
-                               new_peer.peer,
-                               e);
+                    for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
+                        new_peer.raft_group.tick()
                     }
                 }
 
@@ -1233,6 +1244,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
     }
 
+    fn register_report_region_flow_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::ReportRegionFlow,
+                                       self.cfg.report_region_flow_interval) {
+            error!("{} register raft gc log tick err: {:?}", self.tag, e);
+        };
+    }
+
+    fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
+        for (_, peer) in &mut self.region_peers {
+            if !peer.is_leader() {
+                peer.written_bytes = 0;
+                peer.written_keys = 0;
+                continue;
+            }
+
+            self.region_written_bytes.observe(peer.written_bytes as f64);
+            self.region_written_keys.observe(peer.written_keys as f64);
+            peer.written_bytes = 0;
+            peer.written_keys = 0;
+        }
+        self.region_written_bytes.flush();
+        self.region_written_keys.flush();
+
+        self.register_report_region_flow_tick(event_loop);
+    }
+
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for (&region_id, peer) in &mut self.region_peers {
@@ -1270,7 +1308,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
-            let compact_idx;
+            let mut compact_idx;
             if applied_idx > first_idx &&
                applied_idx - first_idx >= self.cfg.raft_log_gc_count_limit {
                 compact_idx = applied_idx;
@@ -1283,11 +1321,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 compact_idx = replicated_idx;
             }
 
-            let compact_term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
+            // Have no idea why subtract 1 here, but original code did this by magic.
+            assert!(compact_idx > 0);
+            compact_idx -= 1;
+            if compact_idx < first_idx {
+                // In case compact_idx == first_idx before subtraction.
+                continue;
+            }
+
+            let term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
 
             // Create a compact log request and notify directly.
-            let request =
-                new_compact_log_request(region_id, peer.peer.clone(), compact_idx, compact_term);
+            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
             if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
                 request: request,
@@ -1465,8 +1510,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(stats) => stats,
         };
 
-        let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
-
+        let disk_cap = disk_stats.total_space();
+        let capacity = if self.cfg.capacity == 0 || disk_cap < self.cfg.capacity {
+            disk_cap
+        } else {
+            self.cfg.capacity
+        };
         stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
@@ -1500,6 +1549,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             // TODO: add cache usage and pinned usage.
+
+            if let Some(num_keys) = self.engine
+                .get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
+                STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC.with_label_values(&[cf])
+                    .set(num_keys as f64);
+            }
         }
 
         used_size += self.snap_mgr.rl().get_total_snap_size();
@@ -1922,6 +1977,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::SnapGc => self.on_snap_mgr_gc(event_loop),
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
+            Tick::ReportRegionFlow => self.on_report_region_flow(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

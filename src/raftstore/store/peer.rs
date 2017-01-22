@@ -158,6 +158,9 @@ pub struct Peer {
 
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
+
+    pub written_bytes: u64,
+    pub written_keys: u64,
 }
 
 impl Peer {
@@ -246,6 +249,8 @@ impl Peer {
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
+            written_bytes: 0,
+            written_keys: 0,
         };
 
         peer.load_all_coprocessors();
@@ -336,7 +341,7 @@ impl Peer {
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         metrics.message += ready.messages.len() as u64;
-        metrics.commit += ready.committed_entries.as_ref().map_or(0, |e| e.len() as u64);
+        metrics.commit += ready.committed_entries.as_ref().map_or(0, |v| v.len() as u64);
         metrics.append += ready.entries.len() as u64;
 
         if !raft::is_empty_snap(&ready.snapshot) {
@@ -582,9 +587,8 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, worker: &mut Worker<ApplyTask>) {
-        // Call `handle_raft_commit_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
-        // snapshot. If we call `handle_raft_commit_entries` directly, these updates
+        // snapshot. If we call `handle_raft_committed_entries` directly, these updates
         // will be written to disk. Because we apply snapshot asynchronously, so these
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included

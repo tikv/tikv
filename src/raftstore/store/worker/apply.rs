@@ -34,7 +34,7 @@ use util::{escape, SlowTimer, rocksdb};
 use util::worker::Runnable;
 use storage::{CF_RAFT, CF_LOCK};
 use raftstore::store::Store;
-use raftstore::store::peer_storage::{write_initial_state, write_peer_state};
+use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state};
 use raftstore::store::util;
 use raftstore::store::msg::Callback;
 use raftstore::store::cmd_resp;
@@ -821,7 +821,7 @@ impl PeerMeta {
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::new();
 
-        let first_index = ctx.apply_state.get_truncated_state().get_index() + 1;
+        let first_index = peer_storage::first_index(&ctx.apply_state);
         if compact_index <= first_index {
             debug!("[region {}] compact index {} <= first index {}, no need to compact",
                    self.region_id,
@@ -830,27 +830,20 @@ impl PeerMeta {
             return Ok((resp, None));
         }
 
-        debug!("[region {}] compact log entries to prior to {}",
-               self.region_id,
-               compact_index);
-
-        if compact_index <= ctx.apply_state.get_truncated_state().get_index() {
-            return Err(box_err!("try to truncate compacted entries"));
-        } else if compact_index > ctx.apply_state.get_applied_index() {
-            return Err(box_err!("compact index {} > applied index {}",
-                                compact_index,
-                                ctx.apply_state.get_applied_index()));
-        }
-
         let compact_term = req.get_compact_log().get_compact_term();
         if compact_term == 0 {
+            info!("[region {}] compact term missing in {:?}, skip.",
+                  self.region_id,
+                  req.get_compact_log());
             // old format compact log command, safe to ignore.
             return Err(box_err!("command format is outdated, please upgrade leader."));
         }
 
-        // we don't actually compact the log now, we add an async task to do it.
-        ctx.apply_state.mut_truncated_state().set_index(compact_index);
-        ctx.apply_state.mut_truncated_state().set_term(compact_term);
+        // compact failure is safe to be omitted, no need to assert.
+        try!(peer_storage::compact_raft_log(self.region_id,
+                                            &mut ctx.apply_state,
+                                            compact_index,
+                                            compact_term));
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
 

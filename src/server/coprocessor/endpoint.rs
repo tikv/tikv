@@ -30,7 +30,7 @@ use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
 
-use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode};
+use storage::{self, Engine, SnapshotStore, ScanMetrics, engine, Snapshot, Key, ScanMode};
 use util::codec::table::TableDecoder;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
@@ -108,6 +108,7 @@ pub struct RequestTask {
     req: Request,
     start_ts: Option<u64>,
     wait_time: Option<f64>,
+    scan_metrics: ScanMetrics,
     timer: Instant,
     // The deadline before which the task should be responded.
     deadline: Instant,
@@ -122,6 +123,7 @@ impl RequestTask {
             req: req,
             start_ts: None,
             wait_time: None,
+            scan_metrics: Default::default(),
             timer: timer,
             deadline: deadline,
             on_resp: on_resp,
@@ -152,12 +154,21 @@ impl RequestTask {
         let wait_time = self.wait_time.unwrap();
         COPR_REQ_HANDLE_TIME.with_label_values(&["select", type_str])
             .observe(handle_time - wait_time);
+
+        let scanned_keys = self.scan_metrics.scanned_keys as f64;
+        COPR_SCAN_KEYS.with_label_values(&["select", type_str]).observe(scanned_keys);
+        let efficiency = self.scan_metrics.efficiency();
+        COPR_SCAN_EFFICIENCY.with_label_values(&["select", type_str]).observe(efficiency);
+
         if handle_time > SLOW_QUERY_LOWER_BOUND {
-            info!("handle {:?} [{}] takes {:?} [waiting: {:?}]",
+            info!("handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, ranges: {:?}]",
                   self.start_ts,
                   type_str,
                   handle_time,
-                  wait_time);
+                  wait_time,
+                  self.scan_metrics.scanned_keys,
+                  efficiency,
+                  self.req.get_ranges());
         }
     }
 }
@@ -347,8 +358,8 @@ impl TiDbEndPoint {
 
     pub fn handle_select(&self, t: &mut RequestTask, sel: SelectRequest) -> Result<Response> {
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
-        let mut ctx = try!(SelectContext::new(sel, snap));
-        let mut range = t.req.take_ranges().into_vec();
+        let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.scan_metrics));
+        let mut range = t.req.get_ranges().to_vec();
         let desc = ctx.core.sel.get_order_by().first().map_or(false, |o| o.get_desc());
         debug!("scanning range: {:?}", range);
         if desc {
@@ -361,9 +372,9 @@ impl TiDbEndPoint {
         };
 
         let res = if t.req.get_tp() == REQ_TYPE_SELECT {
-            ctx.get_rows_from_sel(range, limit, desc, t.deadline)
+            ctx.get_rows_from_sel(range, limit, desc)
         } else {
-            ctx.get_rows_from_idx(range, limit, desc, t.deadline)
+            ctx.get_rows_from_idx(range, limit, desc)
         };
 
         let mut resp = Response::new();
@@ -698,35 +709,38 @@ fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
 
 pub struct SelectContext<'a> {
     snap: SnapshotStore<'a>,
+    scan_metrics: &'a mut ScanMetrics,
     core: SelectContextCore,
+    deadline: Instant,
 }
 
 impl<'a> SelectContext<'a> {
-    fn new(sel: SelectRequest, snap: SnapshotStore<'a>) -> Result<SelectContext<'a>> {
+    fn new(sel: SelectRequest,
+           snap: SnapshotStore<'a>,
+           deadline: Instant,
+           scan_metrics: &'a mut ScanMetrics)
+           -> Result<SelectContext<'a>> {
         Ok(SelectContext {
             core: try!(SelectContextCore::new(sel)),
             snap: snap,
+            deadline: deadline,
+            scan_metrics: scan_metrics,
         })
     }
 
-    fn get_rows_from_sel(&mut self,
-                         ranges: Vec<KeyRange>,
-                         limit: usize,
-                         desc: bool,
-                         deadline: Instant)
-                         -> Result<()> {
+    fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
         let mut collected = 0;
         for ran in ranges {
             if collected >= limit {
                 break;
             }
             let timer = Instant::now();
-            let row_cnt = try!(self.get_rows_from_range(ran, limit, desc, deadline));
+            let row_cnt = try!(self.get_rows_from_range(ran, limit, desc));
             debug!("fetch {} rows takes {} ms",
                    row_cnt,
                    duration_to_ms(timer.elapsed()));
             collected += row_cnt;
-            try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
+            try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
         }
         if self.core.aggr {
             self.core.aggr_rows()
@@ -742,14 +756,10 @@ impl<'a> SelectContext<'a> {
         }
     }
 
-    fn get_rows_from_range(&mut self,
-                           range: KeyRange,
-                           limit: usize,
-                           desc: bool,
-                           deadline: Instant)
-                           -> Result<usize> {
+    fn get_rows_from_range(&mut self, range: KeyRange, limit: usize, desc: bool) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
+            self.scan_metrics.scanned_keys += 1;
             let value = match try!(self.snap.get(&Key::from_raw(range.get_start()))) {
                 None => return Ok(0),
                 Some(v) => v,
@@ -780,12 +790,12 @@ impl<'a> SelectContext<'a> {
                                                      upper_bound));
             while limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
-                    try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
+                    try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
                 }
                 let kv = if desc {
-                    try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+                    try!(scanner.reverse_seek(Key::from_raw(&seek_key), self.scan_metrics))
                 } else {
-                    try!(scanner.seek(Key::from_raw(&seek_key)))
+                    try!(scanner.seek(Key::from_raw(&seek_key), self.scan_metrics))
                 };
                 let (key, value) = match kv {
                     Some((key, value)) => (box_try!(key.raw()), value),
@@ -814,19 +824,14 @@ impl<'a> SelectContext<'a> {
         Ok(row_count)
     }
 
-    fn get_rows_from_idx(&mut self,
-                         ranges: Vec<KeyRange>,
-                         limit: usize,
-                         desc: bool,
-                         deadline: Instant)
-                         -> Result<()> {
+    fn get_rows_from_idx(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
         let mut collected = 0;
         for r in ranges {
             if collected >= limit {
                 break;
             }
-            collected += try!(self.get_idx_row_from_range(r, limit, desc, deadline));
-            try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
+            collected += try!(self.get_idx_row_from_range(r, limit, desc));
+            try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
         }
         if self.core.aggr {
             self.core.aggr_rows()
@@ -835,12 +840,7 @@ impl<'a> SelectContext<'a> {
         }
     }
 
-    fn get_idx_row_from_range(&mut self,
-                              r: KeyRange,
-                              limit: usize,
-                              desc: bool,
-                              deadline: Instant)
-                              -> Result<usize> {
+    fn get_idx_row_from_range(&mut self, r: KeyRange, limit: usize, desc: bool) -> Result<usize> {
         let mut row_cnt = 0;
         let mut seek_key = if desc {
             r.get_end().to_vec()
@@ -861,12 +861,12 @@ impl<'a> SelectContext<'a> {
                                                  upper_bound));
         while row_cnt < limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
-                try!(check_if_outdated(deadline, REQ_TYPE_SELECT));
+                try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
             }
             let nk = if desc {
-                try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+                try!(scanner.reverse_seek(Key::from_raw(&seek_key), self.scan_metrics))
             } else {
-                try!(scanner.seek(Key::from_raw(&seek_key)))
+                try!(scanner.seek(Key::from_raw(&seek_key), self.scan_metrics))
             };
             let (key, val) = match nk {
                 Some((key, val)) => (box_try!(key.raw()), val),

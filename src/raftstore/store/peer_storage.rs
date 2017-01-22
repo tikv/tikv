@@ -75,6 +75,38 @@ impl PartialEq for SnapState {
     }
 }
 
+// Discard all log entries prior to compact_index. We must guarantee
+// that the compact_index is not greater than applied index.
+pub fn compact_raft_log(region_id: u64,
+                        state: &mut RaftApplyState,
+                        compact_index: u64,
+                        compact_term: u64)
+                        -> Result<()> {
+    debug!("[region {}] compact log entries to prior to {}",
+           region_id,
+           compact_index);
+
+    if compact_index <= state.get_truncated_state().get_index() {
+        return Err(box_err!("try to truncate compacted entries"));
+    } else if compact_index > state.get_applied_index() {
+        return Err(box_err!("compact index {} > applied index {}",
+                            compact_index,
+                            state.get_applied_index()));
+    }
+
+    // we don't actually delete the logs now, we add an async task to do it.
+
+    state.mut_truncated_state().set_index(compact_index);
+    state.mut_truncated_state().set_term(compact_term);
+
+    Ok(())
+}
+
+#[inline]
+pub fn first_index(state: &RaftApplyState) -> u64 {
+    state.get_truncated_state().get_index() + 1
+}
+
 pub struct PeerStorage {
     pub engine: Arc<DB>,
 
@@ -357,7 +389,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn first_index(&self) -> u64 {
-        self.apply_state.get_truncated_state().get_index() + 1
+        first_index(&self.apply_state)
     }
 
     #[inline]
@@ -563,30 +595,6 @@ impl PeerStorage {
               ctx.apply_state);
 
         ctx.snap_region = Some(region);
-        Ok(())
-    }
-
-    // Discard all log entries prior to compact_index. We must guarantee
-    // that the compact_index is not greater than applied index.
-    pub fn compact(&self, state: &mut RaftApplyState, compact_index: u64) -> Result<()> {
-        debug!("{} compact log entries to prior to {}",
-               self.tag,
-               compact_index);
-
-        if compact_index <= self.truncated_index() {
-            return Err(box_err!("try to truncate compacted entries"));
-        } else if compact_index > self.applied_index() {
-            return Err(box_err!("compact index {} > applied index {}",
-                                compact_index,
-                                self.applied_index()));
-        }
-
-        let term = try!(self.term(compact_index - 1));
-        // we don't actually compact the log now, we add an async task to do it.
-
-        state.mut_truncated_state().set_index(compact_index - 1);
-        state.mut_truncated_state().set_term(term);
-
         Ok(())
     }
 
@@ -1144,7 +1152,11 @@ mod test {
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store);
-            let res = store.compact(&mut ctx.apply_state, idx);
+            let res = store.term(idx)
+                .map_err(From::from)
+                .and_then(|term| {
+                    compact_raft_log(store.region.get_id(), &mut ctx.apply_state, idx, term)
+                });
             // TODO check exact error type after refactoring error.
             if res.is_err() ^ werr.is_err() {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
@@ -1214,7 +1226,8 @@ mod test {
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
-        s.compact(&mut ctx.apply_state, 7).unwrap();
+        let term = s.term(7).unwrap();
+        compact_raft_log(s.region.get_id(), &mut ctx.apply_state, 7, term).unwrap();
         wb = WriteBatch::new();
         ctx.save_apply_to(&s.engine, &mut wb).unwrap();
         s.engine.write(wb).unwrap();
