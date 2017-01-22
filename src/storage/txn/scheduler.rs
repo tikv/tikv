@@ -808,7 +808,7 @@ impl Scheduler {
 ///
 /// Basically, read-only commands require no latches, write commands require latches hashed
 /// by the referenced keys.
-fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
+pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
     match *cmd {
         Command::Prewrite { ref mutations, .. } => {
             let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
