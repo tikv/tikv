@@ -59,7 +59,7 @@ mod unix {
         use std::net::{SocketAddr, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
         use mio::tcp::{TcpListener as MioTcpListener, TcpStream as MioTcpStream};
 
-        use super::SocketOpt;
+        use util::sockopt::SocketOpt;
 
         #[cfg(unix)]
         fn test_sock_opt<T: AsRawFd>(socket: &T) {
