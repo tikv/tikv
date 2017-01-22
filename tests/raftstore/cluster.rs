@@ -388,7 +388,9 @@ impl<T: Simulator> Cluster<T> {
             }
         }
 
-        panic!("need at lease {} qualified stores, but only got {}", half + 1, qualified_cnt);
+        panic!("need at lease {} qualified stores, but only got {}",
+               half + 1,
+               qualified_cnt);
     }
 
     pub fn shutdown(&mut self) {

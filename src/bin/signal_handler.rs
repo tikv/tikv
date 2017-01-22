@@ -47,7 +47,8 @@ mod imp {
                     // Log common rocksdb stats.
                     for name in engine.cf_names() {
                         let handler = engine.cf_handle(name).unwrap();
-                        if let Some(v) = engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+                        if let Some(v) =
+                               engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
                             info!("{}", v)
                         }
                     }
