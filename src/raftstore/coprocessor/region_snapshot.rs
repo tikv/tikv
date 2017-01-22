@@ -15,7 +15,7 @@ use std::sync::Arc;
 use rocksdb::{DB, SeekKey, DBVector, DBIterator};
 use kvproto::metapb::Region;
 
-use raftstore::store::engine::{Snapshot, Peekable, Iterable};
+use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
 
@@ -24,22 +24,29 @@ use raftstore::Result;
 ///
 /// Only data within a region can be accessed.
 pub struct RegionSnapshot {
-    snap: Snapshot,
+    snap: SyncSnapshot,
     region: Region,
 }
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
         RegionSnapshot {
-            snap: ps.raw_snapshot(),
+            snap: ps.raw_snapshot().into_sync(),
             region: ps.get_region().clone(),
         }
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
         RegionSnapshot {
-            snap: Snapshot::new(db),
+            snap: Snapshot::new(db).into_sync(),
             region: region,
+        }
+    }
+
+    pub fn clone(&self) -> RegionSnapshot {
+        RegionSnapshot {
+            snap: self.snap.clone(),
+            region: self.region.clone(),
         }
     }
 
@@ -146,8 +153,7 @@ fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
     }
 }
 
-// we use rocksdb's style iterator, so omit the warning.
-#[allow(should_implement_trait)]
+// we use rocksdb's style iterator, doesn't need to impl std iterator.
 impl<'a> RegionIterator<'a> {
     pub fn new(snap: &'a Snapshot,
                region: Region,
