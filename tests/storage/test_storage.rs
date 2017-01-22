@@ -30,7 +30,7 @@ use std::collections::HashSet;
 
 #[test]
 fn test_txn_store_get() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     // not exist
     store.get_none(b"x", 10);
     // after put
@@ -42,7 +42,7 @@ fn test_txn_store_get() {
 
 #[test]
 fn test_txn_store_delete() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     store.put_ok(b"x", b"x5-10", 5, 10);
     store.delete_ok(b"x", 15, 20);
     store.get_none(b"x", 5);
@@ -55,7 +55,7 @@ fn test_txn_store_delete() {
 
 #[test]
 fn test_txn_store_cleanup_rollback() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     store.put_ok(b"secondary", b"s-0", 1, 2);
     store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
                            Mutation::Put((make_key(b"secondary"), b"s-5".to_vec()))],
@@ -68,7 +68,7 @@ fn test_txn_store_cleanup_rollback() {
 
 #[test]
 fn test_txn_store_cleanup_commit() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     store.put_ok(b"secondary", b"s-0", 1, 2);
     store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
                            Mutation::Put((make_key(b"secondary"), b"s-5".to_vec()))],
@@ -83,7 +83,7 @@ fn test_txn_store_cleanup_commit() {
 
 #[test]
 fn test_txn_store_batch_get() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     store.put_ok(b"x", b"x1", 5, 10);
     store.put_ok(b"y", b"y1", 15, 20);
     store.put_ok(b"z", b"z1", 25, 30);
@@ -96,7 +96,7 @@ fn test_txn_store_batch_get() {
 
 #[test]
 fn test_txn_store_scan() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
 
     // ver10: A(10) - B(_) - C(10) - D(_) - E(10)
     store.put_ok(b"A", b"A10", 5, 10);
@@ -263,7 +263,7 @@ fn test_txn_store_scan() {
 
 #[test]
 fn test_txn_store_scan_key_only() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     store.put_ok(b"A", b"A", 5, 10);
     store.put_ok(b"B", b"B", 5, 10);
     store.put_ok(b"C", b"C", 5, 10);
@@ -280,7 +280,7 @@ fn lock(key: &[u8], primary: &[u8], ts: u64) -> LockInfo {
 
 #[test]
 fn test_txn_store_scan_lock() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
 
     store.put_ok(b"k1", b"v1", 1, 2);
     store.prewrite_ok(vec![Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
@@ -309,7 +309,7 @@ fn test_txn_store_scan_lock() {
 
 #[test]
 fn test_txn_store_resolve_lock() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
 
     store.prewrite_ok(vec![Mutation::Put((make_key(b"p1"), b"v5".to_vec())),
                            Mutation::Put((make_key(b"s1"), b"v5".to_vec()))],
@@ -332,7 +332,7 @@ fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
     let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
 
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     for k in &keys {
         store.prewrite_ok(vec![Mutation::Put((make_key(&k.as_bytes()), b"v".to_vec()))],
                           b"k1",
@@ -364,7 +364,7 @@ fn test_txn_store_resolve_lock2() {
 #[test]
 fn test_txn_store_gc() {
     let key = "k";
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     let (_cluster, raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
     store.test_txn_store_gc(key);
     raft_store.test_txn_store_gc(key);
@@ -377,7 +377,7 @@ fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
 }
 
 pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     for k in &keys {
         store.put_ok(k.as_bytes(), b"v1", 5, 10);
@@ -402,7 +402,6 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
         if !stores.contains(&store_id) {
             stores.insert(store_id);
         }
-
     }
     for k in &keys {
         store.update_with_key(&mut cluster, k);
@@ -431,7 +430,7 @@ fn test_txn_store_gc2() {
 #[test]
 fn test_txn_store_gc3() {
     let key = "k";
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     store.test_txn_store_gc3(key.as_bytes()[0]);
     let (_cluster, raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
     raft_store.test_txn_store_gc3(key.as_bytes()[0]);
@@ -439,7 +438,7 @@ fn test_txn_store_gc3() {
 
 #[test]
 fn test_txn_store_rawkv() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     store.raw_get_ok(b"key".to_vec(), None);
     store.raw_put_ok(b"key".to_vec(), b"value".to_vec());
     store.raw_get_ok(b"key".to_vec(), Some(b"value".to_vec()));
@@ -451,7 +450,7 @@ fn test_txn_store_rawkv() {
 
 #[test]
 fn test_txn_store_lock_primary() {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     // txn1 locks "p" then aborts.
     store.prewrite_ok(vec![Mutation::Put((make_key(b"p"), b"p1".to_vec()))],
                       b"p",
@@ -530,7 +529,7 @@ fn test_isolation_inc() {
     const THREAD_NUM: usize = 4;
     const INC_PER_THREAD: usize = 100;
 
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     let oracle = Arc::new(Oracle::new());
     let punch_card = Arc::new(Mutex::new(vec![false; THREAD_NUM * INC_PER_THREAD]));
 
@@ -606,7 +605,7 @@ fn test_isolation_multi_inc() {
     const KEY_NUM: usize = 4;
     const INC_PER_THREAD: usize = 100;
 
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     let oracle = Arc::new(Oracle::new());
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {
@@ -630,7 +629,7 @@ use test::Bencher;
 
 #[bench]
 fn bench_txn_store_rocksdb_inc(b: &mut Bencher) {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
     b.iter(|| {
@@ -640,7 +639,7 @@ fn bench_txn_store_rocksdb_inc(b: &mut Bencher) {
 
 #[bench]
 fn bench_txn_store_rocksdb_inc_x100(b: &mut Bencher) {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
     b.iter(|| {
@@ -650,7 +649,7 @@ fn bench_txn_store_rocksdb_inc_x100(b: &mut Bencher) {
 
 #[bench]
 fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
-    let store = AssertionStorage::new_default_storage();
+    let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
     b.iter(|| {

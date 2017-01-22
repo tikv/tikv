@@ -27,6 +27,15 @@ pub struct AssertionStorage {
     pub ctx: Context,
 }
 
+impl Default for AssertionStorage {
+    fn default() -> AssertionStorage {
+        AssertionStorage {
+            ctx: Context::new(),
+            store: SyncStorage::new(&Default::default()),
+        }
+    }
+}
+
 impl AssertionStorage {
     pub fn new_raft_storage_with_store_count(count: usize,
                                              key: &str)
@@ -37,13 +46,6 @@ impl AssertionStorage {
             store: store,
         };
         (cluster, storage)
-    }
-
-    pub fn new_default_storage() -> AssertionStorage {
-        AssertionStorage {
-            ctx: Context::new(),
-            store: SyncStorage::new(&Default::default()),
-        }
     }
 
     pub fn update_with_key(&mut self, cluster: &mut Cluster<ServerCluster>, key: &str) {
