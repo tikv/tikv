@@ -26,8 +26,8 @@ recv-buffer-size = "128KB"
 # size of thread pool for endpoint task
 end-point-concurrency = 8
 
-# set store capacity, if no set, use unlimited or disk size later.
-# capacity = 0 # 0 is unlimited.
+# set store capacity, if no set, use disk capacity.
+# capacity = 0
 
 # set backup path, if not set, use "backup" under store path.
 # backup = "/tmp/tikv/store/backup"
