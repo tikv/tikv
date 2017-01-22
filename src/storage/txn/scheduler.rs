@@ -856,6 +856,7 @@ impl mio::Handler for Scheduler {
 mod tests {
     use super::*;
     use kvproto::kvrpcpb::Context;
+    use storage::txn::latch::*;
     use storage::{Command, make_key, Options, Mutation};
 
     #[test]
