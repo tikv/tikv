@@ -65,7 +65,7 @@ fn new_ready(ss: Option<SoftState>,
         ss: ss,
         hs: hs,
         entries: entries,
-        committed_entries: committed_entries,
+        committed_entries: Some(committed_entries),
         ..Default::default()
     }
 }
@@ -201,6 +201,61 @@ fn test_raw_node_propose_and_conf_change() {
     assert_eq!(entries[0].get_data(), "somedata".as_bytes());
     assert_eq!(entries[1].get_entry_type(), EntryType::EntryConfChange);
     assert_eq!(entries[1].get_data(), &*ccdata);
+}
+
+// test_raw_node_propose_add_duplicate_node ensures that two proposes to add the same node should
+// not affect the later propose to add new node.
+#[test]
+fn test_raw_node_propose_add_duplicate_node() {
+    let s = new_storage();
+    let mut raw_node = new_raw_node(1, vec![], 10, 1, s.clone(), vec![new_peer(1)]);
+    let rd = raw_node.ready();
+    s.wl().append(&rd.entries).expect("");
+    raw_node.advance(rd);
+
+    raw_node.campaign().expect("");
+    loop {
+        let rd = raw_node.ready();
+        s.wl().append(&rd.entries).expect("");
+        if rd.ss.is_some() && rd.ss.as_ref().unwrap().leader_id == raw_node.raft.id {
+            raw_node.advance(rd);
+            break;
+        }
+        raw_node.advance(rd);
+    }
+
+    let mut propose_conf_change_and_apply = |cc| {
+        raw_node.propose_conf_change(cc).expect("");
+        let rd = raw_node.ready();
+        s.wl().append(&rd.entries).expect("");
+        for e in rd.committed_entries.as_ref().unwrap() {
+            if e.get_entry_type() == EntryType::EntryConfChange {
+                let conf_change = protobuf::parse_from_bytes(e.get_data()).unwrap();
+                raw_node.apply_conf_change(conf_change);
+            }
+        }
+        raw_node.advance(rd);
+    };
+
+    let cc1 = conf_change(ConfChangeType::AddNode, 1);
+    let ccdata1 = protobuf::Message::write_to_bytes(&cc1).unwrap();
+    propose_conf_change_and_apply(cc1.clone());
+
+    // try to add the same node again
+    propose_conf_change_and_apply(cc1);
+
+    // the new node join should be ok
+    let cc2 = conf_change(ConfChangeType::AddNode, 2);
+    let ccdata2 = protobuf::Message::write_to_bytes(&cc2).unwrap();
+    propose_conf_change_and_apply(cc2);
+
+    let last_index = s.last_index().unwrap();
+
+    // the last three entries should be: ConfChange cc1, cc1, cc2
+    let mut entries = s.entries(last_index - 2, last_index + 1, NO_LIMIT).unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].take_data(), ccdata1);
+    assert_eq!(entries[2].take_data(), ccdata2);
 }
 
 // test_raw_node_read_index ensures that RawNode.read_index sends the MsgReadIndex message

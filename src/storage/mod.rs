@@ -18,6 +18,7 @@ use std::error;
 use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
 use kvproto::kvrpcpb::LockInfo;
+use kvproto::errorpb;
 use mio::{EventLoop, EventLoopBuilder};
 use self::metrics::*;
 
@@ -33,6 +34,7 @@ pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cur
                        Error as EngineError, ScanMode};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
+pub use self::mvcc::ScanMetrics;
 pub use self::types::{Key, Value, KvPair, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
@@ -41,6 +43,8 @@ pub const CF_DEFAULT: CfName = "default";
 pub const CF_LOCK: CfName = "lock";
 pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
+// Cfs that should be very large generally.
+pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 
 // Short value max len must <= 255.
@@ -213,6 +217,8 @@ impl Debug for Command {
     }
 }
 
+pub const CMD_TAG_GC: &'static str = "gc";
+
 impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
@@ -238,8 +244,24 @@ impl Command {
             Command::Rollback { .. } => "rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
-            Command::Gc { .. } => "gc",
+            Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
+        }
+    }
+
+    pub fn ts(&self) -> u64 {
+        match *self {
+            Command::Get { start_ts, .. } |
+            Command::BatchGet { start_ts, .. } |
+            Command::Scan { start_ts, .. } |
+            Command::Prewrite { start_ts, .. } |
+            Command::Cleanup { start_ts, .. } |
+            Command::Rollback { start_ts, .. } |
+            Command::ResolveLock { start_ts, .. } => start_ts,
+            Command::Commit { lock_ts, .. } => lock_ts,
+            Command::ScanLock { max_ts, .. } => max_ts,
+            Command::Gc { safe_point, .. } => safe_point,
+            Command::RawGet { .. } => 0,
         }
     }
 
@@ -660,6 +682,22 @@ pub fn create_event_loop(notify_capacity: usize,
     builder.messages_per_tick(messages_per_tick);
     let el = try!(builder.build());
     Ok(el)
+}
+
+pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
+    if header.has_not_leader() {
+        "not_leader"
+    } else if header.has_region_not_found() {
+        "region_not_found"
+    } else if header.has_key_not_in_region() {
+        "key_not_in_region"
+    } else if header.has_stale_epoch() {
+        "stale_epoch"
+    } else if header.has_server_is_busy() {
+        "server_is_busy"
+    } else {
+        "other"
+    }
 }
 
 #[cfg(test)]
