@@ -86,6 +86,7 @@ pub fn new_store_cfg() -> Config {
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: Duration::from_secs(3),
+        report_region_flow_interval: 100, // 100ms
         ..Config::default()
     }
 }
