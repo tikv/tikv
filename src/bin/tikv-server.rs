@@ -60,7 +60,7 @@ use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
-fn print_usage(program: &str, opts: Options) {
+fn print_usage(program: &str, opts: &Options) {
     let brief = format!("Usage: {} [options]", program);
     print!("{}", opts.usage(&brief));
 }
@@ -711,9 +711,12 @@ fn main() {
                 "attributes about this server",
                 "zone=example-zone,disk=example-disk");
 
-    let matches = opts.parse(&args[1..]).expect("opts parse failed");
+    let matches = opts.parse(&args[1..]).unwrap_or_else(|e| {
+        print_usage(&program, &opts);
+        exit_with_err(format!("opts parse failed, {:?}", e));
+    });
     if matches.opt_present("h") {
-        print_usage(&program, opts);
+        print_usage(&program, &opts);
         return;
     }
     if matches.opt_present("V") {
