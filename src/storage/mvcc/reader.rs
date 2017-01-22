@@ -91,7 +91,8 @@ impl<'a> MvccReader<'a> {
             }
         }
     }
-
+    /// load lock
+    /// load lock of key,return none on not exist
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         if self.scan_mode.is_some() && self.lock_cursor.is_none() {
             self.lock_cursor = Some(try!(self.snapshot
@@ -104,6 +105,7 @@ impl<'a> MvccReader<'a> {
                 None => Ok(None),
             }
         } else {
+            // For Get(key)
             match try!(self.snapshot.get_cf(CF_LOCK, &key)) {
                 Some(v) => Ok(Some(try!(Lock::parse(&v)))),
                 None => Ok(None),
@@ -138,6 +140,7 @@ impl<'a> MvccReader<'a> {
                     .iter_cf(CF_WRITE, None, self.fill_cache, self.get_scan_mode(false))));
             }
         } else {
+            // normal get,scn_mode=none
             let upper_bound_key = key.append_ts(0u64);
             let upper_bound = upper_bound_key.encoded().as_slice();
             self.write_cursor = Some(try!(self.snapshot
@@ -163,6 +166,14 @@ impl<'a> MvccReader<'a> {
         Ok(Some((commit_ts, write)))
     }
 
+    /// get
+    /// get data for (key,ts)
+    /// 1. check lock in Column Family
+    ///     ----if lock exist,Client should wait or clean it
+    /// 2. get data for (key,ts)
+    ///    --- get data from Column Family write(commit_ts,write) with (key,ts)
+    ///    --- check write's type,if is put/delete,return data in default with commit_ts,
+    ///        else retry get from Column Family with (key,commit-1)
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         if let Some(lock) = try!(self.load_lock(key)) {

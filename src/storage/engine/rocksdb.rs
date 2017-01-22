@@ -71,6 +71,9 @@ pub struct EngineRocksdb {
 }
 
 impl EngineRocksdb {
+    /// new engine rocksdb
+    /// 1. check & load rocksdb with directory $path
+    /// 2. create & start worker -- the one to process detail work
     pub fn new(path: &str, cfs: &[CfName]) -> Result<EngineRocksdb> {
         info!("EngineRocksdb: creating for path {}", path);
         let (path, temp_dir) = match path {
