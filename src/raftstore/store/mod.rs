@@ -36,5 +36,6 @@ pub use self::peer::Peer;
 pub use self::bootstrap::{bootstrap_store, bootstrap_region, write_region, clear_region};
 pub use self::engine::{Peekable, Iterable, Mutable};
 pub use self::peer_storage::{PeerStorage, do_snapshot, SnapState, RAFT_INIT_LOG_TERM,
-                             RAFT_INIT_LOG_INDEX};
-pub use self::snap::{SnapFile, SnapKey, SnapManager, new_snap_mgr, SnapEntry};
+                             RAFT_INIT_LOG_INDEX, decode_cf_files_size};
+pub use self::snap::{SendSnapshotFile, SnapshotFilesReader, RecvSnapshotFile, SnapKey,
+                     SnapManager, new_snap_mgr, SnapEntry};

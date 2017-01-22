@@ -13,7 +13,6 @@
 
 use std::fmt::{self, Formatter, Display};
 use std::io;
-use std::fs::File;
 use std::net::{SocketAddr, TcpStream};
 use std::io::Read;
 use std::collections::HashMap;
@@ -26,14 +25,15 @@ use mio::Token;
 use super::metrics::*;
 use super::{Result, ConnData, Msg};
 use super::transport::RaftStoreRouter;
-use raftstore::store::{SnapFile, SnapManager, SnapKey, SnapEntry};
+use raftstore::store::{SnapManager, SnapKey, SnapEntry, RecvSnapshotFile, decode_cf_files_size};
 use util::worker::Runnable;
 use util::codec::rpc;
 use util::buf::PipeBuffer;
 use util::HandyRwLock;
 use util::transport::SendCh;
 
-use kvproto::raft_serverpb::RaftMessage;
+use protobuf::Message;
+use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData};
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 
@@ -86,28 +86,30 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(&snap));
     mgr.wl().register(key.clone(), SnapEntry::Sending);
-    let snap_file = box_try!(mgr.rl().get_snap_file(&key, true));
-    defer!({
-        snap_file.delete();
-        mgr.wl().deregister(&key, &SnapEntry::Sending);
-    });
-    if !snap_file.exists() {
-        return Err(box_err!("missing snap file: {:?}", snap_file.path()));
+    let mut snapshot_files_reader = box_try!(mgr.rl().get_snap_file_reader(&key));
+    {
+        if !snapshot_files_reader.exists() {
+            // clean up snapshot file
+            snapshot_files_reader.delete();
+            mgr.wl().deregister(&key, &SnapEntry::Sending);
+
+            return Err(box_err!("missing snap file: {:?}",
+                                snapshot_files_reader.display_path()));
+        }
     }
     // snapshot file has been validated when created, so no need to validate again.
 
-    let mut f = try!(File::open(snap_file.path()));
     let mut conn = try!(TcpStream::connect(&addr));
     try!(conn.set_nodelay(true));
     try!(conn.set_read_timeout(Some(Duration::from_secs(DEFAULT_READ_TIMEOUT))));
     try!(conn.set_write_timeout(Some(Duration::from_secs(DEFAULT_WRITE_TIMEOUT))));
 
     let res = rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
-        .and_then(|_| io::copy(&mut f, &mut conn).map_err(From::from))
+        .and_then(|_| io::copy(&mut snapshot_files_reader, &mut conn).map_err(From::from))
         .and_then(|_| conn.read(&mut [0]).map_err(From::from))
         .map(|_| ())
         .map_err(From::from);
-    let size = snap_file.meta().map(|m| m.len()).unwrap_or(0);
+    let size = snapshot_files_reader.total_size().unwrap();
     info!("[region {}] sent snapshot {} [size: {}, dur: {:?}]",
           key.region_id,
           key,
@@ -115,12 +117,17 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
           timer.elapsed());
 
     send_timer.observe_duration();
+
+    // clean up snapshot file
+    snapshot_files_reader.delete();
+    mgr.wl().deregister(&key, &SnapEntry::Sending);
+
     res
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
-    files: HashMap<Token, (SnapFile, RaftMessage)>,
+    files: HashMap<Token, (RecvSnapshotFile, RaftMessage)>,
     pool: ThreadPool,
     ch: SendCh<Msg>,
     raft_router: R,
@@ -150,12 +157,28 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::Register(token, meta) => {
                 SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
+                let mut snap_data = RaftSnapshotData::new();
+                {
+                    let data = meta.get_message().get_snapshot().get_data();
+                    if let Err(e) = snap_data.merge_from_bytes(data) {
+                        error!("snapshot data corrupted, decode err: {:?}", e);
+                        self.close(token);
+                        return;
+                    }
+                }
+                let cf_sizes = match decode_cf_files_size(snap_data.get_data()) {
+                    Ok(sizes) => sizes,
+                    Err(e) => {
+                        error!("failed decode snapshot cf file size, err: {:?}", e);
+                        self.close(token);
+                        return;
+                    }
+                };
                 match SnapKey::from_snap(meta.get_message().get_snapshot())
-                    .and_then(|key| mgr.rl().get_snap_file(&key, false).map(|r| (r, key))) {
+                    .and_then(|key| mgr.rl().get_recv_snap_file(&key, cf_sizes).map(|r| (r, key))) {
                     Ok((f, k)) => {
                         if f.exists() {
-                            info!("file {} already exists, skip receiving.",
-                                  f.path().display());
+                            info!("file {} already exists, skip receiving.", f.display_path());
                             if let Err(e) = self.raft_router.send_raft_msg(meta) {
                                 error!("send snapshot for token {:?} err {:?}", token, e);
                             }
@@ -193,7 +216,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 match self.files.remove(&token) {
                     Some((mut writer, msg)) => {
                         let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
-                        info!("saving snapshot to {}", writer.path().display());
+                        info!("saving snapshot to {}", writer.display_path());
                         defer!({
                             self.snap_mgr.wl().deregister(&key, &SnapEntry::Receiving);
                             self.close(token);

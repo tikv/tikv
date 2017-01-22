@@ -17,16 +17,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
 use std::error;
 use std::time::Instant;
+use std::str;
 
 use rocksdb::{DB, WriteBatch, Writable};
-use protobuf::Message;
+use protobuf::{Message, RepeatedField};
 
 use kvproto::metapb::{self, Region};
 use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
-use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
-                             PeerState};
+use kvproto::raft_serverpb::{KeyValue, RaftSnapshotData, RaftLocalState, RegionLocalState,
+                             RaftApplyState, PeerState};
 use util::HandyRwLock;
-use util::codec::bytes::BytesEncoder;
 use util::worker::Scheduler;
 use util::rocksdb;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
@@ -36,7 +36,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::peer::ReadyContext;
 use super::metrics::*;
-use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
+use super::{SendSnapshotFile, SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -827,7 +827,7 @@ impl PeerStorage {
     }
 }
 
-fn build_snap_file(f: &mut SnapFile,
+fn build_snap_file(f: &mut SendSnapshotFile,
                    snap: &DbSnapshot,
                    region: &metapb::Region)
                    -> raft::Result<()> {
@@ -836,7 +836,7 @@ fn build_snap_file(f: &mut SnapFile,
     let mut snap_key_cnt = 0;
     let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
     for cf in snap.cf_names() {
-        box_try!(f.encode_compact_bytes(cf.as_bytes()));
+        box_try!(f.add_file(cf.to_string()));
         try!(snap.scan_cf(cf,
                           &begin_key,
                           &end_key,
@@ -845,16 +845,11 @@ fn build_snap_file(f: &mut SnapFile,
             snap_size += key.len();
             snap_size += value.len();
             snap_key_cnt += 1;
-            try!(f.encode_compact_bytes(key));
-            try!(f.encode_compact_bytes(value));
+            try!(f.add_kv(key, value));
             Ok(true)
         }));
-        // use an empty byte array to indicate that cf reaches an end.
-        box_try!(f.encode_compact_bytes(b""));
     }
-    // use an empty byte array to indicate that kvpair reaches an end.
-    box_try!(f.encode_compact_bytes(b""));
-    try!(f.save_with_checksum());
+    try!(f.save_all());
 
     info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
           region.get_id(),
@@ -862,6 +857,54 @@ fn build_snap_file(f: &mut SnapFile,
           snap_key_cnt,
           t.elapsed());
     Ok(())
+}
+
+pub fn encode_cf_files_size(sizes: Vec<(String, u64)>) -> Vec<KeyValue> {
+    let mut kvs = vec![];
+    for (cf_name, size) in sizes {
+        let cf_size = format!("{}", size);
+        let mut kv = KeyValue::new();
+        kv.set_key(cf_name.into_bytes());
+        kv.set_value(cf_size.into_bytes());
+        kvs.push(kv);
+    }
+    kvs
+}
+
+pub fn decode_cf_files_size(kvs: &[KeyValue]) -> Result<Vec<(String, usize)>> {
+    let mut cf_sizes: Vec<(String, usize)> = vec![];
+    for kv in kvs {
+        let key = kv.get_key();
+        let cf = match str::from_utf8(key) {
+            Ok(s) => s.to_string(),
+            Err(e) => {
+                return Err(box_err!("failed to parse encoded snapshot cf name {:?}, err: {:?}",
+                                    key,
+                                    e));
+            }
+        };
+        let value = kv.get_value();
+        let size = match str::from_utf8(value) {
+            Ok(v) => {
+                match v.parse::<u64>() {
+                    Ok(s) => s as usize,
+                    Err(e) => {
+                        return Err(box_err!("failed to parse encoded snapshot cf file size \
+                                             {:?}, err: {:?}",
+                                            v,
+                                            e));
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(box_err!("corrupted encoded snapshot cf file size {:?}, err: {:?}",
+                                    value,
+                                    e));
+            }
+        };
+        cf_sizes.push((cf, size));
+    }
+    Ok(cf_sizes)
 }
 
 pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft::Result<Snapshot> {
@@ -913,27 +956,20 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut snap_file = try!(mgr.rl().get_snap_file(&key, true));
-    if snap_file.exists() {
-        if let Err(e) = snap_file.reader().and_then(|mut r| r.validate()) {
-            error!("[region {}] file {} is invalid, will regenerate: {:?}",
-                   region_id,
-                   snap_file.path().display(),
-                   e);
-            try!(snap_file.try_delete());
-            try!(snap_file.init());
-            try!(build_snap_file(&mut snap_file, snap, state.get_region()));
-        }
+    let mut snapshot_file = try!(mgr.rl().get_send_snap_file(&key));
+    if snapshot_file.exists() {
+        // TODO validate `send_snapshot_files`
     } else {
-        try!(build_snap_file(&mut snap_file, snap, state.get_region()));
+        try!(build_snap_file(&mut snapshot_file, snap, state.get_region()));
     }
 
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.take_region());
 
-    let len = try!(snap_file.meta()).len();
-    snap_data.set_file_size(len);
+    snap_data.set_file_size(snapshot_file.total_size());
+    snap_data.set_data(RepeatedField::from_vec(
+        encode_cf_files_size(snapshot_file.list_cf_sizes())));
 
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));

@@ -84,14 +84,14 @@ impl Channel<RaftMessage> for ChannelTransport {
             let source_file = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_snap_file(&key, true).unwrap()
+                    p.0.rl().get_snap_file_reader(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
             let dst_file = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
-                    p.0.rl().get_snap_file(&key, false).unwrap()
+                    p.0.rl().get_snap_file_reader(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -103,7 +103,11 @@ impl Channel<RaftMessage> for ChannelTransport {
             });
 
             if !dst_file.exists() {
-                try!(fs::copy(source_file.path(), dst_file.path()));
+                let source_paths = source_file.list_file_paths();
+                let dst_paths = dst_file.list_file_paths();
+                for i in 0..source_paths.len() {
+                    try!(fs::copy(&source_paths[i], &dst_paths[i]));
+                }
             }
         }
 
