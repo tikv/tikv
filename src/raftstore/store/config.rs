@@ -160,6 +160,14 @@ impl Config {
         Config::default()
     }
 
+    /// For the peer which is the leader of the region before split,
+    /// `leader_accelerate_campaign_after_split_ticks` specifies the tick number to be accelerated
+    /// after the region split, so that the peer of new split region may campaign and become leader
+    /// earlier than other follower peers.
+    pub fn accelerate_campaign_after_split_ticks(&self) -> usize {
+        self.raft_election_timeout_ticks - 1
+    }
+
     pub fn validate(&self) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
