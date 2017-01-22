@@ -22,7 +22,7 @@ pub trait SocketOpt {
 
 #[cfg(unix)]
 mod unix {
-    use super::SocketOpt;
+    use util::sockopt::SocketOpt;
 
     use std::io::{Result, Error};
     use std::os::unix::io::AsRawFd;
