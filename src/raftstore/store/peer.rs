@@ -368,7 +368,7 @@ impl Peer {
         let region = self.get_store().get_region().clone();
         info!("{} begin to destroy", self.tag);
 
-        // First set Tombstone state explicitly, and clear raft meta.
+        // Set Tombstone state explicitly
         let wb = WriteBatch::new();
         try!(self.get_store().clear_meta(&wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
