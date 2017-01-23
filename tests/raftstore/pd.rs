@@ -365,6 +365,10 @@ impl TestPdClient {
         self.cluster.wl().rule = None;
     }
 
+    pub fn get_region_epoch(&self, region_id: u64) -> metapb::RegionEpoch {
+        self.get_region_by_id(region_id).unwrap().unwrap().take_region_epoch()
+    }
+
     // Set an empty rule which nothing to do to disable default max peer count
     // check rule, we can use reset_rule to enable default again.
     pub fn disable_default_rule(&self) {
