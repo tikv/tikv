@@ -717,9 +717,10 @@ fn main() {
         return;
     }
     if matches.opt_present("V") {
-        let (hash, date) = util::build_info();
+        let (hash, date, rustc) = util::build_info();
         println!("Git Commit Hash: {}", hash);
         println!("UTC Build Time:  {}", date);
+        println!("Rustc Version:   {}", rustc);
         return;
     }
     let config = match matches.opt_str("C") {
