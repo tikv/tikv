@@ -49,7 +49,7 @@ fn commit_hash() -> String {
 }
 
 fn rustc_version() -> String {
-    let mut cmd = Command::new("rustc");
+    let mut cmd = Command::new(env::var("RUSTC").unwrap());
     cmd.args(&["--version"]);
     cmd.output()
         .ok()
