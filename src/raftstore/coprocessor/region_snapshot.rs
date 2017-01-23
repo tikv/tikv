@@ -25,21 +25,21 @@ use raftstore::Result;
 /// Only data within a region can be accessed.
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
-    region: Region,
+    region: Arc<Region>,
 }
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
         RegionSnapshot {
             snap: ps.raw_snapshot().into_sync(),
-            region: ps.get_region().clone(),
+            region: Arc::new(ps.get_region().clone()),
         }
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
         RegionSnapshot {
             snap: Snapshot::new(db).into_sync(),
-            region: region,
+            region: Arc::new(region),
         }
     }
 
@@ -140,7 +140,7 @@ impl Peekable for RegionSnapshot {
 pub struct RegionIterator<'a> {
     iter: DBIterator<'a>,
     valid: bool,
-    region: Region,
+    region: Arc<Region>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 }
@@ -156,7 +156,7 @@ fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
 // we use rocksdb's style iterator, doesn't need to impl std iterator.
 impl<'a> RegionIterator<'a> {
     pub fn new(snap: &'a Snapshot,
-               region: Region,
+               region: Arc<Region>,
                upper_bound: Option<&[u8]>,
                fill_cache: bool)
                -> RegionIterator<'a> {
@@ -173,7 +173,7 @@ impl<'a> RegionIterator<'a> {
     }
 
     pub fn new_cf(snap: &'a Snapshot,
-                  region: Region,
+                  region: Arc<Region>,
                   upper_bound: Option<&[u8]>,
                   fill_cache: bool,
                   cf: &str)
