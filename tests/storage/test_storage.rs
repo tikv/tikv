@@ -128,37 +128,6 @@ fn test_txn_store_scan() {
                       10,
                       vec![Some((b"C", b"C10")), Some((b"E", b"E10"))]);
         store.scan_ok(b"F", 1, 10, vec![]);
-
-        store.reverse_scan_ok(b"F", 0, 10, vec![]);
-        store.reverse_scan_ok(b"F", 1, 10, vec![Some((b"E", b"E10"))]);
-        store.reverse_scan_ok(b"F",
-                              2,
-                              10,
-                              vec![Some((b"E", b"E10")), Some((b"C", b"C10"))]);
-        store.reverse_scan_ok(b"F",
-                              3,
-                              10,
-                              vec![Some((b"E", b"E10")),
-                                   Some((b"C", b"C10")),
-                                   Some((b"A", b"A10"))]);
-        store.reverse_scan_ok(b"F",
-                              4,
-                              10,
-                              vec![Some((b"E", b"E10")),
-                                   Some((b"C", b"C10")),
-                                   Some((b"A", b"A10"))]);
-        store.reverse_scan_ok(b"F",
-                              3,
-                              10,
-                              vec![Some((b"E", b"E10")),
-                                   Some((b"C", b"C10")),
-                                   Some((b"A", b"A10"))]);
-        store.reverse_scan_ok(b"D",
-                              3,
-                              10,
-                              vec![Some((b"C", b"C10")), Some((b"A", b"A10"))]);
-        store.reverse_scan_ok(b"C", 4, 10, vec![Some((b"A", b"A10"))]);
-        store.reverse_scan_ok(b"0", 1, 10, vec![]);
     };
     check_v10();
 
@@ -180,22 +149,6 @@ fn test_txn_store_scan() {
                       20,
                       vec![Some((b"C", b"C10")), Some((b"D", b"D20")), Some((b"E", b"E10"))]);
         store.scan_ok(b"D\x00", 1, 20, vec![Some((b"E", b"E10"))]);
-
-        store.reverse_scan_ok(b"F",
-                              5,
-                              20,
-                              vec![Some((b"E", b"E10")),
-                                   Some((b"D", b"D20")),
-                                   Some((b"C", b"C10")),
-                                   Some((b"B", b"B20")),
-                                   Some((b"A", b"A10"))]);
-        store.reverse_scan_ok(b"C\x00",
-                              5,
-                              20,
-                              vec![Some((b"C", b"C10")),
-                                   Some((b"B", b"B20")),
-                                   Some((b"A", b"A10"))]);
-        store.reverse_scan_ok(b"AAA", 1, 20, vec![Some((b"A", b"A10"))]);
     };
     check_v10();
     check_v20();
@@ -211,18 +164,6 @@ fn test_txn_store_scan() {
                       vec![Some((b"B", b"B20")), Some((b"C", b"C10")), Some((b"E", b"E10"))]);
         store.scan_ok(b"A", 1, 30, vec![Some((b"B", b"B20"))]);
         store.scan_ok(b"C\x00", 5, 30, vec![Some((b"E", b"E10"))]);
-
-        store.reverse_scan_ok(b"F",
-                              5,
-                              30,
-                              vec![Some((b"E", b"E10")),
-                                   Some((b"C", b"C10")),
-                                   Some((b"B", b"B20"))]);
-        store.reverse_scan_ok(b"D\x00", 1, 30, vec![Some((b"C", b"C10"))]);
-        store.reverse_scan_ok(b"D\x00",
-                              5,
-                              30,
-                              vec![Some((b"C", b"C10")), Some((b"B", b"B20"))]);
     };
     check_v10();
     check_v20();
@@ -242,18 +183,6 @@ fn test_txn_store_scan() {
                       5,
                       100,
                       vec![Some((b"C", b"C40")), Some((b"D", b"D40")), Some((b"E", b"E10"))]);
-        store.reverse_scan_ok(b"F",
-                              5,
-                              40,
-                              vec![Some((b"E", b"E10")),
-                                   Some((b"D", b"D40")),
-                                   Some((b"C", b"C40"))]);
-        store.reverse_scan_ok(b"F",
-                              5,
-                              100,
-                              vec![Some((b"E", b"E10")),
-                                   Some((b"D", b"D40")),
-                                   Some((b"C", b"C40"))]);
     };
     check_v10();
     check_v20();

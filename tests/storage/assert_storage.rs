@@ -20,6 +20,7 @@ use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use tikv::util::HandyRwLock;
 use super::util::new_raft_storage_with_store_count;
+use tikv::storage::config::Config;
 
 #[derive(Clone)]
 pub struct AssertionStorage {
@@ -31,7 +32,7 @@ impl Default for AssertionStorage {
     fn default() -> AssertionStorage {
         AssertionStorage {
             ctx: Context::new(),
-            store: SyncStorage::new(&Default::default()),
+            store: SyncStorage::new(&Config::default()),
         }
     }
 }
@@ -140,24 +141,6 @@ impl AssertionStorage {
             .map(|x| x.map(|k| (k.to_vec(), vec![])))
             .collect();
         assert_eq!(result, expect);
-    }
-
-    #[allow(unused_variables)]
-    pub fn reverse_scan_ok(&self,
-                           start_key: &[u8],
-                           limit: usize,
-                           ts: u64,
-                           expect: Vec<Option<(&[u8], &[u8])>>) {
-        // TODO: uncomment it after Storage support reverse_scan.
-        // let key_address = make_key(start_key);
-        // let result = self.store.reverse_scan(Context::new(), key_address, limit, ts).unwrap();
-        // let result: Vec<Option<KvPair>> = result.into_iter()
-        //     .map(Result::ok)
-        //     .collect();
-        // let expect: Vec<Option<KvPair>> = expect.into_iter()
-        //     .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
-        //     .collect();
-        // assert_eq!(result, expect);
     }
 
     pub fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
