@@ -49,6 +49,7 @@ impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T);
+    fn shutdown(&mut self) {}
 }
 
 pub trait BatchRunnable<T: Display> {
@@ -56,6 +57,7 @@ pub trait BatchRunnable<T: Display> {
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
+    fn shutdown(&mut self) {}
 }
 
 impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
@@ -66,6 +68,10 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
             self.run(t);
             slow_log!(timer, "handle task {}", task_str);
         }
+    }
+
+    fn shutdown(&mut self) {
+        Runnable::shutdown(self)
     }
 }
 
@@ -144,6 +150,7 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
         let t = rx.recv();
         match t {
             Ok(Some(t)) => buffer.push(t),
+            Ok(None) => break,
             _ => return,
         }
         while buffer.len() < batch_size {
@@ -161,6 +168,7 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
         runner.run_batch(&mut buffer);
         buffer.clear();
     }
+    runner.shutdown();
 }
 
 impl<T: Display + Send + 'static> Worker<T> {

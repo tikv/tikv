@@ -77,12 +77,14 @@ impl PartialEq for SnapState {
 
 // Discard all log entries prior to compact_index. We must guarantee
 // that the compact_index is not greater than applied index.
-pub fn compact_raft_log(tag: &str,
+pub fn compact_raft_log(region_id: u64,
                         state: &mut RaftApplyState,
                         compact_index: u64,
                         compact_term: u64)
                         -> Result<()> {
-    debug!("{} compact log entries to prior to {}", tag, compact_index);
+    debug!("[region {}] compact log entries to prior to {}",
+           region_id,
+           compact_index);
 
     if compact_index <= state.get_truncated_state().get_index() {
         return Err(box_err!("try to truncate compacted entries"));
@@ -1152,7 +1154,9 @@ mod test {
             let mut ctx = InvokeContext::new(&store);
             let res = store.term(idx)
                 .map_err(From::from)
-                .and_then(|term| compact_raft_log(&store.tag, &mut ctx.apply_state, idx, term));
+                .and_then(|term| {
+                    compact_raft_log(store.region.get_id(), &mut ctx.apply_state, idx, term)
+                });
             // TODO check exact error type after refactoring error.
             if res.is_err() ^ werr.is_err() {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
@@ -1223,7 +1227,7 @@ mod test {
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
         let term = s.term(7).unwrap();
-        compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
+        compact_raft_log(s.region.get_id(), &mut ctx.apply_state, 7, term).unwrap();
         wb = WriteBatch::new();
         ctx.save_apply_to(&s.engine, &mut wb).unwrap();
         s.engine.write(wb).unwrap();
