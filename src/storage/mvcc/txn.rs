@@ -180,7 +180,8 @@ impl<'a> MvccTxn<'a> {
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
         match try!(self.reader.load_lock(key)) {
             Some(ref lock) if lock.ts == self.start_ts => {
-                if lock.short_value.is_none() {
+                // If prewrite type is DEL or LOCK, it is no need to delete value.
+                if lock.short_value.is_none() && lock.lock_type == LockType::Put {
                     self.delete_value(key, lock.ts);
                 }
             }
