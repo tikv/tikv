@@ -836,7 +836,9 @@ fn build_snap_file(f: &mut SendSnapshotFile,
     let mut snap_key_cnt = 0;
     let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
     for cf in snap.cf_names() {
-        box_try!(f.add_file(cf.to_string()));
+        if !f.next_file(cf.to_string()) {
+            continue;
+        };
         try!(snap.scan_cf(cf,
                           &begin_key,
                           &end_key,
@@ -871,8 +873,8 @@ pub fn encode_cf_files_size(sizes: Vec<(String, u64)>) -> Vec<KeyValue> {
     kvs
 }
 
-pub fn decode_cf_files_size(kvs: &[KeyValue]) -> Result<Vec<(String, usize)>> {
-    let mut cf_sizes: Vec<(String, usize)> = vec![];
+pub fn decode_cf_files_size(kvs: &[KeyValue]) -> Result<Vec<(String, u64)>> {
+    let mut cf_sizes: Vec<(String, u64)> = vec![];
     for kv in kvs {
         let key = kv.get_key();
         let cf = match str::from_utf8(key) {
@@ -887,7 +889,7 @@ pub fn decode_cf_files_size(kvs: &[KeyValue]) -> Result<Vec<(String, usize)>> {
         let size = match str::from_utf8(value) {
             Ok(v) => {
                 match v.parse::<u64>() {
-                    Ok(s) => s as usize,
+                    Ok(s) => s,
                     Err(e) => {
                         return Err(box_err!("failed to parse encoded snapshot cf file size \
                                              {:?}, err: {:?}",
@@ -1364,13 +1366,13 @@ mod test {
         assert_eq!(s1.truncated_index(), 3);
         assert_eq!(s1.truncated_term(), 3);
 
-        let key = SnapKey::from_snap(&snap1).unwrap();
-        let source_snap = mgr.rl().get_snap_file(&key, true).unwrap();
-        let mut dst_snap = mgr.rl().get_snap_file(&key, false).unwrap();
-        let mut f = File::open(source_snap.path()).unwrap();
-        dst_snap.encode_u64(0).unwrap();
-        io::copy(&mut f, &mut dst_snap).unwrap();
-        dst_snap.save().unwrap();
+        // let key = SnapKey::from_snap(&snap1).unwrap();
+        // let source_snap = mgr.rl().get_snap_file(&key, true).unwrap();
+        // let mut dst_snap = mgr.rl().get_snap_file(&key, false).unwrap();
+        // let mut f = File::open(source_snap.path()).unwrap();
+        // dst_snap.encode_u64(0).unwrap();
+        // io::copy(&mut f, &mut dst_snap).unwrap();
+        // dst_snap.save().unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(sched, &td2);
