@@ -86,7 +86,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(&snap));
     mgr.wl().register(key.clone(), SnapEntry::Sending);
-    let mut snapshot_files_reader = box_try!(mgr.rl().get_snap_file_reader(&key));
+    let mut snapshot_files_reader = box_try!(mgr.rl().get_snap_file_reader(&key, true));
     {
         if !snapshot_files_reader.exists() {
             // clean up snapshot file

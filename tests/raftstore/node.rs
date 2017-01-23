@@ -18,16 +18,17 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
-use std::fs;
+use std::io::{Read, Write};
 
 use rocksdb::DB;
 use tempdir::TempDir;
+use protobuf::Message;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
 use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftMessage};
+use kvproto::raft_serverpb::{self, RaftMessage, RaftSnapshotData};
 use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{store, Result, Error};
 use tikv::util::HandyRwLock;
@@ -81,17 +82,22 @@ impl Channel<RaftMessage> for ChannelTransport {
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
-            let source_file = match self.rl().snap_paths.get(&from_store) {
+            let mut snap_reader = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_snap_file_reader(&key).unwrap()
+                    p.0.rl().get_snap_file_reader(&key, true).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
-            let dst_file = match self.rl().snap_paths.get(&to_store) {
+            //
+            let mut snap_data = RaftSnapshotData::new();
+            let data = msg.get_message().get_snapshot().get_data();
+            snap_data.merge_from_bytes(data).unwrap();
+            let cf_sizes = decode_cf_files_size(snap_data.get_data()).unwrap();
+            let mut recv_snap_file = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
-                    p.0.rl().get_snap_file_reader(&key).unwrap()
+                    p.0.rl().get_recv_snap_file(&key, cf_sizes).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -102,12 +108,17 @@ impl Channel<RaftMessage> for ChannelTransport {
                 core.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
             });
 
-            if !dst_file.exists() {
-                let source_paths = source_file.list_file_paths();
-                let dst_paths = dst_file.list_file_paths();
-                for i in 0..source_paths.len() {
-                    try!(fs::copy(&source_paths[i], &dst_paths[i]));
+            if !recv_snap_file.exists() {
+                loop {
+                    let buf_len = 10000;
+                    let mut buf = Vec::with_capacity(buf_len);
+                    let n = try!(snap_reader.read(&mut buf[..]));
+                    if n == 0 {
+                        break;
+                    }
+                    recv_snap_file.write_all(&buf[0..n]).unwrap();
                 }
+                recv_snap_file.save().unwrap();
             }
         }
 

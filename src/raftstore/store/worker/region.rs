@@ -220,25 +220,27 @@ impl Runner {
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        let snap_files = box_try!(self.mgr.rl().get_snap_file_reader(&snap_key));
+        let snap_reader = box_try!(self.mgr.rl().get_snap_file_reader(&snap_key, false));
         self.mgr.wl().register(snap_key.clone(), SnapEntry::Applying);
         defer!({
             self.mgr.wl().deregister(&snap_key, &SnapEntry::Applying);
         });
-        if !snap_files.exists() {
-            return Err(box_err!("missing snap file {}", snap_files.display_path()));
+        if !snap_reader.exists() {
+            println!("missing snap file {}", snap_reader.display_path());
+            return Err(box_err!("missing snap file {}", snap_reader.display_path()));
         }
         try!(check_abort(&abort));
 
         let timer = Instant::now();
         // Write the snapshot into the region.
-        for (cf, fpath) in snap_files.list_cf_files() {
+        for (cf, fpath) in box_try!(snap_reader.list_cf_files()) {
             // TODO: avoid too many allocation
             try!(check_abort(&abort));
 
             let cf_handle = rocksdb::get_cf_handle(&self.db, &cf).unwrap();
             let ingest_opt = IngestExternalFileOptions::new().move_files(true);
             if let Err(e) = self.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[&fpath]) {
+                println!("fail to ingest external file {}, e: {:?}", fpath, e);
                 return Err(Error::Other(box_err!(e)));
             }
         }

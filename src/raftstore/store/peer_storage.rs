@@ -1044,8 +1044,7 @@ mod test {
     use std::sync::atomic::*;
     use std::sync::mpsc::*;
     use std::cell::RefCell;
-    use std::io;
-    use std::fs::File;
+    use std::io::{Read, Write};
     use std::time::Duration;
     use kvproto::eraftpb::{Entry, ConfState};
     use kvproto::raft_serverpb::RaftSnapshotData;
@@ -1054,7 +1053,6 @@ mod test {
     use protobuf;
     use raftstore::store::{bootstrap, new_snap_mgr, SnapKey};
     use raftstore::store::worker::RegionRunner;
-    use util::codec::number::NumberEncoder;
     use raftstore::store::worker::RegionTask;
     use util::worker::{Worker, Scheduler};
     use util::HandyRwLock;
@@ -1366,13 +1364,18 @@ mod test {
         assert_eq!(s1.truncated_index(), 3);
         assert_eq!(s1.truncated_term(), 3);
 
-        // let key = SnapKey::from_snap(&snap1).unwrap();
-        // let source_snap = mgr.rl().get_snap_file(&key, true).unwrap();
-        // let mut dst_snap = mgr.rl().get_snap_file(&key, false).unwrap();
-        // let mut f = File::open(source_snap.path()).unwrap();
-        // dst_snap.encode_u64(0).unwrap();
-        // io::copy(&mut f, &mut dst_snap).unwrap();
-        // dst_snap.save().unwrap();
+        let key = SnapKey::from_snap(&snap1).unwrap();
+        let mut snap_data = RaftSnapshotData::new();
+        snap_data.merge_from_bytes(snap1.get_data()).unwrap();
+        let total_size = snap_data.get_file_size();
+        let cf_sizes = decode_cf_files_size(snap_data.get_data()).unwrap();
+        let mut recv_snap = mgr.rl().get_recv_snap_file(&key, cf_sizes).unwrap();
+        let mut reader = mgr.rl().get_snap_file_reader(&key, true).unwrap();
+        let mut buf = Vec::with_capacity(total_size as usize);
+        let read_size = reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(read_size as u64, total_size);
+        recv_snap.write_all(&buf[0..read_size]).unwrap();
+        recv_snap.save().unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(sched, &td2);
