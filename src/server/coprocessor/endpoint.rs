@@ -84,7 +84,7 @@ impl Host {
             reqs: HashMap::new(),
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), concurrency),
+            pool: ThreadPool::new_with_name(thd_name!("coprocessor-pool"), concurrency),
             running_count: Arc::new(AtomicUsize::new(0)),
         }
     }
