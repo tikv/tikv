@@ -231,7 +231,7 @@ fn test_raw_node_propose_add_duplicate_node() {
         for e in rd.committed_entries.as_ref().unwrap() {
             if e.get_entry_type() == EntryType::EntryConfChange {
                 let conf_change = protobuf::parse_from_bytes(e.get_data()).unwrap();
-                raw_node.apply_conf_change(conf_change);
+                raw_node.apply_conf_change(&conf_change);
             }
         }
         raw_node.advance(rd);
