@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tikv::storage::{Engine, Snapshot, Modify, ALL_CFS};
 use tikv::storage::engine::{Callback, Result};
+use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
@@ -115,5 +116,5 @@ pub fn new_raft_storage_with_store_count(count: usize,
                                          key: &str)
                                          -> (Cluster<ServerCluster>, SyncStorage, Context) {
     let (cluster, engine, ctx) = new_raft_engine(count, key);
-    (cluster, SyncStorage::from_engine(engine, &Default::default()), ctx)
+    (cluster, SyncStorage::from_engine(engine, &Config::default()), ctx)
 }

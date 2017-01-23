@@ -23,6 +23,8 @@ use tikv::storage::{self, Mutation, Key, make_key, ALL_CFS, Storage};
 use tikv::storage::engine::{self, TEMP_DIR, Engine};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
+use tikv::storage::config::Config;
+
 use super::util::new_raft_engine;
 use super::assert_storage::AssertionStorage;
 use storage::util;
@@ -590,7 +592,7 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 
 fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
     let engine = util::BlockEngine::new(engine);
-    let config = Default::default();
+    let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
 

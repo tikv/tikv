@@ -17,6 +17,7 @@ use std::thread;
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
 use tikv::storage::{txn, engine};
+use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
 use raftstore::cluster::Cluster;
@@ -133,7 +134,7 @@ fn test_scheduler_leader_change_twice() {
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let engine = cluster.sim.rl().storages[&peers[0].get_id()].clone();
     let engine = util::BlockEngine::new(engine);
-    let config = Default::default();
+    let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
 
