@@ -376,8 +376,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
                         .observe(keys.len() as f64);
                     if keys.is_empty() {
+                        // empty range
                         if start_key.is_none() {
-                            // empty region
                             GC_EMPTY_RANGE_COUNTER.inc();
                         }
                         Ok(None)
