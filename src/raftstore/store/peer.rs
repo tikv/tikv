@@ -35,6 +35,9 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progr
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::store::Config;
+use raftstore::store::worker::PdTask;
+use util::worker::Worker;
 use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
@@ -83,13 +86,16 @@ impl Drop for PendingCmd {
     }
 }
 
+#[derive(Default, Debug)]
+pub struct ChangePeer {
+    pub conf_change: eraftpb::ConfChange,
+    pub peer: metapb::Peer,
+    pub region: metapb::Region,
+}
+
 #[derive(Debug)]
 pub enum ExecResult {
-    ChangePeer {
-        change_type: ConfChangeType,
-        peer: metapb::Peer,
-        region: metapb::Region,
-    },
+    ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
         first_index: u64,
@@ -362,14 +368,11 @@ impl Peer {
         let region = self.get_store().get_region().clone();
         info!("{} begin to destroy", self.tag);
 
-        // If pending_remove, meta was destroyed when applying removal.
-        if !self.pending_remove {
-            // First set Tombstone state explicitly, and clear raft meta.
-            let wb = WriteBatch::new();
-            try!(self.get_store().clear_meta(&wb));
-            try!(write_peer_state(&wb, &region, PeerState::Tombstone));
-            try!(self.engine.write(wb));
-        }
+        // Set Tombstone state explicitly
+        let wb = WriteBatch::new();
+        try!(self.get_store().clear_meta(&wb));
+        try!(write_peer_state(&wb, &region, PeerState::Tombstone));
+        try!(self.engine.write(wb));
 
         // TODO: figure out a way to unit test this.
         let peer_id = self.peer_id();
@@ -1052,6 +1055,18 @@ impl Peer {
         None
     }
 
+    pub fn heartbeat_pd(&self, cfg: &Config, worker: &Worker<PdTask>) {
+        let task = PdTask::Heartbeat {
+            region: self.region().clone(),
+            peer: self.peer.clone(),
+            down_peers: self.collect_down_peers(cfg.max_peer_down_duration),
+            pending_peers: self.collect_pending_peers(),
+        };
+        if let Err(e) = worker.schedule(task) {
+            error!("{} failed to notify pd: {}", self.tag, e);
+        }
+    }
+
     fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
@@ -1214,14 +1229,21 @@ impl Peer {
         let term = entry.get_term();
         let conf_change: eraftpb::ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        let (res, cc) = match self.process_raft_cmd(index, term, cmd) {
-            res @ Some(_) => (res, conf_change),
+        Some(self.process_raft_cmd(index, term, cmd).map_or_else(|| {
             // If failed, tell raft that the config change was aborted.
-            None => (None, eraftpb::ConfChange::new()),
-        };
-        self.raft_group.apply_conf_change(cc);
-
-        res
+            ExecResult::ChangePeer(Default::default())
+        }, |mut res| {
+            if let ExecResult::ChangePeer(ref mut cp) = res {
+                cp.conf_change = conf_change;
+            } else {
+                panic!("{} unexpected result {:?} for conf change {:?} at {}",
+                       self.tag,
+                       res,
+                       conf_change,
+                       index);
+            }
+            res
+        }))
     }
 
     fn find_cb(&mut self,
@@ -1359,8 +1381,8 @@ impl Peer {
 
         if let Some(ref exec_result) = exec_result {
             match *exec_result {
-                ExecResult::ChangePeer { ref region, .. } => {
-                    storage.region = region.clone();
+                ExecResult::ChangePeer(ref cp) => {
+                    storage.region = cp.region.clone();
                 }
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } => {}
@@ -1372,6 +1394,8 @@ impl Peer {
                 }
                 ExecResult::SplitRegion { ref left, .. } => {
                     storage.region = left.clone();
+                    self.size_diff_hint = 0;
+                    self.delete_keys_hint = 0;
                 }
             }
         }
@@ -1529,11 +1553,9 @@ impl Peer {
                                         peer,
                                         self.region()));
                 }
+
                 // TODO: Do we allow adding peer in same node?
 
-                // Add this peer to cache.
-                self.peer_cache.borrow_mut().insert(peer.get_id(), peer.clone());
-                self.peer_heartbeats.insert(peer.get_id(), Instant::now());
                 region.mut_peers().push(peer.clone());
 
                 PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["add_peer", "success"]).inc();
@@ -1562,9 +1584,6 @@ impl Peer {
                     self.pending_remove = true;
                 }
 
-                // Remove this peer from cache.
-                self.peer_cache.borrow_mut().remove(&peer.get_id());
-                self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
                 PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["remove_peer", "success"]).inc();
@@ -1576,25 +1595,24 @@ impl Peer {
             }
         }
 
-        if self.pending_remove {
-            self.get_store()
-                .clear_meta(&ctx.wb)
-                .and_then(|_| write_peer_state(&ctx.wb, &region, PeerState::Tombstone))
-                .unwrap_or_else(|e| panic!("{} failed to remove self: {:?}", self.tag, e));
+        let state = if self.pending_remove {
+            PeerState::Tombstone
         } else {
-            write_peer_state(&ctx.wb, &region, PeerState::Normal)
-                .unwrap_or_else(|e| panic!("{} failed to update region state: {:?}", self.tag, e));
+            PeerState::Normal
+        };
+        if let Err(e) = write_peer_state(&ctx.wb, &region, state) {
+            panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
 
         Ok((resp,
-            Some(ExecResult::ChangePeer {
-            change_type: change_type,
+            Some(ExecResult::ChangePeer(ChangePeer {
+            conf_change: Default::default(),
             peer: peer.clone(),
             region: region,
-        })))
+        }))))
     }
 
     fn exec_split(&mut self,
@@ -1643,9 +1661,6 @@ impl Peer {
         for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
             let peer_id = new_peer_ids[index];
             peer.set_id(peer_id);
-
-            // Add this peer to cache.
-            self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
         }
 
         // update region version
@@ -1665,9 +1680,6 @@ impl Peer {
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());
         resp.mut_split().set_right(new_region.clone());
-
-        self.size_diff_hint = 0;
-        self.delete_keys_hint = 0;
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 
