@@ -209,6 +209,7 @@ impl PendingCmdQueue {
         self.conf_change.take()
     }
 
+    // TODO: seems we don't need to seperate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd) {
         self.conf_change = Some(cmd);
     }
