@@ -86,7 +86,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(&snap));
     mgr.wl().register(key.clone(), SnapEntry::Sending);
-    let mut snapshot_files_reader = box_try!(mgr.rl().get_snap_file_reader(&key, true));
+    let mut snapshot_files_reader = box_try!(mgr.rl().get_send_snap_file_reader(&key));
     {
         if !snapshot_files_reader.exists() {
             // clean up snapshot file
@@ -151,32 +151,32 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
     }
 }
 
+fn get_cf_file_sizes(msg: &RaftMessage) -> Result<Vec<(String, u64)>> {
+    let mut snap_data = RaftSnapshotData::new();
+    let data = msg.get_message().get_snapshot().get_data();
+    try!(snap_data.merge_from_bytes(data));
+    let res = try!(decode_cf_files_size(snap_data.get_data()));
+    Ok(res)
+}
+
 impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Register(token, meta) => {
                 SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
-                let mut snap_data = RaftSnapshotData::new();
-                {
-                    let data = meta.get_message().get_snapshot().get_data();
-                    if let Err(e) = snap_data.merge_from_bytes(data) {
-                        error!("snapshot data corrupted, decode err: {:?}", e);
-                        self.close(token);
-                        return;
-                    }
-                }
-                let cf_sizes = match decode_cf_files_size(snap_data.get_data()) {
-                    Ok(sizes) => sizes,
+                let cf_sizes = match get_cf_file_sizes(&meta) {
+                    Ok(res) => res,
                     Err(e) => {
-                        error!("failed decode snapshot cf file size, err: {:?}", e);
+                        error!("failed to get cf file sizes from snapshot message, err: {:?}",
+                               e);
                         self.close(token);
                         return;
                     }
                 };
                 match SnapKey::from_snap(meta.get_message().get_snapshot())
                     .and_then(|key| mgr.rl().get_recv_snap_file(&key, cf_sizes).map(|r| (r, key))) {
-                    Ok((f, k)) => {
+                    Ok((mut f, k)) => {
                         if f.exists() {
                             info!("file {} already exists, skip receiving.", f.display_path());
                             if let Err(e) = self.raft_router.send_raft_msg(meta) {
@@ -184,12 +184,19 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             }
                             self.close(token);
                             return;
+                        } else if let Err(e) = f.init() {
+                            error!("failed to init snap file for {:?}: {:?}", token, e);
+                            self.close(token);
+                            return;
                         }
                         debug!("begin to receive snap {:?}", meta);
                         mgr.wl().register(k.clone(), SnapEntry::Receiving);
                         self.files.insert(token, (f, meta));
                     }
-                    Err(e) => error!("failed to create snap file for {:?}: {:?}", token, e),
+                    Err(e) => {
+                        error!("failed to create snap file for {:?}: {:?}", token, e);
+                        self.close(token);
+                    }
                 }
             }
             Task::Write(token, mut data) => {
@@ -223,6 +230,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         });
                         // don't need to write checksum, because it's already included in the file.
                         if let Err(e) = writer.save() {
+                            writer.delete();
                             error!("failed to save file {:?}: {:?}", token, e);
                             return;
                         }

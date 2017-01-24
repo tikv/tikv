@@ -79,16 +79,13 @@ const SNAP_REV_PREFIX: &'static str = "rev";
 
 struct CfFile {
     pub cf: String,
-    pub writer: SstFileWriter,
+    pub writer: Option<SstFileWriter>,
     pub kv_count: u64,
     pub path: String,
     pub tmp_path: String,
-    pub size: u64,
 }
 
 pub struct SendSnapshotFile {
-    dir: PathBuf,
-    prefix: String,
     index: usize,
     cf_files: Vec<CfFile>,
     size_track: Arc<RwLock<u64>>,
@@ -106,50 +103,44 @@ impl SendSnapshotFile {
 
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         let cf_number = ALL_CFS.len() - 1;
-
-        let mut f = SendSnapshotFile {
-            dir: dir_path,
-            prefix: prefix,
-            index: 0,
-            cf_files: Vec::with_capacity(cf_number),
-            size_track: size_track,
-        };
-        try!(f.init());
-        Ok(f)
-    }
-
-    fn init(&mut self) -> io::Result<()> {
+        let mut cf_files = Vec::with_capacity(cf_number);
         for cf in ALL_CFS {
             if *cf == CF_RAFT {
                 continue;
             }
-            // The cf raft is not needed
-            try!(self.add_file(cf.to_string()));
+            let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
+            let path = dir_path.join(filename).as_path().to_str().unwrap().to_string();
+            let tmp_filename = format!("{}_{}{}", prefix, cf, TMP_FILE_SUFFIX);
+            let tmp_path = dir_path.join(tmp_filename).as_path().to_str().unwrap().to_string();
+            let cf_file = CfFile {
+                cf: String::from(*cf),
+                writer: None,
+                kv_count: 0,
+                tmp_path: tmp_path,
+                path: path,
+            };
+            cf_files.push(cf_file);
         }
-        Ok(())
+
+        let f = SendSnapshotFile {
+            index: 0,
+            cf_files: cf_files,
+            size_track: size_track,
+        };
+        Ok(f)
     }
 
-    fn add_file(&mut self, cf: String) -> io::Result<()> {
-        let filename = format!("{}_{}{}", self.prefix, cf, SST_FILE_SUFFIX);
-        let path = self.dir.join(filename).as_path().to_str().unwrap().to_string();
-        let tmp_filename = format!("{}_{}{}", self.prefix, cf, TMP_FILE_SUFFIX);
-        let tmp_path = self.dir.join(tmp_filename).as_path().to_str().unwrap().to_string();
-        let env_opt = EnvOptions::new();
-        let io_options = Options::new();
-        let mut writer = SstFileWriter::new(&env_opt, &io_options);
-        if let Err(e) = writer.open(&tmp_path) {
-            return Err(io::Error::new(ErrorKind::Other, e));
+    pub fn init(&mut self) -> io::Result<()> {
+        for f in &mut self.cf_files {
+            let env_opt = EnvOptions::new();
+            let io_options = Options::new();
+            let mut writer = SstFileWriter::new(&env_opt, &io_options);
+            if let Err(e) = writer.open(&f.tmp_path) {
+                return Err(io::Error::new(ErrorKind::Other, e));
+            }
+            f.writer = Some(writer);
         }
-        let cf_file = CfFile {
-            cf: cf,
-            writer: writer,
-            kv_count: 0,
-            tmp_path: tmp_path,
-            path: path,
-            size: 0,
-        };
 
-        self.cf_files.push(cf_file);
         Ok(())
     }
 
@@ -172,42 +163,40 @@ impl SendSnapshotFile {
     }
 
     pub fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
-        if let Err(e) = self.cf_files[self.index].writer.add(k, v) {
+        let mut cf_file = &mut self.cf_files[self.index];
+        let mut writer = cf_file.writer.as_mut().unwrap();
+        if let Err(e) = writer.add(k, v) {
             return Err(io::Error::new(ErrorKind::Other, e));
         }
-        self.cf_files[self.index].kv_count += 1;
+        cf_file.kv_count += 1;
         Ok(())
     }
 
     pub fn save_all(&mut self) -> io::Result<()> {
         for f in &mut self.cf_files {
             if f.kv_count == 0 {
-                let _ = try!(OpenOptions::new().write(true).create_new(true).open(&f.path));
-                f.size = 0;
+                try!(fs::rename(&f.tmp_path, &f.path));
             } else {
-                if let Err(e) = f.writer.finish() {
-                    println!("cf {}, tmp_path {}, path {}, error here {:?}",
-                             f.cf,
-                             f.tmp_path,
-                             f.path,
-                             e);
+                let writer = f.writer.as_mut().unwrap();
+                if let Err(e) = writer.finish() {
                     return Err(io::Error::new(ErrorKind::Other, e));
                 }
                 let mut size_track = self.size_track.wl();
                 try!(fs::rename(&f.tmp_path, &f.path));
-                f.size = try!(fs::metadata(&f.path)).len();
-                *size_track = size_track.saturating_add(f.size);
+                let size = try!(fs::metadata(&f.path)).len();
+                *size_track = size_track.saturating_add(size);
             }
         }
         Ok(())
     }
 
-    pub fn list_cf_sizes(&self) -> Vec<(String, u64)> {
+    pub fn list_cf_sizes(&self) -> io::Result<Vec<(String, u64)>> {
         let mut res = Vec::with_capacity(self.cf_files.len());
         for f in &self.cf_files {
-            res.push((f.cf.clone(), f.size));
+            let size = try!(fs::metadata(&f.path)).len();
+            res.push((f.cf.clone(), size));
         }
-        res
+        Ok(res)
     }
 
     pub fn exists(&self) -> bool {
@@ -218,43 +207,48 @@ impl SendSnapshotFile {
         }
         true
     }
+}
 
-    pub fn total_size(&self) -> u64 {
-        let mut sum = 0;
+impl Drop for SendSnapshotFile {
+    fn drop(&mut self) {
+        let mut to_cleanup = false;
         for f in &self.cf_files {
-            sum += f.size;
+            if file_exists(&f.tmp_path) {
+                to_cleanup = true;
+                break;
+            }
         }
-        sum
+        if to_cleanup {
+            for f in &self.cf_files {
+                delete_file(&f.tmp_path);
+                delete_file(&f.path);
+            }
+        }
     }
 }
 
-struct CfReader {
+struct SendCfFileReader {
     pub cf: String,
     pub file: File,
     pub path: String,
 }
 
-pub struct SnapshotFileReader {
+pub struct SendSnapshotFileReader {
     dir: PathBuf,
     prefix: String,
     index: usize,
-    cf_readers: Vec<CfReader>,
+    cf_readers: Vec<SendCfFileReader>,
     size_track: Arc<RwLock<u64>>,
 }
 
-impl SnapshotFileReader {
+impl SendSnapshotFileReader {
     fn new<T: Into<PathBuf>>(snap_dir: T,
                              key: &SnapKey,
-                             to_send: bool,
                              size_track: Arc<RwLock<u64>>)
-                             -> io::Result<SnapshotFileReader> {
+                             -> io::Result<SendSnapshotFileReader> {
         let dir_path = snap_dir.into();
 
-        let prefix = if to_send {
-            format!("{}_{}", SNAP_GEN_PREFIX, key)
-        } else {
-            format!("{}_{}", SNAP_REV_PREFIX, key)
-        };
+        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         let mut cf_readers = Vec::with_capacity(ALL_CFS.len() - 1);
         for cf in ALL_CFS {
             if *cf == CF_RAFT {
@@ -264,17 +258,18 @@ impl SnapshotFileReader {
             let path = dir_path.join(filename).as_path().to_str().unwrap().to_string();
             if !file_exists(&path) {
                 return Err(io::Error::new(ErrorKind::NotFound,
-                                          format!("snapshot for {} not found", key)));
+                                          format!("send snapshot file for snap key {} not found",
+                                                  key)));
             }
             let f = try!(OpenOptions::new().read(true).open(&path));
-            let r = CfReader {
+            let r = SendCfFileReader {
                 cf: String::from(*cf),
                 file: f,
                 path: path,
             };
             cf_readers.push(r);
         }
-        Ok(SnapshotFileReader {
+        Ok(SendSnapshotFileReader {
             dir: dir_path,
             prefix: prefix,
             index: 0,
@@ -294,8 +289,7 @@ impl SnapshotFileReader {
 
     pub fn display_path(&self) -> String {
         let mut cf_names = String::from("");
-        let mut i = 0;
-        for f in &self.cf_readers {
+        for (i, f) in self.cf_readers.iter().enumerate() {
             if i == 0 {
                 cf_names += "(";
                 cf_names += &f.cf;
@@ -303,26 +297,13 @@ impl SnapshotFileReader {
                 cf_names += "|";
                 cf_names += &f.cf;
             }
-            i += 0;
         }
         cf_names += ")";
-        format!("{:?}/{}_{}.{}",
-                self.dir,
+        format!("{}/{}_{}{}",
+                self.dir.as_path().to_str().unwrap().to_string(),
                 self.prefix,
                 cf_names,
                 SST_FILE_SUFFIX)
-    }
-
-    pub fn list_cf_files(&self) -> io::Result<Vec<(String, String)>> {
-        let mut res = Vec::with_capacity(self.cf_readers.len());
-        for r in &self.cf_readers {
-            let size = try!(fs::metadata(&r.path)).len();
-            if size == 0 {
-                continue;
-            }
-            res.push((r.cf.clone(), r.path.clone()));
-        }
-        Ok(res)
     }
 
     pub fn delete(&self) {
@@ -358,7 +339,7 @@ impl SnapshotFileReader {
     }
 }
 
-impl Read for SnapshotFileReader {
+impl Read for SendSnapshotFileReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.len() == 0 {
             return Ok(0);
@@ -382,7 +363,7 @@ impl Read for SnapshotFileReader {
 
 struct RecvCfFile {
     pub cf: String,
-    pub file: File,
+    pub file: Option<File>,
     pub path: String,
     pub tmp_path: String,
     pub size: u64,
@@ -416,10 +397,9 @@ impl RecvSnapshotFile {
             let tmp_path = dir_path.join(tmp_filename).as_path().to_str().unwrap().to_string();
             let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
             let path = dir_path.join(filename).as_path().to_str().unwrap().to_string();
-            let f = try!(OpenOptions::new().write(true).create_new(true).open(&tmp_path));
             let cf_file = RecvCfFile {
                 cf: cf,
-                file: f,
+                file: None,
                 tmp_path: tmp_path,
                 path: path,
                 size: size,
@@ -436,6 +416,14 @@ impl RecvSnapshotFile {
         })
     }
 
+    pub fn init(&mut self) -> io::Result<()> {
+        for f in &mut self.cf_files {
+            let tmp_file = try!(OpenOptions::new().write(true).create_new(true).open(&f.tmp_path));
+            f.file = Some(tmp_file);
+        }
+        Ok(())
+    }
+
     pub fn exists(&self) -> bool {
         for f in &self.cf_files {
             if !file_exists(&f.path) {
@@ -447,8 +435,7 @@ impl RecvSnapshotFile {
 
     pub fn display_path(&self) -> String {
         let mut cf_names = String::from("");
-        let mut i = 0;
-        for f in &self.cf_files {
+        for (i, f) in self.cf_files.iter().enumerate() {
             if i == 0 {
                 cf_names += "(";
                 cf_names += &f.cf;
@@ -456,11 +443,10 @@ impl RecvSnapshotFile {
                 cf_names += "|";
                 cf_names += &f.cf;
             }
-            i += 0;
         }
         cf_names += ")";
-        format!("{:?}/{}_{}.{}",
-                self.dir,
+        format!("{}/{}_{}{}",
+                self.dir.as_path().to_str().unwrap().to_string(),
                 self.prefix,
                 cf_names,
                 SST_FILE_SUFFIX)
@@ -468,8 +454,20 @@ impl RecvSnapshotFile {
 
     pub fn save(&mut self) -> io::Result<()> {
         debug!("saving to {}", self.display_path());
+        // check that all cf files have been fully written
         for cf_file in &mut self.cf_files {
-            try!(cf_file.file.flush());
+            let mut file = cf_file.file.as_mut().unwrap();
+            try!(file.flush());
+            let tmp_path_size = try!(fs::metadata(&cf_file.tmp_path)).len();
+            if tmp_path_size < cf_file.size {
+                return Err(io::Error::new(ErrorKind::Other,
+                                          format!("snapshot file for cf {} not fully written, \
+                                                   diff {}",
+                                                  cf_file.cf,
+                                                  cf_file.size - tmp_path_size)));
+            }
+        }
+        for cf_file in &mut self.cf_files {
             let mut size_track = self.size_track.wl();
             try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
             *size_track = size_track.saturating_add(cf_file.size as u64);
@@ -488,10 +486,8 @@ impl RecvSnapshotFile {
     pub fn try_delete(&self) -> io::Result<()> {
         debug!("deleting {}", self.display_path());
         for f in &self.cf_files {
-            let size = try!(fs::metadata(&f.path)).len();
-            let mut size_track = self.size_track.wl();
-            try!(fs::remove_file(&f.path));
-            *size_track = size_track.saturating_sub(size);
+            delete_file(&f.tmp_path);
+            delete_file(&f.path);
         }
         Ok(())
     }
@@ -499,17 +495,25 @@ impl RecvSnapshotFile {
 
 impl Write for RecvSnapshotFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.len() == 0 {
+            return Ok(0);
+        }
         let mut next_buf = buf;
         while self.index < self.cf_files.len() {
             let cf_file = &mut self.cf_files[self.index];
             let left = (cf_file.size - cf_file.written_size) as usize;
+            if left == 0 {
+                self.index += 1;
+                continue;
+            }
+            let mut file = cf_file.file.as_mut().unwrap();
             if next_buf.len() > left {
-                try!(cf_file.file.write_all(&next_buf[0..left]));
+                try!(file.write_all(&next_buf[0..left]));
                 cf_file.written_size += left as u64;
                 self.index += 1;
                 next_buf = &next_buf[left..];
             } else {
-                try!(cf_file.file.write_all(next_buf));
+                try!(file.write_all(next_buf));
                 cf_file.written_size = next_buf.len() as u64;
                 return Ok(buf.len());
             }
@@ -519,8 +523,9 @@ impl Write for RecvSnapshotFile {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        for cf_file in &mut self.cf_files {
-            try!(cf_file.file.flush());
+        if let Some(cf_file) = self.cf_files.get_mut(self.index) {
+            let file = cf_file.file.as_mut().unwrap();
+            try!(file.flush());
         }
         Ok(())
     }
@@ -528,18 +533,93 @@ impl Write for RecvSnapshotFile {
 
 impl Drop for RecvSnapshotFile {
     fn drop(&mut self) {
-        debug!("deleting {}", self.display_path());
-        let mut done_writing = true;
-        for cf_file in &self.cf_files {
-            if file_exists(&cf_file.tmp_path) {
-                done_writing = false;
+        let mut to_cleanup = false;
+        for f in &self.cf_files {
+            if file_exists(&f.tmp_path) {
+                to_cleanup = true;
+                break;
             }
         }
-        if !done_writing {
-            for cf_file in &self.cf_files {
-                delete_file(&cf_file.tmp_path);
-                delete_file(&cf_file.path);
+        if to_cleanup {
+            for f in &self.cf_files {
+                delete_file(&f.tmp_path);
+                delete_file(&f.path);
             }
+        }
+    }
+}
+
+struct RecvCfFileReader {
+    pub cf: String,
+    pub path: String,
+    pub size: u64,
+}
+
+pub struct RecvSnapshotFileReader {
+    cf_files: Vec<RecvCfFileReader>,
+    size_track: Arc<RwLock<u64>>,
+}
+
+impl RecvSnapshotFileReader {
+    fn new<T: Into<PathBuf>>(snap_dir: T,
+                             key: &SnapKey,
+                             size_track: Arc<RwLock<u64>>)
+                             -> io::Result<RecvSnapshotFileReader> {
+        let dir_path = snap_dir.into();
+
+        let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
+        let mut cf_files = Vec::with_capacity(ALL_CFS.len() - 1);
+        for cf in ALL_CFS {
+            if *cf == CF_RAFT {
+                continue;
+            }
+            let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
+            let path = dir_path.join(filename).as_path().to_str().unwrap().to_string();
+            if !file_exists(&path) {
+                error!("recv snapshot path {} not exists", path);
+                return Err(io::Error::new(ErrorKind::NotFound,
+                                          format!("recv snapshot file for snap key {} not found",
+                                                  key)));
+            }
+            let size = try!(fs::metadata(&path)).len();
+            let f = RecvCfFileReader {
+                cf: String::from(*cf),
+                path: path.to_string(),
+                size: size,
+            };
+            cf_files.push(f);
+        }
+        Ok(RecvSnapshotFileReader {
+            cf_files: cf_files,
+            size_track: size_track,
+        })
+    }
+
+    pub fn list_cf_files(&self) -> Vec<(String, String)> {
+        let mut res = Vec::with_capacity(self.cf_files.len());
+        for cf_file in &self.cf_files {
+            if cf_file.size == 0 {
+                continue;
+            }
+            res.push((cf_file.cf.clone(), cf_file.path.clone()));
+        }
+        res
+    }
+
+    pub fn delete(&self) {
+        // Do not delete cf files since they are moved to rocksdb
+        let mut size_track = self.size_track.wl();
+        for cf_file in &self.cf_files {
+            delete_file(&cf_file.path);
+            *size_track = size_track.saturating_sub(cf_file.size);
+        }
+    }
+
+    pub fn cleanup(&self) {
+        // Do not delete cf files since they are moved to rocksdb
+        let mut size_track = self.size_track.wl();
+        for cf_file in &self.cf_files {
+            *size_track = size_track.saturating_sub(cf_file.size);
         }
     }
 }
@@ -606,7 +686,7 @@ impl SnapManagerCore {
     pub fn list_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         let path = Path::new(&self.base);
         let read_dir = try!(fs::read_dir(path));
-        Ok(read_dir.filter_map(|p| {
+        let mut all_keys: Vec<(SnapKey, bool)> = read_dir.filter_map(|p| {
                 let p = match p {
                     Err(e) => {
                         error!("failed to list content of {}: {:?}", self.base, e);
@@ -638,7 +718,10 @@ impl SnapManagerCore {
                 }
                 Some((SnapKey::new(numbers[0], numbers[1], numbers[2]), is_sending))
             })
-            .collect())
+            .collect();
+        all_keys.sort();
+        all_keys.dedup();
+        Ok(all_keys)
     }
 
     #[inline]
@@ -660,11 +743,13 @@ impl SnapManagerCore {
     }
 
     #[inline]
-    pub fn get_snap_file_reader(&self,
-                                key: &SnapKey,
-                                to_send: bool)
-                                -> io::Result<SnapshotFileReader> {
-        SnapshotFileReader::new(&self.base, key, to_send, self.snap_size.clone())
+    pub fn get_send_snap_file_reader(&self, key: &SnapKey) -> io::Result<SendSnapshotFileReader> {
+        SendSnapshotFileReader::new(&self.base, key, self.snap_size.clone())
+    }
+
+    #[inline]
+    pub fn get_recv_snap_file_reader(&self, key: &SnapKey) -> io::Result<RecvSnapshotFileReader> {
+        RecvSnapshotFileReader::new(&self.base, key, self.snap_size.clone())
     }
 
     /// Get the approximate size of snap file exists in snap directory.
@@ -797,13 +882,17 @@ mod test {
         let path3 = path.path().to_str().unwrap().to_owned() + "/snap3";
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let f1 = SendSnapshotFile::new(&path3, &key1, size_track.clone()).unwrap();
-        let f2 = SendSnapshotFile::new(&path3, &key1, size_track.clone()).unwrap();
+        let mut f1 = SendSnapshotFile::new(&path3, &key1, size_track.clone()).unwrap();
+        f1.init().unwrap();
+        let mut f2 = SendSnapshotFile::new(&path3, &key1, size_track.clone()).unwrap();
+        f2.init().unwrap();
         let key2 = SnapKey::new(2, 1, 1);
         let mut f3 = SendSnapshotFile::new(&path3, &key2, size_track.clone()).unwrap();
+        f3.init().unwrap();
         write_test_snapshot_file(&mut f3);
         f3.save_all().unwrap();
         let mut f4 = SendSnapshotFile::new(&path3, &key2, size_track.clone()).unwrap();
+        f4.init().unwrap();
         write_test_snapshot_file(&mut f4);
         f4.save_all().unwrap();
         assert!(!f1.exists());
@@ -829,43 +918,54 @@ mod test {
         let snap_key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
         let mut f1 = SendSnapshotFile::new(path_str, &snap_key1, size_track.clone()).unwrap();
+        f1.init().unwrap();
         write_test_snapshot_file(&mut f1);
         f1.save_all().unwrap();
-        let cf_sizes = f1.list_cf_sizes();
-        let total_size = f1.total_size();
+        let cf_sizes = f1.list_cf_sizes().unwrap();
+        let mut total_size = 0;
+        for &(_, size) in &cf_sizes {
+            total_size += size;
+        }
 
-        let mut reader = SnapshotFileReader::new(path_str, &snap_key1, true, size_track.clone())
+        let mut reader = SendSnapshotFileReader::new(path_str, &snap_key1, size_track.clone())
             .unwrap();
-        let mut buf = Vec::with_capacity(total_size as usize);
+        let buf_len = total_size as usize;
+        let mut buf = Vec::with_capacity(buf_len);
+        buf.resize(buf_len, 0);
         let read_size = reader.read_to_end(&mut buf).unwrap();
         assert_eq!(read_size as u64, total_size);
 
-        let snap_key2 = SnapKey::new(2, 1, 1);
         let mut f2 =
-            RecvSnapshotFile::new(path_str, &snap_key2, cf_sizes.clone(), size_track.clone())
+            RecvSnapshotFile::new(path_str, &snap_key1, cf_sizes.clone(), size_track.clone())
                 .unwrap();
+        f2.init().unwrap();
         f2.write_all(&buf[0..read_size]).unwrap();
         f2.save().unwrap();
 
-        let snap_key3 = SnapKey::new(3, 1, 1);
-        let mut f3 = SendSnapshotFile::new(path_str, &snap_key3, size_track.clone()).unwrap();
+        let snap_key2 = SnapKey::new(2, 1, 1);
+        let mut f3 = SendSnapshotFile::new(path_str, &snap_key2, size_track.clone()).unwrap();
+        f3.init().unwrap();
         write_test_snapshot_file(&mut f3);
 
         mgr = new_snap_mgr(path_str, None);
         mgr.wl().init().unwrap();
         // temporary file should not be count in snap size.
         assert_eq!(mgr.rl().get_total_snap_size(), total_size * 2);
-        mgr.rl().get_snap_file_reader(&snap_key1, true).unwrap().delete();
+        mgr.rl().get_send_snap_file_reader(&snap_key1).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), total_size);
-        mgr.rl().get_recv_snap_file(&snap_key2, cf_sizes).unwrap().delete();
+        mgr.rl().get_recv_snap_file_reader(&snap_key1).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
 
-        let snap_key4 = SnapKey::new(4, 1, 1);
-        let mut f4 = mgr.rl().get_send_snap_file(&snap_key4).unwrap();
+        let snap_key3 = SnapKey::new(3, 1, 1);
+        let mut f4 = mgr.rl().get_send_snap_file(&snap_key3).unwrap();
+        f4.init().unwrap();
         write_test_snapshot_file(&mut f4);
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
         f4.save_all().unwrap();
-        let size = f4.total_size();
-        assert_eq!(mgr.rl().get_total_snap_size(), size);
+        let mut total_size = 0;
+        for (_, size) in f4.list_cf_sizes().unwrap() {
+            total_size += size;
+        }
+        assert_eq!(mgr.rl().get_total_snap_size(), total_size);
     }
 }

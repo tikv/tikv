@@ -962,6 +962,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     if snapshot_file.exists() {
         // TODO validate `send_snapshot_files`
     } else {
+        try!(snapshot_file.init());
         try!(build_snap_file(&mut snapshot_file, snap, state.get_region()));
     }
 
@@ -969,9 +970,13 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.take_region());
 
-    snap_data.set_file_size(snapshot_file.total_size());
-    snap_data.set_data(RepeatedField::from_vec(
-        encode_cf_files_size(snapshot_file.list_cf_sizes())));
+    let cf_sizes = try!(snapshot_file.list_cf_sizes());
+    let mut sum_size = 0;
+    for &(_, size) in &cf_sizes {
+        sum_size += size;
+    }
+    snap_data.set_file_size(sum_size);
+    snap_data.set_data(RepeatedField::from_vec(encode_cf_files_size(cf_sizes)));
 
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
@@ -1370,7 +1375,8 @@ mod test {
         let total_size = snap_data.get_file_size();
         let cf_sizes = decode_cf_files_size(snap_data.get_data()).unwrap();
         let mut recv_snap = mgr.rl().get_recv_snap_file(&key, cf_sizes).unwrap();
-        let mut reader = mgr.rl().get_snap_file_reader(&key, true).unwrap();
+        recv_snap.init().unwrap();
+        let mut reader = mgr.rl().get_send_snap_file_reader(&key).unwrap();
         let mut buf = Vec::with_capacity(total_size as usize);
         let read_size = reader.read_to_end(&mut buf).unwrap();
         assert_eq!(read_size as u64, total_size);

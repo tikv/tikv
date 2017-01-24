@@ -85,7 +85,7 @@ impl Channel<RaftMessage> for ChannelTransport {
             let mut snap_reader = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_snap_file_reader(&key, true).unwrap()
+                    p.0.rl().get_send_snap_file_reader(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
@@ -97,7 +97,17 @@ impl Channel<RaftMessage> for ChannelTransport {
             let mut recv_snap_file = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
-                    p.0.rl().get_recv_snap_file(&key, cf_sizes).unwrap()
+                    match p.0.rl().get_recv_snap_file(&key, cf_sizes) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            return Err(box_err!("fail to create snap file from store {} to store \
+                                                 {} for {:?}: {:?}",
+                                                from_store,
+                                                to_store,
+                                                key,
+                                                e))
+                        }
+                    }
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -109,9 +119,11 @@ impl Channel<RaftMessage> for ChannelTransport {
             });
 
             if !recv_snap_file.exists() {
+                recv_snap_file.init().unwrap();
                 loop {
                     let buf_len = 10000;
                     let mut buf = Vec::with_capacity(buf_len);
+                    buf.resize(buf_len, 0);
                     let n = try!(snap_reader.read(&mut buf[..]));
                     if n == 0 {
                         break;
