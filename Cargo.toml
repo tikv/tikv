@@ -45,7 +45,7 @@ crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
-protobuf = "1.0"
+protobuf = "1.1"
 bytes  = "0.3.0"
 nix = "0.6.0"
 utime = "0.1"
@@ -65,6 +65,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
+branch = "ov/grpc-pdpb"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -76,6 +77,9 @@ git = "https://github.com/carllerche/mio.git"
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
 features = ["nightly", "push"]
+
+[dependencies.grpc]
+git = "https://github.com/pingcap/grpc-rust.git"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
