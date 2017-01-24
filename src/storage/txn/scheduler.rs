@@ -369,6 +369,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
             let mut reader =
                 MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true, None);
+            // scan_key is used as start_key here,and Range start gc with scan_key=none.
             let start_key = scan_key.clone();
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
@@ -378,7 +379,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                     if keys.is_empty() {
                         // empty range
                         if start_key.is_none() {
-                            GC_EMPTY_RANGE_COUNTER.inc();
+                            KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
                         }
                         Ok(None)
                     } else {

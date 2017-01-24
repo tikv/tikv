@@ -77,9 +77,9 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref GC_EMPTY_RANGE_COUNTER: Counter =
+    pub static ref KV_COMMAND_GC_EMPTY_RANGE_COUNTER: Counter =
         register_counter!(
-            "gc_empty_range_total",
+            "tikv_storage_gc_empty_range_total",
             "Total number of empty range found by gc"
         ).unwrap();
 }
