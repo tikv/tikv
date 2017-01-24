@@ -14,6 +14,7 @@
 use std::vec::Vec;
 
 mod client;
+mod v2client;
 mod protocol;
 mod metrics;
 
