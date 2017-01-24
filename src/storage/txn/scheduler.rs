@@ -369,12 +369,17 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
             let mut reader =
                 MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true, None);
+            let start_key = scan_key.clone();
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
                         .observe(keys.len() as f64);
                     if keys.is_empty() {
+                        if start_key.is_none() {
+                            // empty region
+                            GC_EMPTY_RANGE_COUNTER.inc();
+                        }
                         Ok(None)
                     } else {
                         Ok(Some(Command::Gc {

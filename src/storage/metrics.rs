@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, Gauge, HistogramVec, Histogram, exponential_buckets};
+use prometheus::{Counter, CounterVec, Gauge, HistogramVec, Histogram, exponential_buckets};
 
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: CounterVec =
@@ -75,5 +75,11 @@ lazy_static! {
             "tikv_storage_rawkv_command_total",
             "Total number of rawkv commands received.",
             &["type"]
+        ).unwrap();
+
+    pub static ref GC_EMPTY_RANGE_COUNTER: Counter =
+        register_counter!(
+            "gc_empty_range_total",
+            "Total number of empty range found by gc"
         ).unwrap();
 }
