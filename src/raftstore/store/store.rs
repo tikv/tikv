@@ -51,7 +51,7 @@ use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState,
+use super::peer::{Peer, ProposalMeta, ReadyResult, ExecResult, StaleState, ConsistencyState,
                   ReadyContext, ChangePeer};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
@@ -1109,13 +1109,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
-        let pending_cmd = PendingCmd {
+        let meta = ProposalMeta {
             uuid: uuid,
             term: term,
-            cb: Some(cb),
             renew_lease_time: None,
         };
-        if peer.propose(pending_cmd, msg, resp, &mut self.raft_metrics.propose) {
+        if peer.propose(meta, cb, msg, resp, &mut self.raft_metrics.propose) {
             self.pending_raft_groups.insert(region_id);
         }
 
