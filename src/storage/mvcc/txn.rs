@@ -349,6 +349,38 @@ mod tests {
     }
 
     #[test]
+    fn test_rollback_lock() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        let (k, v) = (b"k1", b"v1");
+        must_prewrite_put(engine.as_ref(), k, v, k, 5);
+        must_commit(engine.as_ref(), k, 5, 10);
+
+        // Lock
+        must_prewrite_lock(engine.as_ref(), k, k, 15);
+        must_locked(engine.as_ref(), k, 15);
+
+        // Rollback lock
+        must_rollback(engine.as_ref(), k, 15);
+    }
+
+    #[test]
+    fn test_rollback_del() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        let (k, v) = (b"k1", b"v1");
+        must_prewrite_put(engine.as_ref(), k, v, k, 5);
+        must_commit(engine.as_ref(), k, 5, 10);
+
+        // Prewrite delete
+        must_prewrite_delete(engine.as_ref(), k, k, 15);
+        must_locked(engine.as_ref(), k, 15);
+
+        // Rollback delete
+        must_rollback(engine.as_ref(), k, 15);
+    }
+
+    #[test]
     fn test_mvcc_txn_prewrite() {
         test_mvcc_txn_prewrite_imp(b"k1", b"v1");
 
