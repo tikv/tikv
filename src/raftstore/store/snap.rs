@@ -857,7 +857,7 @@ mod test {
     fn write_test_snapshot_file(f: &mut SendSnapshotFile) {
         // Write at least one key-value to the SendSnapshotFile
         // because it's not allowed to finish a rocksdb sst file writer with no entries.
-        for cf in get_snapshot_cfs() {
+        for cf in super::get_snapshot_cfs() {
             if !f.next_file(cf) {
                 continue;
             }
