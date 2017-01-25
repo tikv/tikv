@@ -37,7 +37,7 @@ use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
-use raft::{SnapshotStatus, INVALID_INDEX};
+use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
@@ -52,7 +52,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState,
-                  ReadyContext};
+                  ReadyContext, ChangePeer};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -863,28 +863,50 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_change_peer(&mut self,
-                            region_id: u64,
-                            change_type: ConfChangeType,
-                            peer: metapb::Peer) {
-        let mut peer_id = 0;
-        if let Some(p) = self.region_peers.get(&region_id) {
+    fn on_ready_change_peer(&mut self, region_id: u64, cp: ChangePeer) {
+        let my_peer_id;
+        let change_type = cp.conf_change.get_change_type();
+        if let Some(p) = self.region_peers.get_mut(&region_id) {
+            p.raft_group.apply_conf_change(&cp.conf_change);
+            if cp.conf_change.get_node_id() == raft::INVALID_ID {
+                // Apply failed, skip.
+                return;
+            }
             if p.is_leader() {
                 // Notify pd immediately.
                 info!("{} notify pd with change peer region {:?}",
                       p.tag,
                       p.region());
-                self.heartbeat_pd(p);
+                p.heartbeat_pd(&self.cfg, &self.pd_worker);
             }
-            peer_id = p.peer_id();
+
+            match change_type {
+                ConfChangeType::AddNode => {
+                    // Add this peer to cache.
+                    let peer = cp.peer.clone();
+                    p.peer_heartbeats.insert(peer.get_id(), Instant::now());
+                    self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
+                }
+                ConfChangeType::RemoveNode => {
+                    // Remove this peer from cache.
+                    p.peer_heartbeats.remove(&cp.peer.get_id());
+                    self.peer_cache.borrow_mut().remove(&cp.peer.get_id());
+                }
+            }
+
+            my_peer_id = p.peer_id();
+        } else {
+            panic!("{} missing region {}", self.tag, region_id);
         }
+
+        let peer = cp.peer;
 
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            if peer_id == peer.get_id() {
+            if my_peer_id == peer.get_id() {
                 self.destroy_peer(region_id, peer)
             } else {
-                panic!("trying to remove unknown peer {:?}", peer);
+                panic!("{} trying to remove unknown peer {:?}", self.tag, peer);
             }
         }
     }
@@ -911,6 +933,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              right: metapb::Region) {
         let new_region_id = right.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
+            // Add new peers to cache.
+            for meta in right.get_peers() {
+                self.peer_cache.borrow_mut().insert(meta.get_id(), meta.to_owned());
+            }
             // If the store received a raft msg with the new region raft group
             // before splitting, it will creates a uninitialized peer.
             // We can remove this uninitialized peer directly.
@@ -973,8 +999,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("notify pd with split left {:?}, right {:?}",
               left_region,
               right_region);
-        self.heartbeat_pd(left);
-        self.heartbeat_pd(right);
+        left.heartbeat_pd(&self.cfg, &self.pd_worker);
+        right.heartbeat_pd(&self.cfg, &self.pd_worker);
 
         // Now pd only uses ReportSplit for history operation show,
         // so we send it independently here.
@@ -1023,9 +1049,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // handle executing committed log results
         for result in ready_result.exec_results {
             match result {
-                ExecResult::ChangePeer { change_type, peer, .. } => {
-                    self.on_ready_change_peer(region_id, change_type, peer)
-                }
+                ExecResult::ChangePeer(cp) => self.on_ready_change_peer(region_id, cp),
                 ExecResult::CompactLog { state, .. } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
@@ -1368,18 +1392,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn heartbeat_pd(&self, peer: &Peer) {
-        let task = PdTask::Heartbeat {
-            region: peer.region().clone(),
-            peer: peer.peer.clone(),
-            down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
-            pending_peers: peer.collect_pending_peers(),
-        };
-        if let Err(e) = self.pd_worker.schedule(task) {
-            error!("{} failed to notify pd: {}", peer.tag, e);
-        }
-    }
-
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
             peer.check_peers();
@@ -1389,7 +1401,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values() {
             if peer.is_leader() {
                 leader_count += 1;
-                self.heartbeat_pd(peer);
+                peer.heartbeat_pd(&self.cfg, &self.pd_worker);
             }
         }
 
