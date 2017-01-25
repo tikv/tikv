@@ -13,8 +13,8 @@
 
 use uuid::Uuid;
 use kvproto::{metapb, pdpb};
-use protobuf::RepeatedField;
-use super::{Error, Result, RpcClient};
+// use protobuf::RepeatedField;
+use super::{Result, RpcClient};
 
 impl super::PdClient for RpcClient {
     fn get_cluster_id(&self) -> Result<u64> {
@@ -135,18 +135,19 @@ impl super::PdClient for RpcClient {
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
-        let mut heartbeat = pdpb::RegionHeartbeatRequest::new();
-        heartbeat.set_region(region);
-        heartbeat.set_leader(leader);
-        heartbeat.set_down_peers(RepeatedField::from_vec(down_peers));
-        heartbeat.set_pending_peers(RepeatedField::from_vec(pending_peers));
+        // let mut heartbeat = pdpb::RegionHeartbeatRequest::new();
+        // heartbeat.set_region(region);
+        // heartbeat.set_leader(leader);
+        // heartbeat.set_down_peers(RepeatedField::from_vec(down_peers));
+        // heartbeat.set_pending_peers(RepeatedField::from_vec(pending_peers));
 
-        let mut req = new_request(self.cluster_id, pdpb::CommandType::RegionHeartbeat);
-        req.set_region_heartbeat(heartbeat);
+        // let mut req = new_request(self.cluster_id, pdpb::CommandType::RegionHeartbeat);
+        // req.set_region_heartbeat(heartbeat);
 
-        let mut resp = try!(self.send(&req));
-        try!(check_resp(&resp));
-        Ok(resp.take_region_heartbeat())
+        // let mut resp = try!(self.send(&req));
+        // try!(check_resp(&resp));
+        // Ok(resp.take_region_heartbeat())
+        self.v2.region_heartbeat(region, leader, down_peers, pending_peers)
     }
 
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
@@ -163,14 +164,15 @@ impl super::PdClient for RpcClient {
     }
 
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
-        let mut heartbeat = pdpb::StoreHeartbeatRequest::new();
-        heartbeat.set_stats(stats);
+        // let mut heartbeat = pdpb::StoreHeartbeatRequest::new();
+        // heartbeat.set_stats(stats);
 
-        let mut req = new_request(self.cluster_id, pdpb::CommandType::StoreHeartbeat);
-        req.set_store_heartbeat(heartbeat);
+        // let mut req = new_request(self.cluster_id, pdpb::CommandType::StoreHeartbeat);
+        // req.set_store_heartbeat(heartbeat);
 
-        let resp = try!(self.send(&req));
-        check_resp(&resp)
+        // let resp = try!(self.send(&req));
+        // check_resp(&resp)
+        self.v2.store_heartbeat(stats)
     }
 
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()> {
@@ -197,19 +199,19 @@ pub fn new_request(cluster_id: u64, cmd_type: pdpb::CommandType) -> pdpb::Reques
     req
 }
 
-fn check_resp(resp: &pdpb::Response) -> Result<()> {
-    if !resp.has_header() {
-        return Err(box_err!("pd response missing header"));
-    }
-    let header = resp.get_header();
-    if !header.has_error() {
-        return Ok(());
-    }
-    let error = header.get_error();
-    // TODO: translate more error types
-    if error.has_bootstrapped() {
-        Err(Error::ClusterBootstrapped(header.get_cluster_id()))
-    } else {
-        Err(box_err!(error.get_message()))
-    }
-}
+// fn check_resp(resp: &pdpb::Response) -> Result<()> {
+//     if !resp.has_header() {
+//         return Err(box_err!("pd response missing header"));
+//     }
+//     let header = resp.get_header();
+//     if !header.has_error() {
+//         return Ok(());
+//     }
+//     let error = header.get_error();
+//     // TODO: translate more error types
+//     if error.has_bootstrapped() {
+//         Err(Error::ClusterBootstrapped(header.get_cluster_id()))
+//     } else {
+//         Err(box_err!(error.get_message()))
+//     }
+// }

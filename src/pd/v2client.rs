@@ -15,6 +15,8 @@ use std::fmt;
 
 use grpc;
 
+use protobuf::RepeatedField;
+
 use kvproto::{metapb, pdpb};
 use kvproto::pdpb2;
 use kvproto::pdpb2_grpc::{self, PD};
@@ -164,14 +166,52 @@ impl PdClient for Client {
     }
 
     // Leader for a region will use this to heartbeat Pd.
-    #[allow(unused_variables)]
     fn region_heartbeat(&self,
                         region: metapb::Region,
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
-        unimplemented!()
+        let mut req = pdpb2::RegionHeartbeatRequest::new();
+        req.set_header(self.header());
+        req.set_region(region);
+        req.set_leader(leader);
+        req.set_down_peers(down_peers.into_iter()
+            .map(|mut p| {
+                let mut p2 = pdpb2::PeerStats::new();
+                if p.has_peer() {
+                    p2.set_peer(p.take_peer());
+                }
+                p2.set_down_seconds(p.get_down_seconds());
+                p2
+            })
+            .collect());
+        req.set_pending_peers(RepeatedField::from_vec(pending_peers));
+
+        let mut resp: pdpb2::RegionHeartbeatResponse = box_try!(self.inner.RegionHeartbeat(req));
+        try!(check_resp_header(resp.get_header()));
+        let mut ret = pdpb::RegionHeartbeatResponse::new();
+        if resp.has_change_peer() {
+            let mut cp = pdpb::ChangePeer::new();
+            let mut cp2 = resp.take_change_peer();
+            if cp2.has_change_type() {
+                let ty = cp2.take_change_type();
+                cp.set_change_type(ty.get_field_type());
+            }
+            if cp2.has_peer() {
+                cp.set_peer(cp2.take_peer());
+            }
+            ret.set_change_peer(cp);
+        }
+        if resp.has_transfer_leader() {
+            let mut tf = pdpb::TransferLeader::new();
+            let mut tf2 = resp.take_transfer_leader();
+            if tf2.has_peer() {
+                tf.set_peer(tf2.take_peer());
+            }
+            ret.set_transfer_leader(tf);
+        }
+        Ok(ret)
     }
 
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
@@ -188,9 +228,42 @@ impl PdClient for Client {
     }
 
     // Send store statistics regularly.
-    #[allow(unused_variables)]
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
-        unimplemented!()
+        let mut req = pdpb2::StoreHeartbeatRequest::new();
+        req.set_header(self.header());
+        let mut stats2 = pdpb2::StoreStats::new();
+        if stats.has_store_id() {
+            stats2.set_store_id(stats.get_store_id())
+        }
+        if stats.has_capacity() {
+            stats2.set_capacity(stats.get_capacity())
+        }
+        if stats.has_available() {
+            stats2.set_available(stats.get_available())
+        }
+        if stats.has_region_count() {
+            stats2.set_region_count(stats.get_region_count())
+        }
+        if stats.has_sending_snap_count() {
+            stats2.set_sending_snap_count(stats.get_sending_snap_count())
+        }
+        if stats.has_receiving_snap_count() {
+            stats2.set_receiving_snap_count(stats.get_receiving_snap_count())
+        }
+        if stats.has_start_time() {
+            stats2.set_start_time(stats.get_start_time())
+        }
+        if stats.has_applying_snap_count() {
+            stats2.set_applying_snap_count(stats.get_applying_snap_count())
+        }
+        if stats.has_is_busy() {
+            stats2.set_is_busy(stats.get_is_busy())
+        }
+        req.set_stats(stats2);
+
+        let resp = box_try!(self.inner.StoreHeartbeat(req));
+        try!(check_resp_header(resp.get_header()));
+        Ok(())
     }
 
     // Report pd the split region.
