@@ -63,7 +63,8 @@ fn is_response_msg(t: MessageType) -> bool {
         MessageType::MsgAppendResponse |
         MessageType::MsgRequestVoteResponse |
         MessageType::MsgHeartbeatResponse |
-        MessageType::MsgUnreachable => true,
+        MessageType::MsgUnreachable |
+        MessageType::MsgRequestPreVoteResponse => true,
         _ => false,
     }
 }
@@ -103,7 +104,7 @@ pub struct Ready {
     // CommittedEntries specifies entries to be committed to a
     // store/state-machine. These have previously been committed to stable
     // store.
-    pub committed_entries: Vec<Entry>,
+    pub committed_entries: Option<Vec<Entry>>,
 
     // Messages specifies outbound messages to be sent AFTER Entries are
     // committed to stable storage.
@@ -116,7 +117,7 @@ impl Ready {
     fn new<T: Storage>(raft: &mut Raft<T>, prev_ss: &SoftState, prev_hs: &HardState) -> Ready {
         let mut rd = Ready {
             entries: raft.raft_log.unstable_entries().unwrap_or(&[]).to_vec(),
-            committed_entries: raft.raft_log.next_entries().unwrap_or_else(Vec::new),
+            committed_entries: Some(raft.raft_log.next_entries().unwrap_or_else(Vec::new)),
             messages: raft.msgs.drain(..).collect(),
             ..Default::default()
         };
@@ -260,7 +261,7 @@ impl<T: Storage> RawNode<T> {
         self.raft.step(m)
     }
 
-    pub fn apply_conf_change(&mut self, cc: ConfChange) -> ConfState {
+    pub fn apply_conf_change(&mut self, cc: &ConfChange) -> ConfState {
         if cc.get_node_id() == INVALID_ID {
             self.raft.reset_pending_conf();
             let mut cs = ConfState::new();
@@ -394,25 +395,25 @@ mod test {
 
     #[test]
     fn test_is_local_msg() {
-        let tests = vec![
-            (MessageType::MsgHup, true),
-            (MessageType::MsgBeat, true),
-            (MessageType::MsgUnreachable, true),
-            (MessageType::MsgSnapStatus, true),
-            (MessageType::MsgCheckQuorum, true),
-            (MessageType::MsgPropose, false),
-            (MessageType::MsgAppend, false),
-            (MessageType::MsgAppendResponse, false),
-            (MessageType::MsgRequestVote, false),
-            (MessageType::MsgRequestVoteResponse, false),
-            (MessageType::MsgSnapshot, false),
-            (MessageType::MsgHeartbeat, false),
-            (MessageType::MsgHeartbeatResponse, false),
-            (MessageType::MsgTransferLeader, false),
-            (MessageType::MsgTimeoutNow, false),
-            (MessageType::MsgReadIndex, false),
-            (MessageType::MsgReadIndexResp, false),
-        ];
+        let tests = vec![(MessageType::MsgHup, true),
+                         (MessageType::MsgBeat, true),
+                         (MessageType::MsgUnreachable, true),
+                         (MessageType::MsgSnapStatus, true),
+                         (MessageType::MsgCheckQuorum, true),
+                         (MessageType::MsgPropose, false),
+                         (MessageType::MsgAppend, false),
+                         (MessageType::MsgAppendResponse, false),
+                         (MessageType::MsgRequestVote, false),
+                         (MessageType::MsgRequestVoteResponse, false),
+                         (MessageType::MsgSnapshot, false),
+                         (MessageType::MsgHeartbeat, false),
+                         (MessageType::MsgHeartbeatResponse, false),
+                         (MessageType::MsgTransferLeader, false),
+                         (MessageType::MsgTimeoutNow, false),
+                         (MessageType::MsgReadIndex, false),
+                         (MessageType::MsgReadIndexResp, false),
+                         (MessageType::MsgRequestPreVote, false),
+                         (MessageType::MsgRequestPreVoteResponse, false)];
         for (msg_type, result) in tests {
             assert_eq!(is_local_msg(msg_type), result);
         }

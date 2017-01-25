@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::str::FromStr;
-use std::mem;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::collections::HashMap;
 
@@ -166,6 +165,7 @@ pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, Confi
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    use std::mem;
     use libc;
 
     unsafe {
@@ -196,7 +196,7 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
 }
 
 #[cfg(not(unix))]
-pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+pub fn check_max_open_fds(_: u64) -> Result<(), ConfigError> {
     Ok(())
 }
 

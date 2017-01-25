@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+use prometheus::local::LocalHistogram;
+
 use super::metrics::*;
 
 /// The buffered metrics counters for raft ready handling.
@@ -177,11 +180,25 @@ impl RaftProposeMetrics {
 
 
 /// The buffered metrics counters for raft.
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct RaftMetrics {
     pub ready: RaftReadyMetrics,
     pub message: RaftMessageMetrics,
     pub propose: RaftProposeMetrics,
+    pub process_tick: LocalHistogram,
+    pub process_ready: LocalHistogram,
+}
+
+impl Default for RaftMetrics {
+    fn default() -> RaftMetrics {
+        RaftMetrics {
+            ready: Default::default(),
+            message: Default::default(),
+            propose: Default::default(),
+            process_tick: PEER_RAFT_PROCESS_DURATION.with_label_values(&["tick"]).local(),
+            process_ready: PEER_RAFT_PROCESS_DURATION.with_label_values(&["ready"]).local(),
+        }
+    }
 }
 
 impl RaftMetrics {
@@ -190,5 +207,7 @@ impl RaftMetrics {
         self.ready.flush();
         self.message.flush();
         self.propose.flush();
+        self.process_tick.flush();
+        self.process_ready.flush();
     }
 }

@@ -595,13 +595,13 @@ impl RecvSnapshotFileReader {
         })
     }
 
-    pub fn list_cf_files(&self) -> Vec<(String, String)> {
+    pub fn list_cf_files(&self) -> Vec<(String, String, u64)> {
         let mut res = Vec::with_capacity(self.cf_files.len());
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 continue;
             }
-            res.push((cf_file.cf.clone(), cf_file.path.clone()));
+            res.push((cf_file.cf.clone(), cf_file.path.clone(), cf_file.size));
         }
         res
     }

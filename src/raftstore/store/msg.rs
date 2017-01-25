@@ -34,6 +34,7 @@ pub enum Tick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
+    ReportRegionFlow,
 }
 
 pub struct SnapshotStatusMsg {

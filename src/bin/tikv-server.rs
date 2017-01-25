@@ -29,9 +29,12 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 
+mod signal_handler;
+
 use std::process;
 use std::{env, thread};
 use std::fs::{self, File};
+use std::usize;
 use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
@@ -42,10 +45,11 @@ use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
-use prometheus::{Encoder, TextEncoder};
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
-use tikv::util::{self, logger, file_log, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::logger::{self, StderrLogger};
+use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
                    Config, bind, create_event_loop, create_raft_storage, Msg};
@@ -56,10 +60,7 @@ use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
-const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
-const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
-
-fn print_usage(program: &str, opts: Options) {
+fn print_usage(program: &str, opts: &Options) {
     let brief = format!("Usage: {} [options]", program);
     print!("{}", opts.usage(&brief));
 }
@@ -115,22 +116,65 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
     s
 }
 
-fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
-    let i = match config.lookup(name) {
-        Some(&toml::Value::Integer(i)) => i,
+fn get_toml_int_opt(config: &toml::Value, name: &str) -> Option<i64> {
+    let res = match config.lookup(name) {
+        Some(&toml::Value::Integer(i)) => Some(i),
         Some(&toml::Value::String(ref s)) => {
-            util::config::parse_readable_int(s)
-                .unwrap_or_else(|e| exit_with_err(format!("{} parse failed {:?}", name, e)))
+            Some(util::config::parse_readable_int(s)
+                .unwrap_or_else(|e| exit_with_err(format!("{} parse failed {:?}", name, e))))
         }
-        None => {
-            info!("{} use default {:?}", name, default);
-            default.unwrap_or_else(|| exit_with_err(format!("please specify {}", name)))
-        }
+        None => None,
         _ => exit_with_err(format!("{} int or readable int is excepted", name)),
     };
-    info!("toml value {} : {}", name, i);
+    if let Some(i) = res {
+        info!("toml value {} : {:?}", name, i);
+    }
+    res
+}
 
-    i
+fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
+    get_toml_int_opt(config, name).unwrap_or_else(|| {
+        let i = default.unwrap_or_else(|| exit_with_err(format!("please specify {}", name)));
+        info!("{} use default {:?}", name, default);
+        i
+    })
+}
+
+fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) -> bool {
+    match get_toml_int_opt(config, name) {
+        Some(i) => {
+            assert!(i >= 0 && i as u64 <= usize::MAX as u64,
+                    "{}: {} is invalid.",
+                    name,
+                    i);
+            *target = i as usize;
+            true
+        }
+        None => {
+            info!("{} keep default {}", name, *target);
+            false
+        }
+    }
+}
+
+fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
+    match get_toml_int_opt(config, name) {
+        Some(i) => {
+            assert!(i >= 0, "{}: {} is invalid", name, i);
+            *target = i as u64;
+        }
+        None => info!("{} keep default {}", name, *target),
+    }
+}
+
+fn cfg_duration(target: &mut Duration, config: &toml::Value, name: &str) {
+    match get_toml_int_opt(config, name) {
+        Some(i) => {
+            assert!(i >= 0);
+            *target = Duration::from_millis(i as u64);
+        }
+        None => info!("{} keep default {:?}", name, *target),
+    }
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
@@ -140,10 +184,13 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     let log_file_path = get_flag_string(matches, "f")
         .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
 
+    let level_filter = logger::get_level_by_string(&level);
     if log_file_path.is_empty() {
-        util::init_log(logger::get_level_by_string(&level)).unwrap();
+        let w = StderrLogger;
+        logger::init_log(w, level_filter).unwrap();
     } else {
-        file_log::init(&level, &log_file_path).unwrap();
+        let w = RotatingFileLogger::new(&log_file_path).unwrap();
+        logger::init_log(w, level_filter).unwrap();
     }
 }
 
@@ -164,6 +211,8 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
     }
 
     info!("start prometheus client");
+
+    util::monitor_threads("tikv").unwrap();
 
     util::run_prometheus(Duration::from_millis(push_interval as u64),
                          &push_address,
@@ -238,6 +287,10 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
             get_toml_int(config, "rocksdb.stats-dump-period-sec", Some(600));
         opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
+
+    let compaction_readahead_size =
+        get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
+    opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
     opts
 }
@@ -377,17 +430,18 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
-    cfg.notify_capacity = get_toml_int(config, "server.notify-capacity", Some(40960)) as usize;
-
-    cfg.end_point_concurrency =
-        get_toml_int(config, "server.end-point-concurrency", Some(8)) as usize;
-    cfg.messages_per_tick = get_toml_int(config, "server.messages-per-tick", Some(4096)) as usize;
+    cfg_usize(&mut cfg.notify_capacity, config, "server.notify-capacity");
+    cfg_usize(&mut cfg.end_point_concurrency,
+              config,
+              "server.end-point-concurrency");
+    cfg_usize(&mut cfg.messages_per_tick,
+              config,
+              "server.messages-per-tick");
     let capacity = get_flag_int(matches, "capacity")
-        .unwrap_or_else(|| get_toml_int(config, "server.capacity", Some(0)));
-    assert!(capacity >= 0);
-
-    if capacity > 0 {
-        cfg.raft_store.capacity = capacity as u64;
+        .or_else(|| get_toml_int_opt(config, "server.capacity"));
+    if let Some(cap) = capacity {
+        assert!(cap >= 0);
+        cfg.raft_store.capacity = cap as u64;
     }
 
     // Set advertise address for outer node and client use.
@@ -396,84 +450,84 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
         .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.to_owned())));
     check_advertise_address(&cfg.advertise_addr);
 
-    cfg.send_buffer_size =
-        get_toml_int(config, "server.send-buffer-size", Some(128 * 1024)) as usize;
-    cfg.recv_buffer_size =
-        get_toml_int(config, "server.recv-buffer-size", Some(128 * 1024)) as usize;
+    cfg_usize(&mut cfg.send_buffer_size, config, "server.send-buffer-size");
+    cfg_usize(&mut cfg.recv_buffer_size, config, "server.recv-buffer-size");
 
-    cfg.raft_store.notify_capacity =
-        get_toml_int(config, "raftstore.notify-capacity", Some(40960)) as usize;
-    cfg.raft_store.messages_per_tick =
-        get_toml_int(config, "raftstore.messages-per-tick", Some(4096)) as usize;
-    let interval = get_toml_int(config,
-                                "raftstore.split-region-check-tick-interval",
-                                Some(10000));
-    cfg.raft_store.split_region_check_tick_interval = interval as u64;
-    cfg.raft_store.region_split_size =
-        get_toml_int(config,
-                     "raftstore.region-split-size",
-                     Some(64 * 1024 * 1024)) as u64;
-    cfg.raft_store.region_max_size =
-        get_toml_int(config, "raftstore.region-max-size", Some(80 * 1024 * 1024)) as u64;
-
-    cfg.raft_store.region_check_size_diff =
-        get_toml_int(config,
-                     "raftstore.region-split-check-diff",
-                     Some(8 * 1024 * 1024)) as u64;
-
-    cfg.raft_store.raft_log_gc_tick_interval =
-        get_toml_int(config, "raftstore.raft-log-gc-tick-interval", Some(10_000)) as u64;
-
-    cfg.raft_store.raft_log_gc_threshold =
-        get_toml_int(config, "raftstore.raft-log-gc-threshold", Some(50)) as u64;
-
-    let default_size_limit = cfg.raft_store.raft_log_gc_count_limit as i64;
-    cfg.raft_store.raft_log_gc_count_limit =
-        get_toml_int(config,
-                     "raftstore.raft-log-gc-count-limit",
-                     Some(default_size_limit)) as u64;
-
-    cfg.raft_store.raft_log_gc_size_limit =
-        get_toml_int(config,
-                     "raftstore.raft-log-gc-size-limit",
-                     Some(48 * 1024 * 1024)) as u64;
-
-    cfg.raft_store.region_compact_check_interval =
-        get_toml_int(config,
-                     "raftstore.region-compact-check-interval",
-                     Some(300_000)) as u64;
-
-    cfg.raft_store.region_compact_delete_keys_count =
-        get_toml_int(config,
-                     "raftstore.region-compact-delete-keys-count",
-                     Some(1_000_000)) as u64;
-
-    cfg.raft_store.lock_cf_compact_interval =
-        get_toml_int(config, "raftstore.lock-cf-compact-interval", Some(600_000)) as u64;
-
-    let max_peer_down_millis =
-        get_toml_int(config, "raftstore.max-peer-down-duration", Some(300_000)) as u64;
-    cfg.raft_store.max_peer_down_duration = Duration::from_millis(max_peer_down_millis);
-
-    cfg.raft_store.pd_heartbeat_tick_interval =
-        get_toml_int(config, "raftstore.pd-heartbeat-tick-interval", Some(60_000)) as u64;
-
-    cfg.raft_store.pd_store_heartbeat_tick_interval =
-        get_toml_int(config,
-                     "raftstore.pd-store-heartbeat-tick-interval",
-                     Some(10_000)) as u64;
-
-    cfg.raft_store.consistency_check_tick_interval =
-        get_toml_int(config, "raftstore.consistency-check-interval", Some(0)) as u64;
-
-    cfg.storage.sched_notify_capacity =
-        get_toml_int(config, "storage.scheduler-notify-capacity", Some(10240)) as usize;
-    cfg.storage.sched_msg_per_tick =
-        get_toml_int(config, "storage.scheduler-messages-per-tick", Some(1024)) as usize;
-    cfg.storage.sched_concurrency =
-        get_toml_int(config, "storage.scheduler-concurrency", Some(102400)) as usize;
-    cfg.storage.sched_worker_pool_size =
-        get_toml_int(config, "storage.scheduler-worker-pool-size", Some(4)) as usize;
+    cfg_usize(&mut cfg.raft_store.notify_capacity,
+              config,
+              "raftstore.notify-capacity");
+    cfg_usize(&mut cfg.raft_store.messages_per_tick,
+              config,
+              "raftstore.messages-per-tick");
+    cfg_usize(&mut cfg.raft_store.raft_heartbeat_ticks,
+              config,
+              "raftstore.raft-heartbeat-ticks");
+    if cfg_usize(&mut cfg.raft_store.raft_election_timeout_ticks,
+                 config,
+                 "raftstore.raft-election-timeout-ticks") {
+        warn!("Election timeout ticks needs to be same across all the cluster, otherwise it may \
+               lead to inconsistency.");
+    }
+    cfg_u64(&mut cfg.raft_store.split_region_check_tick_interval,
+            config,
+            "raftstore.split-region-check-tick-interval");
+    cfg_u64(&mut cfg.raft_store.region_split_size,
+            config,
+            "raftstore.region-split-size");
+    cfg_u64(&mut cfg.raft_store.region_max_size,
+            config,
+            "raftstore.region-max-size");
+    cfg_u64(&mut cfg.raft_store.region_check_size_diff,
+            config,
+            "raftstore.region-split-check-diff");
+    cfg_u64(&mut cfg.raft_store.raft_log_gc_tick_interval,
+            config,
+            "raftstore.raft-log-gc-tick-interval");
+    cfg_u64(&mut cfg.raft_store.raft_log_gc_threshold,
+            config,
+            "raftstore.raft-log-gc-threshold");
+    cfg_u64(&mut cfg.raft_store.raft_log_gc_count_limit,
+            config,
+            "raftstore.raft-log-gc-count-limit");
+    cfg_u64(&mut cfg.raft_store.raft_log_gc_size_limit,
+            config,
+            "raftstore.raft-log-gc-size-limit");
+    cfg_u64(&mut cfg.raft_store.region_compact_check_interval,
+            config,
+            "raftstore.region-compact-check-interval");
+    cfg_u64(&mut cfg.raft_store.region_compact_delete_keys_count,
+            config,
+            "raftstore.region-compact-delete-keys-count");
+    cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
+            config,
+            "raftstore.lock-cf-compact-interval");
+    cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
+            config,
+            "raftstore.raft-entry-max-size");
+    cfg_duration(&mut cfg.raft_store.max_peer_down_duration,
+                 config,
+                 "raftstore.max-peer-down-duration");
+    cfg_u64(&mut cfg.raft_store.pd_heartbeat_tick_interval,
+            config,
+            "raftstore.pd-heartbeat-tick-interval");
+    cfg_u64(&mut cfg.raft_store.pd_store_heartbeat_tick_interval,
+            config,
+            "raftstore.pd-store-heartbeat-tick-interval");
+    cfg_u64(&mut cfg.raft_store.consistency_check_tick_interval,
+            config,
+            "raftstore.consistency-check-interval");
+    cfg_usize(&mut cfg.storage.sched_notify_capacity,
+              config,
+              "storage.scheduler-notify-capacity");
+    cfg_usize(&mut cfg.storage.sched_msg_per_tick,
+              config,
+              "storage.scheduler-messages-per-tick");
+    cfg_usize(&mut cfg.storage.sched_concurrency,
+              config,
+              "storage.scheduler-concurrency");
+    cfg_usize(&mut cfg.storage.sched_worker_pool_size,
+              config,
+              "storage.scheduler-worker-pool-size");
 
     cfg
 }
@@ -566,72 +620,14 @@ fn start_server<T, S>(mut server: Server<T, S>,
 {
     let ch = server.get_sendch();
     let h = thread::Builder::new()
-        .name("tikv-server".to_owned())
+        .name("tikv-eventloop".to_owned())
         .spawn(move || {
             server.run(&mut el).unwrap();
         })
         .unwrap();
-    handle_signal(ch, engine, backup_path);
+    signal_handler::handle_signal(ch, engine, backup_path);
     h.join().unwrap();
 }
-
-#[cfg(unix)]
-fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
-    use signal::trap::Trap;
-    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
-    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
-    for sig in trap {
-        match sig {
-            SIGTERM | SIGINT => {
-                info!("receive signal {}, stopping server...", sig);
-                ch.send(Msg::Quit).unwrap();
-                break;
-            }
-            SIGUSR1 => {
-                // Use SIGUSR1 to log metrics.
-                let mut buffer = vec![];
-                let metric_familys = prometheus::gather();
-                let encoder = TextEncoder::new();
-                encoder.encode(&metric_familys, &mut buffer).unwrap();
-                info!("{}", String::from_utf8(buffer).unwrap());
-
-                // Log common rocksdb stats.
-                for name in engine.cf_names() {
-                    let handler = engine.cf_handle(name).unwrap();
-                    if let Some(v) = engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
-                        info!("{}", v)
-                    }
-                }
-
-                if let Some(v) = engine.get_property_value(ROCKSDB_DB_STATS_KEY) {
-                    info!("{}", v)
-                }
-
-                // Log more stats if enable_statistics is true.
-                if let Some(v) = engine.get_statistics() {
-                    info!("{}", v)
-                }
-            }
-            SIGUSR2 => {
-                if backup_path.is_empty() {
-                    info!("empty backup path, backup is disabled");
-                    continue;
-                }
-
-                info!("backup db to {}", backup_path);
-                if let Err(e) = engine.backup_at(backup_path) {
-                    error!("fail to backup: {}", e);
-                }
-                info!("backup done");
-            }
-            // TODO: handle more signal
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn handle_signal(_: SendCh<Msg>, _: Arc<DB>, _: &str) {}
 
 fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config: &toml::Value) {
     let mut event_loop = create_event_loop(&cfg).unwrap();
@@ -698,7 +694,7 @@ fn main() {
                 "log-file",
                 "set log file",
                 "if not set, output log to stdout");
-    opts.optflag("v", "version", "print version information");
+    opts.optflag("V", "version", "print version information");
     opts.optflag("h", "help", "print this help menu");
     opts.optopt("C", "config", "set configuration file", "file path");
     opts.optopt("s",
@@ -708,22 +704,27 @@ fn main() {
     opts.optopt("",
                 "capacity",
                 "set the store capacity",
-                "default: 0 (unlimited)");
+                "default: 0 (disk capacity)");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
     opts.optopt("",
                 "labels",
                 "attributes about this server",
                 "zone=example-zone,disk=example-disk");
 
-    let matches = opts.parse(&args[1..]).expect("opts parse failed");
+    let matches = opts.parse(&args[1..]).unwrap_or_else(|e| {
+        println!("opts parse failed, {:?}", e);
+        print_usage(&program, &opts);
+        process::exit(1);
+    });
     if matches.opt_present("h") {
-        print_usage(&program, opts);
+        print_usage(&program, &opts);
         return;
     }
-    if matches.opt_present("v") {
-        let (hash, date) = util::build_info();
+    if matches.opt_present("V") {
+        let (hash, date, rustc) = util::build_info();
         println!("Git Commit Hash: {}", hash);
         println!("UTC Build Time:  {}", date);
+        println!("Rustc Version:   {}", rustc);
         return;
     }
     let config = match matches.opt_str("C") {

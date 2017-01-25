@@ -229,17 +229,21 @@ impl Runner {
 
         let timer = Instant::now();
         // Write the snapshot into the region.
-        for (cf, fpath) in snap_reader.list_cf_files() {
+        let mut snapshot_size = 0;
+        for (cf, fpath, size) in snap_reader.list_cf_files() {
             // TODO: avoid too many allocation
             try!(check_abort(&abort));
 
-            let cf_handle = rocksdb::get_cf_handle(&self.db, &cf).unwrap();
+            let cf_handle = box_try!(rocksdb::get_cf_handle(&self.db, &cf));
             let ingest_opt = IngestExternalFileOptions::new().move_files(true);
             if let Err(e) = self.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[&fpath]) {
                 return Err(Error::Other(box_err!(e)));
             }
+            snapshot_size += size;
         }
         snap_reader.delete();
+        SNAPSHOT_SIZE_HISTOGRAM.observe(snapshot_size as f64);
+
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
         info!("[region {}] apply new data takes {:?}",
