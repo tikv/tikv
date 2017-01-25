@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
+
 use grpc;
 
 use kvproto::{metapb, pdpb};
 use kvproto::pdpb2;
 use kvproto::pdpb2_grpc::{self, PD};
-
 use super::PdClient;
 use super::{Result, Error};
 
@@ -63,6 +64,12 @@ fn check_resp_header(header: &pdpb2::ResponseHeader) -> Result<()> {
         Err(Error::ClusterBootstrapped(header.get_cluster_id()))
     } else {
         Err(box_err!(err.get_message()))
+    }
+}
+
+impl fmt::Debug for Client {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "V2Client")
     }
 }
 
