@@ -725,8 +725,9 @@ impl Peer {
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
-                to_be_updated = to_be_updated &&
-                                self.maybe_update_lease(entry.get_term(), entry.get_data());
+                if to_be_updated {
+                    to_be_updated = !self.maybe_update_lease(entry.get_term(), entry.get_data());
+                }
             }
             if !committed_entries.is_empty() {
                 self.handle_raft_committed_entries(committed_entries)
@@ -865,10 +866,8 @@ impl Peer {
             return false;
         }
 
-
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(clocktime::raw_now());
-
 
         let cmd = PendingCmd {
             uuid: meta.uuid,
