@@ -19,6 +19,18 @@ use rocksdb::{EnvOptions, Options, SstFileWriter};
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
 const SST_FILE_SUFFIX: &'static str = ".sst";
 
+fn get_snapshot_cfs() -> Vec<String> {
+    let size = ALL_CFS.len();
+    let mut cfs = Vec::with_capacity(size);
+    for cf in ALL_CFS {
+        if *cf == CF_RAFT {
+            continue;
+        }
+        cfs.push(String::from(*cf));
+    }
+    cfs
+}
+
 fn file_exists(file: &str) -> bool {
     let path = Path::new(file);
     path.exists() && path.is_file()
@@ -102,18 +114,15 @@ impl SendSnapshotFile {
         }
 
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        let cf_number = ALL_CFS.len() - 1;
-        let mut cf_files = Vec::with_capacity(cf_number);
-        for cf in ALL_CFS {
-            if *cf == CF_RAFT {
-                continue;
-            }
+        let snapshot_cfs = get_snapshot_cfs();
+        let mut cf_files = Vec::with_capacity(snapshot_cfs.len());
+        for cf in snapshot_cfs {
             let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
             let path = dir_path.join(filename).as_path().to_str().unwrap().to_string();
             let tmp_filename = format!("{}_{}{}", prefix, cf, TMP_FILE_SUFFIX);
             let tmp_path = dir_path.join(tmp_filename).as_path().to_str().unwrap().to_string();
             let cf_file = CfFile {
-                cf: String::from(*cf),
+                cf: cf,
                 writer: None,
                 kv_count: 0,
                 tmp_path: tmp_path,
@@ -249,11 +258,9 @@ impl SendSnapshotFileReader {
         let dir_path = snap_dir.into();
 
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        let mut cf_readers = Vec::with_capacity(ALL_CFS.len() - 1);
-        for cf in ALL_CFS {
-            if *cf == CF_RAFT {
-                continue;
-            }
+        let snapshot_cfs = get_snapshot_cfs();
+        let mut cf_readers = Vec::with_capacity(snapshot_cfs.len());
+        for cf in snapshot_cfs {
             let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
             let path = dir_path.join(filename).as_path().to_str().unwrap().to_string();
             if !file_exists(&path) {
@@ -263,7 +270,7 @@ impl SendSnapshotFileReader {
             }
             let f = try!(OpenOptions::new().read(true).open(&path));
             let r = SendCfFileReader {
-                cf: String::from(*cf),
+                cf: cf,
                 file: f,
                 path: path,
             };
@@ -568,11 +575,9 @@ impl RecvSnapshotFileReader {
         let dir_path = snap_dir.into();
 
         let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
-        let mut cf_files = Vec::with_capacity(ALL_CFS.len() - 1);
-        for cf in ALL_CFS {
-            if *cf == CF_RAFT {
-                continue;
-            }
+        let snapshot_cfs = get_snapshot_cfs();
+        let mut cf_files = Vec::with_capacity(snapshot_cfs.len());
+        for cf in snapshot_cfs {
             let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
             let path = dir_path.join(filename).as_path().to_str().unwrap().to_string();
             if !file_exists(&path) {
@@ -583,7 +588,7 @@ impl RecvSnapshotFileReader {
             }
             let size = try!(fs::metadata(&path)).len();
             let f = RecvCfFileReader {
-                cf: String::from(*cf),
+                cf: cf,
                 path: path.to_string(),
                 size: size,
             };
@@ -852,8 +857,8 @@ mod test {
     fn write_test_snapshot_file(f: &mut SendSnapshotFile) {
         // Write at least one key-value to the SendSnapshotFile
         // because it's not allowed to finish a rocksdb sst file writer with no entries.
-        for cf in ALL_CFS {
-            if !f.next_file(cf.to_string()) {
+        for cf in get_snapshot_cfs() {
+            if !f.next_file(cf) {
                 continue;
             }
             f.add_kv(b"k", b"v").unwrap();

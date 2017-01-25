@@ -1061,7 +1061,7 @@ mod test {
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
-    use protobuf;
+    use protobuf::{self, Message};
     use raftstore::store::{bootstrap, new_snap_mgr, SnapKey};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
