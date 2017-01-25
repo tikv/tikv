@@ -89,7 +89,7 @@ const SNAP_GEN_PREFIX: &'static str = "gen";
 /// Name prefix for the received snapshot file.
 const SNAP_REV_PREFIX: &'static str = "rev";
 
-struct CfFile {
+struct SendCfFile {
     pub cf: String,
     pub writer: Option<SstFileWriter>,
     pub kv_count: u64,
@@ -99,7 +99,7 @@ struct CfFile {
 
 pub struct SendSnapshotFile {
     index: usize,
-    cf_files: Vec<CfFile>,
+    cf_files: Vec<SendCfFile>,
     size_track: Arc<RwLock<u64>>,
 }
 
@@ -121,7 +121,7 @@ impl SendSnapshotFile {
             let path = dir_path.join(filename).as_path().to_str().unwrap().to_string();
             let tmp_filename = format!("{}_{}{}", prefix, cf, TMP_FILE_SUFFIX);
             let tmp_path = dir_path.join(tmp_filename).as_path().to_str().unwrap().to_string();
-            let cf_file = CfFile {
+            let cf_file = SendCfFile {
                 cf: cf,
                 writer: None,
                 kv_count: 0,

@@ -966,7 +966,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     let mut snapshot_file = try!(mgr.rl().get_send_snap_file(&key));
     if snapshot_file.exists() {
-        // TODO validate `send_snapshot_files`
+        // TODO validate `snapshot_file`
     } else {
         try!(snapshot_file.init());
         try!(build_snap_file(&mut snapshot_file, snap, state.get_region()));
