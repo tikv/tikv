@@ -53,7 +53,6 @@ use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
-
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
 /// The returned states of the peer after checking whether it is stale
