@@ -95,7 +95,6 @@ impl<'a> MergedIterator<'a> {
         })
     }
 
-    #[allow(should_implement_trait)]
     fn next(&mut self) -> Option<KeyEntry> {
         let pos = match self.heap.peek() {
             None => return None,
