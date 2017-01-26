@@ -38,7 +38,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::PdTask;
 use util::worker::Worker;
-use util::{escape, SlowTimer, rocksdb, clocktime};
+use util::{escape, SlowTimer, rocksdb, clocktime, duration_to_sec};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
 use super::store::Store;
@@ -52,7 +52,7 @@ use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
-
+use prometheus::local::LocalHistogram;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -671,7 +671,10 @@ impl Peer {
         }
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, result: &mut ReadyResult) {
+    pub fn handle_raft_ready_apply(&mut self,
+                                   mut ready: Ready,
+                                   result: &mut ReadyResult,
+                                   request_process_time: &mut LocalHistogram) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -686,7 +689,8 @@ impl Peer {
             }
             vec![]
         } else {
-            self.handle_raft_committed_entries(ready.committed_entries.take().unwrap())
+            self.handle_raft_committed_entries(ready.committed_entries.take().unwrap(),
+                                               request_process_time)
         };
 
         self.raft_group.advance(ready);
@@ -1141,7 +1145,8 @@ impl Peer {
     }
 
     fn handle_raft_committed_entries(&mut self,
-                                     committed_entries: Vec<eraftpb::Entry>)
+                                     committed_entries: Vec<eraftpb::Entry>,
+                                     request_process_time: &mut LocalHistogram)
                                      -> Vec<ExecResult> {
         if committed_entries.is_empty() {
             return vec![];
@@ -1172,8 +1177,12 @@ impl Peer {
             self.raft_log_size_hint += entry.get_data().len() as u64;
 
             let res = match entry.get_entry_type() {
-                eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
-                eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
+                eraftpb::EntryType::EntryNormal => {
+                    self.handle_raft_entry_normal(entry, request_process_time)
+                }
+                eraftpb::EntryType::EntryConfChange => {
+                    self.handle_raft_entry_conf_change(entry, request_process_time)
+                }
             };
 
             if let Some(res) = res {
@@ -1188,14 +1197,17 @@ impl Peer {
         results
     }
 
-    fn handle_raft_entry_normal(&mut self, entry: eraftpb::Entry) -> Option<ExecResult> {
+    fn handle_raft_entry_normal(&mut self,
+                                entry: eraftpb::Entry,
+                                request_process_time: &mut LocalHistogram)
+                                -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
 
         if !data.is_empty() {
             let cmd = parse_data_at(data, index, &self.tag);
-            return self.process_raft_cmd(index, term, cmd);
+            return self.process_raft_cmd(index, term, cmd, request_process_time);
         }
 
         // when a peer become leader, it will send an empty entry.
@@ -1224,12 +1236,15 @@ impl Peer {
         None
     }
 
-    fn handle_raft_entry_conf_change(&mut self, entry: eraftpb::Entry) -> Option<ExecResult> {
+    fn handle_raft_entry_conf_change(&mut self,
+                                     entry: eraftpb::Entry,
+                                     request_process_time: &mut LocalHistogram)
+                                     -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: eraftpb::ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        Some(self.process_raft_cmd(index, term, cmd).map_or_else(|| {
+        Some(self.process_raft_cmd(index, term, cmd, request_process_time).map_or_else(|| {
             // If failed, tell raft that the config change was aborted.
             ExecResult::ChangePeer(Default::default())
         }, |mut res| {
@@ -1276,7 +1291,8 @@ impl Peer {
     fn process_raft_cmd(&mut self,
                         index: u64,
                         term: u64,
-                        cmd: RaftCmdRequest)
+                        cmd: RaftCmdRequest,
+                        request_process_time: &mut LocalHistogram)
                         -> Option<ExecResult> {
         if index == 0 {
             panic!("{} processing raft command needs a none zero index",
@@ -1332,6 +1348,9 @@ impl Peer {
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term());
         cb.call_box((resp,));
+
+        let d = clocktime::raw_now() - lease_renew_time;
+        request_process_time.observe(duration_to_sec(d.to_std().unwrap()) as f64);
 
         exec_result
     }
