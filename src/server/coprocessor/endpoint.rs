@@ -179,10 +179,11 @@ impl RequestTask {
 impl Display for RequestTask {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f,
-               "request [context {:?}, tp: {}, ranges: {:?}]",
+               "request [context {:?}, tp: {}, ranges: {} ({:?})]",
                self.req.get_context(),
                self.req.get_tp(),
-               self.req.get_ranges())
+               self.req.get_ranges().len(),
+               self.req.get_ranges().get(0))
     }
 }
 
