@@ -52,9 +52,9 @@ pub const BATCH_ROW_COUNT: usize = 64;
 // be timeout already, so it can be safely aborted.
 const REQUEST_MAX_HANDLE_SECS: u64 = 60;
 const REQUEST_CHECKPOINT: usize = 255;
-// Assume a batch can be finished in 0.1ms, a batch at position x will wait about 0.0001 * x secs
-// to be actual started. Hence the queue should have at most REQUEST_MAX_HANDLE_SECS / 0.0001
-// batches.
+// Assume a request can be finished in 0.1ms, a request at position x will wait about
+// 0.0001 * x secs to be actual started. Hence the queue should have at most
+// REQUEST_MAX_HANDLE_SECS / 0.0001 request.
 const DEFAULT_MAX_RUNNING_TASK_COUNT: usize = REQUEST_MAX_HANDLE_SECS as usize * 10_000;
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
@@ -215,20 +215,23 @@ impl BatchRunnable<Task> for Host {
                             continue;
                         }
                     };
-                    let end_point = TiDbEndPoint::new(snap);
+                    let len = reqs.len() as f64;
                     let running_count = self.running_count.clone();
                     if running_count.load(Ordering::SeqCst) >= self.max_running_task_count {
                         notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
                         continue;
                     }
-                    running_count.fetch_add(1, Ordering::SeqCst);
-                    let len = reqs.len() as f64;
+                    running_count.fetch_add(reqs.len(), Ordering::SeqCst);
                     COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
-                    self.pool.execute(move || {
-                        end_point.handle_requests(reqs);
-                        running_count.fetch_sub(1, Ordering::SeqCst);
-                        COPR_PENDING_REQS.with_label_values(&["select"]).sub(len);
-                    });
+                    for req in reqs {
+                        let running_count = running_count.clone();
+                        let end_point = TiDbEndPoint::new(snap.clone());
+                        self.pool.execute(move || {
+                            end_point.handle_request(req);
+                            running_count.fetch_sub(1, Ordering::SeqCst);
+                            COPR_PENDING_REQS.with_label_values(&["select"]).sub(1.0);
+                        });
+                    }
                 }
             }
         }
@@ -326,17 +329,12 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_requests(&self, reqs: Vec<RequestTask>) {
-        for t in reqs {
-            match t.check_outdated() {
-                Err(e) => on_error(e, t),
-                Ok(_) => self.handle_request(t),
-            }
-        }
-    }
-
     fn handle_request(&self, mut t: RequestTask) {
         t.stop_record_waiting();
+        if let Err(e) = t.check_outdated() {
+            on_error(e, t);
+            return;
+        }
         let tp = t.req.get_tp();
         match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {

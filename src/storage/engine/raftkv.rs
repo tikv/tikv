@@ -336,6 +336,10 @@ impl Snapshot for RegionSnapshot {
         Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound, fill_cache)),
                        mode))
     }
+
+    fn clone(&self) -> Box<Snapshot> {
+        Box::new(RegionSnapshot::clone(self))
+    }
 }
 
 impl<'a> EngineIterator for RegionIterator<'a> {

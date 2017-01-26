@@ -91,7 +91,6 @@ fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
     }
 }
 
-#[allow(should_implement_trait)]
 impl Datum {
     pub fn cmp(&self, ctx: &EvalContext, datum: &Datum) -> Result<Ordering> {
         match *datum {
