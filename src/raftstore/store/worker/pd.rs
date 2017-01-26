@@ -110,10 +110,7 @@ impl<T: PdClient> Runner<T> {
 
         req.set_admin_request(request);
 
-        if let Err(e) = self.ch.try_send(Msg::RaftCmd {
-            request: req,
-            callback: Box::new(|_| {}),
-        }) {
+        if let Err(e) = self.ch.try_send(Msg::new_raft_cmd(req, Box::new(|_| {}))) {
             error!("[region {}] send {:?} request err {:?}",
                    region_id,
                    cmd_type,
