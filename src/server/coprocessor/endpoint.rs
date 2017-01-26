@@ -161,14 +161,17 @@ impl RequestTask {
         COPR_SCAN_EFFICIENCY.with_label_values(&["select", type_str]).observe(efficiency);
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
-            info!("handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, ranges: {:?}]",
+            info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
+                   ranges: {} ({:?})]",
+                  self.req.get_context().get_region_id(),
                   self.start_ts,
                   type_str,
                   handle_time,
                   wait_time,
                   self.scan_metrics.scanned_keys,
                   efficiency,
-                  self.req.get_ranges());
+                  self.req.get_ranges().len(),
+                  self.req.get_ranges().get(0));
         }
     }
 }
