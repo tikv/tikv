@@ -113,9 +113,6 @@ pub struct Store<T, C: 'static> {
 
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
-
-    request_wait_time: LocalHistogram,
-    request_process_time: LocalHistogram,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -187,8 +184,6 @@ impl<T, C> Store<T, C> {
             is_busy: false,
             region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
-            request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
-            request_process_time: REQUEST_PROCESS_TIME_HISTOGRAM.local(),
         };
         try!(s.init());
         Ok(s)
@@ -454,8 +449,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         timer.observe_duration();
 
         self.raft_metrics.flush();
-        self.request_wait_time.flush();
-        self.request_process_time.flush();
 
         self.register_raft_base_tick(event_loop);
     }
@@ -821,7 +814,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(ready, &mut res, &mut self.request_process_time);
+                .handle_raft_ready_apply(ready, &mut res);
             self.on_ready_result(region_id, res)
         }
 
@@ -1870,7 +1863,10 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 }
             }
             Msg::RaftCmd { send_time, request, callback } => {
-                self.request_wait_time.observe(duration_to_sec(send_time.elapsed()) as f64);
+                self.raft_metrics
+                    .propose
+                    .request_wait_time
+                    .observe(duration_to_sec(send_time.elapsed()) as f64);
                 self.propose_raft_command(request, callback)
             }
             Msg::Quit => {

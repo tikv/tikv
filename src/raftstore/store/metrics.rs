@@ -163,11 +163,4 @@ lazy_static! {
             "Bucketed histogram of request wait time duration",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-
-    pub static ref REQUEST_PROCESS_TIME_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_request_process_time_duration_secs",
-            "Bucketed histogram of request process time duration",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap();
 }
