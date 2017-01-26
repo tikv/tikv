@@ -1075,9 +1075,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   result_count);
     }
 
-    fn propose_raft_command(&mut self, send_time: Instant, msg: RaftCmdRequest, cb: Callback) {
-        self.request_wait_time.observe(duration_to_sec(send_time.elapsed()) as f64);
-
+    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
         let mut resp = RaftCmdResponse::new();
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {
@@ -1872,7 +1870,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 }
             }
             Msg::RaftCmd { send_time, request, callback } => {
-                self.propose_raft_command(send_time, request, callback)
+                self.request_wait_time.observe(duration_to_sec(send_time.elapsed()) as f64);
+                self.propose_raft_command(request, callback)
             }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);
