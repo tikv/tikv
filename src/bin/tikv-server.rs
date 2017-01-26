@@ -817,8 +817,15 @@ fn main() {
         .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
     for addr in pd_endpoints.split(',')
         .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| if s.starts_with("http://") { &s[7..] } else { s }) {
+        .filter_map(|s| if s.is_empty() {
+            None
+        } else {
+            if s.starts_with("http://") {
+                Some(&s[7..])
+            } else {
+                Some(s)
+            }
+        }) {
         if let Err(e) = util::config::check_addr(addr) {
             panic!("{:?}", e);
         }
