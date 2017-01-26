@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName, CF_DEFAULT};
-use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
+use raftstore::store::engine::{SyncSnapshot as RocksSnapshot, Peekable, Iterable};
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
@@ -188,6 +188,10 @@ impl Snapshot for RocksSnapshot {
         trace!("RocksSnapshot: create cf iterator");
         Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound, fill_cache)),
                        mode))
+    }
+
+    fn clone(&self) -> Box<Snapshot> {
+        Box::new(RocksSnapshot::clone(self))
     }
 }
 
