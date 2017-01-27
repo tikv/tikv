@@ -15,7 +15,7 @@ use std::sync::Arc;
 use rocksdb::{DB, SeekKey, DBVector, DBIterator};
 use kvproto::metapb::Region;
 
-use raftstore::store::engine::{Snapshot, Peekable, Iterable};
+use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
 
@@ -24,22 +24,29 @@ use raftstore::Result;
 ///
 /// Only data within a region can be accessed.
 pub struct RegionSnapshot {
-    snap: Snapshot,
-    region: Region,
+    snap: SyncSnapshot,
+    region: Arc<Region>,
 }
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
         RegionSnapshot {
-            snap: ps.raw_snapshot(),
-            region: ps.get_region().clone(),
+            snap: ps.raw_snapshot().into_sync(),
+            region: Arc::new(ps.get_region().clone()),
         }
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
         RegionSnapshot {
-            snap: Snapshot::new(db),
-            region: region,
+            snap: Snapshot::new(db).into_sync(),
+            region: Arc::new(region),
+        }
+    }
+
+    pub fn clone(&self) -> RegionSnapshot {
+        RegionSnapshot {
+            snap: self.snap.clone(),
+            region: self.region.clone(),
         }
     }
 
@@ -133,7 +140,7 @@ impl Peekable for RegionSnapshot {
 pub struct RegionIterator<'a> {
     iter: DBIterator<'a>,
     valid: bool,
-    region: Region,
+    region: Arc<Region>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 }
@@ -146,11 +153,10 @@ fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
     }
 }
 
-// we use rocksdb's style iterator, so omit the warning.
-#[allow(should_implement_trait)]
+// we use rocksdb's style iterator, doesn't need to impl std iterator.
 impl<'a> RegionIterator<'a> {
     pub fn new(snap: &'a Snapshot,
-               region: Region,
+               region: Arc<Region>,
                upper_bound: Option<&[u8]>,
                fill_cache: bool)
                -> RegionIterator<'a> {
@@ -167,7 +173,7 @@ impl<'a> RegionIterator<'a> {
     }
 
     pub fn new_cf(snap: &'a Snapshot,
-                  region: Region,
+                  region: Arc<Region>,
                   upper_bound: Option<&[u8]>,
                   fill_cache: bool,
                   cf: &str)

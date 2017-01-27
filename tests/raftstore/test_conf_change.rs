@@ -17,6 +17,7 @@ use std::thread;
 
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
+use kvproto::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use kvproto::metapb;
@@ -55,11 +56,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"k1", b"v1");
     must_get_equal(&engine_2, b"k2", b"v2");
 
-    let epoch = cluster.pd_client
-        .get_region_by_id(1)
-        .unwrap()
-        .unwrap()
-        .take_region_epoch();
+    let epoch = cluster.pd_client.get_region_epoch(r1);
 
     // Conf version must change.
     assert!(epoch.get_conf_ver() > 1);
@@ -107,6 +104,15 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.get(b"k4"), Some(b"v4".to_vec()));
     must_get_equal(&engine_2, b"k4", b"v4");
+
+    let conf_change = new_change_peer_request(ConfChangeType::AddNode, new_peer(2, 2));
+    let epoch = cluster.pd_client.get_region_epoch(r1);
+    let admin_req = new_admin_request(r1, &epoch, conf_change);
+    let resp = cluster.call_command_on_leader(admin_req, Duration::from_secs(3)).unwrap();
+    let exec_res = resp.get_header().get_error().get_message().contains("duplicated");
+    assert!(exec_res,
+            "add duplicated peer should failed, but got {:?}",
+            resp);
 
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));

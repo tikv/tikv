@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
-use std::{cmp, u64};
+use std::u64;
 
 use rocksdb::DB;
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
@@ -37,7 +37,7 @@ use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
-use raft::{SnapshotStatus, INVALID_INDEX};
+use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
@@ -51,8 +51,8 @@ use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState,
-                  ReadyContext};
+use super::peer::{Peer, ProposalMeta, ReadyResult, ExecResult, StaleState, ConsistencyState,
+                  ReadyContext, ChangePeer};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -863,28 +863,50 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_change_peer(&mut self,
-                            region_id: u64,
-                            change_type: ConfChangeType,
-                            peer: metapb::Peer) {
-        let mut peer_id = 0;
-        if let Some(p) = self.region_peers.get(&region_id) {
+    fn on_ready_change_peer(&mut self, region_id: u64, cp: ChangePeer) {
+        let my_peer_id;
+        let change_type = cp.conf_change.get_change_type();
+        if let Some(p) = self.region_peers.get_mut(&region_id) {
+            p.raft_group.apply_conf_change(&cp.conf_change);
+            if cp.conf_change.get_node_id() == raft::INVALID_ID {
+                // Apply failed, skip.
+                return;
+            }
             if p.is_leader() {
                 // Notify pd immediately.
                 info!("{} notify pd with change peer region {:?}",
                       p.tag,
                       p.region());
-                self.heartbeat_pd(p);
+                p.heartbeat_pd(&self.cfg, &self.pd_worker);
             }
-            peer_id = p.peer_id();
+
+            match change_type {
+                ConfChangeType::AddNode => {
+                    // Add this peer to cache.
+                    let peer = cp.peer.clone();
+                    p.peer_heartbeats.insert(peer.get_id(), Instant::now());
+                    self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
+                }
+                ConfChangeType::RemoveNode => {
+                    // Remove this peer from cache.
+                    p.peer_heartbeats.remove(&cp.peer.get_id());
+                    self.peer_cache.borrow_mut().remove(&cp.peer.get_id());
+                }
+            }
+
+            my_peer_id = p.peer_id();
+        } else {
+            panic!("{} missing region {}", self.tag, region_id);
         }
+
+        let peer = cp.peer;
 
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            if peer_id == peer.get_id() {
+            if my_peer_id == peer.get_id() {
                 self.destroy_peer(region_id, peer)
             } else {
-                panic!("trying to remove unknown peer {:?}", peer);
+                panic!("{} trying to remove unknown peer {:?}", self.tag, peer);
             }
         }
     }
@@ -911,6 +933,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              right: metapb::Region) {
         let new_region_id = right.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
+            // Add new peers to cache.
+            for meta in right.get_peers() {
+                self.peer_cache.borrow_mut().insert(meta.get_id(), meta.to_owned());
+            }
             // If the store received a raft msg with the new region raft group
             // before splitting, it will creates a uninitialized peer.
             // We can remove this uninitialized peer directly.
@@ -926,16 +952,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("create new split region {:?} err {:?}", right, e);
             }
             Ok(mut new_peer) => {
-                // If the peer for the region before split is leader,
-                // we can force the new peer for the new split region to campaign
-                // to become the leader too.
+                // If this peer is the leader of the region before split, it's intuitional for
+                // it to become the leader of new split region.
+                // The ticks are accelerated here, so that the peer for the new split region
+                // comes to campaign earlier than the other follower peers. And then it's more
+                // likely for this peer to become the leader of the new split region.
+                // If the other follower peers applies logs too slowly, they may fail to vote the
+                // `MsgRequestVote` from this peer on its campaign.
+                // In this worst case scenario, the new split raft group will not be available
+                // since there is no leader established during one election timeout after the split.
                 let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
-                    if let Err(e) = new_peer.raft_group.campaign() {
-                        error!("[region {}] peer {:?} campaigns  err {:?}",
-                               new_region_id,
-                               new_peer.peer,
-                               e);
+                    for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
+                        new_peer.raft_group.tick()
                     }
                 }
 
@@ -970,8 +999,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("notify pd with split left {:?}, right {:?}",
               left_region,
               right_region);
-        self.heartbeat_pd(left);
-        self.heartbeat_pd(right);
+        left.heartbeat_pd(&self.cfg, &self.pd_worker);
+        right.heartbeat_pd(&self.cfg, &self.pd_worker);
 
         // Now pd only uses ReportSplit for history operation show,
         // so we send it independently here.
@@ -1020,9 +1049,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // handle executing committed log results
         for result in ready_result.exec_results {
             match result {
-                ExecResult::ChangePeer { change_type, peer, .. } => {
-                    self.on_ready_change_peer(region_id, change_type, peer)
-                }
+                ExecResult::ChangePeer(cp) => self.on_ready_change_peer(region_id, cp),
                 ExecResult::CompactLog { state, .. } => self.on_ready_compact_log(region_id, state),
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
@@ -1082,13 +1109,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
-        let pending_cmd = PendingCmd {
+        let meta = ProposalMeta {
             uuid: uuid,
             term: term,
-            cb: Some(cb),
             renew_lease_time: None,
         };
-        if peer.propose(pending_cmd, msg, resp, &mut self.raft_metrics.propose) {
+        if peer.propose(meta, cb, msg, resp, &mut self.raft_metrics.propose) {
             self.pending_raft_groups.insert(region_id);
         }
 
@@ -1243,10 +1269,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Create a compact log request and notify directly.
             let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
-            if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
-                request: request,
-                callback: Box::new(|_| {}),
-            }) {
+            if let Err(e) = self.sendch.try_send(Msg::new_raft_cmd(request, Box::new(|_| {}))) {
                 error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
         }
@@ -1365,18 +1388,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn heartbeat_pd(&self, peer: &Peer) {
-        let task = PdTask::Heartbeat {
-            region: peer.region().clone(),
-            peer: peer.peer.clone(),
-            down_peers: peer.collect_down_peers(self.cfg.max_peer_down_duration),
-            pending_peers: peer.collect_pending_peers(),
-        };
-        if let Err(e) = self.pd_worker.schedule(task) {
-            error!("{} failed to notify pd: {}", peer.tag, e);
-        }
-    }
-
     fn on_pd_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
             peer.check_peers();
@@ -1386,7 +1397,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values() {
             if peer.is_leader() {
                 leader_count += 1;
-                self.heartbeat_pd(peer);
+                peer.heartbeat_pd(&self.cfg, &self.pd_worker);
             }
         }
 
@@ -1419,8 +1430,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(stats) => stats,
         };
 
-        let capacity = cmp::min(disk_stats.total_space(), self.cfg.capacity);
-
+        let disk_cap = disk_stats.total_space();
+        let capacity = if self.cfg.capacity == 0 || disk_cap < self.cfg.capacity {
+            disk_cap
+        } else {
+            self.cfg.capacity
+        };
         stats.set_capacity(capacity);
 
         // Must get the total SST file size here.
@@ -1708,10 +1723,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let peer = &self.region_peers[&candidate_id];
 
             info!("{} scheduling consistent check", peer.tag);
-            let msg = Msg::RaftCmd {
-                request: new_compute_hash_request(candidate_id, peer.peer.clone()),
-                callback: Box::new(|_| {}),
-            };
+            let msg = Msg::new_raft_cmd(new_compute_hash_request(candidate_id, peer.peer.clone()),
+                                        Box::new(|_| {}));
 
             if let Err(e) = self.sendch.send(msg) {
                 error!("{} failed to schedule consistent check: {:?}", peer.tag, e);
@@ -1764,10 +1777,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        let msg = Msg::RaftCmd {
-            request: new_verify_hash_request(region_id, peer.clone(), state),
-            callback: Box::new(|_| {}),
-        };
+        let msg = Msg::new_raft_cmd(new_verify_hash_request(region_id, peer.clone(), state),
+                                    Box::new(|_| {}));
         if let Err(e) = self.sendch.send(msg) {
             error!("[region {}] failed to schedule verify command for index {}: {:?}",
                    region_id,
@@ -1850,7 +1861,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("{} handle raft message err: {:?}", self.tag, e);
                 }
             }
-            Msg::RaftCmd { request, callback } => self.propose_raft_command(request, callback),
+            Msg::RaftCmd { send_time, request, callback } => {
+                self.raft_metrics
+                    .propose
+                    .request_wait_time
+                    .observe(duration_to_sec(send_time.elapsed()) as f64);
+                self.propose_raft_command(request, callback)
+            }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();

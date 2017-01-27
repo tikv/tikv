@@ -188,6 +188,14 @@ pub fn new_admin_request(region_id: u64,
     req
 }
 
+pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::ChangePeer);
+    req.mut_change_peer().set_change_type(change_type);
+    req.mut_change_peer().set_peer(peer);
+    req
+}
+
 pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::TransferLeader);
