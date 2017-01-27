@@ -819,12 +819,10 @@ fn main() {
         .map(|s| s.trim())
         .filter_map(|s| if s.is_empty() {
             None
+        } else if s.starts_with("http://") {
+            Some(&s[7..])
         } else {
-            if s.starts_with("http://") {
-                Some(&s[7..])
-            } else {
-                Some(s)
-            }
+            Some(s)
         }) {
         if let Err(e) = util::config::check_addr(addr) {
             panic!("{:?}", e);
