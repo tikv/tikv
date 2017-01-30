@@ -25,7 +25,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_raft::*;
+use super::test_raft::*;
 use kvproto::eraftpb::*;
 
 fn testing_snap() -> Snapshot {
