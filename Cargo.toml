@@ -65,9 +65,11 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
+branch = "siddontang/protobuf-1.2.1"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
+branch = "siddontang/protbuf-1.2.1"
 
 [dependencies.mio]
 git = "https://github.com/carllerche/mio.git"
