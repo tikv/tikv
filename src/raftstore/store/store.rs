@@ -553,8 +553,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.insert_peer_cache(msg.take_from_peer());
         self.insert_peer_cache(msg.take_to_peer());
 
+        let timer = self.new_slow_timer();
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let timer = SlowTimer::from_millis(self.cfg.raft_base_tick_interval);
         try!(peer.step(msg.take_message()));
         slow_log!(timer, "{} raft step", peer.tag);
 
@@ -761,7 +761,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_ready(&mut self) {
-        let t = SlowTimer::from_millis(self.cfg.raft_base_tick_interval);
+        let t = self.new_slow_timer();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
@@ -1044,7 +1044,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.on_ready_apply_snapshot(apply_result);
         }
 
-        let t = SlowTimer::from_millis(self.cfg.raft_base_tick_interval);
+        let t = self.new_slow_timer();
         let result_count = ready_result.exec_results.len();
         // handle executing committed log results
         for result in ready_result.exec_results {
@@ -1786,6 +1786,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                    e);
         }
     }
+
+    #[inline]
+    fn new_slow_timer(&self) -> SlowTimer {
+        SlowTimer::from_millis(self.cfg.raft_slow_time_ms())
+    }
 }
 
 fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
@@ -1853,7 +1858,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Message = Msg;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
-        let t = SlowTimer::from_millis(self.cfg.raft_base_tick_interval);
+        let t = self.new_slow_timer();
         let msg_str = format!("{:?}", msg);
         match msg {
             Msg::RaftMessage(data) => {
@@ -1888,7 +1893,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
-        let t = SlowTimer::from_millis(self.cfg.raft_base_tick_interval);
+        let t = self.new_slow_timer();
         match timeout {
             Tick::Raft => self.on_raft_base_tick(event_loop),
             Tick::RaftLogGc => self.on_raft_gc_log_tick(event_loop),
