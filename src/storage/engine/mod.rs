@@ -269,7 +269,7 @@ impl<'a> Cursor<'a> {
     }
 
     /// Find the largest key that is not greater than the specific key.
-    fn near_reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
+    pub fn near_reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
         assert!(self.scan_mode != ScanMode::Forward);
         if !self.iter.valid() {
             return self.reverse_seek_le(key);
