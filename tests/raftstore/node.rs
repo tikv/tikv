@@ -22,13 +22,12 @@ use std::io::{Read, Write};
 
 use rocksdb::DB;
 use tempdir::TempDir;
-use protobuf::Message;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
 use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftMessage, RaftSnapshotData};
+use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{store, Result, Error};
 use tikv::util::HandyRwLock;
@@ -85,19 +84,17 @@ impl Channel<RaftMessage> for ChannelTransport {
             let mut snap_reader = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_send_snap_file_reader(&key).unwrap()
+                    p.0.rl().get_snapshot_file_trans_reader(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
-            //
-            let mut snap_data = RaftSnapshotData::new();
-            let data = msg.get_message().get_snapshot().get_data();
-            snap_data.merge_from_bytes(data).unwrap();
-            let cf_sizes = decode_cf_files_size(snap_data.get_data()).unwrap();
             let mut recv_snap_file = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
-                    match p.0.rl().get_recv_snap_file(&key, cf_sizes) {
+                    match p.0.rl().get_snapshot_file_writer(&key,
+                                                            msg.get_message()
+                                                                .get_snapshot()
+                                                                .get_data()) {
                         Ok(f) => f,
                         Err(e) => {
                             return Err(box_err!("fail to create snap file from store {} to store \

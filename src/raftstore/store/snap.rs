@@ -1,23 +1,36 @@
 use std::io::{self, Write, ErrorKind, Read};
 use std::fmt::{self, Formatter, Display};
+use std::cmp;
 use std::fs::{self, File, OpenOptions, Metadata};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
 use std::path::{Path, PathBuf};
 
+use crc::crc32::{self, Digest, Hasher32};
+use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use protobuf::Message;
 
 use kvproto::eraftpb::Snapshot;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use raftstore::store::Msg;
+use raftstore::Result;
 use util::transport::SendCh;
 use util::HandyRwLock;
 use storage::{ALL_CFS, CF_RAFT};
 use rocksdb::{EnvOptions, Options, SstFileWriter};
+use super::peer_storage::decode_cf_file_sizes;
+
+/// Name prefix for the self-generated snapshot file.
+const SNAP_GEN_PREFIX: &'static str = "gen";
+/// Name prefix for the received snapshot file.
+const SNAP_REV_PREFIX: &'static str = "rev";
 
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
 const SST_FILE_SUFFIX: &'static str = ".sst";
+
+const CRC32_BYTES_COUNT: usize = 4;
+const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
 
 fn get_snapshot_cfs() -> Vec<String> {
     let size = ALL_CFS.len();
@@ -84,10 +97,340 @@ impl Display for SnapKey {
     }
 }
 
-/// Name prefix for the self-generated snapshot file.
-const SNAP_GEN_PREFIX: &'static str = "gen";
-/// Name prefix for the received snapshot file.
-const SNAP_REV_PREFIX: &'static str = "rev";
+pub enum SnapshotFileWriter {
+    V1(SnapshotFileV1),
+    V2(RecvSnapshotFile),
+}
+
+impl SnapshotFileWriter {
+    pub fn init(&mut self) -> io::Result<()> {
+        match *self {
+            SnapshotFileWriter::V1(ref mut f) => f.init(),
+            SnapshotFileWriter::V2(ref mut f) => f.init(),
+        }
+    }
+
+    pub fn path(&self) -> String {
+        match *self {
+            SnapshotFileWriter::V1(ref f) => f.path(),
+            SnapshotFileWriter::V2(ref f) => f.path(),
+        }
+    }
+
+    pub fn exists(&self) -> bool {
+        match *self {
+            SnapshotFileWriter::V1(ref f) => f.exists(),
+            SnapshotFileWriter::V2(ref f) => f.exists(),
+        }
+    }
+
+    pub fn save(&mut self) -> io::Result<()> {
+        match *self {
+            SnapshotFileWriter::V1(ref mut f) => f.save(),
+            SnapshotFileWriter::V2(ref mut f) => f.save(),
+        }
+    }
+}
+
+impl Write for SnapshotFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match *self {
+            SnapshotFileWriter::V1(ref mut f) => f.write(buf),
+            SnapshotFileWriter::V2(ref mut f) => f.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match *self {
+            SnapshotFileWriter::V1(ref mut f) => f.flush(),
+            SnapshotFileWriter::V2(ref mut f) => f.flush(),
+        }
+    }
+}
+
+pub enum SnapshotFileSendReader {
+    V1((SnapshotFileV1, SnapValidationReader)),
+    V2(SendSnapshotFileReader),
+}
+
+impl SnapshotFileSendReader {
+    pub fn exists(&self) -> bool {
+        match *self {
+            SnapshotFileSendReader::V1((ref f, _)) => f.exists(),
+            SnapshotFileSendReader::V2(ref f) => f.exists(),
+        }
+    }
+
+    pub fn path(&self) -> String {
+        match *self {
+            SnapshotFileSendReader::V1((ref f, _)) => f.path(),
+            SnapshotFileSendReader::V2(ref f) => f.path(),
+        }
+    }
+
+    pub fn meta(&self) -> io::Result<Metadata> {
+        match *self {
+            SnapshotFileSendReader::V1((ref f, _)) => f.meta(),
+            SnapshotFileSendReader::V2(ref f) => f.meta(),
+        }
+    }
+
+    pub fn delete(&self) {
+        match *self {
+            SnapshotFileSendReader::V1((ref f, _)) => f.delete(),
+            SnapshotFileSendReader::V2(ref f) => f.delete(),
+        }
+    }
+
+    pub fn total_size(&self) -> io::Result<u64> {
+        match *self {
+            SnapshotFileSendReader::V1((ref f, _)) => {
+                let meta = try!(f.meta());
+                Ok(meta.len())
+            }
+            SnapshotFileSendReader::V2(ref f) => f.total_size(),
+        }
+    }
+}
+
+impl Read for SnapshotFileSendReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match *self {
+            SnapshotFileSendReader::V1((_, ref mut f)) => f.read(buf),
+            SnapshotFileSendReader::V2(ref mut f) => f.read(buf),
+        }
+    }
+}
+
+pub enum SnapshotFileRecvReader {
+    V1(SnapshotFileV1),
+    V2(RecvSnapshotFileReader),
+}
+
+impl SnapshotFileRecvReader {
+    pub fn delete(&self) {
+        match *self {
+            SnapshotFileRecvReader::V1(ref f) => f.delete(),
+            SnapshotFileRecvReader::V2(ref f) => f.delete(),
+        }
+    }
+}
+
+/// A structure represents the snapshot file.
+///
+/// All changes to the file will be written to `tmp_file` first, and use
+/// `save` method to make them persistent. When saving a crc32 checksum
+/// will be appended to the file end automatically.
+pub struct SnapshotFileV1 {
+    file: PathBuf,
+    digest: Digest,
+    size_track: Arc<RwLock<u64>>,
+    // File is the file obj represent the tmpfile, string is the actual path to
+    // tmpfile.
+    tmp_file: Option<(File, String)>,
+}
+
+impl SnapshotFileV1 {
+    fn new<T: Into<PathBuf>>(snap_dir: T,
+                             size_track: Arc<RwLock<u64>>,
+                             is_sending: bool,
+                             key: &SnapKey)
+                             -> io::Result<SnapshotFileV1> {
+        let mut file_path = snap_dir.into();
+        if !file_path.exists() {
+            try!(fs::create_dir_all(file_path.as_path()));
+        }
+        let prefix = if is_sending {
+            SNAP_GEN_PREFIX
+        } else {
+            SNAP_REV_PREFIX
+        };
+        let file_name = format!("{}_{}.snap", prefix, key);
+        file_path.push(&file_name);
+
+        let f = SnapshotFileV1 {
+            file: file_path,
+            digest: Digest::new(crc32::IEEE),
+            size_track: size_track,
+            tmp_file: None,
+        };
+        Ok(f)
+    }
+
+    pub fn init(&mut self) -> io::Result<()> {
+        if self.exists() || self.tmp_file.is_some() {
+            return Ok(());
+        }
+
+        let tmp_path = format!("{}{}", self.path(), TMP_FILE_SUFFIX);
+        let tmp_f = try!(OpenOptions::new().write(true).create_new(true).open(&tmp_path));
+        self.tmp_file = Some((tmp_f, tmp_path));
+        Ok(())
+    }
+
+    pub fn meta(&self) -> io::Result<Metadata> {
+        self.file.metadata()
+    }
+
+    /// Get a validation reader.
+    pub fn reader(&self) -> io::Result<SnapValidationReader> {
+        SnapValidationReader::open(self.path())
+    }
+
+    pub fn exists(&self) -> bool {
+        self.file.exists() && self.file.is_file()
+    }
+
+    pub fn delete(&self) {
+        if let Err(e) = self.try_delete() {
+            error!("failed to delete {}: {:?}", self.path(), e);
+        }
+    }
+
+    pub fn try_delete(&self) -> io::Result<()> {
+        debug!("deleting {}", self.path());
+        if !self.exists() {
+            return Ok(());
+        }
+        let size = try!(self.meta()).len();
+        try!(fs::remove_file(self.path()));
+        let mut size_track = self.size_track.wl();
+        *size_track = size_track.saturating_sub(size);
+        Ok(())
+    }
+
+    /// Use the content in temporary files replace the target file.
+    ///
+    /// Please note that this method can only be called once.
+    fn save(&mut self) -> io::Result<()> {
+        self.save_impl(false)
+    }
+
+    /// Same as `save`, but will automatically append the checksum to
+    /// the end of file.
+    pub fn save_with_checksum(&mut self) -> io::Result<()> {
+        self.save_impl(true)
+    }
+
+    fn save_impl(&mut self, append_checksum: bool) -> io::Result<()> {
+        debug!("saving to {}", self.file.as_path().display());
+        if let Some((mut f, path)) = self.tmp_file.take() {
+            if append_checksum {
+                try!(f.write_u32::<BigEndian>(self.digest.sum32()));
+            }
+            try!(f.flush());
+            let file_len = try!(fs::metadata(&path)).len();
+            let mut size_track = self.size_track.wl();
+            try!(fs::rename(path, self.file.as_path()));
+            *size_track = size_track.saturating_add(file_len);
+        }
+        Ok(())
+    }
+
+    pub fn path(&self) -> String {
+        self.file.as_path().to_str().unwrap().to_string()
+    }
+}
+
+impl Write for SnapshotFileV1 {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.tmp_file.is_none() {
+            return Ok(0);
+        }
+        let written = try!(self.tmp_file.as_mut().unwrap().0.write(buf));
+        self.digest.write(&buf[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.tmp_file.is_none() {
+            return Ok(());
+        }
+        self.tmp_file.as_mut().unwrap().0.flush()
+    }
+}
+
+impl Drop for SnapshotFileV1 {
+    fn drop(&mut self) {
+        if let Some((_, path)) = self.tmp_file.take() {
+            debug!("deleting {}", path);
+            if let Err(e) = fs::remove_file(&path) {
+                warn!("failed to delete temporary file {}: {:?}", path, e);
+            }
+        }
+    }
+}
+
+/// A reader that calculate checksum and verify it without read
+/// it from the beginning again.
+pub struct SnapValidationReader {
+    reader: File,
+    digest: Digest,
+    left: usize,
+    res: Option<u32>,
+}
+
+impl SnapValidationReader {
+    /// Open the snap file located at specified path.
+    fn open<P: AsRef<Path>>(path: P) -> io::Result<SnapValidationReader> {
+        let reader = try!(File::open(path.as_ref()));
+        let digest = Digest::new(crc32::IEEE);
+        let len = try!(reader.metadata()).len();
+        if len < CRC32_BYTES_COUNT as u64 {
+            return Err(io::Error::new(ErrorKind::InvalidInput,
+                                      format!("file length {} < {}", len, CRC32_BYTES_COUNT)));
+        }
+        let left = len as usize - CRC32_BYTES_COUNT;
+        Ok(SnapValidationReader {
+            reader: reader,
+            digest: digest,
+            left: left,
+            res: None,
+        })
+    }
+
+    /// Validate the file
+    ///
+    /// If the reader will be consumed after calling this method, no further data can be
+    /// read from this reader again.
+    pub fn validate(&mut self) -> io::Result<()> {
+        if self.res.is_none() {
+            if self.left > 0 {
+                let cap = cmp::min(self.left, DEFAULT_READ_BUFFER_SIZE);
+                let mut buf = vec![0; cap];
+                while self.left > 0 {
+                    try!(self.read(&mut buf));
+                }
+            }
+            self.res = Some(try!(self.reader.read_u32::<BigEndian>()));
+        }
+        if self.res.unwrap() != self.digest.sum32() {
+            let msg = format!("crc not correct: {} != {}",
+                              self.res.unwrap(),
+                              self.digest.sum32());
+            return Err(io::Error::new(ErrorKind::InvalidData, msg));
+        }
+        Ok(())
+    }
+}
+
+impl Read for SnapValidationReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.left == 0 {
+            return Ok(0);
+        }
+        let read = if buf.len() < self.left {
+            try!(self.reader.read(buf))
+        } else {
+            try!(self.reader.read(&mut buf[..self.left]))
+        };
+        self.digest.write(&buf[..read]);
+        self.left -= read;
+        Ok(read)
+    }
+}
+
+// new format
 
 struct SendCfFile {
     pub cf: String,
@@ -294,7 +637,7 @@ impl SendSnapshotFileReader {
         true
     }
 
-    pub fn display_path(&self) -> String {
+    pub fn path(&self) -> String {
         let mut cf_names = String::from("");
         for (i, f) in self.cf_readers.iter().enumerate() {
             if i == 0 {
@@ -315,14 +658,12 @@ impl SendSnapshotFileReader {
 
     pub fn delete(&self) {
         if let Err(e) = self.try_delete() {
-            error!("failed to delete snapshot file {}: {:?}",
-                   self.display_path(),
-                   e);
+            error!("failed to delete snapshot file {}: {:?}", self.path(), e);
         }
     }
 
     pub fn try_delete(&self) -> io::Result<()> {
-        debug!("deleting {}", self.display_path());
+        debug!("deleting {}", self.path());
         for f in &self.cf_readers {
             let size = try!(fs::metadata(&f.path)).len();
             let mut size_track = self.size_track.wl();
@@ -440,7 +781,7 @@ impl RecvSnapshotFile {
         true
     }
 
-    pub fn display_path(&self) -> String {
+    pub fn path(&self) -> String {
         let mut cf_names = String::from("");
         for (i, f) in self.cf_files.iter().enumerate() {
             if i == 0 {
@@ -459,8 +800,8 @@ impl RecvSnapshotFile {
                 SST_FILE_SUFFIX)
     }
 
-    pub fn save(&mut self) -> io::Result<()> {
-        debug!("saving to {}", self.display_path());
+    fn save(&mut self) -> io::Result<()> {
+        debug!("saving to {}", self.path());
         // check that all cf files have been fully written
         for cf_file in &mut self.cf_files {
             let mut file = cf_file.file.as_mut().unwrap();
@@ -484,14 +825,12 @@ impl RecvSnapshotFile {
 
     pub fn delete(&mut self) {
         if let Err(e) = self.try_delete() {
-            error!("failed to delete snapshot file {}: {:?}",
-                   self.display_path(),
-                   e);
+            error!("failed to delete snapshot file {}: {:?}", self.path(), e);
         }
     }
 
     pub fn try_delete(&self) -> io::Result<()> {
-        debug!("deleting {}", self.display_path());
+        debug!("deleting {}", self.path());
         for f in &self.cf_files {
             delete_file(&f.tmp_path);
             delete_file(&f.path);
@@ -612,7 +951,6 @@ impl RecvSnapshotFileReader {
     }
 
     pub fn delete(&self) {
-        // Do not delete cf files since they are moved to rocksdb
         let mut size_track = self.size_track.wl();
         for cf_file in &self.cf_files {
             delete_file(&cf_file.path);
@@ -688,10 +1026,10 @@ impl SnapManagerCore {
         Ok(())
     }
 
-    pub fn list_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
+    pub fn list_snap(&self) -> io::Result<Vec<(SnapKey, bool, bool)>> {
         let path = Path::new(&self.base);
         let read_dir = try!(fs::read_dir(path));
-        let mut all_keys: Vec<(SnapKey, bool)> = read_dir.filter_map(|p| {
+        let mut all_keys: Vec<(SnapKey, bool, bool)> = read_dir.filter_map(|p| {
                 let p = match p {
                     Err(e) => {
                         error!("failed to list content of {}: {:?}", self.base, e);
@@ -709,19 +1047,16 @@ impl SnapManagerCore {
                     Some(n) => n,
                 };
                 let is_sending = name.starts_with(SNAP_GEN_PREFIX);
-                let numbers: Vec<u64> = name.split('.')
+                let name_parts: Vec<&str> = name.split('.')
                     .next()
-                    .map_or_else(|| vec![], |s| {
-                        s.split('_')
-                            .skip(1)
-                            .filter_map(|s| s.parse().ok())
-                            .collect()
-                    });
+                    .map_or_else(|| vec![], |s| s.split('_').skip(1).collect());
+                let is_v1 = name_parts.len() == 3;
+                let numbers: Vec<u64> = name_parts.iter().filter_map(|s| s.parse().ok()).collect();
                 if numbers.len() != 3 {
                     error!("failed to parse snapkey from {}", name);
                     return None;
                 }
-                Some((SnapKey::new(numbers[0], numbers[1], numbers[2]), is_sending))
+                Some((SnapKey::new(numbers[0], numbers[1], numbers[2]), is_sending, is_v1))
             })
             .collect();
         all_keys.sort();
@@ -735,26 +1070,74 @@ impl SnapManagerCore {
     }
 
     #[inline]
-    pub fn get_send_snap_file(&self, key: &SnapKey) -> io::Result<SendSnapshotFile> {
+    pub fn get_send_snapshot_file(&self, key: &SnapKey) -> io::Result<SendSnapshotFile> {
         SendSnapshotFile::new(&self.base, key, self.snap_size.clone())
     }
 
     #[inline]
-    pub fn get_recv_snap_file(&self,
-                              key: &SnapKey,
-                              cf_sizes: Vec<(String, u64)>)
-                              -> io::Result<RecvSnapshotFile> {
-        RecvSnapshotFile::new(&self.base, key, cf_sizes, self.snap_size.clone())
+    pub fn get_snapshot_file_writer(&self,
+                                    key: &SnapKey,
+                                    data: &[u8])
+                                    -> Result<SnapshotFileWriter> {
+        if data.len() == 0 {
+            let f = try!(SnapshotFileV1::new(&self.base, self.snap_size.clone(), false, key));
+            Ok(SnapshotFileWriter::V1(f))
+        } else {
+            let cf_file_sizes = try!(decode_cf_file_sizes(data));
+            let f =
+                try!(RecvSnapshotFile::new(&self.base, key, cf_file_sizes, self.snap_size.clone()));
+            Ok(SnapshotFileWriter::V2(f))
+        }
     }
 
     #[inline]
-    pub fn get_send_snap_file_reader(&self, key: &SnapKey) -> io::Result<SendSnapshotFileReader> {
-        SendSnapshotFileReader::new(&self.base, key, self.snap_size.clone())
+    pub fn get_snapshot_file_trans_reader(&self, key: &SnapKey) -> Result<SnapshotFileSendReader> {
+        let v1 = try!(SnapshotFileV1::new(&self.base, self.snap_size.clone(), false, key));
+        if v1.exists() {
+            let reader = try!(v1.reader());
+            return Ok(SnapshotFileSendReader::V1((v1, reader)));
+        }
+        let v2 = try!(SendSnapshotFileReader::new(&self.base, key, self.snap_size.clone()));
+        Ok(SnapshotFileSendReader::V2(v2))
     }
 
     #[inline]
-    pub fn get_recv_snap_file_reader(&self, key: &SnapKey) -> io::Result<RecvSnapshotFileReader> {
-        RecvSnapshotFileReader::new(&self.base, key, self.snap_size.clone())
+    pub fn get_snapshot_file_apply_reader(&self, key: &SnapKey) -> Result<SnapshotFileRecvReader> {
+        let v1 = try!(SnapshotFileV1::new(&self.base, self.snap_size.clone(), false, key));
+        if v1.exists() {
+            return Ok(SnapshotFileRecvReader::V1(v1));
+        }
+        let v2 = try!(RecvSnapshotFileReader::new(&self.base, key, self.snap_size.clone()));
+        Ok(SnapshotFileRecvReader::V2(v2))
+    }
+
+    #[inline]
+    pub fn get_snapshot_file_send_reader(&self,
+                                         key: &SnapKey,
+                                         is_v1: bool)
+                                         -> Result<SnapshotFileSendReader> {
+        if is_v1 {
+            let v1 = try!(SnapshotFileV1::new(&self.base, self.snap_size.clone(), false, key));
+            let reader = try!(v1.reader());
+            Ok(SnapshotFileSendReader::V1((v1, reader)))
+        } else {
+            let v2 = try!(SendSnapshotFileReader::new(&self.base, key, self.snap_size.clone()));
+            Ok(SnapshotFileSendReader::V2(v2))
+        }
+    }
+
+    #[inline]
+    pub fn get_snapshot_file_recv_reader(&self,
+                                         key: &SnapKey,
+                                         is_v1: bool)
+                                         -> io::Result<SnapshotFileRecvReader> {
+        if is_v1 {
+            let f = try!(SnapshotFileV1::new(&self.base, self.snap_size.clone(), false, key));
+            Ok(SnapshotFileRecvReader::V1(f))
+        } else {
+            let f = try!(RecvSnapshotFileReader::new(&self.base, key, self.snap_size.clone()));
+            Ok(SnapshotFileRecvReader::V2(f))
+        }
     }
 
     /// Get the approximate size of snap file exists in snap directory.
@@ -956,13 +1339,13 @@ mod test {
         mgr.wl().init().unwrap();
         // temporary file should not be count in snap size.
         assert_eq!(mgr.rl().get_total_snap_size(), total_size * 2);
-        mgr.rl().get_send_snap_file_reader(&snap_key1).unwrap().delete();
+        mgr.rl().get_snapshot_file_trans_reader(&snap_key1).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), total_size);
-        mgr.rl().get_recv_snap_file_reader(&snap_key1).unwrap().delete();
+        mgr.rl().get_snapshot_file_apply_reader(&snap_key1).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
 
         let snap_key3 = SnapKey::new(3, 1, 1);
-        let mut f4 = mgr.rl().get_send_snap_file(&snap_key3).unwrap();
+        let mut f4 = mgr.rl().get_send_snapshot_file(&snap_key3).unwrap();
         f4.init().unwrap();
         write_test_snapshot_file(&mut f4);
         assert_eq!(mgr.rl().get_total_snap_size(), 0);

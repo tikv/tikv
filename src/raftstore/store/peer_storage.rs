@@ -867,7 +867,7 @@ fn build_snap_file(f: &mut SendSnapshotFile,
     Ok(())
 }
 
-pub fn encode_cf_files_size(sizes: Vec<(String, u64)>) -> Vec<KeyValue> {
+pub fn encode_cf_file_sizes(sizes: Vec<(String, u64)>) -> Vec<KeyValue> {
     let mut kvs = vec![];
     for (cf_name, size) in sizes {
         let cf_size = format!("{}", size);
@@ -879,9 +879,11 @@ pub fn encode_cf_files_size(sizes: Vec<(String, u64)>) -> Vec<KeyValue> {
     kvs
 }
 
-pub fn decode_cf_files_size(kvs: &[KeyValue]) -> Result<Vec<(String, u64)>> {
+pub fn decode_cf_file_sizes(data: &[u8]) -> Result<Vec<(String, u64)>> {
+    let mut snap_data = RaftSnapshotData::new();
+    try!(snap_data.merge_from_bytes(data));
     let mut cf_sizes: Vec<(String, u64)> = vec![];
-    for kv in kvs {
+    for kv in snap_data.get_data() {
         let key = kv.get_key();
         let cf = match str::from_utf8(key) {
             Ok(s) => s.to_string(),
@@ -964,7 +966,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut snapshot_file = try!(mgr.rl().get_send_snap_file(&key));
+    let mut snapshot_file = try!(mgr.rl().get_send_snapshot_file(&key));
     if snapshot_file.exists() {
         // TODO validate `snapshot_file`
     } else {
@@ -982,7 +984,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
         sum_size += size;
     }
     snap_data.set_file_size(sum_size);
-    snap_data.set_data(RepeatedField::from_vec(encode_cf_files_size(cf_sizes)));
+    snap_data.set_data(RepeatedField::from_vec(encode_cf_file_sizes(cf_sizes)));
 
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
@@ -1061,7 +1063,7 @@ mod test {
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
-    use protobuf::{self, Message};
+    use protobuf;
     use raftstore::store::{bootstrap, new_snap_mgr, SnapKey};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
@@ -1379,13 +1381,10 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
-        let mut snap_data = RaftSnapshotData::new();
-        snap_data.merge_from_bytes(snap1.get_data()).unwrap();
-        let total_size = snap_data.get_file_size();
-        let cf_sizes = decode_cf_files_size(snap_data.get_data()).unwrap();
-        let mut recv_snap = mgr.rl().get_recv_snap_file(&key, cf_sizes).unwrap();
+        let mut recv_snap = mgr.rl().get_snapshot_file_writer(&key, snap1.get_data()).unwrap();
         recv_snap.init().unwrap();
-        let mut reader = mgr.rl().get_send_snap_file_reader(&key).unwrap();
+        let mut reader = mgr.rl().get_snapshot_file_trans_reader(&key).unwrap();
+        let total_size = reader.total_size().unwrap();
         let mut buf = Vec::with_capacity(total_size as usize);
         let read_size = reader.read_to_end(&mut buf).unwrap();
         assert_eq!(read_size as u64, total_size);
