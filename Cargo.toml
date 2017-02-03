@@ -51,15 +51,17 @@ nix = "0.6.0"
 utime = "0.1"
 chrono = "0.2"
 lazy_static = "0.2.1"
-signal = "0.2"
 backtrace = "0.2.3"
 clap = "2"
 url = "1.2"
 getopts = "0.2"
 regex = "0.1"
 
+[target.'cfg(unix)'.dependencies]
+signal = "0.2"
+
 [dependencies.rocksdb]
-git = "https://github.com/ngaut/rust-rocksdb.git"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"

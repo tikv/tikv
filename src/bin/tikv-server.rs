@@ -29,6 +29,8 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 
+mod signal_handler;
+
 use std::process;
 use std::{env, thread};
 use std::fs::{self, File};
@@ -43,7 +45,6 @@ use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
-use prometheus::{Encoder, TextEncoder};
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
@@ -59,10 +60,7 @@ use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
-const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
-const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
-
-fn print_usage(program: &str, opts: Options) {
+fn print_usage(program: &str, opts: &Options) {
     let brief = format!("Usage: {} [options]", program);
     print!("{}", opts.usage(&brief));
 }
@@ -214,6 +212,8 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
+    util::monitor_threads("tikv").unwrap();
+
     util::run_prometheus(Duration::from_millis(push_interval as u64),
                          &push_address,
                          &push_job);
@@ -287,6 +287,10 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
             get_toml_int(config, "rocksdb.stats-dump-period-sec", Some(600));
         opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
+
+    let compaction_readahead_size =
+        get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
+    opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
     opts
 }
@@ -506,6 +510,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
+    cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
+            config,
+            "raftstore.raft-entry-max-size");
     cfg_duration(&mut cfg.raft_store.max_peer_down_duration,
                  config,
                  "raftstore.max-peer-down-duration");
@@ -622,72 +629,14 @@ fn start_server<T, S>(mut server: Server<T, S>,
 {
     let ch = server.get_sendch();
     let h = thread::Builder::new()
-        .name("tikv-server".to_owned())
+        .name("tikv-eventloop".to_owned())
         .spawn(move || {
             server.run(&mut el).unwrap();
         })
         .unwrap();
-    handle_signal(ch, engine, backup_path);
+    signal_handler::handle_signal(ch, engine, backup_path);
     h.join().unwrap();
 }
-
-#[cfg(unix)]
-fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
-    use signal::trap::Trap;
-    use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
-    let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
-    for sig in trap {
-        match sig {
-            SIGTERM | SIGINT => {
-                info!("receive signal {}, stopping server...", sig);
-                ch.send(Msg::Quit).unwrap();
-                break;
-            }
-            SIGUSR1 => {
-                // Use SIGUSR1 to log metrics.
-                let mut buffer = vec![];
-                let metric_familys = prometheus::gather();
-                let encoder = TextEncoder::new();
-                encoder.encode(&metric_familys, &mut buffer).unwrap();
-                info!("{}", String::from_utf8(buffer).unwrap());
-
-                // Log common rocksdb stats.
-                for name in engine.cf_names() {
-                    let handler = engine.cf_handle(name).unwrap();
-                    if let Some(v) = engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
-                        info!("{}", v)
-                    }
-                }
-
-                if let Some(v) = engine.get_property_value(ROCKSDB_DB_STATS_KEY) {
-                    info!("{}", v)
-                }
-
-                // Log more stats if enable_statistics is true.
-                if let Some(v) = engine.get_statistics() {
-                    info!("{}", v)
-                }
-            }
-            SIGUSR2 => {
-                if backup_path.is_empty() {
-                    info!("empty backup path, backup is disabled");
-                    continue;
-                }
-
-                info!("backup db to {}", backup_path);
-                if let Err(e) = engine.backup_at(backup_path) {
-                    error!("fail to backup: {}", e);
-                }
-                info!("backup done");
-            }
-            // TODO: handle more signal
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn handle_signal(_: SendCh<Msg>, _: Arc<DB>, _: &str) {}
 
 fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config: &toml::Value) {
     let mut event_loop = create_event_loop(&cfg).unwrap();
@@ -764,22 +713,27 @@ fn main() {
     opts.optopt("",
                 "capacity",
                 "set the store capacity",
-                "default: 0 (unlimited)");
+                "default: 0 (disk capacity)");
     opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
     opts.optopt("",
                 "labels",
                 "attributes about this server",
                 "zone=example-zone,disk=example-disk");
 
-    let matches = opts.parse(&args[1..]).expect("opts parse failed");
+    let matches = opts.parse(&args[1..]).unwrap_or_else(|e| {
+        println!("opts parse failed, {:?}", e);
+        print_usage(&program, &opts);
+        process::exit(1);
+    });
     if matches.opt_present("h") {
-        print_usage(&program, opts);
+        print_usage(&program, &opts);
         return;
     }
     if matches.opt_present("V") {
-        let (hash, date) = util::build_info();
+        let (hash, date, rustc) = util::build_info();
         println!("Git Commit Hash: {}", hash);
         println!("UTC Build Time:  {}", date);
+        println!("Rustc Version:   {}", rustc);
         return;
     }
     let config = match matches.opt_str("C") {
@@ -815,7 +769,15 @@ fn main() {
 
     let pd_endpoints = get_flag_string(&matches, "pd")
         .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
-    for addr in pd_endpoints.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    for addr in pd_endpoints.split(',')
+        .map(|s| s.trim())
+        .filter_map(|s| if s.is_empty() {
+            None
+        } else if s.starts_with("http://") {
+            Some(&s[7..])
+        } else {
+            Some(s)
+        }) {
         if let Err(e) = util::config::check_addr(addr) {
             panic!("{:?}", e);
         }

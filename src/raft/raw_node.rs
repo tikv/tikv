@@ -104,7 +104,7 @@ pub struct Ready {
     // CommittedEntries specifies entries to be committed to a
     // store/state-machine. These have previously been committed to stable
     // store.
-    pub committed_entries: Vec<Entry>,
+    pub committed_entries: Option<Vec<Entry>>,
 
     // Messages specifies outbound messages to be sent AFTER Entries are
     // committed to stable storage.
@@ -117,7 +117,7 @@ impl Ready {
     fn new<T: Storage>(raft: &mut Raft<T>, prev_ss: &SoftState, prev_hs: &HardState) -> Ready {
         let mut rd = Ready {
             entries: raft.raft_log.unstable_entries().unwrap_or(&[]).to_vec(),
-            committed_entries: raft.raft_log.next_entries().unwrap_or_else(Vec::new),
+            committed_entries: Some(raft.raft_log.next_entries().unwrap_or_else(Vec::new)),
             messages: raft.msgs.drain(..).collect(),
             ..Default::default()
         };
@@ -261,7 +261,7 @@ impl<T: Storage> RawNode<T> {
         self.raft.step(m)
     }
 
-    pub fn apply_conf_change(&mut self, cc: ConfChange) -> ConfState {
+    pub fn apply_conf_change(&mut self, cc: &ConfChange) -> ConfState {
         if cc.get_node_id() == INVALID_ID {
             self.raft.reset_pending_conf();
             let mut cs = ConfState::new();

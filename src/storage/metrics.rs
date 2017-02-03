@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, Gauge, HistogramVec};
+use prometheus::{Counter, CounterVec, Gauge, HistogramVec, Histogram, exponential_buckets};
 
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: CounterVec =
@@ -55,10 +55,31 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_scheduler_kv_command_key_read",
+            "Bucketed histogram of keys read of a kv command",
+            &["type"],
+            exponential_buckets(1.0, 2.0, 21).unwrap()
+        ).unwrap();
+
+    pub static ref KV_COMMAND_SCAN_EFFICIENCY: Histogram =
+        register_histogram!(
+            "tikv_scheudler_kv_scan_efficiency",
+            "Bucketed histogram of kv keys scan efficiency",
+            vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        ).unwrap();
+
     pub static ref RAWKV_COMMAND_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_storage_rawkv_command_total",
             "Total number of rawkv commands received.",
             &["type"]
+        ).unwrap();
+
+    pub static ref KV_COMMAND_GC_EMPTY_RANGE_COUNTER: Counter =
+        register_counter!(
+            "tikv_storage_gc_empty_range_total",
+            "Total number of empty range found by gc"
         ).unwrap();
 }

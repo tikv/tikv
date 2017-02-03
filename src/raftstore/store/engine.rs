@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::option::Option;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::fmt::{self, Debug, Formatter};
 
@@ -32,6 +33,28 @@ pub struct Snapshot {
 /// Because snap will be valid whenever db is valid, so it's safe to send
 /// it around.
 unsafe impl Send for Snapshot {}
+unsafe impl Sync for Snapshot {}
+
+#[derive(Debug)]
+pub struct SyncSnapshot(Arc<Snapshot>);
+
+impl Deref for SyncSnapshot {
+    type Target = Snapshot;
+
+    fn deref(&self) -> &Snapshot {
+        &self.0
+    }
+}
+
+impl SyncSnapshot {
+    pub fn new(db: Arc<DB>) -> SyncSnapshot {
+        SyncSnapshot(Arc::new(Snapshot::new(db)))
+    }
+
+    pub fn clone(&self) -> SyncSnapshot {
+        SyncSnapshot(self.0.clone())
+    }
+}
 
 impl Snapshot {
     pub fn new(db: Arc<DB>) -> Snapshot {
@@ -41,6 +64,10 @@ impl Snapshot {
                 db: db,
             }
         }
+    }
+
+    pub fn into_sync(self) -> SyncSnapshot {
+        SyncSnapshot(Arc::new(self))
     }
 
     pub fn cf_names(&self) -> Vec<&str> {

@@ -86,6 +86,7 @@ pub fn new_store_cfg() -> Config {
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: Duration::from_secs(3),
+        report_region_flow_interval: 100, // 100ms
         ..Config::default()
     }
 }
@@ -184,6 +185,14 @@ pub fn new_admin_request(region_id: u64,
                          -> RaftCmdRequest {
     let mut req = new_base_request(region_id, epoch.clone(), false);
     req.set_admin_request(request);
+    req
+}
+
+pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::ChangePeer);
+    req.mut_change_peer().set_change_type(change_type);
+    req.mut_change_peer().set_peer(peer);
     req
 }
 
