@@ -124,15 +124,31 @@ pub trait Peekable {
     }
 }
 
+pub enum SeekMode {
+    TotalOrderSeek,
+    PrefixSeek,
+}
+
+pub struct IterOption {
+    pub upper_bound: Option<Vec<u8>>,
+    pub fill_cache: bool,
+    pub seek_mode: SeekMode,
+}
+
+impl Default for IterOption {
+    fn default() -> IterOption {
+        IterOption {
+            upper_bound: None,
+            fill_cache: true,
+            seek_mode: SeekMode::TotalOrderSeek,
+        }
+    }
+}
+
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
-    fn new_iterator(&self, Option<&[u8]>, fill_cache: bool, total_order_seek: bool) -> DBIterator;
-    fn new_iterator_cf(&self,
-                       &str,
-                       Option<&[u8]>,
-                       fill_cache: bool,
-                       total_order_seek: bool)
-                       -> Result<DBIterator>;
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator;
+    fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator>;
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
@@ -206,30 +222,27 @@ impl Peekable for DB {
 }
 
 impl Iterable for DB {
-    fn new_iterator(&self,
-                    upper_bound: Option<&[u8]>,
-                    fill_cache: bool,
-                    total_order_seek: bool)
-                    -> DBIterator {
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
         let mut readopts = ReadOptions::new();
-        readopts.fill_cache(fill_cache);
-        readopts.set_total_order_seek(total_order_seek);
-        if let Some(key) = upper_bound {
+        readopts.fill_cache(iter_opt.fill_cache);
+        readopts.set_total_order_seek(match iter_opt.seek_mode {
+            SeekMode::TotalOrderSeek => true,
+            _ => false,
+        });
+        if let Some(key) = iter_opt.upper_bound {
             readopts.set_iterate_upper_bound(key);
         }
         self.iter_opt(readopts)
     }
 
-    fn new_iterator_cf(&self,
-                       cf: &str,
-                       upper_bound: Option<&[u8]>,
-                       fill_cache: bool,
-                       total_order_seek: bool)
-                       -> Result<DBIterator> {
+    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
         let mut readopts = ReadOptions::new();
-        readopts.fill_cache(fill_cache);
-        readopts.set_total_order_seek(total_order_seek);
-        if let Some(key) = upper_bound {
+        readopts.fill_cache(iter_opt.fill_cache);
+        readopts.set_total_order_seek(match iter_opt.seek_mode {
+            SeekMode::TotalOrderSeek => true,
+            _ => false,
+        });
+        if let Some(key) = iter_opt.upper_bound {
             readopts.set_iterate_upper_bound(key);
         }
         let handle = try!(rocksdb::get_cf_handle(self, cf));
