@@ -51,7 +51,7 @@ use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{Peer, PendingCmd, ReadyResult, ExecResult, StaleState, ConsistencyState,
+use super::peer::{Peer, ProposalMeta, ReadyResult, ExecResult, StaleState, ConsistencyState,
                   ReadyContext, ChangePeer};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
@@ -1109,13 +1109,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
-        let pending_cmd = PendingCmd {
+        let meta = ProposalMeta {
             uuid: uuid,
             term: term,
-            cb: Some(cb),
             renew_lease_time: None,
         };
-        if peer.propose(pending_cmd, msg, resp, &mut self.raft_metrics.propose) {
+        if peer.propose(meta, cb, msg, resp, &mut self.raft_metrics.propose) {
             self.pending_raft_groups.insert(region_id);
         }
 
@@ -1270,10 +1269,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // Create a compact log request and notify directly.
             let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
 
-            if let Err(e) = self.sendch.try_send(Msg::RaftCmd {
-                request: request,
-                callback: Box::new(|_| {}),
-            }) {
+            if let Err(e) = self.sendch.try_send(Msg::new_raft_cmd(request, Box::new(|_| {}))) {
                 error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
             }
         }
@@ -1728,10 +1724,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let peer = &self.region_peers[&candidate_id];
 
             info!("{} scheduling consistent check", peer.tag);
-            let msg = Msg::RaftCmd {
-                request: new_compute_hash_request(candidate_id, peer.peer.clone()),
-                callback: Box::new(|_| {}),
-            };
+            let msg = Msg::new_raft_cmd(new_compute_hash_request(candidate_id, peer.peer.clone()),
+                                        Box::new(|_| {}));
 
             if let Err(e) = self.sendch.send(msg) {
                 error!("{} failed to schedule consistent check: {:?}", peer.tag, e);
@@ -1784,10 +1778,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return;
         }
 
-        let msg = Msg::RaftCmd {
-            request: new_verify_hash_request(region_id, peer.clone(), state),
-            callback: Box::new(|_| {}),
-        };
+        let msg = Msg::new_raft_cmd(new_verify_hash_request(region_id, peer.clone(), state),
+                                    Box::new(|_| {}));
         if let Err(e) = self.sendch.send(msg) {
             error!("[region {}] failed to schedule verify command for index {}: {:?}",
                    region_id,
@@ -1870,7 +1862,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("{} handle raft message err: {:?}", self.tag, e);
                 }
             }
-            Msg::RaftCmd { request, callback } => self.propose_raft_command(request, callback),
+            Msg::RaftCmd { send_time, request, callback } => {
+                self.raft_metrics
+                    .propose
+                    .request_wait_time
+                    .observe(duration_to_sec(send_time.elapsed()) as f64);
+                self.propose_raft_command(request, callback)
+            }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
