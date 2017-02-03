@@ -17,32 +17,20 @@ use std::thread;
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
 use tikv::storage::{txn, engine};
+use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
 use raftstore::cluster::Cluster;
 use raftstore::server::ServerCluster;
 use raftstore::util::*;
 use storage::util;
-
 use super::sync_storage::SyncStorage;
+use super::util::new_raft_storage_with_store_count;
 
 fn new_raft_storage() -> (Cluster<ServerCluster>, SyncStorage, Context) {
-    let mut cluster = new_server_cluster_with_cfs(0, 1, ALL_CFS);
-    cluster.run();
-    // make sure leader has been elected.
-    assert_eq!(cluster.must_get(b""), None);
-
-    let region = cluster.get_region(b"");
-    let leader_id = cluster.leader_of_region(region.get_id()).unwrap();
-    let engine = cluster.sim.rl().storages[&leader_id.get_id()].clone();
-
-    let mut ctx = Context::new();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(region.get_peers()[0].clone());
-
-    (cluster, SyncStorage::from_engine(engine, &Default::default()), ctx)
+    new_raft_storage_with_store_count(1, "")
 }
+
 #[test]
 fn test_raft_storage() {
     let (_cluster, storage, mut ctx) = new_raft_storage();
@@ -146,7 +134,7 @@ fn test_scheduler_leader_change_twice() {
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let engine = cluster.sim.rl().storages[&peers[0].get_id()].clone();
     let engine = util::BlockEngine::new(engine);
-    let config = Default::default();
+    let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
 

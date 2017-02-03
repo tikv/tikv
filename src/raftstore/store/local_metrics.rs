@@ -132,13 +132,27 @@ impl RaftMessageMetrics {
 }
 
 /// The buffered metrics counters for raft propose.
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct RaftProposeMetrics {
     pub all: u64,
     pub local_read: u64,
     pub normal: u64,
     pub transfer_leader: u64,
     pub conf_change: u64,
+    pub request_wait_time: LocalHistogram,
+}
+
+impl Default for RaftProposeMetrics {
+    fn default() -> RaftProposeMetrics {
+        RaftProposeMetrics {
+            all: 0,
+            local_read: 0,
+            normal: 0,
+            transfer_leader: 0,
+            conf_change: 0,
+            request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
+        }
+    }
 }
 
 impl RaftProposeMetrics {
@@ -175,6 +189,7 @@ impl RaftProposeMetrics {
                 .unwrap();
             self.conf_change = 0;
         }
+        self.request_wait_time.flush();
     }
 }
 

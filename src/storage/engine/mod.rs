@@ -107,6 +107,7 @@ pub trait Snapshot: Send {
                    fill_cache: bool,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
+    fn clone(&self) -> Box<Snapshot>;
 }
 
 pub trait Iterator {
@@ -358,7 +359,6 @@ impl<'a> Cursor<'a> {
     }
 
     #[inline]
-    #[allow(should_implement_trait)]
     pub fn next(&mut self) -> bool {
         self.iter.next()
     }
