@@ -957,14 +957,6 @@ impl RecvSnapshotFileReader {
             *size_track = size_track.saturating_sub(cf_file.size);
         }
     }
-
-    pub fn cleanup(&self) {
-        // Do not delete cf files since they are moved to rocksdb
-        let mut size_track = self.size_track.wl();
-        for cf_file in &self.cf_files {
-            *size_track = size_track.saturating_sub(cf_file.size);
-        }
-    }
 }
 
 #[derive(PartialEq, Debug)]
