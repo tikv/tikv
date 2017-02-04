@@ -116,7 +116,6 @@ impl Channel<RaftMessage> for ChannelTransport {
             });
 
             if !writer.exists() {
-                writer.init().unwrap();
                 let buf_len = 10000;
                 let mut buf = Vec::with_capacity(buf_len);
                 buf.resize(buf_len, 0);

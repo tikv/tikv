@@ -182,13 +182,6 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     }
                     self.close(token);
                     return;
-                } else if let Err(e) = writer.init() {
-                    error!("failed to init snapshot file {} for token {:?}: {:?}",
-                           writer.path(),
-                           token,
-                           e);
-                    self.close(token);
-                    return;
                 }
                 debug!("begin to receive snap {:?}", meta);
                 mgr.wl().register(key, SnapEntry::Receiving);
