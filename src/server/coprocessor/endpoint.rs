@@ -578,23 +578,22 @@ impl<'a> Ord for SortRow {
     fn cmp(&self, right: &SortRow) -> CmpOrdering {
         let values = self.key.clone().into_iter().zip(right.key.clone().into_iter());
         for (col, (v1, v2)) in self.order_cols.clone().into_iter().zip(values) {
-            if let Ok(order) = v1.cmp(self.ctx.as_ref(), &v2) {
-                match order {
-                    CmpOrdering::Equal => {
-                        continue;
-                    }
-                    _ => {
-                        // less or equal
-                        if col.get_desc() {
-                            // heap pop the biggest first
-                            return order.reverse();
-                        } else {
-                            return order;
-                        }
+            // panic when decode data failed in cmp
+            let order = v1.cmp(self.ctx.as_ref(), &v2).unwrap();
+            match order {
+                CmpOrdering::Equal => {
+                    continue;
+                }
+                _ => {
+                    // less or equal
+                    if col.get_desc() {
+                        // heap pop the biggest first
+                        return order.reverse();
+                    } else {
+                        return order;
                     }
                 }
             }
-            // TODO process error
         }
         CmpOrdering::Equal
     }
