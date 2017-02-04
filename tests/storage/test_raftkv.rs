@@ -6,7 +6,7 @@ use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
 use raftstore::transport_simulate::IsolationFilterFactory;
 use raftstore::server::new_server_cluster_with_cfs;
-use tikv::raftstore::store::engine::{IterOption, SeekMode};
+use tikv::raftstore::store::engine::IterOption;
 
 fn test_raftkv(read_quorum: bool) {
     let count = 1;
