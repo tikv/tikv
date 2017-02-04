@@ -319,7 +319,7 @@ impl<'a> Cursor<'a> {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
     pub fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        if !try!(self.seek_for_prev(key)) {
+        if !try!(self.near_seek_for_prev(key)) {
             return Ok(false);
         }
 
