@@ -538,31 +538,6 @@ struct TopNHeap {
 }
 
 impl TopNHeap {
-    fn try_to_add_row(&mut self, row: SortRow) {
-        self.rows.push(row);
-        if self.rows.len() > self.limit {
-            self.rows.pop();
-        }
-    }
-
-    fn pop(&mut self) -> Option<SortRow> {
-        self.rows.pop()
-    }
-
-    fn get_rows_in_reverse_order(&mut self) -> Vec<SortRow> {
-        let mut rows = Vec::with_capacity(self.rows.len());
-        loop {
-            match self.pop() {
-                Some(row) => {
-                    rows.push(row);
-                }
-                _ => {
-                    return rows;
-                }
-            }
-        }
-    }
-
     fn new(limit: usize) -> TopNHeap {
         TopNHeap {
             rows: match limit {
@@ -571,6 +546,23 @@ impl TopNHeap {
             },
             limit: limit,
         }
+    }
+
+    fn try_to_add_row(&mut self, row: SortRow) {
+        if self.rows.len() >= self.limit {
+            let mut val = self.rows.peek_mut().unwrap();
+            if CmpOrdering::Less == row.cmp(&val) {
+                *val = row;
+            }
+            return;
+        }
+        self.rows.push(row);
+
+    }
+
+    fn get_sorted_rows(&mut self) -> Vec<SortRow> {
+        // it seems clone is needed since self is borrowed
+        self.rows.clone().into_sorted_vec()
     }
 }
 
@@ -832,27 +824,12 @@ impl SelectContextCore {
     }
 
     fn topn_rows(&mut self) -> Result<()> {
-        let mut limit = 0;
-        let mut rows = self.topn_heap.get_rows_in_reverse_order();
-        loop {
-            let cur = rows.pop();
-            match cur {
-                Some(row) => {
-                    let chunk = get_chunk(&mut self.chunks);
-                    chunk.mut_rows_data().extend_from_slice(row.data.as_slice());
-                    chunk.mut_rows_meta().push(row.meta);
-
-                    limit += 1;
-                    if limit >= self.limit {
-                        return Ok(());
-                    }
-                }
-                _ => {
-                    return Ok(());
-                }
-            }
+        for row in self.topn_heap.get_sorted_rows() {
+            let chunk = get_chunk(&mut self.chunks);
+            chunk.mut_rows_data().extend_from_slice(row.data.as_slice());
+            chunk.mut_rows_meta().push(row.meta);
         }
-
+        Ok(())
     }
     /// Convert aggregate partial result to rows.
     /// Data layout example:
