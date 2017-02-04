@@ -36,7 +36,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::peer::ReadyContext;
 use super::metrics::*;
-use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
+use super::{SnapFile, SnapKey, SnapEntry, SnapManager, SnapshotFileWriter};
 use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,

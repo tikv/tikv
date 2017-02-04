@@ -122,7 +122,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
-    files: HashMap<Token, (SnapshotFileWriter, RaftMessage)>,
+    files: HashMap<Token, (Box<SnapshotFileWriter>, RaftMessage)>,
     pool: ThreadPool,
     ch: SendCh<Msg>,
     raft_router: R,
@@ -162,7 +162,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         return;
                     }
                 };
-                let mut writer = match mgr.rl()
+                let writer = match mgr.rl()
                     .get_snapshot_file_writer(&key, meta.get_message().get_snapshot().get_data()) {
                     Ok(writer) => writer,
                     Err(e) => {

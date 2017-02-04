@@ -1,3 +1,17 @@
+// Copyright 2016 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::error;
 use std::io::{self, Write, ErrorKind, Read};
 use std::fmt::{self, Formatter, Display};
 use std::cmp;
@@ -5,17 +19,26 @@ use std::fs::{self, File, OpenOptions, Metadata};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::{Path, PathBuf};
+use std::result;
+use std::str;
 
 use crc::crc32::{self, Digest, Hasher32};
 use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use protobuf::Message;
 
+use rocksdb::{DB, Writable, WriteBatch};
 use kvproto::eraftpb::Snapshot;
+use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use raftstore::store::Msg;
 use util::transport::SendCh;
-use util::HandyRwLock;
+use util::{HandyRwLock, rocksdb};
+use util::codec::bytes::CompactBytesDecoder;
+
+use super::peer_storage::JOB_STATUS_CANCELLING;
+use super::{keys, util};
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &'static str = "gen";
@@ -25,6 +48,32 @@ const SNAP_REV_PREFIX: &'static str = "rev";
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
 const CRC32_BYTES_COUNT: usize = 4;
 const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Abort {
+            description("abort")
+            display("abort")
+        }
+        Other(err: Box<error::Error + Sync + Send>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("snap failed {:?}", err)
+        }
+    }
+}
+
+pub type Result<T> = result::Result<T, Error>;
+
+#[inline]
+pub fn check_abort(status: &AtomicUsize) -> Result<()> {
+    if status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING {
+        return Err(Error::Abort);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SnapKey {
@@ -66,112 +115,80 @@ impl Display for SnapKey {
     }
 }
 
-pub enum SendSnapshotFileReader {
-    V1((SnapFile, File)),
+pub trait SendSnapshotFileReader: Read {
+    fn exists(&self) -> bool;
+    fn path(&self) -> String;
+    fn meta(&self) -> io::Result<Metadata>;
+    fn total_size(&self) -> io::Result<u64>;
+    fn delete(&self);
 }
 
-impl SendSnapshotFileReader {
-    pub fn exists(&self) -> bool {
-        match *self {
-            SendSnapshotFileReader::V1((ref f, _)) => f.exists(),
-        }
-    }
+pub trait RecvSnapshotFileReader {
+    fn path(&self) -> String;
+    fn exists(&self) -> bool;
+    fn delete(&self);
+    fn apply(&mut self,
+             db: Arc<DB>,
+             region: &Region,
+             abort: Arc<AtomicUsize>,
+             write_batch_size: usize,
+             snapshot_size: &mut usize,
+             snapshot_kv_count: &mut usize)
+             -> Result<()>;
+}
 
-    pub fn path(&self) -> String {
-        match *self {
-            SendSnapshotFileReader::V1((ref f, _)) => f.path(),
-        }
-    }
+pub trait SnapshotFileWriter: Write + Send {
+    fn path(&self) -> String;
+    fn exists(&self) -> bool;
+    fn save(&mut self) -> io::Result<()>;
+}
 
-    pub fn meta(&self) -> io::Result<Metadata> {
-        match *self {
-            SendSnapshotFileReader::V1((ref f, _)) => f.meta(),
-        }
-    }
+pub struct SnapFileReader {
+    // the corresponding snapshot file
+    snap_file: SnapFile,
+    // reader to the os file
+    reader: File,
+}
 
-    pub fn total_size(&self) -> io::Result<u64> {
-        match *self {
-            SendSnapshotFileReader::V1((ref f, _)) => {
-                let meta = try!(f.meta());
-                Ok(meta.len())
-            }
-        }
-    }
-
-    pub fn delete(&self) {
-        match *self {
-            SendSnapshotFileReader::V1((ref f, _)) => f.delete(),
-        }
+impl SnapFileReader {
+    fn new<T: Into<PathBuf>>(snap_dir: T,
+                             size_track: Arc<RwLock<u64>>,
+                             key: &SnapKey)
+                             -> io::Result<SnapFileReader> {
+        let f = try!(SnapFile::new(snap_dir, size_track, true, key));
+        let reader = try!(f.raw_reader());
+        Ok(SnapFileReader {
+            snap_file: f,
+            reader: reader,
+        })
     }
 }
 
-impl Read for SendSnapshotFileReader {
+impl SendSnapshotFileReader for SnapFileReader {
+    fn exists(&self) -> bool {
+        RecvSnapshotFileReader::exists(&self.snap_file)
+    }
+
+    fn path(&self) -> String {
+        RecvSnapshotFileReader::path(&self.snap_file)
+    }
+
+    fn meta(&self) -> io::Result<Metadata> {
+        self.snap_file.meta()
+    }
+
+    fn total_size(&self) -> io::Result<u64> {
+        self.snap_file.total_size()
+    }
+
+    fn delete(&self) {
+        self.snap_file.delete()
+    }
+}
+
+impl Read for SnapFileReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match *self {
-            SendSnapshotFileReader::V1((_, ref mut f)) => f.read(buf),
-        }
-    }
-}
-
-pub enum RecvSnapshotFileReader {
-    V1(SnapFile),
-}
-
-impl RecvSnapshotFileReader {
-    pub fn exists(&self) -> bool {
-        match *self {
-            RecvSnapshotFileReader::V1(ref f) => f.exists(),
-        }
-    }
-
-    pub fn path(&self) -> String {
-        match *self {
-            RecvSnapshotFileReader::V1(ref f) => f.path(),
-        }
-    }
-
-    pub fn delete(&self) {
-        match *self {
-            RecvSnapshotFileReader::V1(ref f) => f.delete(),
-        }
-    }
-}
-
-pub enum SnapshotFileWriter {
-    V1(SnapFile),
-}
-
-impl SnapshotFileWriter {
-    pub fn path(&mut self) -> String {
-        match *self {
-            SnapshotFileWriter::V1(ref f) => f.path(),
-        }
-    }
-
-    pub fn exists(&self) -> bool {
-        match *self {
-            SnapshotFileWriter::V1(ref f) => f.exists(),
-        }
-    }
-
-    pub fn save(&mut self) -> io::Result<()> {
-        match *self {
-            SnapshotFileWriter::V1(ref mut f) => f.save(),
-        }
-    }
-}
-
-impl Write for SnapshotFileWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match *self {
-            SnapshotFileWriter::V1(ref mut f) => f.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match *self {
-            SnapshotFileWriter::V1(ref mut f) => f.flush(),
-        }
+        self.reader.read(buf)
     }
 }
 
@@ -218,11 +235,11 @@ impl SnapFile {
     }
 
     pub fn init(&mut self) -> io::Result<()> {
-        if self.exists() || self.tmp_file.is_some() {
+        if SnapshotFileWriter::exists(self) || self.tmp_file.is_some() {
             return Ok(());
         }
 
-        let tmp_path = format!("{}{}", self.path(), TMP_FILE_SUFFIX);
+        let tmp_path = format!("{}{}", SnapshotFileWriter::path(self), TMP_FILE_SUFFIX);
         let tmp_f = try!(OpenOptions::new().write(true).create_new(true).open(&tmp_path));
         self.tmp_file = Some((tmp_f, tmp_path));
         Ok(())
@@ -232,32 +249,35 @@ impl SnapFile {
         self.file.metadata()
     }
 
+    pub fn total_size(&self) -> io::Result<u64> {
+        let meta = try!(self.meta());
+        Ok(meta.len())
+    }
+
     pub fn raw_reader(&self) -> io::Result<File> {
-        File::open(self.path())
+        File::open(SnapshotFileWriter::path(self))
     }
 
     /// Get a validation reader.
     pub fn reader(&self) -> io::Result<SnapValidationReader> {
-        SnapValidationReader::open(self.path())
-    }
-
-    pub fn exists(&self) -> bool {
-        self.file.exists() && self.file.is_file()
+        SnapValidationReader::open(SnapshotFileWriter::path(self))
     }
 
     pub fn delete(&self) {
         if let Err(e) = self.try_delete() {
-            error!("failed to delete {}: {:?}", self.path(), e);
+            error!("failed to delete {}: {:?}",
+                   SnapshotFileWriter::path(self),
+                   e);
         }
     }
 
     pub fn try_delete(&self) -> io::Result<()> {
-        debug!("deleting {}", self.path());
-        if !self.exists() {
+        debug!("deleting {}", SnapshotFileWriter::path(self));
+        if !SnapshotFileWriter::exists(self) {
             return Ok(());
         }
         let size = try!(self.meta()).len();
-        try!(fs::remove_file(self.path()));
+        try!(fs::remove_file(SnapshotFileWriter::path(self)));
         let mut size_track = self.size_track.wl();
         *size_track = size_track.saturating_sub(size);
         Ok(())
@@ -267,13 +287,6 @@ impl SnapFile {
     /// the end of file.
     pub fn save_with_checksum(&mut self) -> io::Result<()> {
         self.save_impl(true)
-    }
-
-    /// Use the content in temporary files replace the target file.
-    ///
-    /// Please note that this method can only be called once.
-    pub fn save(&mut self) -> io::Result<()> {
-        self.save_impl(false)
     }
 
     fn save_impl(&mut self, append_checksum: bool) -> io::Result<()> {
@@ -290,9 +303,82 @@ impl SnapFile {
         }
         Ok(())
     }
+}
 
-    pub fn path(&self) -> String {
+impl RecvSnapshotFileReader for SnapFile {
+    fn path(&self) -> String {
+        SnapshotFileWriter::path(self)
+    }
+
+    fn exists(&self) -> bool {
+        SnapshotFileWriter::exists(self)
+    }
+
+    fn delete(&self) {
+        self.delete()
+    }
+
+    fn apply(&mut self,
+             db: Arc<DB>,
+             region: &Region,
+             abort: Arc<AtomicUsize>,
+             write_batch_size: usize,
+             snapshot_size: &mut usize,
+             snapshot_kv_count: &mut usize)
+             -> Result<()> {
+        let mut reader = box_try!(self.reader());
+        loop {
+            try!(check_abort(&abort));
+            let cf = box_try!(reader.decode_compact_bytes());
+            if cf.is_empty() {
+                break;
+            }
+            let handle = box_try!(rocksdb::get_cf_handle(&db,
+                                                         unsafe { str::from_utf8_unchecked(&cf) }));
+            let mut wb = WriteBatch::new();
+            let mut batch_size = 0;
+            loop {
+                try!(check_abort(&abort));
+                let key = box_try!(reader.decode_compact_bytes());
+                if key.is_empty() {
+                    box_try!(db.write(wb));
+                    *snapshot_size += batch_size;
+                    break;
+                }
+                *snapshot_kv_count += 1;
+                box_try!(util::check_key_in_region(keys::origin_key(&key), region));
+                batch_size += key.len();
+                let value = box_try!(reader.decode_compact_bytes());
+                batch_size += value.len();
+                box_try!(wb.put_cf(handle, &key, &value));
+                if batch_size >= write_batch_size {
+                    box_try!(db.write(wb));
+                    *snapshot_size += batch_size;
+                    wb = WriteBatch::new();
+                    batch_size = 0;
+                }
+            }
+        }
+
+        box_try!(reader.validate());
+        Ok(())
+    }
+}
+
+impl SnapshotFileWriter for SnapFile {
+    fn path(&self) -> String {
         self.file.as_path().to_str().unwrap().to_owned()
+    }
+
+    fn exists(&self) -> bool {
+        self.file.exists() && self.file.is_file()
+    }
+
+    /// Use the content in temporary files replace the target file.
+    ///
+    /// Please note that this method can only be called once.
+    fn save(&mut self) -> io::Result<()> {
+        self.save_impl(false)
     }
 }
 
@@ -496,33 +582,28 @@ impl SnapManagerCore {
         self.registry.contains_key(key)
     }
 
-    #[inline]
     pub fn get_send_snapshot_file_reader(&self,
                                          key: &SnapKey)
-                                         -> io::Result<SendSnapshotFileReader> {
-        let f = try!(SnapFile::new(&self.base, self.snap_size.clone(), true, key));
-        let reader = try!(f.raw_reader());
-        Ok(SendSnapshotFileReader::V1((f, reader)))
+                                         -> io::Result<Box<SendSnapshotFileReader>> {
+        let reader = try!(SnapFileReader::new(&self.base, self.snap_size.clone(), key));
+        Ok(Box::new(reader))
     }
 
-    #[inline]
     pub fn get_recv_snapshot_file_reader(&self,
                                          key: &SnapKey)
-                                         -> io::Result<RecvSnapshotFileReader> {
+                                         -> io::Result<Box<RecvSnapshotFileReader>> {
         let f = try!(SnapFile::new(&self.base, self.snap_size.clone(), false, key));
-        Ok(RecvSnapshotFileReader::V1(f))
+        Ok(Box::new(f))
     }
 
-    #[inline]
     pub fn get_snapshot_file_writer(&self,
                                     key: &SnapKey,
                                     _data: &[u8])
-                                    -> io::Result<SnapshotFileWriter> {
+                                    -> io::Result<Box<SnapshotFileWriter>> {
         let f = try!(SnapFile::new(&self.base, self.snap_size.clone(), false, key));
-        Ok((SnapshotFileWriter::V1(f)))
+        Ok(Box::new(f))
     }
 
-    #[inline]
     pub fn get_snap_file(&self, key: &SnapKey, is_sending: bool) -> io::Result<SnapFile> {
         SnapFile::new(&self.base, self.snap_size.clone(), is_sending, key)
     }
@@ -653,18 +734,18 @@ mod test {
         f3.save_with_checksum().unwrap();
         let mut f4 = SnapFile::new(&path3, size_track.clone(), false, &key2).unwrap();
         f4.save_with_checksum().unwrap();
-        assert!(!f1.exists());
-        assert!(!f2.exists());
-        assert!(f3.exists());
-        assert!(f4.exists());
+        assert!(!SnapshotFileWriter::exists(&f1));
+        assert!(!SnapshotFileWriter::exists(&f2));
+        assert!(SnapshotFileWriter::exists(&f3));
+        assert!(SnapshotFileWriter::exists(&f4));
         assert!(Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
         assert!(Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
         mgr = new_snap_mgr(path3, None);
         mgr.wl().init().unwrap();
         assert!(!Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
         assert!(!Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
-        assert!(f3.exists());
-        assert!(f4.exists());
+        assert!(SnapshotFileWriter::exists(&f3));
+        assert!(SnapshotFileWriter::exists(&f4));
     }
 
     #[test]
@@ -731,7 +812,7 @@ mod test {
         while reader.read(&mut [0, 0]).unwrap() != 0 {}
         reader.validate().unwrap();
 
-        let mut f = OpenOptions::new().write(true).open(f1.path()).unwrap();
+        let mut f = OpenOptions::new().write(true).open(SnapshotFileWriter::path(&f1)).unwrap();
         f.write_all(b"et").unwrap();
         reader = f1.reader().unwrap();
         reader.validate().unwrap_err();
