@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::Ordering as CmpOrdering;
-
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta, ByItem};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
@@ -512,14 +511,14 @@ struct SortRow {
     meta: RowMeta,
     data: Vec<u8>,
     order_cols: Vec<ByItem>,
-    ctx: EvalContext,
+    ctx: Rc<EvalContext>,
 }
 
 
 impl SortRow {
     fn new(meta: RowMeta,
            order_cols: Vec<ByItem>,
-           ctx: EvalContext,
+           ctx: Rc<EvalContext>,
            data: Vec<u8>,
            key: Vec<Datum>)
            -> SortRow {
@@ -577,18 +576,16 @@ impl TopNHeap {
 
 impl<'a> Ord for SortRow {
     fn cmp(&self, right: &SortRow) -> CmpOrdering {
-        for id in 0..self.order_cols.len() {
-            let v1 = self.key[id].clone();
-            let v2 = right.key[id].clone();
-            if let Ok(order) = v1.cmp(&self.ctx, &v2) {
+        let values = self.key.clone().into_iter().zip(right.key.clone().into_iter());
+        for (col, (v1, v2)) in self.order_cols.clone().into_iter().zip(values) {
+            if let Ok(order) = v1.cmp(self.ctx.as_ref(), &v2) {
                 match order {
                     CmpOrdering::Equal => {
                         continue;
                     }
                     _ => {
                         // less or equal
-                        if self.order_cols[id].has_desc() && //default asc
-                            self.order_cols[id].get_desc() {
+                        if col.get_desc() {
                             // heap pop the biggest first
                             return order.reverse();
                         } else {
@@ -597,6 +594,7 @@ impl<'a> Ord for SortRow {
                     }
                 }
             }
+            // TODO process error
         }
         CmpOrdering::Equal
     }
@@ -618,7 +616,7 @@ impl PartialOrd for SortRow {
 
 
 pub struct SelectContextCore {
-    ctx: EvalContext,
+    ctx: Rc<EvalContext>,
     sel: SelectRequest,
     eval: Evaluator,
     cols: Either<HashSet<i64>, Vec<i64>>,
@@ -704,8 +702,9 @@ impl SelectContextCore {
             Either::Right(cols.iter().map(|c| c.get_column_id()).collect())
         };
 
+
         Ok(SelectContextCore {
-            ctx: box_try!(EvalContext::new(&sel)),
+            ctx: Rc::new(box_try!(EvalContext::new(&sel))),
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
             aggr_cols: aggr_cols,
             topn_cols: topn_cols,
