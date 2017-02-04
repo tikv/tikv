@@ -29,8 +29,8 @@ quick_error! {
             display("{}", reason)
         }
         Closed {
-            description("ch is closed")
-            display("ch is closed")
+            description("channel is closed")
+            display("channel is closed")
         }
         Other(err: Box<error::Error + Send + Sync>) {
             from()

@@ -204,7 +204,7 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallbac
             result: result,
         }) {
             Ok(_) => {}
-            e @ Err(TransportError::Closed) => info!("ch closed, server is closing, err {:?}", e),
+            e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
             Err(e) => {
                 panic!("send write finished to scheduler failed cid={}, err:{:?}",
                        cid,
@@ -688,7 +688,9 @@ impl Scheduler {
                 snapshot: snapshot,
             }) {
                 Ok(_) => {}
-                e @ Err(TransportError::Closed) => info!("ch closed, server is closing, err {:?}", e),
+                e @ Err(TransportError::Closed) => {
+                    info!("ch closed, server is closing, err {:?}", e)
+                }
                 Err(e) => panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e),
             }
         };
