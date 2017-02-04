@@ -31,7 +31,6 @@ use super::server::new_server_cluster;
 use super::util::*;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    // init_log();
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 10;
     cluster.cfg.raft_store.snap_apply_batch_size = 500;
@@ -100,8 +99,6 @@ fn test_server_huge_snapshot() {
 }
 
 fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
-    init_log();
-
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
@@ -115,8 +112,6 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-
-    println!("here");
 
     let (tx, rx) = mpsc::channel();
     // drop all the snapshot so we can detect stale snapfile.
@@ -250,8 +245,6 @@ fn test_server_concurrent_snap() {
 }
 
 fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    init_log();
-
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 20;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 2;

@@ -651,12 +651,16 @@ mod test {
         let path3 = path.path().to_str().unwrap().to_owned() + "/snap3";
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let f1 = SnapFile::new(&path3, size_track.clone(), true, &key1).unwrap();
-        let f2 = SnapFile::new(&path3, size_track.clone(), false, &key1).unwrap();
+        let mut f1 = SnapFile::new(&path3, size_track.clone(), true, &key1).unwrap();
+        f1.init().unwrap();
+        let mut f2 = SnapFile::new(&path3, size_track.clone(), false, &key1).unwrap();
+        f2.init().unwrap();
         let key2 = SnapKey::new(2, 1, 1);
         let mut f3 = SnapFile::new(&path3, size_track.clone(), true, &key2).unwrap();
+        f3.init().unwrap();
         f3.save_with_checksum().unwrap();
         let mut f4 = SnapFile::new(&path3, size_track.clone(), false, &key2).unwrap();
+        f4.init().unwrap();
         f4.save_with_checksum().unwrap();
         assert!(!f1.exists());
         assert!(!f2.exists());
@@ -685,14 +689,18 @@ mod test {
         let exp_len = (test_data.len() + super::CRC32_BYTES_COUNT) as u64;
         let size_track = Arc::new(RwLock::new(0));
         let mut f1 = SnapFile::new(path_str, size_track.clone(), true, &key1).unwrap();
+        f1.init().unwrap();
         let mut f2 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
+        f2.init().unwrap();
         f1.write_all(test_data).unwrap();
         f2.write_all(test_data).unwrap();
         let key2 = SnapKey::new(2, 1, 1);
         let mut f3 = SnapFile::new(path_str, size_track.clone(), true, &key2).unwrap();
+        f3.init().unwrap();
         f3.write_all(test_data).unwrap();
         f3.save_with_checksum().unwrap();
         let mut f4 = SnapFile::new(path_str, size_track.clone(), false, &key2).unwrap();
+        f4.init().unwrap();
         f4.write_all(test_data).unwrap();
         f4.save_with_checksum().unwrap();
 
@@ -707,6 +715,7 @@ mod test {
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
 
         let mut f4 = mgr.rl().get_snap_file(&key2, true).unwrap();
+        f4.init().unwrap();
         f4.write_all(test_data).unwrap();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
         f4.save_with_checksum().unwrap();
@@ -721,6 +730,7 @@ mod test {
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
         let mut f1 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
+        f1.init().unwrap();
         f1.write_all(b"testdata").unwrap();
         f1.save_with_checksum().unwrap();
         let mut reader = f1.reader().unwrap();

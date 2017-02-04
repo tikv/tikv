@@ -1341,6 +1341,7 @@ mod test {
         let key = SnapKey::from_snap(&snap1).unwrap();
         let source_snap = mgr.rl().get_snap_file(&key, true).unwrap();
         let mut dst_snap = mgr.rl().get_snap_file(&key, false).unwrap();
+        dst_snap.init().unwrap();
         let mut f = File::open(source_snap.path()).unwrap();
         dst_snap.encode_u64(0).unwrap();
         io::copy(&mut f, &mut dst_snap).unwrap();
