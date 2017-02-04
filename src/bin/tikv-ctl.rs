@@ -31,7 +31,7 @@ use rocksdb::DB;
 use tikv::util::{self, escape, unescape};
 use tikv::util::codec::bytes::encode_bytes;
 use tikv::raftstore::store::keys;
-use tikv::raftstore::store::engine::{Peekable, Iterable};
+use tikv::raftstore::store::engine::{Peekable, Iterable, IterOption, SeekMode};
 use tikv::storage::{ALL_CFS, CF_RAFT, CF_LOCK, CF_WRITE, CF_DEFAULT, CfName};
 use tikv::storage::mvcc::{Lock, Write};
 use tikv::storage::types::Key;
@@ -240,7 +240,9 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
     } else {
         encode_bytes(unescape(key_prefix).as_slice())
     };
-    let mut iter = db.new_iterator_cf(mvcc_type, None, false, true).unwrap();
+    let mut iter = db.new_iterator_cf(mvcc_type,
+                         IterOption::new(None, false, SeekMode::TotalOrderSeek))
+        .unwrap();
     iter.seek(keys::data_key(&encoded_prefix).as_slice().into());
     if !iter.valid() {
         vec![]

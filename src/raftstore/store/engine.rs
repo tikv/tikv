@@ -151,15 +151,27 @@ pub trait Peekable {
     }
 }
 
+#[derive(Clone)]
 pub enum SeekMode {
     TotalOrderSeek,
     PrefixSeek,
 }
 
+#[derive(Clone)]
 pub struct IterOption {
     pub upper_bound: Option<Vec<u8>>,
     pub fill_cache: bool,
     pub seek_mode: SeekMode,
+}
+
+impl IterOption {
+    pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool, seek_mode: SeekMode) -> IterOption {
+        IterOption {
+            upper_bound: upper_bound,
+            fill_cache: fill_cache,
+            seek_mode: seek_mode,
+        }
+    }
 }
 
 impl Default for IterOption {
@@ -182,7 +194,9 @@ pub trait Iterable {
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(self.new_iterator(Some(end_key), fill_cache, true),
+        scan_impl(self.new_iterator(IterOption::new(Some(end_key.to_vec()),
+                                                    fill_cache,
+                                                    SeekMode::TotalOrderSeek)),
                   start_key,
                   f)
     }
@@ -198,23 +212,23 @@ pub trait Iterable {
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
         scan_impl(try!(self.new_iterator_cf(cf,
-                                            Some(end_key),
-                                            fill_cache,
-                                            true /* total-order-seek */)),
+                                            IterOption::new(Some(end_key.to_vec()),
+                                                            fill_cache,
+                                                            SeekMode::TotalOrderSeek))),
                   start_key,
                   f)
     }
 
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = self.new_iterator(None, true, true);
+        let mut iter = self.new_iterator(IterOption::default());
         iter.seek(key.into());
         Ok(iter.kv())
     }
 
     // Seek the first key >= given key, if no found, return None.
     fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = try!(self.new_iterator_cf(cf, None, true, true));
+        let mut iter = try!(self.new_iterator_cf(cf, IterOption::default()));
         iter.seek(key.into());
         Ok(iter.kv())
     }
@@ -257,7 +271,7 @@ impl Iterable for DB {
             _ => false,
         });
         if let Some(key) = iter_opt.upper_bound {
-            readopts.set_iterate_upper_bound(key);
+            readopts.set_iterate_upper_bound(&key);
         }
         self.iter_opt(readopts)
     }
@@ -270,7 +284,7 @@ impl Iterable for DB {
             _ => false,
         });
         if let Some(key) = iter_opt.upper_bound {
-            readopts.set_iterate_upper_bound(key);
+            readopts.set_iterate_upper_bound(&key);
         }
         let handle = try!(rocksdb::get_cf_handle(self, cf));
         Ok(DBIterator::new_cf(self, handle, readopts))
@@ -299,16 +313,15 @@ impl Peekable for Snapshot {
 }
 
 impl Iterable for Snapshot {
-    fn new_iterator(&self,
-                    upper_bound: Option<&[u8]>,
-                    fill_cache: bool,
-                    total_order_seek: bool)
-                    -> DBIterator {
+    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
         let mut opt = ReadOptions::new();
-        opt.fill_cache(fill_cache);
-        opt.set_total_order_seek(total_order_seek);
-        if let Some(key) = upper_bound {
-            opt.set_iterate_upper_bound(key);
+        opt.fill_cache(iter_opt.fill_cache);
+        opt.set_total_order_seek(match iter_opt.seek_mode {
+            SeekMode::TotalOrderSeek => true,
+            _ => false,
+        });
+        if let Some(key) = iter_opt.upper_bound {
+            opt.set_iterate_upper_bound(&key);
         }
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -316,18 +329,16 @@ impl Iterable for Snapshot {
         DBIterator::new(&self.db, opt)
     }
 
-    fn new_iterator_cf(&self,
-                       cf: &str,
-                       upper_bound: Option<&[u8]>,
-                       fill_cache: bool,
-                       total_order_seek: bool)
-                       -> Result<DBIterator> {
+    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
         let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
         let mut opt = ReadOptions::new();
-        opt.fill_cache(fill_cache);
-        opt.set_total_order_seek(total_order_seek);
-        if let Some(key) = upper_bound {
-            opt.set_iterate_upper_bound(key);
+        opt.fill_cache(iter_opt.fill_cache);
+        opt.set_total_order_seek(match iter_opt.seek_mode {
+            SeekMode::TotalOrderSeek => true,
+            _ => false,
+        });
+        if let Some(key) = iter_opt.upper_bound {
+            opt.set_iterate_upper_bound(&key);
         }
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -393,7 +404,10 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
     let handle = try!(rocksdb::get_cf_handle(db, cf));
     try!(db.delete_file_in_range_cf(handle, start_key, end_key));
 
-    let mut it = try!(db.new_iterator_cf(cf, Some(end_key), false, true));
+    let mut it = try!(db.new_iterator_cf(cf,
+                                         IterOption::new(Some(end_key.to_vec()),
+                                                         false,
+                                                         SeekMode::TotalOrderSeek)));
 
     let mut wb = WriteBatch::new();
     it.seek(start_key.into());

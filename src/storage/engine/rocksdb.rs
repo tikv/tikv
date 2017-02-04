@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName, CF_DEFAULT};
-use raftstore::store::engine::{SyncSnapshot as RocksSnapshot, Peekable, Iterable};
+use raftstore::store::engine::{SyncSnapshot as RocksSnapshot, Peekable, Iterable, IterOption};
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
@@ -169,28 +169,19 @@ impl Snapshot for RocksSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self,
-                upper_bound: Option<&[u8]>,
-                fill_cache: bool,
-                total_order_seek: bool,
-                mode: ScanMode)
-                -> Result<Cursor<'b>> {
+    fn iter<'b>(&'b self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create iterator");
-        Ok(Cursor::new(self.new_iterator(upper_bound, fill_cache, total_order_seek),
-                       mode))
+        Ok(Cursor::new(self.new_iterator(iter_opt), mode))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self,
                    cf: CfName,
-                   upper_bound: Option<&[u8]>,
-                   fill_cache: bool,
-                   total_order_seek: bool,
+                   iter_opt: IterOption,
                    mode: ScanMode)
                    -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound, fill_cache, total_order_seek)),
-                       mode))
+        Ok(Cursor::new(try!(self.new_iterator_cf(cf, iter_opt)), mode))
     }
 
     fn clone(&self) -> Box<Snapshot> {
