@@ -196,7 +196,6 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             }
             Task::Write(token, mut data) => {
                 SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
-                debug!("**** write snapshot data: {:?}", data);
                 let mut should_close = false;
                 match self.files.entry(token) {
                     Entry::Occupied(mut e) => {

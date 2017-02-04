@@ -29,7 +29,6 @@ use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util::*;
-use super::super::util::init_log;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // init_log();
@@ -282,13 +281,9 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // Add node 1 back.
     cluster.clear_send_filters();
 
-    println!("here");
-
     // Now snapshot must be applied on node 1.
     must_get_cf_equal(&engine1, cf, b"k1", b"v1");
     must_get_cf_none(&engine1, cf, b"k2");
-
-    println!("there");
 
     // test if node can be safely restarted without losing any data.
     cluster.stop_node(1);

@@ -67,7 +67,7 @@ impl Display for SnapKey {
 }
 
 pub enum SendSnapshotFileReader {
-    V1((SnapFile, SnapValidationReader)),
+    V1((SnapFile, File)),
 }
 
 impl SendSnapshotFileReader {
@@ -237,6 +237,10 @@ impl SnapFile {
         self.file.metadata()
     }
 
+    pub fn raw_reader(&self) -> io::Result<File> {
+        File::open(self.path())
+    }
+
     /// Get a validation reader.
     pub fn reader(&self) -> io::Result<SnapValidationReader> {
         SnapValidationReader::open(self.path())
@@ -391,7 +395,6 @@ impl Read for SnapValidationReader {
         };
         self.digest.write(&buf[..read]);
         self.left -= read;
-        debug!("call SnapValidationReader.read(), return read: {}", read);
         Ok(read)
     }
 }
@@ -503,8 +506,7 @@ impl SnapManagerCore {
                                          key: &SnapKey)
                                          -> io::Result<SendSnapshotFileReader> {
         let f = try!(SnapFile::new(&self.base, self.snap_size.clone(), true, key));
-        let reader = try!(f.reader());
-        debug!("**** get send file reader");
+        let reader = try!(f.raw_reader());
         Ok(SendSnapshotFileReader::V1((f, reader)))
     }
 
