@@ -924,13 +924,14 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
         if let Err(e) = snap_file.reader().and_then(|mut r| r.validate()) {
             error!("[region {}] file {} is invalid, will regenerate: {:?}",
                    region_id,
-                   snap_file.path().display(),
+                   snap_file.path(),
                    e);
             try!(snap_file.try_delete());
             try!(snap_file.init());
             try!(build_snap_file(&mut snap_file, snap, state.get_region()));
         }
     } else {
+        try!(snap_file.init());
         try!(build_snap_file(&mut snap_file, snap, state.get_region()));
     }
 
