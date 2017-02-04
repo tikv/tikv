@@ -412,7 +412,7 @@ mod tests {
     use util::codec::bytes;
     use util::escape;
     use kvproto::kvrpcpb::Context;
-    use super::super::super::raftstore::store::engine::{IterOption, SeekMode};
+    use super::super::super::raftstore::store::engine::IterOption;
 
     const TEST_ENGINE_CFS: &'static [CfName] = &["cf"];
 
