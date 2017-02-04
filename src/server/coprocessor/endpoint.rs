@@ -568,8 +568,8 @@ impl TopNHeap {
 
 impl<'a> Ord for SortRow {
     fn cmp(&self, right: &SortRow) -> CmpOrdering {
-        let values = self.key.clone().into_iter().zip(right.key.clone().into_iter());
-        for (col, (v1, v2)) in self.order_cols.clone().into_iter().zip(values) {
+        let values = self.key.iter().zip(right.key.iter());
+        for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
             // panic when decode data failed in cmp
             let order = v1.cmp(self.ctx.as_ref(), &v2).unwrap();
             match order {
