@@ -599,9 +599,9 @@ mod tests {
 
     #[derive(PartialEq, Eq, Clone, Copy)]
     enum SeekMode {
-        Seek,
-        ReverseSeek,
-        SeekForPrev,
+        Normal,
+        Reverse,
+        ForPrev,
     }
 
     #[allow(cyclomatic_complexity)]
@@ -616,43 +616,43 @@ mod tests {
         let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 
         for (_, mut i) in (start..SEEK_BOUND * 30).enumerate().filter(|&(i, _)| i % step == 0) {
-            if seek_mode != SeekMode::Seek {
+            if seek_mode != SeekMode::Normal {
                 i = SEEK_BOUND * 30 - 1 - i;
             }
             let key = format!("key_{:03}", i);
             let seek_key = make_key(key.as_bytes());
             let exp_kv = if i <= 100 {
                 match seek_mode {
-                    SeekMode::ReverseSeek => None,
-                    SeekMode::SeekForPrev if i < 100 => None,
-                    SeekMode::Seek | SeekMode::SeekForPrev => {
+                    SeekMode::Reverse => None,
+                    SeekMode::ForPrev if i < 100 => None,
+                    SeekMode::Normal | SeekMode::ForPrev => {
                         Some(("key_100".to_owned(), "value_50".to_owned()))
                     }
                 }
             } else if i <= limit {
-                if seek_mode == SeekMode::ReverseSeek {
+                if seek_mode == SeekMode::Reverse {
                     Some((format!("key_{}", (i - 1) / 2 * 2), format!("value_{}", (i - 1) / 2)))
-                } else if seek_mode == SeekMode::SeekForPrev {
+                } else if seek_mode == SeekMode::ForPrev {
                     Some((format!("key_{}", i / 2 * 2), format!("value_{}", i / 2)))
                 } else {
                     Some((format!("key_{}", (i + 1) / 2 * 2), format!("value_{}", (i + 1) / 2)))
                 }
-            } else if seek_mode != SeekMode::Seek {
+            } else if seek_mode != SeekMode::Normal {
                 Some((format!("key_{:03}", limit), format!("value_{:03}", limit / 2)))
             } else {
                 None
             };
 
             match seek_mode {
-                SeekMode::ReverseSeek => {
+                SeekMode::Reverse => {
                     assert_seek!(cursor, reverse_seek, seek_key, exp_kv);
                     assert_seek!(near_cursor, near_reverse_seek, seek_key, exp_kv);
                 }
-                SeekMode::Seek => {
+                SeekMode::Normal => {
                     assert_seek!(cursor, seek, seek_key, exp_kv);
                     assert_seek!(near_cursor, near_seek, seek_key, exp_kv);
                 }
-                SeekMode::SeekForPrev => {
+                SeekMode::ForPrev => {
                     assert_seek!(cursor, seek_for_prev, seek_key, exp_kv);
                     assert_seek!(near_cursor, near_seek_for_prev, seek_key, exp_kv);
                 }
@@ -676,22 +676,22 @@ mod tests {
             for start in 0..10 {
                 test_linear_seek(snapshot.as_ref(),
                                  ScanMode::Forward,
-                                 SeekMode::Seek,
+                                 SeekMode::Normal,
                                  start * SEEK_BOUND,
                                  step);
                 test_linear_seek(snapshot.as_ref(),
                                  ScanMode::Backward,
-                                 SeekMode::ReverseSeek,
+                                 SeekMode::Reverse,
                                  start * SEEK_BOUND,
                                  step);
                 test_linear_seek(snapshot.as_ref(),
                                  ScanMode::Backward,
-                                 SeekMode::SeekForPrev,
+                                 SeekMode::ForPrev,
                                  start * SEEK_BOUND,
                                  step);
             }
         }
-        for &seek_mode in &[SeekMode::ReverseSeek, SeekMode::Seek, SeekMode::SeekForPrev] {
+        for &seek_mode in &[SeekMode::Reverse, SeekMode::Normal, SeekMode::ForPrev] {
             for step in 1..SEEK_BOUND * 3 {
                 for start in 0..10 {
                     test_linear_seek(snapshot.as_ref(),
