@@ -386,7 +386,7 @@ impl Evaluator {
                      ctx: &EvalContext,
                      expr: &Expr,
                      break_res: Option<bool>,
-                     logic_eval: F)
+                     logic_func: F)
                      -> Result<Datum>
         where F: FnOnce(Option<bool>, Option<bool>) -> Datum
     {
@@ -401,7 +401,7 @@ impl Evaluator {
         if right == break_res {
             return Ok(right.into());
         }
-        Ok(logic_eval(left, right))
+        Ok(logic_func(left, right))
     }
 }
 
@@ -636,6 +636,8 @@ mod test {
         (bin_expr(Datum::I64(0), Datum::I64(1), ExprType::And), Datum::I64(0)),
         (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::Null),
+        (bin_expr(Datum::Null, Datum::I64(1), ExprType::And), Datum::Null),
+        (bin_expr(Datum::I64(0), Datum::Null, ExprType::And), Datum::I64(0)),
         (bin_expr(Datum::Null, Datum::I64(0), ExprType::And), Datum::I64(0)),
         (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
             ExprType::And), Datum::I64(0)),
@@ -645,8 +647,10 @@ mod test {
         (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
             ExprType::Or), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::Null, ExprType::Or), Datum::I64(1)),
+        (bin_expr(Datum::Null, Datum::I64(1), ExprType::Or), Datum::I64(1)),
         (bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::Null),
         (bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
+        (bin_expr(Datum::I64(0), Datum::Null, ExprType::Or), Datum::Null),
         (build_expr_r(vec![bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
             bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ)], ExprType::And), Datum::I64(1)),
         (not_expr(Datum::I64(1)), Datum::I64(0)),
