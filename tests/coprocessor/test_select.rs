@@ -312,6 +312,18 @@ impl<'a> Select<'a> {
         self
     }
 
+    fn order_by(mut self, col: Column, desc: bool) -> Select<'a> {
+        let mut item = ByItem::new();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ColumnRef);
+        expr.mut_val().encode_i64(col.id).unwrap();
+        item.set_expr(expr);
+        item.set_desc(desc);
+        self.sel.mut_order_by().push(item);
+        self
+    }
+
+
     fn count(mut self) -> Select<'a> {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::Count);
@@ -838,6 +850,46 @@ fn test_aggr_extre() {
         assert_eq!(row.data, &*expected_encoded);
     }
     end_point.stop().unwrap();
+}
+
+#[test]
+fn test_order_by_column() {
+    let data = vec![
+    (1, Some("name:0"), 2),
+    (2, Some("name:3"), 3),
+    (4, Some("name:0"), 1),
+    (5, Some("name:6"), 4),
+    (6, Some("name:5"), 4),
+    (7, Some("name:4"),4 ),
+    (8,None,4),
+    ];
+
+    let exp = vec![
+    (8,None,4),
+    (7, Some("name:4"),4 ),
+    (6, Some("name:5"), 4),
+    (5, Some("name:6"), 4),
+    (2, Some("name:3"), 3),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+    let req = Select::from(&product.table)
+        .limit(5)
+        .order_by(product.count, true)
+        .order_by(product.name, false)
+        .build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 5);
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, name, cnt)) in spliter.zip(exp) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded =
+            datum::encode_value(&[(id as i64).into(), name_datum, (cnt as i64).into()]).unwrap();
+        assert_eq!(id as i64, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+    }
+    end_point.stop().unwrap().join().unwrap();
 }
 
 #[test]
