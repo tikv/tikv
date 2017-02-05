@@ -43,13 +43,13 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
 #[test]
 fn test_server_transfer_leader() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_server_cluster(0, 5);
     test_transfer_leader(&mut cluster);
 }
 
 #[test]
 fn test_node_transfer_leader() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     test_transfer_leader(&mut cluster);
 }
 
@@ -102,13 +102,13 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
 #[test]
 fn test_server_pd_transfer_leader() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     test_pd_transfer_leader(&mut cluster);
 }
 
 #[test]
 fn test_node_pd_transfer_leader() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     test_pd_transfer_leader(&mut cluster);
 }
 
@@ -153,12 +153,12 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
 
 #[test]
 fn test_server_transfer_leader_during_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     test_transfer_leader_during_snapshot(&mut cluster);
 }
 
 #[test]
 fn test_node_transfer_leader_during_snapshot() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     test_transfer_leader_during_snapshot(&mut cluster);
 }
