@@ -548,7 +548,7 @@ impl TopNHeap {
         }
     }
 
-    fn try_to_add_row(&mut self, row: SortRow) {
+    fn try_add_row(&mut self, row: SortRow) {
         if self.rows.len() >= self.limit {
             let mut val = self.rows.peek_mut().unwrap();
             if CmpOrdering::Less == row.cmp(&val) {
@@ -561,8 +561,9 @@ impl TopNHeap {
     }
 
     fn get_sorted_rows(&mut self) -> Vec<SortRow> {
-        // it seems clone is needed since self is borrowed
-        self.rows.clone().into_sorted_vec()
+        let mut data: Vec<SortRow> = self.rows.drain().collect();
+        data.sort();
+        data
     }
 }
 
@@ -571,7 +572,7 @@ impl<'a> Ord for SortRow {
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
             // panic when decode data failed in cmp
-            let order = v1.cmp(self.ctx.as_ref(), &v2).unwrap();
+            let order = v1.cmp(self.ctx.as_ref(), v2).unwrap();
             match order {
                 CmpOrdering::Equal => {
                     continue;
@@ -763,7 +764,7 @@ impl SelectContextCore {
         let mut data = Vec::new();
         let meta = encode_row_from_cols(cols, h, values, &mut data).unwrap();
         let sort_row = SortRow::new(meta, order_by, self.ctx.clone(), data, sort_keys);
-        self.topn_heap.try_to_add_row(sort_row);
+        self.topn_heap.try_add_row(sort_row);
         Ok(())
     }
 
