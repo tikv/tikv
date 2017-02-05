@@ -370,11 +370,27 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.remove(&region_id);
     }
 
-    pub fn check_quorum<F: FnMut(&&Arc<DB>) -> bool>(&self, condition: F) -> bool {
+    pub fn assert_quorum<F: FnMut(&DB) -> bool>(&self, mut condition: F) {
         if self.engines.is_empty() {
-            return true;
+            return;
         }
-        self.engines.values().filter(condition).count() > self.engines.len() / 2
+        let half = self.engines.len() / 2;
+        let mut qualified_cnt = 0;
+        for (id, engine) in &self.engines {
+            if !condition(engine) {
+                debug!("store {} is not qualified yet.", id);
+                continue;
+            }
+            debug!("store {} is qualified", id);
+            qualified_cnt += 1;
+            if half < qualified_cnt {
+                return;
+            }
+        }
+
+        panic!("need at lease {} qualified stores, but only got {}",
+               half + 1,
+               qualified_cnt);
     }
 
     pub fn shutdown(&mut self) {

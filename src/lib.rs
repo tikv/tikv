@@ -27,6 +27,7 @@
 #![recursion_limit="100"]
 
 #![allow(module_inception)]
+#![allow(should_implement_trait)]
 
 #[macro_use]
 extern crate log;

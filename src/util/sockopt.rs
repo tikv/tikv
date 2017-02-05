@@ -22,7 +22,7 @@ pub trait SocketOpt {
 
 #[cfg(unix)]
 mod unix {
-    use super::SocketOpt;
+    use util::sockopt::SocketOpt;
 
     use std::io::{Result, Error};
     use std::os::unix::io::AsRawFd;
@@ -52,11 +52,64 @@ mod unix {
     fn from_nix_error(err: NixError) -> Error {
         Error::from_raw_os_error(err.errno() as i32)
     }
+
+    #[cfg(test)]
+    mod tests {
+        use std::os::unix::io::AsRawFd;
+        use std::net::{SocketAddr, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
+        use mio::tcp::{TcpListener as MioTcpListener, TcpStream as MioTcpStream};
+
+        use util::sockopt::SocketOpt;
+
+        #[cfg(unix)]
+        fn test_sock_opt<T: AsRawFd>(socket: &T) {
+            // For linux, getsockopt will return doubled value set by setsockopt.
+            // But for Mac OS X, getsockopt may return the same value. So we can only
+            // check value changed.
+            socket.set_send_buffer_size(4096).unwrap();
+            let mio_s1 = socket.send_buffer_size().unwrap();
+            socket.set_send_buffer_size(8192).unwrap();
+            let mio_s2 = socket.send_buffer_size().unwrap();
+            assert!(mio_s2 != mio_s1,
+                    format!("{} should not equal {}", mio_s2, mio_s1));
+
+            socket.set_recv_buffer_size(4096).unwrap();
+            let mio_r1 = socket.recv_buffer_size().unwrap();
+            socket.set_recv_buffer_size(8192).unwrap();
+            let mio_r2 = socket.recv_buffer_size().unwrap();
+            assert!(mio_r2 != mio_r1,
+                    format!("{} should not equal {}", mio_r2, mio_r1));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_mio_sock_opt() {
+            let addr = "127.0.0.1:0".parse().unwrap();
+            let mio_server = MioTcpListener::bind(&addr).unwrap();
+            let mio_addr = &format!("{}", mio_server.local_addr().unwrap());
+            let mio_sock = MioTcpStream::connect(&mio_addr.parse().unwrap()).unwrap();
+
+            test_sock_opt(&mio_sock);
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_std_sock_opt() {
+            let std_server = StdTcpListener::bind("127.0.0.1:0").unwrap();
+            let std_addr: SocketAddr =
+                (&format!("{}", std_server.local_addr().unwrap())).parse().unwrap();
+            let std_sock = StdTcpStream::connect(std_addr).unwrap();
+
+            test_sock_opt(&std_sock);
+        }
+    }
 }
 
 
 #[cfg(windows)]
 mod windows {
+    use super::SocketOpt;
+
     use mio::tcp::TcpStream;
     use std::io::Result;
 
@@ -88,54 +141,3 @@ pub use self::unix::*;
 
 #[cfg(windows)]
 pub use self::windows::*;
-
-#[cfg(test)]
-mod tests {
-    use std::os::unix::io::AsRawFd;
-    use std::net::{SocketAddr, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
-    use mio::tcp::{TcpListener as MioTcpListener, TcpStream as MioTcpStream};
-
-    use super::SocketOpt;
-
-    #[cfg(unix)]
-    fn test_sock_opt<T: AsRawFd>(socket: &T) {
-        // For linux, getsockopt will return doubled value set by setsockopt.
-        // But for Mac OS X, getsockopt may return the same value. So we can only
-        // check value changed.
-        socket.set_send_buffer_size(4096).unwrap();
-        let mio_s1 = socket.send_buffer_size().unwrap();
-        socket.set_send_buffer_size(8192).unwrap();
-        let mio_s2 = socket.send_buffer_size().unwrap();
-        assert!(mio_s2 != mio_s1,
-                format!("{} should not equal {}", mio_s2, mio_s1));
-
-        socket.set_recv_buffer_size(4096).unwrap();
-        let mio_r1 = socket.recv_buffer_size().unwrap();
-        socket.set_recv_buffer_size(8192).unwrap();
-        let mio_r2 = socket.recv_buffer_size().unwrap();
-        assert!(mio_r2 != mio_r1,
-                format!("{} should not equal {}", mio_r2, mio_r1));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_mio_sock_opt() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let mio_server = MioTcpListener::bind(&addr).unwrap();
-        let mio_addr = &format!("{}", mio_server.local_addr().unwrap());
-        let mio_sock = MioTcpStream::connect(&mio_addr.parse().unwrap()).unwrap();
-
-        test_sock_opt(&mio_sock);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_std_sock_opt() {
-        let std_server = StdTcpListener::bind("127.0.0.1:0").unwrap();
-        let std_addr: SocketAddr =
-            (&format!("{}", std_server.local_addr().unwrap())).parse().unwrap();
-        let std_sock = StdTcpStream::connect(std_addr).unwrap();
-
-        test_sock_opt(&std_sock);
-    }
-}

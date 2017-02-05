@@ -369,12 +369,18 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
             let mut reader =
                 MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true, None);
+            // scan_key is used as start_key here,and Range start gc with scan_key=none.
+            let is_range_start_key = scan_key.is_none();
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
                         .observe(keys.len() as f64);
                     if keys.is_empty() {
+                        // empty range
+                        if is_range_start_key {
+                            KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+                        }
                         Ok(None)
                     } else {
                         Ok(Some(Command::Gc {
@@ -571,24 +577,6 @@ impl Scheduler {
         ctx.tag
     }
 
-    /// Generates the lock for a command.
-    ///
-    /// Basically, read-only commands require no latches, write commands require latches hashed
-    /// by the referenced keys.
-    fn gen_lock(&self, cmd: &Command) -> Lock {
-        match *cmd {
-            Command::Prewrite { ref mutations, .. } => {
-                let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-                self.latches.gen_lock(&keys)
-            }
-            Command::Commit { ref keys, .. } |
-            Command::Rollback { ref keys, .. } |
-            Command::ResolveLock { ref keys, .. } => self.latches.gen_lock(keys),
-            Command::Cleanup { ref key, .. } => self.latches.gen_lock(&[key]),
-            _ => Lock::new(vec![]),
-        }
-    }
-
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
@@ -644,7 +632,7 @@ impl Scheduler {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
-        let lock = self.gen_lock(&cmd);
+        let lock = gen_command_lock(&self.latches, &cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
         self.lock_and_get_snapshot(cid);
@@ -822,6 +810,24 @@ impl Scheduler {
     }
 }
 
+/// Generates the lock for a command.
+///
+/// Basically, read-only commands require no latches, write commands require latches hashed
+/// by the referenced keys.
+pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
+    match *cmd {
+        Command::Prewrite { ref mutations, .. } => {
+            let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
+            latches.gen_lock(&keys)
+        }
+        Command::Commit { ref keys, .. } |
+        Command::Rollback { ref keys, .. } |
+        Command::ResolveLock { ref keys, .. } => latches.gen_lock(keys),
+        Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
+        _ => Lock::new(vec![]),
+    }
+}
+
 /// Handler of the scheduler event loop.
 impl mio::Handler for Scheduler {
     type Timeout = ();
@@ -848,6 +854,113 @@ impl mio::Handler for Scheduler {
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             // stop work threads if has
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kvproto::kvrpcpb::Context;
+    use storage::txn::latch::*;
+    use storage::{Command, make_key, Options, Mutation};
+
+    #[test]
+    fn test_command_latches() {
+        let readonly_cmds = vec![Command::Get {
+                                     ctx: Context::new(),
+                                     key: make_key(b"k"),
+                                     start_ts: 25,
+                                 },
+                                 Command::BatchGet {
+                                     ctx: Context::new(),
+                                     keys: vec![make_key(b"k")],
+                                     start_ts: 25,
+                                 },
+                                 Command::Scan {
+                                     ctx: Context::new(),
+                                     start_key: make_key(b"k"),
+                                     limit: 100,
+                                     start_ts: 25,
+                                     options: Options::default(),
+                                 },
+                                 Command::ScanLock {
+                                     ctx: Context::new(),
+                                     max_ts: 5,
+                                 },
+                                 Command::ResolveLock {
+                                     ctx: Context::new(),
+                                     start_ts: 10,
+                                     commit_ts: Some(20),
+                                     scan_key: None,
+                                     keys: vec![],
+                                 },
+                                 Command::Gc {
+                                     ctx: Context::new(),
+                                     safe_point: 5,
+                                     scan_key: None,
+                                     keys: vec![make_key(b"k")],
+                                 }];
+        let write_cmds = vec![Command::Prewrite {
+                                  ctx: Context::new(),
+                                  mutations: vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+                                  primary: b"k".to_vec(),
+                                  start_ts: 10,
+                                  options: Options::default(),
+                              },
+                              Command::Commit {
+                                  ctx: Context::new(),
+                                  keys: vec![make_key(b"k")],
+                                  lock_ts: 10,
+                                  commit_ts: 20,
+                              },
+                              Command::Cleanup {
+                                  ctx: Context::new(),
+                                  key: make_key(b"k"),
+                                  start_ts: 10,
+                              },
+                              Command::Rollback {
+                                  ctx: Context::new(),
+                                  keys: vec![make_key(b"k")],
+                                  start_ts: 10,
+                              },
+                              Command::ResolveLock {
+                                  ctx: Context::new(),
+                                  start_ts: 10,
+                                  commit_ts: Some(20),
+                                  scan_key: None,
+                                  keys: vec![make_key(b"k")],
+                              }];
+
+        let mut latches = Latches::new(1024);
+
+        let write_locks: Vec<Lock> = write_cmds.into_iter()
+            .enumerate()
+            .map(|(id, cmd)| {
+                let mut lock = gen_command_lock(&latches, &cmd);
+                assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
+                lock
+            })
+            .collect();
+
+        for (id, cmd) in readonly_cmds.iter().enumerate() {
+            let mut lock = gen_command_lock(&latches, cmd);
+            assert!(latches.acquire(&mut lock, id as u64));
+        }
+
+        // acquire/release locks one by one.
+        let max_id = write_locks.len() as u64 - 1;
+        for (id, mut lock) in write_locks.into_iter().enumerate() {
+            let id = id as u64;
+            if id != 0 {
+                assert!(latches.acquire(&mut lock, id));
+            }
+            let unlocked = latches.release(&lock, id);
+            if id as u64 == max_id {
+                assert_eq!(unlocked, vec![]);
+            } else {
+                assert_eq!(unlocked, vec![id + 1]);
+            }
         }
     }
 }

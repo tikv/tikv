@@ -35,12 +35,15 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progr
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
+use raftstore::store::Config;
+use raftstore::store::worker::PdTask;
+use util::worker::Worker;
 use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
 use super::store::Store;
-use super::peer_storage::{PeerStorage, ApplySnapResult, write_initial_state, write_peer_state,
-                          InvokeContext};
+use super::peer_storage::{self, PeerStorage, ApplySnapResult, write_initial_state,
+                          write_peer_state, InvokeContext, compact_raft_log};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -49,7 +52,6 @@ use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
-
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -60,12 +62,52 @@ pub enum StaleState {
     ToValidate,
 }
 
+pub struct ProposalMeta {
+    pub uuid: Uuid,
+    pub term: u64,
+    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
+    pub renew_lease_time: Option<Timespec>,
+}
+
+#[derive(Default)]
+struct ProposalQueue {
+    queue: VecDeque<ProposalMeta>,
+    uuids: HashSet<Uuid>,
+}
+
+impl ProposalQueue {
+    pub fn contains(&self, uuid: &Uuid) -> bool {
+        self.uuids.contains(uuid)
+    }
+
+    fn pop(&mut self, term: u64) -> Option<ProposalMeta> {
+        self.queue.pop_front().and_then(|meta| {
+            if meta.term > term {
+                self.queue.push_front(meta);
+                return None;
+            }
+            self.uuids.remove(&meta.uuid);
+            Some(meta)
+        })
+    }
+
+    fn push(&mut self, meta: ProposalMeta) {
+        self.uuids.insert(meta.uuid);
+        self.queue.push_back(meta);
+    }
+
+    fn clear(&mut self) {
+        if !self.uuids.is_empty() {
+            self.uuids.clear();
+            self.queue.clear();
+        }
+    }
+}
+
 pub struct PendingCmd {
     pub uuid: Uuid,
     pub term: u64,
     pub cb: Option<Callback>,
-    /// `renew_lease_time` contains the last time when a peer starts to renew lease.
-    pub renew_lease_time: Option<Timespec>,
 }
 
 impl PendingCmd {
@@ -83,13 +125,16 @@ impl Drop for PendingCmd {
     }
 }
 
+#[derive(Default, Debug)]
+pub struct ChangePeer {
+    pub conf_change: eraftpb::ConfChange,
+    pub peer: metapb::Peer,
+    pub region: metapb::Region,
+}
+
 #[derive(Debug)]
 pub enum ExecResult {
-    ChangePeer {
-        change_type: ConfChangeType,
-        peer: metapb::Peer,
-        region: metapb::Region,
-    },
+    ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
         first_index: u64,
@@ -140,47 +185,31 @@ pub struct ReadyResult {
 struct PendingCmdQueue {
     normals: VecDeque<PendingCmd>,
     conf_change: Option<PendingCmd>,
-    uuids: HashSet<Uuid>,
 }
 
 impl PendingCmdQueue {
-    pub fn contains(&self, uuid: &Uuid) -> bool {
-        self.uuids.contains(uuid)
-    }
-
-    fn remove(&mut self, cmd: &Option<PendingCmd>) {
-        if let Some(ref cmd) = *cmd {
-            self.uuids.remove(&cmd.uuid);
-        }
-    }
-
     fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
             if cmd.term > term {
                 self.normals.push_front(cmd);
                 return None;
             }
-            let res = Some(cmd);
-            self.remove(&res);
-            res
+            Some(cmd)
         })
     }
 
     fn append_normal(&mut self, cmd: PendingCmd) {
-        self.uuids.insert(cmd.uuid);
         self.normals.push_back(cmd);
     }
 
     fn take_conf_change(&mut self) -> Option<PendingCmd> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
-        let cmd = self.conf_change.take();
-        self.remove(&cmd);
-        cmd
+        self.conf_change.take()
     }
 
+    // TODO: seems we don't need to seperate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd) {
-        self.uuids.insert(cmd.uuid);
         self.conf_change = Some(cmd);
     }
 }
@@ -219,6 +248,7 @@ pub struct Peer {
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
+    proposals: ProposalQueue,
     pending_cmds: PendingCmdQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
@@ -317,6 +347,7 @@ impl Peer {
             peer: util::new_peer(store_id, peer_id),
             region_id: region.get_id(),
             raft_group: raft_group,
+            proposals: Default::default(),
             pending_cmds: Default::default(),
             peer_cache: store.peer_cache(),
             peer_heartbeats: HashMap::new(),
@@ -362,14 +393,11 @@ impl Peer {
         let region = self.get_store().get_region().clone();
         info!("{} begin to destroy", self.tag);
 
-        // If pending_remove, meta was destroyed when applying removal.
-        if !self.pending_remove {
-            // First set Tombstone state explicitly, and clear raft meta.
-            let wb = WriteBatch::new();
-            try!(self.get_store().clear_meta(&wb));
-            try!(write_peer_state(&wb, &region, PeerState::Tombstone));
-            try!(self.engine.write(wb));
-        }
+        // Set Tombstone state explicitly
+        let wb = WriteBatch::new();
+        try!(self.get_store().clear_meta(&wb));
+        try!(write_peer_state(&wb, &region, PeerState::Tombstone));
+        try!(self.engine.write(wb));
 
         // TODO: figure out a way to unit test this.
         let peer_id = self.peer_id();
@@ -683,29 +711,104 @@ impl Peer {
             }
             vec![]
         } else {
-            self.handle_raft_committed_entries(ready.committed_entries.take().unwrap())
+            let committed_entries = ready.committed_entries.take().unwrap();
+            // leader needs to update lease.
+            let mut to_be_updated = self.is_leader();
+            if !to_be_updated {
+                // It's not leader anymore, we are safe to clear proposals. If it becomes leader
+                // again, the lease should be updated when election is finished, old proposals
+                // have no effect. Although this may allow old uuids to be reused before old
+                // callbacks are called.
+                self.proposals.clear();
+            }
+            for entry in committed_entries.iter().rev() {
+                // raft meta is very small, can be ignored.
+                self.raft_log_size_hint += entry.get_data().len() as u64;
+                if to_be_updated {
+                    to_be_updated = !self.maybe_update_lease(entry.get_term(), entry.get_data());
+                }
+            }
+            if !committed_entries.is_empty() {
+                self.handle_raft_committed_entries(committed_entries)
+            } else {
+                vec![]
+            }
         };
 
         self.raft_group.advance(ready);
+    }
+
+    /// Try to update lease.
+    ///
+    /// If the it can make sure that its lease is the latest lease, returns true.
+    fn maybe_update_lease(&mut self, term: u64, data: &[u8]) -> bool {
+        let mut req = RaftCmdRequest::new();
+        let propose_time = match req.merge_from_bytes(data)
+            .ok()
+            .and_then(|_| util::get_uuid_from_req(&req))
+            .and_then(|uuid| self.find_propose_time(uuid, term)) {
+            Some(t) => t,
+            _ => return false,
+        };
+
+        // Try to renew the leader lease as this command asks to.
+        if let Some(current_expired_time) = self.leader_lease_expired_time {
+            // This peer is leader and has recorded leader lease.
+            // Calculate the renewed lease for this command. If the renewed lease lives longer
+            // than the current leader lease, update the current leader lease to the renewed lease.
+            let next_expired_time = self.next_lease_expired_time(propose_time);
+            // Use the lease expired timestamp comparison here, so that these codes still
+            // work no matter how the leader changes before applying this command.
+            if current_expired_time < next_expired_time {
+                debug!("{} update leader lease expired time from {:?} to {:?}",
+                       self.tag,
+                       current_expired_time,
+                       next_expired_time);
+                self.leader_lease_expired_time = Some(next_expired_time)
+            }
+        } else if self.is_leader() {
+            // This peer is leader but its leader lease has expired.
+            // Calculate the renewed lease for this command, and update the leader lease
+            // for this peer.
+            let next_expired_time = self.next_lease_expired_time(propose_time);
+            debug!("{} update leader lease expired time from None to {:?}",
+                   self.tag,
+                   self.leader_lease_expired_time);
+            self.leader_lease_expired_time = Some(next_expired_time);
+        }
+
+        true
+    }
+
+    fn find_propose_time(&mut self, uuid: Uuid, term: u64) -> Option<Timespec> {
+        while let Some(meta) = self.proposals.pop(term) {
+            if meta.uuid == uuid {
+                return Some(meta.renew_lease_time.unwrap());
+            }
+        }
+        None
     }
 
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
     pub fn propose(&mut self,
-                   mut cmd: PendingCmd,
+                   mut meta: ProposalMeta,
+                   cb: Callback,
                    req: RaftCmdRequest,
                    mut err_resp: RaftCmdResponse,
                    metrics: &mut RaftProposeMetrics)
                    -> bool {
-        if self.pending_cmds.contains(&cmd.uuid) {
-            cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", cmd.uuid));
-            cmd.call(err_resp);
+        if self.proposals.contains(&meta.uuid) {
+            cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", meta.uuid));
+            cb(err_resp);
             return false;
         }
 
-        debug!("{} propose command with uuid {:?}", self.tag, cmd.uuid);
+        debug!("{} propose command with uuid {:?}", self.tag, meta.uuid);
         metrics.all += 1;
+
+        let mut is_conf_change = false;
 
         if self.should_read_local(&req) {
             metrics.local_read += 1;
@@ -717,9 +820,9 @@ impl Peer {
                 (cmd_resp::new_error(e), None)
             });
 
-            cmd_resp::bind_uuid(&mut resp, cmd.uuid);
+            cmd_resp::bind_uuid(&mut resp, meta.uuid);
             cmd_resp::bind_term(&mut resp, self.term());
-            cmd.call(resp);
+            cb(resp);
             return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
             metrics.transfer_leader += 1;
@@ -737,7 +840,7 @@ impl Peer {
 
             // transfer leader command doesn't need to replicate log and apply, so we
             // return immediately. Note that this command may fail, we can view it just as an advice
-            cmd.call(make_transfer_leader_response());
+            cb(make_transfer_leader_response());
             return false;
         } else if get_change_peer_cmd(&req).is_some() {
             if self.raft_group.raft.pending_conf {
@@ -745,33 +848,44 @@ impl Peer {
                 cmd_resp::bind_error(&mut err_resp,
                                      box_err!("{} there is a pending conf change, try later",
                                               self.tag));
-                cmd.call(err_resp);
+                cb(err_resp);
                 return false;
-            }
-            if let Some(cmd) = self.pending_cmds.take_conf_change() {
-                // if it loses leadership before conf change is replicated, there may be
-                // a stale pending conf change before next conf change is applied. If it
-                // becomes leader again with the stale pending conf change, will enter
-                // this block, so we notify leadership may have changed.
-                self.notify_stale_command(cmd);
             }
 
             if let Err(e) = self.propose_conf_change(req, metrics) {
                 cmd_resp::bind_error(&mut err_resp, e);
-                cmd.call(err_resp);
+                cb(err_resp);
                 return false;
             }
 
-            // Try to renew leader lease on every conf change request.
-            cmd.renew_lease_time = Some(clocktime::raw_now());
-            self.pending_cmds.set_conf_change(cmd);
+            is_conf_change = true;
         } else if let Err(e) = self.propose_normal(req, metrics) {
             cmd_resp::bind_error(&mut err_resp, e);
-            cmd.call(err_resp);
+            cb(err_resp);
             return false;
+        }
+
+        // Try to renew leader lease on every consistent read/write request.
+        meta.renew_lease_time = Some(clocktime::raw_now());
+
+        let cmd = PendingCmd {
+            uuid: meta.uuid,
+            term: meta.term,
+            cb: Some(cb),
+        };
+
+        self.proposals.push(meta);
+
+        if is_conf_change {
+            if let Some(stale_cmd) = self.pending_cmds.take_conf_change() {
+                // if it loses leadership before conf change is replicated, there may be
+                // a stale pending conf change before next conf change is applied. If it
+                // becomes leader again with the stale pending conf change, will enter
+                // this block, so we notify leadership may have changed.
+                self.notify_stale_command(stale_cmd);
+            }
+            self.pending_cmds.set_conf_change(cmd);
         } else {
-            // Try to renew leader lease on every consistent read/write request.
-            cmd.renew_lease_time = Some(clocktime::raw_now());
             self.pending_cmds.append_normal(cmd);
         }
 
@@ -1052,6 +1166,18 @@ impl Peer {
         None
     }
 
+    pub fn heartbeat_pd(&self, cfg: &Config, worker: &Worker<PdTask>) {
+        let task = PdTask::Heartbeat {
+            region: self.region().clone(),
+            peer: self.peer.clone(),
+            down_peers: self.collect_down_peers(cfg.max_peer_down_duration),
+            pending_peers: self.collect_pending_peers(),
+        };
+        if let Err(e) = worker.schedule(task) {
+            error!("{} failed to notify pd: {}", self.tag, e);
+        }
+    }
+
     fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
@@ -1153,9 +1279,6 @@ impl Peer {
                        entry.get_index());
             }
 
-            // raft meta is very small, can be ignored.
-            self.raft_log_size_hint += entry.get_data().len() as u64;
-
             let res = match entry.get_entry_type() {
                 eraftpb::EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
                 eraftpb::EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
@@ -1214,25 +1337,28 @@ impl Peer {
         let term = entry.get_term();
         let conf_change: eraftpb::ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        let (res, cc) = match self.process_raft_cmd(index, term, cmd) {
-            res @ Some(_) => (res, conf_change),
+        Some(self.process_raft_cmd(index, term, cmd).map_or_else(|| {
             // If failed, tell raft that the config change was aborted.
-            None => (None, eraftpb::ConfChange::new()),
-        };
-        self.raft_group.apply_conf_change(cc);
-
-        res
+            ExecResult::ChangePeer(Default::default())
+        }, |mut res| {
+            if let ExecResult::ChangePeer(ref mut cp) = res {
+                cp.conf_change = conf_change;
+            } else {
+                panic!("{} unexpected result {:?} for conf change {:?} at {}",
+                       self.tag,
+                       res,
+                       conf_change,
+                       index);
+            }
+            res
+        }))
     }
 
-    fn find_cb(&mut self,
-               uuid: Uuid,
-               term: u64,
-               cmd: &RaftCmdRequest)
-               -> Option<(Callback, Timespec)> {
+    fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
         if get_change_peer_cmd(cmd).is_some() {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.uuid == uuid {
-                    return Some((cmd.cb.take().unwrap(), cmd.renew_lease_time.unwrap()));
+                    return Some(cmd.cb.take().unwrap());
                 } else {
                     self.notify_stale_command(cmd);
                 }
@@ -1241,7 +1367,7 @@ impl Peer {
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(term) {
             if head.uuid == uuid {
-                return Some((head.cb.take().unwrap(), head.renew_lease_time.unwrap()));
+                return Some(head.cb.take().unwrap());
             }
             // Because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
@@ -1272,36 +1398,11 @@ impl Peer {
                uuid,
                index);
 
-        if cmd_cb.is_none() {
-            return exec_result;
-        }
+        let cb = match cmd_cb {
+            None => return exec_result,
+            Some(cb) => cb,
+        };
 
-        let (cb, lease_renew_time) = cmd_cb.unwrap();
-        // Try to renew the leader lease as this command asks to.
-        if let Some(current_expired_time) = self.leader_lease_expired_time {
-            // This peer is leader and has recorded leader lease.
-            // Calculate the renewed lease for this command. If the renewed lease lives longer
-            // than the current leader lease, update the current leader lease to the renewed lease.
-            let next_expired_time = self.next_lease_expired_time(lease_renew_time);
-            // Use the lease expired timestamp comparison here, so that these codes still
-            // work no matter how the leader changes before applying this command.
-            if current_expired_time < next_expired_time {
-                debug!("{} update leader lease expired time from {:?} to {:?}",
-                       self.tag,
-                       current_expired_time,
-                       next_expired_time);
-                self.leader_lease_expired_time = Some(next_expired_time)
-            }
-        } else if self.is_leader() {
-            // This peer is leader but its leader lease has expired.
-            // Calculate the renewed lease for this command, and update the leader lease
-            // for this peer.
-            let next_expired_time = self.next_lease_expired_time(lease_renew_time);
-            debug!("{} update leader lease expired time from None to {:?}",
-                   self.tag,
-                   self.leader_lease_expired_time);
-            self.leader_lease_expired_time = Some(next_expired_time);
-        }
         // Involve post apply hook.
         self.coprocessor_host.post_apply(self.raft_group.get_store(), &cmd, &mut resp);
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
@@ -1359,8 +1460,8 @@ impl Peer {
 
         if let Some(ref exec_result) = exec_result {
             match *exec_result {
-                ExecResult::ChangePeer { ref region, .. } => {
-                    storage.region = region.clone();
+                ExecResult::ChangePeer(ref cp) => {
+                    storage.region = cp.region.clone();
                 }
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } => {}
@@ -1372,6 +1473,8 @@ impl Peer {
                 }
                 ExecResult::SplitRegion { ref left, .. } => {
                     storage.region = left.clone();
+                    self.size_diff_hint = 0;
+                    self.delete_keys_hint = 0;
                 }
             }
         }
@@ -1529,11 +1632,9 @@ impl Peer {
                                         peer,
                                         self.region()));
                 }
+
                 // TODO: Do we allow adding peer in same node?
 
-                // Add this peer to cache.
-                self.peer_cache.borrow_mut().insert(peer.get_id(), peer.clone());
-                self.peer_heartbeats.insert(peer.get_id(), Instant::now());
                 region.mut_peers().push(peer.clone());
 
                 PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["add_peer", "success"]).inc();
@@ -1562,9 +1663,6 @@ impl Peer {
                     self.pending_remove = true;
                 }
 
-                // Remove this peer from cache.
-                self.peer_cache.borrow_mut().remove(&peer.get_id());
-                self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
                 PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["remove_peer", "success"]).inc();
@@ -1576,25 +1674,24 @@ impl Peer {
             }
         }
 
-        if self.pending_remove {
-            self.get_store()
-                .clear_meta(&ctx.wb)
-                .and_then(|_| write_peer_state(&ctx.wb, &region, PeerState::Tombstone))
-                .unwrap_or_else(|e| panic!("{} failed to remove self: {:?}", self.tag, e));
+        let state = if self.pending_remove {
+            PeerState::Tombstone
         } else {
-            write_peer_state(&ctx.wb, &region, PeerState::Normal)
-                .unwrap_or_else(|e| panic!("{} failed to update region state: {:?}", self.tag, e));
+            PeerState::Normal
+        };
+        if let Err(e) = write_peer_state(&ctx.wb, &region, state) {
+            panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
 
         Ok((resp,
-            Some(ExecResult::ChangePeer {
-            change_type: change_type,
+            Some(ExecResult::ChangePeer(ChangePeer {
+            conf_change: Default::default(),
             peer: peer.clone(),
             region: region,
-        })))
+        }))))
     }
 
     fn exec_split(&mut self,
@@ -1643,9 +1740,6 @@ impl Peer {
         for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
             let peer_id = new_peer_ids[index];
             peer.set_id(peer_id);
-
-            // Add this peer to cache.
-            self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
         }
 
         // update region version
@@ -1666,9 +1760,6 @@ impl Peer {
         resp.mut_split().set_left(region.clone());
         resp.mut_split().set_right(new_region.clone());
 
-        self.size_diff_hint = 0;
-        self.delete_keys_hint = 0;
-
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 
         Ok((resp,
@@ -1687,7 +1778,7 @@ impl Peer {
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::new();
 
-        let first_index = self.get_store().first_index();
+        let first_index = peer_storage::first_index(&ctx.apply_state);
         if compact_index <= first_index {
             debug!("{} compact index {} <= first index {}, no need to compact",
                    self.tag,
@@ -1696,8 +1787,21 @@ impl Peer {
             return Ok((resp, None));
         }
 
+        let compact_term = req.get_compact_log().get_compact_term();
+        // TODO: add unit tests to cover all the message integrity checks.
+        if compact_term == 0 {
+            info!("{} compact term missing in {:?}, skip.",
+                  self.tag,
+                  req.get_compact_log());
+            // old format compact log command, safe to ignore.
+            return Err(box_err!("command format is outdated, please upgrade leader."));
+        }
+
         // compact failure is safe to be omitted, no need to assert.
-        try!(self.get_store().compact(&mut ctx.apply_state, compact_index));
+        try!(compact_raft_log(&self.get_store().tag,
+                              &mut ctx.apply_state,
+                              compact_index,
+                              compact_term));
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
 

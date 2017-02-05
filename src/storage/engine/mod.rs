@@ -107,6 +107,7 @@ pub trait Snapshot: Send {
                    fill_cache: bool,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
+    fn clone(&self) -> Box<Snapshot>;
 }
 
 pub trait Iterator {
@@ -268,7 +269,7 @@ impl<'a> Cursor<'a> {
     }
 
     /// Find the largest key that is not greater than the specific key.
-    fn near_reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
+    pub fn near_reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
         assert!(self.scan_mode != ScanMode::Forward);
         if !self.iter.valid() {
             return self.reverse_seek_le(key);
@@ -358,7 +359,6 @@ impl<'a> Cursor<'a> {
     }
 
     #[inline]
-    #[allow(should_implement_trait)]
     pub fn next(&mut self) -> bool {
         self.iter.next()
     }

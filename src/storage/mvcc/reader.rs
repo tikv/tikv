@@ -146,7 +146,7 @@ impl<'a> MvccReader<'a> {
 
         let mut cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
-            try!(cursor.near_reverse_seek(&key.append_ts(ts)))
+            try!(cursor.near_reverse_seek_le(&key.append_ts(ts)))
         } else {
             try!(cursor.near_seek(&key.append_ts(ts)))
         };

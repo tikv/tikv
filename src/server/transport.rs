@@ -37,10 +37,7 @@ pub trait RaftStoreRouter: Send + Clone {
 
     // Send RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::RaftCmd {
-            request: req,
-            callback: cb,
-        })
+        self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64, _: u64) -> RaftStoreResult<()> {
@@ -96,10 +93,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         let store_id = req.get_header().get_peer().get_store_id();
         try!(self.validate_store_id(store_id));
-        self.try_send(StoreMsg::RaftCmd {
-            request: req,
-            callback: cb,
-        })
+        self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
     fn report_unreachable(&self,
