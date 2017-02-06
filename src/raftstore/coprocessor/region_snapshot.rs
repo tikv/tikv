@@ -234,6 +234,16 @@ impl<'a> RegionIterator<'a> {
         Ok(self.update_valid(true))
     }
 
+    pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        try!(self.should_seekable(key));
+        let key = keys::data_key(key);
+        self.valid = self.iter.seek_for_prev(key.as_slice().into());
+        if self.valid && self.iter.key() == self.end_key.as_slice() {
+            self.valid = self.iter.prev();
+        }
+        Ok(self.update_valid(false))
+    }
+
     pub fn prev(&mut self) -> bool {
         if !self.valid {
             return false;
@@ -279,11 +289,12 @@ impl<'a> RegionIterator<'a> {
 mod tests {
     use tempdir::TempDir;
     use rocksdb::{Writable, DB};
+    use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
     use storage::{Cursor, Key, ALL_CFS, ScanMode};
-    use util::{worker, rocksdb};
+    use util::{worker, rocksdb, escape};
 
     use super::*;
     use std::sync::Arc;
@@ -352,6 +363,7 @@ mod tests {
         assert!(v4.is_err());
     }
 
+    #[allow(type_complexity)]
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
@@ -372,14 +384,41 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let mut iter = snap.iter(None, true);
-        assert!(iter.seek(b"a1").is_err());
-        assert!(iter.seek(b"a2").unwrap());
-        assert_eq!(iter.key(), b"a3");
-        assert_eq!(iter.value(), b"v3");
-        assert!(!iter.seek(b"a6").unwrap());
-        assert!(!iter.seek(b"a7").unwrap());
-        assert!(iter.seek(b"a8").is_err());
+        let seek_table: Vec<(_, _, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> = vec![
+            (b"a1", false, None, None),
+            (b"a2", true, Some((b"a3", b"v3")), None),
+            (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
+            (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
+            (b"a6", true, None, Some((b"a5", b"v5"))),
+            (b"a7", true, None, Some((b"a5", b"v5"))),
+            (b"a8", false, None, None),
+        ];
+        let upper_bounds: Vec<Option<&[u8]>> = vec![None, Some(b"a7")];
+        for upper_bound in upper_bounds {
+            let mut iter = snap.iter(upper_bound, true);
+            for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
+                let check_res =
+                    |iter: &RegionIterator, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
+                        if !in_range {
+                            assert!(res.is_err(), "exp failed at {}", escape(seek_key));
+                            return;
+                        }
+                        if exp.is_none() {
+                            assert!(!res.unwrap(), "exp none at {}", escape(seek_key));
+                            return;
+                        }
+
+                        assert!(res.unwrap(), "should succeed at {}", escape(seek_key));
+                        let (exp_key, exp_val) = exp.unwrap();
+                        assert_eq!(iter.key(), exp_key);
+                        assert_eq!(iter.value(), exp_val);
+                    };
+                let seek_res = iter.seek(seek_key);
+                check_res(&iter, seek_res, seek_exp);
+                let prev_res = iter.seek_for_prev(seek_key);
+                check_res(&iter, prev_res, prev_exp);
+            }
+        }
 
         data.clear();
         snap.scan(b"a2",
@@ -393,6 +432,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
+        let mut iter = snap.iter(None, true);
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
