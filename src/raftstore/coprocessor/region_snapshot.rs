@@ -289,6 +289,7 @@ impl<'a> RegionIterator<'a> {
 mod tests {
     use tempdir::TempDir;
     use rocksdb::{Writable, DB};
+    use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
@@ -383,7 +384,6 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let mut iter = snap.iter(None, true);
         let seek_table: Vec<(_, _, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> = vec![
             (b"a1", false, None, None),
             (b"a2", true, Some((b"a3", b"v3")), None),
@@ -393,27 +393,31 @@ mod tests {
             (b"a7", true, None, Some((b"a5", b"v5"))),
             (b"a8", false, None, None),
         ];
-        for (seek_key, in_range, seek_exp, prev_exp) in seek_table {
-            let check_res =
-                |iter: &RegionIterator, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
-                    if !in_range {
-                        assert!(res.is_err(), "exp failed at {}", escape(seek_key));
-                        return;
-                    }
-                    if exp.is_none() {
-                        assert!(!res.unwrap(), "exp none at {}", escape(seek_key));
-                        return;
-                    }
+        let upper_bounds: Vec<Option<&[u8]>> = vec![None, Some(b"a7")];
+        for upper_bound in upper_bounds {
+            let mut iter = snap.iter(upper_bound, true);
+            for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
+                let check_res =
+                    |iter: &RegionIterator, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
+                        if !in_range {
+                            assert!(res.is_err(), "exp failed at {}", escape(seek_key));
+                            return;
+                        }
+                        if exp.is_none() {
+                            assert!(!res.unwrap(), "exp none at {}", escape(seek_key));
+                            return;
+                        }
 
-                    assert!(res.unwrap(), "should succeed at {}", escape(seek_key));
-                    let (exp_key, exp_val) = exp.unwrap();
-                    assert_eq!(iter.key(), exp_key);
-                    assert_eq!(iter.value(), exp_val);
-                };
-            let seek_res = iter.seek(seek_key);
-            check_res(&iter, seek_res, seek_exp);
-            let prev_res = iter.seek_for_prev(seek_key);
-            check_res(&iter, prev_res, prev_exp);
+                        assert!(res.unwrap(), "should succeed at {}", escape(seek_key));
+                        let (exp_key, exp_val) = exp.unwrap();
+                        assert_eq!(iter.key(), exp_key);
+                        assert_eq!(iter.value(), exp_val);
+                    };
+                let seek_res = iter.seek(seek_key);
+                check_res(&iter, seek_res, seek_exp);
+                let prev_res = iter.seek_for_prev(seek_key);
+                check_res(&iter, prev_res, prev_exp);
+            }
         }
 
         data.clear();
@@ -428,6 +432,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
+        let mut iter = snap.iter(None, true);
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
