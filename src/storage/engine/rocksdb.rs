@@ -208,6 +208,10 @@ impl<'a> EngineIterator for DBIterator<'a> {
         Ok(DBIterator::seek(self, key.encoded().as_slice().into()))
     }
 
+    fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
+        Ok(DBIterator::seek_for_prev(self, key.encoded().as_slice().into()))
+    }
+
     fn seek_to_first(&mut self) -> bool {
         DBIterator::seek(self, SeekKey::Start)
     }
