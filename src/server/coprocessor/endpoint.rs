@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::Ordering as CmpOrdering;
+use std::result::Result as StdError;
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta, ByItem};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
@@ -527,6 +528,29 @@ impl SortRow {
             ctx: ctx,
         }
     }
+
+    fn cmp_and_check(&self, right: &SortRow) -> Result<CmpOrdering> {
+        let values = self.key.iter().zip(right.key.iter());
+        for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
+            let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
+            if let StdError::Err(err) = cmp_ret {
+                return Err(box_err!("cmp failed {:?} ", err));
+            }
+
+            let order = cmp_ret.unwrap();
+            if order == CmpOrdering::Equal {
+                continue;
+            }
+            // less or equal
+            if col.get_desc() {
+                // heap pop the biggest first
+                return Ok(order.reverse());
+            } else {
+                return Ok(order);
+            }
+        }
+        Ok(CmpOrdering::Equal)
+    }
 }
 
 struct TopNHeap {
@@ -545,45 +569,41 @@ impl TopNHeap {
         }
     }
 
-    fn try_add_row(&mut self, row: SortRow) {
-        if self.rows.len() >= self.limit {
-            let mut val = self.rows.peek_mut().unwrap();
-            if CmpOrdering::Less == row.cmp(&val) {
-                *val = row;
-            }
-            return;
+    fn try_add_row(&mut self, row: SortRow) -> Result<()> {
+        if self.rows.is_empty() {
+            self.rows.push(row);
+            return Ok(());
         }
-        self.rows.push(row);
 
+        // check row data
+        let order = {
+            let top_data = self.rows.peek().unwrap();
+            try!(row.cmp_and_check(&top_data))
+        };
+
+        // push into heap on heap not full
+        if self.rows.len() < self.limit {
+            self.rows.push(row);
+            return Ok(());
+        }
+
+        // switch top value with row when heap is full and current row is smaller than top data
+        let mut top_value = self.rows.peek_mut().unwrap();
+        if CmpOrdering::Less == order {
+            *(top_value) = row;
+        }
+        Ok(())
     }
 
-    fn get_sorted_rows(&mut self) -> Vec<SortRow> {
-        let mut data: Vec<SortRow> = self.rows.drain().collect();
-        data.sort();
-        data
+    fn into_sorted_vec(self) -> Vec<SortRow> {
+        self.rows.into_sorted_vec()
     }
 }
 
 impl<'a> Ord for SortRow {
     fn cmp(&self, right: &SortRow) -> CmpOrdering {
-        let values = self.key.iter().zip(right.key.iter());
-        for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
-            // panic when decode data failed in cmp
-            let order = v1.cmp(self.ctx.as_ref(), v2).unwrap();
-            match order {
-                CmpOrdering::Equal => {
-                    continue;
-                }
-                _ => {
-                    // less or equal
-                    if col.get_desc() {
-                        // heap pop the biggest first
-                        return order.reverse();
-                    } else {
-                        return order;
-                    }
-                }
-            }
+        if let Ok(order) = self.cmp_and_check(right) {
+            return order;
         }
         CmpOrdering::Equal
     }
@@ -614,7 +634,7 @@ pub struct SelectContextCore {
     aggr: bool,
     aggr_cols: Vec<ColumnInfo>,
     topn: bool,
-    topn_heap: TopNHeap,
+    topn_heap: Option<TopNHeap>,
     limit: usize,
     desc_scan: bool,
     gks: Vec<Rc<Vec<u8>>>,
@@ -705,7 +725,13 @@ impl SelectContextCore {
             gk_aggrs: map![],
             chunks: vec![],
             topn: topn,
-            topn_heap: TopNHeap::new(limit),
+            topn_heap: {
+                if topn {
+                    Some(TopNHeap::new(limit))
+                } else {
+                    None
+                }
+            },
             limit: limit,
             desc_scan: desc_can,
         })
@@ -761,7 +787,9 @@ impl SelectContextCore {
         let mut data = Vec::new();
         try!(encode_row_from_cols(cols, h, values, &mut data));
         let sort_row = SortRow::new(h, order_by, self.ctx.clone(), data, sort_keys);
-        self.topn_heap.try_add_row(sort_row);
+        if let Some(heap) = self.topn_heap.as_mut() {
+            try!(heap.try_add_row(sort_row));
+        }
         Ok(())
     }
 
@@ -824,7 +852,9 @@ impl SelectContextCore {
     }
 
     fn topn_rows(&mut self) -> Result<()> {
-        for row in self.topn_heap.get_sorted_rows() {
+        let sorted_data = self.topn_heap.take().unwrap().into_sorted_vec();
+        for row in sorted_data {
+            // self.topn_heap.convert_to_sorted_vec() {
             let mut meta = RowMeta::new();
             meta.set_length(row.data.len() as i64);
             meta.set_handle(row.handle);
@@ -1221,10 +1251,9 @@ mod tests {
                                    ctx.clone(),
                                    data.into_bytes(),
                                    cur_key);
-            topn_heap.try_add_row(row)
+            topn_heap.try_add_row(row).unwrap();
         }
-
-        let result = topn_heap.get_sorted_rows();
+        let result = topn_heap.into_sorted_vec();
         assert_eq!(result.len(), exp.len());
         for (row, (handle, data, name, count)) in result.iter().zip(exp) {
             let get_data = String::from_utf8(row.data.clone()).unwrap();
@@ -1266,10 +1295,10 @@ mod tests {
                                    ctx.clone(),
                                    data.into_bytes(),
                                    cur_key);
-            topn_heap.try_add_row(row)
+            topn_heap.try_add_row(row).unwrap();
         }
 
-        let result = topn_heap.get_sorted_rows();
+        let result = topn_heap.into_sorted_vec();
         assert_eq!(result.len(), exp.len());
         for (row, (handle, data, name, count)) in result.iter().zip(exp) {
             let get_data = String::from_utf8(row.data.clone()).unwrap();
