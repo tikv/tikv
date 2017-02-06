@@ -83,7 +83,7 @@ impl Channel<RaftMessage> for ChannelTransport {
             let reader = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_send_snapshot_file_reader(&key).unwrap()
+                    p.0.rl().get_send_snapshot_file(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };

@@ -127,7 +127,7 @@ pub trait SnapshotFileCommon {
     fn exists(&self) -> bool;
 }
 
-pub trait SendSnapshotFileReader: SnapshotFileCommon + Read {
+pub trait SendSnapshotFile: SnapshotFileCommon + Read {
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn delete(&self);
@@ -153,20 +153,11 @@ pub trait RecvSnapshotFileApplier: SnapshotFileCommon {
 
 // A helper function to copy snapshot file from send reader to recv writer.
 // Only used in tests.
-pub fn copy_snapshot_file(mut reader: Box<SendSnapshotFileReader>,
+pub fn copy_snapshot_file(mut reader: Box<SendSnapshotFile>,
                           mut writer: Box<RecvSnapshotFileWriter>)
                           -> io::Result<()> {
     if !writer.exists() {
-        let buf_len = 10000;
-        let mut buf = Vec::with_capacity(buf_len);
-        buf.resize(buf_len, 0);
-        loop {
-            let n = try!(reader.read(&mut buf[..]));
-            if n == 0 {
-                break;
-            }
-            try!(writer.write_all(&buf[0..n]));
-        }
+        try!(io::copy(reader.as_mut(), writer.as_mut()));
         try!(writer.save());
     }
     Ok(())
@@ -181,28 +172,28 @@ mod v1 {
     use super::super::engine::Iterable;
     use super::*;
 
-    pub struct SnapFileReader {
+    pub struct SendSnapFile {
         // the corresponding snapshot file
         snap_file: SnapFile,
         // reader to the os file
         reader: File,
     }
 
-    impl SnapFileReader {
+    impl SendSnapFile {
         pub fn new<T: Into<PathBuf>>(snap_dir: T,
                                      size_track: Arc<RwLock<u64>>,
                                      key: &SnapKey)
-                                     -> io::Result<SnapFileReader> {
+                                     -> io::Result<SendSnapFile> {
             let f = try!(SnapFile::new(snap_dir, size_track, true, key));
             let reader = try!(f.raw_reader());
-            Ok(SnapFileReader {
+            Ok(SendSnapFile {
                 snap_file: f,
                 reader: reader,
             })
         }
     }
 
-    impl SnapshotFileCommon for SnapFileReader {
+    impl SnapshotFileCommon for SendSnapFile {
         fn path(&self) -> &str {
             self.snap_file.path()
         }
@@ -212,7 +203,7 @@ mod v1 {
         }
     }
 
-    impl SendSnapshotFileReader for SnapFileReader {
+    impl SendSnapshotFile for SendSnapFile {
         fn meta(&self) -> io::Result<Metadata> {
             self.snap_file.meta()
         }
@@ -226,7 +217,7 @@ mod v1 {
         }
     }
 
-    impl Read for SnapFileReader {
+    impl Read for SendSnapFile {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             self.reader.read(buf)
         }
@@ -740,10 +731,8 @@ impl SnapManagerCore {
         Ok(Box::new(f))
     }
 
-    pub fn get_send_snapshot_file_reader(&self,
-                                         key: &SnapKey)
-                                         -> io::Result<Box<SendSnapshotFileReader>> {
-        let reader = try!(v1::SnapFileReader::new(&self.base, self.snap_size.clone(), key));
+    pub fn get_send_snapshot_file(&self, key: &SnapKey) -> io::Result<Box<SendSnapshotFile>> {
+        let reader = try!(v1::SendSnapFile::new(&self.base, self.snap_size.clone(), key));
         Ok(Box::new(reader))
     }
 
@@ -929,7 +918,7 @@ mod test {
         // temporary file should not be count in snap size.
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len * 2);
 
-        mgr.rl().get_send_snapshot_file_reader(&key2).unwrap().delete();
+        mgr.rl().get_send_snapshot_file(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
         mgr.rl().get_recv_snapshot_file_applier(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);

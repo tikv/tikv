@@ -85,13 +85,13 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(&snap));
     mgr.wl().register(key.clone(), SnapEntry::Sending);
-    let mut reader = box_try!(mgr.rl().get_send_snapshot_file_reader(&key));
-    if !reader.exists() {
+    let mut f = box_try!(mgr.rl().get_send_snapshot_file(&key));
+    if !f.exists() {
         // clean up
-        reader.delete();
+        f.delete();
         mgr.wl().deregister(&key, &SnapEntry::Sending);
 
-        return Err(box_err!("missing snap file: {:?}", reader.path()));
+        return Err(box_err!("missing snap file: {:?}", f.path()));
     }
     // snapshot file has been validated when created, so no need to validate again.
 
@@ -101,11 +101,11 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     try!(conn.set_write_timeout(Some(Duration::from_secs(DEFAULT_WRITE_TIMEOUT))));
 
     let res = rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
-        .and_then(|_| io::copy(&mut reader, &mut conn).map_err(From::from))
+        .and_then(|_| io::copy(&mut f, &mut conn).map_err(From::from))
         .and_then(|_| conn.read(&mut [0]).map_err(From::from))
         .map(|_| ())
         .map_err(From::from);
-    let size = try!(reader.total_size());
+    let size = try!(f.total_size());
     info!("[region {}] sent snapshot {} [size: {}, dur: {:?}]",
           key.region_id,
           key,
@@ -113,7 +113,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
           timer.elapsed());
 
     // clean up
-    reader.delete();
+    f.delete();
     mgr.wl().deregister(&key, &SnapEntry::Sending);
 
     send_timer.observe_duration();

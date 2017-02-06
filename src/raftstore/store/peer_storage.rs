@@ -1285,7 +1285,7 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
-        let reader = mgr.rl().get_send_snapshot_file_reader(&key).unwrap();
+        let reader = mgr.rl().get_send_snapshot_file(&key).unwrap();
         let writer = mgr.rl().get_recv_snapshot_file_writer(&key, b"").unwrap();
         copy_snapshot_file(reader, writer).unwrap();
 

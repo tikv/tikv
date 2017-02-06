@@ -1565,7 +1565,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             if is_sending {
-                let r = try!(self.snap_mgr.rl().get_send_snapshot_file_reader(&key));
+                let r = try!(self.snap_mgr.rl().get_send_snapshot_file(&key));
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
