@@ -157,7 +157,7 @@ pub fn copy_snapshot_file(mut reader: Box<SendSnapshotFile>,
                           mut writer: Box<RecvSnapshotFileWriter>)
                           -> io::Result<()> {
     if !writer.exists() {
-        try!(io::copy(reader.as_mut(), writer.as_mut()));
+        try!(io::copy(&mut reader, &mut writer));
         try!(writer.save());
     }
     Ok(())
