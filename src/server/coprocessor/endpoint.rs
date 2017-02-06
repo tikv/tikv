@@ -484,9 +484,7 @@ fn encode_row_from_cols(cols: &[ColumnInfo],
                         h: i64,
                         values: HashMap<i64, &[u8]>,
                         data: &mut Vec<u8>)
-                        -> Result<RowMeta> {
-    let mut meta = RowMeta::new();
-    meta.set_handle(h);
+                        -> Result<()> {
     for col in cols {
         let col_id = col.get_column_id();
         if let Some(v) = values.get(&col_id) {
@@ -501,14 +499,13 @@ fn encode_row_from_cols(cols: &[ColumnInfo],
             box_try!(datum::encode_to(data, &[Datum::Null], false));
         }
     }
-    meta.set_length(data.len() as i64);
-    Ok(meta)
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
 struct SortRow {
     key: Vec<Datum>,
-    meta: RowMeta,
+    handle: i64,
     data: Vec<u8>,
     order_cols: Vec<ByItem>,
     ctx: Rc<EvalContext>,
@@ -516,7 +513,7 @@ struct SortRow {
 
 
 impl SortRow {
-    fn new(meta: RowMeta,
+    fn new(handle: i64,
            order_cols: Vec<ByItem>,
            ctx: Rc<EvalContext>,
            data: Vec<u8>,
@@ -524,7 +521,7 @@ impl SortRow {
            -> SortRow {
         SortRow {
             key: key,
-            meta: meta,
+            handle: handle,
             data: data,
             order_cols: order_cols,
             ctx: ctx,
@@ -762,8 +759,8 @@ impl SelectContextCore {
         };
         // encode cols
         let mut data = Vec::new();
-        let meta = encode_row_from_cols(cols, h, values, &mut data).unwrap();
-        let sort_row = SortRow::new(meta, order_by, self.ctx.clone(), data, sort_keys);
+        try!(encode_row_from_cols(cols, h, values, &mut data));
+        let sort_row = SortRow::new(h, order_by, self.ctx.clone(), data, sort_keys);
         self.topn_heap.try_add_row(sort_row);
         Ok(())
     }
@@ -776,7 +773,9 @@ impl SelectContextCore {
         } else {
             self.sel.get_index_info().get_columns()
         };
-        let mut meta = encode_row_from_cols(cols, h, values, chunk.mut_rows_data()).unwrap();
+        try!(encode_row_from_cols(cols, h, values, chunk.mut_rows_data()));
+        let mut meta = RowMeta::new();
+        meta.set_handle(h);
         meta.set_length((chunk.get_rows_data().len() - last_len) as i64);
         chunk.mut_rows_meta().push(meta);
         Ok(())
@@ -826,9 +825,12 @@ impl SelectContextCore {
 
     fn topn_rows(&mut self) -> Result<()> {
         for row in self.topn_heap.get_sorted_rows() {
+            let mut meta = RowMeta::new();
+            meta.set_length(row.data.len() as i64);
+            meta.set_handle(row.handle);
             let chunk = get_chunk(&mut self.chunks);
             chunk.mut_rows_data().extend_from_slice(row.data.as_slice());
-            chunk.mut_rows_meta().push(row.meta);
+            chunk.mut_rows_meta().push(meta);
         }
         Ok(())
     }
@@ -1106,7 +1108,7 @@ mod tests {
     use kvproto::msgpb::MessageType;
 
     use tipb::expression::{Expr, ExprType};
-    use tipb::select::{RowMeta, ByItem};
+    use tipb::select::ByItem;
 
     use util::codec::number::*;
     use util::codec::Datum;
@@ -1212,11 +1214,9 @@ mod tests {
         (4,String::from("data4"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
         ];
 
-        for (id, data, name, count) in test_data {
-            let mut meta = RowMeta::new();
-            meta.set_handle(id as i64);
+        for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
-            let row = SortRow::new(meta,
+            let row = SortRow::new(handle as i64,
                                    order_cols.clone(),
                                    ctx.clone(),
                                    data.into_bytes(),
@@ -1230,7 +1230,7 @@ mod tests {
             let get_data = String::from_utf8(row.data.clone()).unwrap();
             // println!("{:?},{:?},{:?}",row.meta.get_handle(),row.key,get_data);
             let exp_keys: Vec<Datum> = vec![name, count];
-            assert_eq!(row.meta.get_handle(), handle);
+            assert_eq!(row.handle, handle);
             assert_eq!(row.key, exp_keys);
             assert_eq!(get_data, data);
         }
@@ -1259,11 +1259,9 @@ mod tests {
         (4,String::from("data4"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
         ];
 
-        for (id, data, name, count) in test_data {
-            let mut meta = RowMeta::new();
-            meta.set_handle(id as i64);
+        for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
-            let row = SortRow::new(meta,
+            let row = SortRow::new(handle as i64,
                                    order_cols.clone(),
                                    ctx.clone(),
                                    data.into_bytes(),
@@ -1277,7 +1275,7 @@ mod tests {
             let get_data = String::from_utf8(row.data.clone()).unwrap();
             // println!("{:?},{:?},{:?}",row.meta.get_handle(),row.key,get_data);
             let exp_keys: Vec<Datum> = vec![name, count];
-            assert_eq!(row.meta.get_handle(), handle);
+            assert_eq!(row.handle, handle);
             assert_eq!(row.key, exp_keys);
             assert_eq!(get_data, data);
         }
