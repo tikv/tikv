@@ -1207,6 +1207,7 @@ mod tests {
         }
         panic!("suppose to get ServerIsBusy error.");
     }
+
     fn new_order_by(col_id: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
         let mut expr = Expr::new();
