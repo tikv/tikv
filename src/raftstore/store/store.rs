@@ -1565,20 +1565,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             if is_sending {
-                let r = try!(self.snap_mgr.rl().get_send_snapshot_file(&key));
+                let f = try!(self.snap_mgr.rl().get_send_snapshot_file(&key));
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
                           key);
-                    r.delete();
-                } else if let Ok(meta) = r.meta() {
+                    f.delete();
+                } else if let Ok(meta) = f.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
                             info!("[region {}] snap file {} has been expired, delete.",
                                   key.region_id,
                                   key);
-                            r.delete();
+                            f.delete();
                         }
                     }
                 }

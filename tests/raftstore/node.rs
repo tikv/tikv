@@ -90,20 +90,8 @@ impl Channel<RaftMessage> for ChannelTransport {
             let writer = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
-                    match p.0.rl().get_recv_snapshot_file_writer(&key,
-                                                                 msg.get_message()
-                                                                     .get_snapshot()
-                                                                     .get_data()) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            return Err(box_err!("failed to create snapshot file from store {} \
-                                                 to store {} for {:?}: {:?}",
-                                                from_store,
-                                                to_store,
-                                                key,
-                                                e));
-                        }
-                    }
+                    let data = msg.get_message().get_snapshot().get_data();
+                    p.0.rl().get_recv_snapshot_file_writer(&key, data).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };

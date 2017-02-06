@@ -86,11 +86,10 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let key = try!(SnapKey::from_snap(&snap));
     mgr.wl().register(key.clone(), SnapEntry::Sending);
     let mut f = box_try!(mgr.rl().get_send_snapshot_file(&key));
-    if !f.exists() {
-        // clean up
-        f.delete();
+    defer!({
         mgr.wl().deregister(&key, &SnapEntry::Sending);
-
+    });
+    if !f.exists() {
         return Err(box_err!("missing snap file: {:?}", f.path()));
     }
     // snapshot file has been validated when created, so no need to validate again.
@@ -111,11 +110,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
           key,
           size,
           timer.elapsed());
-
-    // clean up
     f.delete();
-    mgr.wl().deregister(&key, &SnapEntry::Sending);
-
     send_timer.observe_duration();
     res
 }
