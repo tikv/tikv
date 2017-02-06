@@ -214,7 +214,7 @@ impl Runner {
                 snapshot_size: &mut snapshot_size,
                 snapshot_kv_count: &mut snapshot_kv_count,
             };
-            try!(applier.as_mut().apply(apply_options));
+            try!(applier.apply(apply_options));
         }
         SNAPSHOT_KV_COUNT_HISTOGRAM.observe(snapshot_kv_count as f64);
         SNAPSHOT_SIZE_HISTOGRAM.observe(snapshot_size as f64);
