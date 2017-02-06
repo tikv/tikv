@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -123,18 +123,20 @@ pub trait SendSnapshotFileReader: Read {
     fn delete(&self);
 }
 
+pub struct ApplyOptions<'a> {
+    pub db: Arc<DB>,
+    pub region: &'a Region,
+    pub abort: Arc<AtomicUsize>,
+    pub write_batch_size: usize,
+    pub snapshot_size: &'a mut usize,
+    pub snapshot_kv_count: &'a mut usize,
+}
+
 pub trait RecvSnapshotFileReader {
     fn path(&self) -> String;
     fn exists(&self) -> bool;
     fn delete(&self);
-    fn apply(&mut self,
-             db: Arc<DB>,
-             region: &Region,
-             abort: Arc<AtomicUsize>,
-             write_batch_size: usize,
-             snapshot_size: &mut usize,
-             snapshot_kv_count: &mut usize)
-             -> Result<()>;
+    fn apply(&mut self, options: ApplyOptions) -> Result<()>;
 }
 
 pub trait SnapshotFileWriter: Write + Send {
@@ -318,42 +320,35 @@ impl RecvSnapshotFileReader for SnapFile {
         self.delete()
     }
 
-    fn apply(&mut self,
-             db: Arc<DB>,
-             region: &Region,
-             abort: Arc<AtomicUsize>,
-             write_batch_size: usize,
-             snapshot_size: &mut usize,
-             snapshot_kv_count: &mut usize)
-             -> Result<()> {
+    fn apply(&mut self, options: ApplyOptions) -> Result<()> {
         let mut reader = box_try!(self.reader());
         loop {
-            try!(check_abort(&abort));
+            try!(check_abort(&options.abort));
             let cf = box_try!(reader.decode_compact_bytes());
             if cf.is_empty() {
                 break;
             }
-            let handle = box_try!(rocksdb::get_cf_handle(&db,
+            let handle = box_try!(rocksdb::get_cf_handle(&options.db,
                                                          unsafe { str::from_utf8_unchecked(&cf) }));
             let mut wb = WriteBatch::new();
             let mut batch_size = 0;
             loop {
-                try!(check_abort(&abort));
+                try!(check_abort(&options.abort));
                 let key = box_try!(reader.decode_compact_bytes());
                 if key.is_empty() {
-                    box_try!(db.write(wb));
-                    *snapshot_size += batch_size;
+                    box_try!(options.db.write(wb));
+                    *options.snapshot_size += batch_size;
                     break;
                 }
-                *snapshot_kv_count += 1;
-                box_try!(util::check_key_in_region(keys::origin_key(&key), region));
+                *options.snapshot_kv_count += 1;
+                box_try!(util::check_key_in_region(keys::origin_key(&key), options.region));
                 batch_size += key.len();
                 let value = box_try!(reader.decode_compact_bytes());
                 batch_size += value.len();
                 box_try!(wb.put_cf(handle, &key, &value));
-                if batch_size >= write_batch_size {
-                    box_try!(db.write(wb));
-                    *snapshot_size += batch_size;
+                if batch_size >= options.write_batch_size {
+                    box_try!(options.db.write(wb));
+                    *options.snapshot_size += batch_size;
                     wb = WriteBatch::new();
                     batch_size = 0;
                 }
