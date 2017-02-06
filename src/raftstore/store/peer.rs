@@ -262,6 +262,7 @@ pub struct Peer {
 
     pub tag: String,
 
+    last_ready_idx: u64,
     pub last_compacted_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
@@ -357,6 +358,7 @@ impl Peer {
             pending_remove: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
+            last_ready_idx: applied_index,
             last_compacted_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
@@ -635,14 +637,14 @@ impl Peer {
             return;
         }
 
-        if !self.raft_group.has_ready() {
+        if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
             return;
         }
 
         debug!("{} handle raft ready", self.tag);
 
         let ready_timer = PEER_GET_READY_HISTOGRAM.start_timer();
-        let mut ready = self.raft_group.ready();
+        let mut ready = self.raft_group.ready_since(self.last_ready_idx);
         ready_timer.observe_duration();
 
         self.update_leader_lease(&ready);
@@ -705,10 +707,8 @@ impl Peer {
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
         result.exec_results = if self.is_applying() {
-            if let Some(ref mut hs) = ready.hs {
-                // Snapshot's metadata has been applied.
-                hs.set_commit(self.get_store().truncated_index());
-            }
+            // Snapshot's metadata has been applied.
+            self.last_ready_idx = self.get_store().truncated_index();
             vec![]
         } else {
             let committed_entries = ready.committed_entries.take().unwrap();
@@ -729,13 +729,15 @@ impl Peer {
                 }
             }
             if !committed_entries.is_empty() {
+                self.last_ready_idx = committed_entries.last().unwrap().get_index();
                 self.handle_raft_committed_entries(committed_entries)
             } else {
                 vec![]
             }
         };
 
-        self.raft_group.advance(ready);
+        self.raft_group.advance_append(ready);
+        self.raft_group.advance_apply(self.last_ready_idx);
     }
 
     /// Try to update lease.
