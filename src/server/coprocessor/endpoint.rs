@@ -590,7 +590,7 @@ impl TopNHeap {
         // switch top value with row when heap is full and current row is smaller than top data
         let mut top_value = self.rows.peek_mut().unwrap();
         if CmpOrdering::Less == order {
-            *(top_value) = row;
+            *top_value = row;
         }
         Ok(())
     }
@@ -1130,7 +1130,7 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use server::coprocessor::endpoint::{SortRow, TopNHeap};
     use util::worker::Worker;
     use storage::engine::{self, TEMP_DIR};
 

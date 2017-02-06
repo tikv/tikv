@@ -329,6 +329,7 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
         store.update_with_key(&mut cluster, k);
         let store_id = store.ctx.get_peer().get_store_id();
         store.put_ok(k.as_bytes(), b"v1", 5, 10);
+        store.update_with_key(&mut cluster, k);
         store.put_ok(k.as_bytes(), b"v2", 15, 20);
         if !stores.contains(&store_id) {
             stores.insert(store_id);
