@@ -25,7 +25,7 @@ use mio::Token;
 use super::metrics::*;
 use super::{Result, ConnData, Msg};
 use super::transport::RaftStoreRouter;
-use raftstore::store::{SnapManager, SnapKey, SnapEntry, SnapshotFileWriter};
+use raftstore::store::{SnapManager, SnapKey, SnapEntry, RecvSnapshotFileWriter};
 use util::worker::Runnable;
 use util::codec::rpc;
 use util::buf::PipeBuffer;
@@ -122,7 +122,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
-    files: HashMap<Token, (Box<SnapshotFileWriter>, RaftMessage)>,
+    files: HashMap<Token, (Box<RecvSnapshotFileWriter>, RaftMessage)>,
     pool: ThreadPool,
     ch: SendCh<Msg>,
     raft_router: R,
@@ -163,7 +163,8 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     }
                 };
                 let writer = match mgr.rl()
-                    .get_snapshot_file_writer(&key, meta.get_message().get_snapshot().get_data()) {
+                    .get_recv_snapshot_file_writer(&key,
+                                                   meta.get_message().get_snapshot().get_data()) {
                     Ok(writer) => writer,
                     Err(e) => {
                         error!("failed to create snapshot file for key {} token {:?}: {:?}",

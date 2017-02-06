@@ -26,7 +26,6 @@ use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
 use util::HandyRwLock;
-use util::codec::bytes::BytesEncoder;
 use util::worker::Scheduler;
 use util::rocksdb;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
@@ -36,7 +35,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::peer::ReadyContext;
 use super::metrics::*;
-use super::{SnapFile, SnapKey, SnapEntry, SnapManager, SnapshotFileWriter};
+use super::{SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -833,43 +832,6 @@ impl PeerStorage {
     }
 }
 
-fn build_snap_file(f: &mut SnapFile,
-                   snap: &DbSnapshot,
-                   region: &metapb::Region)
-                   -> raft::Result<()> {
-    let t = Instant::now();
-    let mut snap_size = 0;
-    let mut snap_key_cnt = 0;
-    let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
-    for cf in snap.cf_names() {
-        box_try!(f.encode_compact_bytes(cf.as_bytes()));
-        try!(snap.scan_cf(cf,
-                          &begin_key,
-                          &end_key,
-                          false,
-                          &mut |key, value| {
-            snap_size += key.len();
-            snap_size += value.len();
-            snap_key_cnt += 1;
-            try!(f.encode_compact_bytes(key));
-            try!(f.encode_compact_bytes(value));
-            Ok(true)
-        }));
-        // use an empty byte array to indicate that cf reaches an end.
-        box_try!(f.encode_compact_bytes(b""));
-    }
-    // use an empty byte array to indicate that kvpair reaches an end.
-    box_try!(f.encode_compact_bytes(b""));
-    try!(f.save_with_checksum());
-
-    info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
-          region.get_id(),
-          snap_size,
-          snap_key_cnt,
-          t.elapsed());
-    Ok(())
-}
-
 pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft::Result<Snapshot> {
     debug!("[region {}] begin to generate a snapshot", region_id);
 
@@ -919,27 +881,14 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut snap_file = try!(mgr.rl().get_snap_file(&key, true));
-    if snap_file.exists() {
-        if let Err(e) = snap_file.reader().and_then(|mut r| r.validate()) {
-            error!("[region {}] file {} is invalid, will regenerate: {:?}",
-                   region_id,
-                   snap_file.path(),
-                   e);
-            try!(snap_file.try_delete());
-            try!(snap_file.init());
-            try!(build_snap_file(&mut snap_file, snap, state.get_region()));
-        }
-    } else {
-        try!(snap_file.init());
-        try!(build_snap_file(&mut snap_file, snap, state.get_region()));
-    }
+    let mut snapshot_file_builder = try!(mgr.rl().get_send_snapshot_file_builder(&key));
+    try!(snapshot_file_builder.build(snap, state.get_region()));
 
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.take_region());
 
-    let len = try!(snap_file.meta()).len();
+    let len = try!(snapshot_file_builder.total_size());
     snap_data.set_file_size(len);
 
     let mut v = vec![];
@@ -1013,17 +962,14 @@ mod test {
     use std::sync::atomic::*;
     use std::sync::mpsc::*;
     use std::cell::RefCell;
-    use std::io;
-    use std::fs::File;
     use std::time::Duration;
     use kvproto::eraftpb::{Entry, ConfState};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, new_snap_mgr, SnapKey};
+    use raftstore::store::{bootstrap, new_snap_mgr, SnapKey, copy_snapshot_file};
     use raftstore::store::worker::RegionRunner;
-    use util::codec::number::NumberEncoder;
     use raftstore::store::worker::RegionTask;
     use util::worker::{Worker, Scheduler};
     use util::HandyRwLock;
@@ -1339,12 +1285,9 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
-        let source_snap = mgr.rl().get_snap_file(&key, true).unwrap();
-        let mut dst_snap = mgr.rl().get_snap_file(&key, false).unwrap();
-        let mut f = File::open(source_snap.path()).unwrap();
-        dst_snap.encode_u64(0).unwrap();
-        io::copy(&mut f, &mut dst_snap).unwrap();
-        dst_snap.save().unwrap();
+        let reader = mgr.rl().get_send_snapshot_file_reader(&key).unwrap();
+        let writer = mgr.rl().get_recv_snapshot_file_writer(&key, b"").unwrap();
+        copy_snapshot_file(reader, writer).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(sched, &td2);

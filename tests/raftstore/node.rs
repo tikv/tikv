@@ -18,7 +18,6 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
-use std::io::{Read, Write};
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -81,20 +80,20 @@ impl Channel<RaftMessage> for ChannelTransport {
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
-            let mut reader = match self.rl().snap_paths.get(&from_store) {
+            let reader = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
                     p.0.rl().get_send_snapshot_file_reader(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
-            let mut writer = match self.rl().snap_paths.get(&to_store) {
+            let writer = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
-                    match p.0.rl().get_snapshot_file_writer(&key,
-                                                            msg.get_message()
-                                                                .get_snapshot()
-                                                                .get_data()) {
+                    match p.0.rl().get_recv_snapshot_file_writer(&key,
+                                                                 msg.get_message()
+                                                                     .get_snapshot()
+                                                                     .get_data()) {
                         Ok(f) => f,
                         Err(e) => {
                             return Err(box_err!("failed to create snapshot file from store {} \
@@ -115,19 +114,7 @@ impl Channel<RaftMessage> for ChannelTransport {
                 core.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
             });
 
-            if !writer.exists() {
-                let buf_len = 10000;
-                let mut buf = Vec::with_capacity(buf_len);
-                buf.resize(buf_len, 0);
-                loop {
-                    let n = try!(reader.read(&mut buf[..]));
-                    if n == 0 {
-                        break;
-                    }
-                    writer.write_all(&buf[0..n]).unwrap();
-                }
-                writer.save().unwrap();
-            }
+            try!(copy_snapshot_file(reader, writer));
         }
 
         match self.core.rl().routers.get(&to_store) {

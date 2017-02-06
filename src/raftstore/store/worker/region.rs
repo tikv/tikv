@@ -193,13 +193,13 @@ impl Runner {
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        let mut recv_reader = box_try!(self.mgr.rl().get_recv_snapshot_file_reader(&snap_key));
+        let mut applier = box_try!(self.mgr.rl().get_recv_snapshot_file_applier(&snap_key));
         self.mgr.wl().register(snap_key.clone(), SnapEntry::Applying);
         defer!({
             self.mgr.wl().deregister(&snap_key, &SnapEntry::Applying);
         });
-        if !recv_reader.exists() {
-            return Err(box_err!("missing snapshot file {}", recv_reader.path()));
+        if !applier.exists() {
+            return Err(box_err!("missing snapshot file {}", applier.path()));
         }
         try!(check_abort(&abort));
         let timer = Instant::now();
@@ -214,13 +214,13 @@ impl Runner {
                 snapshot_size: &mut snapshot_size,
                 snapshot_kv_count: &mut snapshot_kv_count,
             };
-            try!(recv_reader.as_mut().apply(apply_options));
+            try!(applier.as_mut().apply(apply_options));
         }
         SNAPSHOT_KV_COUNT_HISTOGRAM.observe(snapshot_kv_count as f64);
         SNAPSHOT_SIZE_HISTOGRAM.observe(snapshot_size as f64);
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
-        recv_reader.delete();
+        applier.delete();
         info!("[region {}] apply new data takes {:?}",
               region_id,
               timer.elapsed());
