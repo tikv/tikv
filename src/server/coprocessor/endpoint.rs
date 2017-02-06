@@ -1105,9 +1105,19 @@ mod tests {
     use kvproto::coprocessor::Request;
     use kvproto::msgpb::MessageType;
 
+    use tipb::expression::{Expr, ExprType};
+    use tipb::select::{RowMeta, ByItem};
+
+    use util::codec::number::*;
+    use util::codec::Datum;
+    use util::xeval::EvalContext;
+
+    use std::rc::Rc;
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
+
+
 
     #[test]
     fn test_get_req_type_str() {
@@ -1164,5 +1174,112 @@ mod tests {
             return;
         }
         panic!("suppose to get ServerIsBusy error.");
+    }
+    fn new_order_by(col_id: i64, desc: bool) -> ByItem {
+        let mut item = ByItem::new();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ColumnRef);
+        expr.mut_val().encode_i64(col_id).unwrap();
+        item.set_expr(expr);
+        item.set_desc(desc);
+        item
+    }
+
+    #[test]
+    fn test_topn_heap() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(5);
+        let test_data = vec![
+        (1,String::from("data1"),Datum::Null, Datum::I64(1)),
+        (2,String::from("data2"),Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
+        (3,String::from("data3"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+        (4,String::from("data4"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+        (5,String::from("data5"),Datum::Bytes(b"name:0".to_vec()), Datum::I64(6)),
+        (6,String::from("data6"),Datum::Bytes(b"name:0".to_vec()), Datum::I64(4)),
+        (7,String::from("data7"),Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+        (8,String::from("data8"),Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+        (9,String::from("data9"),Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+        ];
+
+        let exp = vec![
+        (9,String::from("data9"),Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+        (8,String::from("data8"),Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+        (7,String::from("data7"),Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+        (3,String::from("data3"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+        (4,String::from("data4"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+        ];
+
+        for (id, data, name, count) in test_data {
+            let mut meta = RowMeta::new();
+            meta.set_handle(id as i64);
+            let cur_key: Vec<Datum> = vec![name, count];
+            let row = SortRow::new(meta,
+                                   order_cols.clone(),
+                                   ctx.clone(),
+                                   data.into_bytes(),
+                                   cur_key);
+            topn_heap.try_add_row(row)
+        }
+
+        let result = topn_heap.get_sorted_rows();
+        assert_eq!(result.len(), exp.len());
+        for (row, (handle, data, name, count)) in result.iter().zip(exp) {
+            let get_data = String::from_utf8(row.data.clone()).unwrap();
+            // println!("{:?},{:?},{:?}",row.meta.get_handle(),row.key,get_data);
+            let exp_keys: Vec<Datum> = vec![name, count];
+            assert_eq!(row.meta.get_handle(), handle);
+            assert_eq!(row.key, exp_keys);
+            assert_eq!(get_data, data);
+        }
+    }
+
+    #[test]
+    fn test_topn_heap_with_few_data() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(10);
+        let test_data = vec![
+            (3,String::from("data3"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4,String::from("data4"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+            (7,String::from("data7"),Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (8,String::from("data8"),Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (9,String::from("data9"),Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+        ];
+
+        let exp = vec![
+        (9,String::from("data9"),Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+        (8,String::from("data8"),Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+        (7,String::from("data7"),Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+        (3,String::from("data3"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+        (4,String::from("data4"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+        ];
+
+        for (id, data, name, count) in test_data {
+            let mut meta = RowMeta::new();
+            meta.set_handle(id as i64);
+            let cur_key: Vec<Datum> = vec![name, count];
+            let row = SortRow::new(meta,
+                                   order_cols.clone(),
+                                   ctx.clone(),
+                                   data.into_bytes(),
+                                   cur_key);
+            topn_heap.try_add_row(row)
+        }
+
+        let result = topn_heap.get_sorted_rows();
+        assert_eq!(result.len(), exp.len());
+        for (row, (handle, data, name, count)) in result.iter().zip(exp) {
+            let get_data = String::from_utf8(row.data.clone()).unwrap();
+            // println!("{:?},{:?},{:?}",row.meta.get_handle(),row.key,get_data);
+            let exp_keys: Vec<Datum> = vec![name, count];
+            assert_eq!(row.meta.get_handle(), handle);
+            assert_eq!(row.key, exp_keys);
+            assert_eq!(get_data, data);
+        }
     }
 }
