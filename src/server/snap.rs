@@ -147,41 +147,34 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::Register(token, meta) => {
                 SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
-                let key = match SnapKey::from_snap(meta.get_message().get_snapshot()) {
-                    Ok(k) => k,
+                match SnapKey::from_snap(meta.get_message().get_snapshot()).and_then(|key| {
+                    mgr.rl()
+                        .get_recv_snapshot_file_writer(&key,
+                                                       meta.get_message().get_snapshot().get_data())
+                        .map(|w| (w, key))
+                }) {
+                    Ok((writer, key)) => {
+                        if writer.exists() {
+                            info!("snapshot file {} already exists, skip receiving.",
+                                  writer.path());
+                            if let Err(e) = self.raft_router.send_raft_msg(meta) {
+                                error!("send snapshot for key {} token {:?}: {:?}", key, token, e);
+                            }
+                            self.close(token);
+                            return;
+                        }
+                        debug!("begin to receive snap {:?}", meta);
+                        mgr.wl().register(key, SnapEntry::Receiving);
+                        self.files.insert(token, (writer, meta));
+                    }
                     Err(e) => {
-                        error!("failed to create snapshot key for token {:?}: {:?}",
+                        error!("failed to create snapshot file for token {:?}: {:?}",
                                token,
                                e);
                         self.close(token);
                         return;
                     }
-                };
-                let writer = match mgr.rl()
-                    .get_recv_snapshot_file_writer(&key,
-                                                   meta.get_message().get_snapshot().get_data()) {
-                    Ok(writer) => writer,
-                    Err(e) => {
-                        error!("failed to create snapshot file for key {} token {:?}: {:?}",
-                               key,
-                               token,
-                               e);
-                        self.close(token);
-                        return;
-                    }
-                };
-                if writer.exists() {
-                    info!("snapshot file {} already exists, skip receiving.",
-                          writer.path());
-                    if let Err(e) = self.raft_router.send_raft_msg(meta) {
-                        error!("send snapshot for key {} token {:?}: {:?}", key, token, e);
-                    }
-                    self.close(token);
-                    return;
                 }
-                debug!("begin to receive snap {:?}", meta);
-                mgr.wl().register(key, SnapEntry::Receiving);
-                self.files.insert(token, (writer, meta));
             }
             Task::Write(token, mut data) => {
                 SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
