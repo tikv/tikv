@@ -326,10 +326,10 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     let mut stores: HashSet<u64> = HashSet::new();
     for k in &keys {
-        store.update_with_key(&mut cluster, k);
+        // store.update_with_key(&mut cluster, k);
+        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
+        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v2", 15, 20);
         let store_id = store.ctx.get_peer().get_store_id();
-        store.put_ok(k.as_bytes(), b"v1", 5, 10);
-        store.put_ok(k.as_bytes(), b"v2", 15, 20);
         if !stores.contains(&store_id) {
             stores.insert(store_id);
         }
