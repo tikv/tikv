@@ -108,8 +108,8 @@ impl Display for SnapKey {
     }
 }
 
-pub trait SendSnapshotFileBuilder {
-    fn build(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()>;
+pub trait SendSnapshotFileCreator {
+    fn create(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()>;
     fn total_size(&self) -> io::Result<u64>;
 }
 
@@ -174,7 +174,7 @@ mod v1 {
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey,
-                SnapshotFileCommon, SendSnapshotFileBuilder, SendSnapshotFile,
+                SnapshotFileCommon, SendSnapshotFileCreator, SendSnapshotFile,
                 RecvSnapshotFileWriter, RecvSnapshotFileApplier, ApplyOptions, check_abort};
 
     pub const CRC32_BYTES_COUNT: usize = 4;
@@ -420,8 +420,8 @@ mod v1 {
         }
     }
 
-    impl SendSnapshotFileBuilder for SnapFile {
-        fn build(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
+    impl SendSnapshotFileCreator for SnapFile {
+        fn create(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
             if self.exists() {
                 match self.reader().and_then(|mut r| r.validate()) {
                     Ok(()) => return Ok(()),
@@ -732,9 +732,9 @@ impl SnapManagerCore {
         self.registry.contains_key(key)
     }
 
-    pub fn get_send_snapshot_file_builder(&self,
+    pub fn get_send_snapshot_file_creator(&self,
                                           key: &SnapKey)
-                                          -> io::Result<Box<SendSnapshotFileBuilder>> {
+                                          -> io::Result<Box<SendSnapshotFileCreator>> {
         let f = try!(v1::SnapFile::new(&self.base, self.snap_size.clone(), true, key));
         Ok(Box::new(f))
     }

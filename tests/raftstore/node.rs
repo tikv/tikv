@@ -80,7 +80,7 @@ impl Channel<RaftMessage> for ChannelTransport {
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
-            let reader = match self.rl().snap_paths.get(&from_store) {
+            let f = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
                     p.0.rl().get_send_snapshot_file(&key).unwrap()
@@ -102,7 +102,7 @@ impl Channel<RaftMessage> for ChannelTransport {
                 core.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
             });
 
-            try!(copy_snapshot_file(reader, writer));
+            try!(copy_snapshot_file(f, writer));
         }
 
         match self.core.rl().routers.get(&to_store) {
