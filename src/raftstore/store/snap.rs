@@ -571,8 +571,7 @@ mod v1 {
         use std::fs::OpenOptions;
         use tempdir::TempDir;
         use util::HandyRwLock;
-        use super::super::SnapshotFileCommon;
-        use super::SnapKey;
+        use super::super::{SnapKey, SnapshotFileCommon};
         use super::SnapFile;
 
         #[test]
