@@ -28,6 +28,10 @@ quick_error! {
             description("message is discarded")
             display("{}", reason)
         }
+        Closed {
+            description("channel is closed")
+            display("channel is closed")
+        }
         Other(err: Box<error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
@@ -42,6 +46,7 @@ impl<T: Debug> From<NotifyError<T>> for Error {
         match e {
             // ALLERT!! May cause sensitive data leak.
             NotifyError::Full(m) => Error::Discard(format!("Failed to send {:?} due to full", m)),
+            NotifyError::Closed(..) => Error::Closed,
             _ => box_err!("{:?}", e),
         }
     }

@@ -114,13 +114,21 @@ pub struct Ready {
 }
 
 impl Ready {
-    fn new<T: Storage>(raft: &mut Raft<T>, prev_ss: &SoftState, prev_hs: &HardState) -> Ready {
+    fn new<T: Storage>(raft: &mut Raft<T>,
+                       prev_ss: &SoftState,
+                       prev_hs: &HardState,
+                       since_idx: Option<u64>)
+                       -> Ready {
         let mut rd = Ready {
             entries: raft.raft_log.unstable_entries().unwrap_or(&[]).to_vec(),
-            committed_entries: Some(raft.raft_log.next_entries().unwrap_or_else(Vec::new)),
             messages: raft.msgs.drain(..).collect(),
             ..Default::default()
         };
+        rd.committed_entries = Some((match since_idx {
+                None => raft.raft_log.next_entries(),
+                Some(idx) => raft.raft_log.next_entries_since(idx),
+            })
+            .unwrap_or_else(Vec::new));
         let ss = raft.soft_state();
         if &ss != prev_ss {
             rd.ss = Some(ss);
@@ -202,18 +210,6 @@ impl<T: Storage> RawNode<T> {
                 self.prev_hs = e;
             }
         }
-        if self.prev_hs.get_commit() != 0 {
-            // In most cases, prevHardSt and rd.HardState will be the same
-            // because when there are new entries to apply we just sent a
-            // HardState with an updated Commit value. However, on initial
-            // startup the two are different because we don't send a HardState
-            // until something changes, but we do send any un-applied but
-            // committed entries (and previously-committed entries may be
-            // incorporated into the snapshot, even if rd.CommittedEntries is
-            // empty). Therefore we mark all committed entries as applied
-            // whether they were included in rd.HardState or not.
-            self.raft.raft_log.applied_to(self.prev_hs.get_commit());
-        }
         if !rd.entries.is_empty() {
             let e = rd.entries.last().unwrap();
             self.raft.raft_log.stable_to(e.get_index(), e.get_term());
@@ -224,6 +220,10 @@ impl<T: Storage> RawNode<T> {
         if !rd.read_states.is_empty() {
             self.raft.read_states.clear();
         }
+    }
+
+    fn commit_apply(&mut self, applied: u64) {
+        self.raft.raft_log.applied_to(applied);
     }
 
     // Tick advances the internal logical clock by a single tick.
@@ -291,14 +291,19 @@ impl<T: Storage> RawNode<T> {
         Err(Error::StepPeerNotFound)
     }
 
-    // Ready returns the current point-in-time state of this RawNode.
-    pub fn ready(&mut self) -> Ready {
-        Ready::new(&mut self.raft, &self.prev_ss, &self.prev_hs)
+    pub fn ready_since(&mut self, applied_idx: u64) -> Ready {
+        Ready::new(&mut self.raft,
+                   &self.prev_ss,
+                   &self.prev_hs,
+                   Some(applied_idx))
     }
 
-    // HasReady called when RawNode user need to check if any Ready pending.
-    // Checking logic in this method should be consistent with Ready.containsUpdates().
-    pub fn has_ready(&self) -> bool {
+    // Ready returns the current point-in-time state of this RawNode.
+    pub fn ready(&mut self) -> Ready {
+        Ready::new(&mut self.raft, &self.prev_ss, &self.prev_hs, None)
+    }
+
+    pub fn has_ready_since(&self, applied_idx: Option<u64>) -> bool {
         let raft = &self.raft;
         if raft.soft_state() != self.prev_ss {
             return true;
@@ -310,14 +315,26 @@ impl<T: Storage> RawNode<T> {
         if self.get_snap().map_or(false, |s| !is_empty_snap(s)) {
             return true;
         }
-        if !raft.msgs.is_empty() || raft.raft_log.unstable_entries().is_some() ||
-           raft.raft_log.has_next_entries() {
+        if !raft.msgs.is_empty() || raft.raft_log.unstable_entries().is_some() {
+            return true;
+        }
+        let has_unapplied_entries = match applied_idx {
+            None => raft.raft_log.has_next_entries(),
+            Some(idx) => raft.raft_log.has_next_entries_since(idx),
+        };
+        if has_unapplied_entries {
             return true;
         }
         if !raft.read_states.is_empty() {
             return true;
         }
         false
+    }
+
+    // HasReady called when RawNode user need to check if any Ready pending.
+    // Checking logic in this method should be consistent with Ready.containsUpdates().
+    pub fn has_ready(&self) -> bool {
+        self.has_ready_since(None)
     }
 
     #[inline]
@@ -328,7 +345,29 @@ impl<T: Storage> RawNode<T> {
     // Advance notifies the RawNode that the application has applied and saved progress in the
     // last Ready results.
     pub fn advance(&mut self, rd: Ready) {
+        self.advance_append(rd);
+
+        let commit_idx = self.prev_hs.get_commit();
+        if commit_idx != 0 {
+            // In most cases, prevHardSt and rd.HardState will be the same
+            // because when there are new entries to apply we just sent a
+            // HardState with an updated Commit value. However, on initial
+            // startup the two are different because we don't send a HardState
+            // until something changes, but we do send any un-applied but
+            // committed entries (and previously-committed entries may be
+            // incorporated into the snapshot, even if rd.CommittedEntries is
+            // empty). Therefore we mark all committed entries as applied
+            // whether they were included in rd.HardState or not.
+            self.advance_apply(commit_idx);
+        }
+    }
+
+    pub fn advance_append(&mut self, rd: Ready) {
         self.commit_ready(rd);
+    }
+
+    pub fn advance_apply(&mut self, applied: u64) {
+        self.commit_apply(applied);
     }
 
     // Status returns the current status of the given group.
