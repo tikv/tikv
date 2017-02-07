@@ -108,6 +108,8 @@ impl Display for SnapKey {
     }
 }
 
+/// `SendSnapshotFileCreator` is a trait that creates snapshot file from `RocksDB` snapshot,
+/// the created snapshot file is used to replicate local db data to other remote raftstores.
 pub trait SendSnapshotFileCreator {
     fn create(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()>;
     fn total_size(&self) -> io::Result<u64>;
@@ -118,12 +120,16 @@ pub trait SnapshotFileCommon {
     fn exists(&self) -> bool;
 }
 
+/// `SendSnapshotFile` is a trait that reads local snapshot file, and then send it to other
+/// remote raftstores.
 pub trait SendSnapshotFile: SnapshotFileCommon + Read {
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn delete(&self);
 }
 
+/// `RecvSnapshotFileWriter` is a trait that receives snapshot file for remote raftstore,
+/// and then save it locally.
 pub trait RecvSnapshotFileWriter: SnapshotFileCommon + Write + Send {
     fn save(&mut self) -> io::Result<()>;
 }
@@ -137,18 +143,20 @@ pub struct ApplyOptions<'a> {
     pub snapshot_kv_count: &'a mut usize,
 }
 
+/// `RecvSnapshotFileApplier` is a trait that read the snapshot file which is received from
+/// remote raftstore, and then apply the snapshot file to local `RocksDB`.
 pub trait RecvSnapshotFileApplier: SnapshotFileCommon {
     fn delete(&self);
     fn apply(&mut self, options: ApplyOptions) -> Result<()>;
 }
 
-// A helper function to copy snapshot file from send reader to recv writer.
+// A helper function to copy snapshot file from send file to recv writer.
 // Only used in tests.
-pub fn copy_snapshot_file(mut reader: Box<SendSnapshotFile>,
+pub fn copy_snapshot_file(mut f: Box<SendSnapshotFile>,
                           mut writer: Box<RecvSnapshotFileWriter>)
                           -> io::Result<()> {
     if !writer.exists() {
-        try!(io::copy(&mut reader, &mut writer));
+        try!(io::copy(&mut f, &mut writer));
         try!(writer.save());
     }
     Ok(())
@@ -557,12 +565,15 @@ mod v1 {
 
     #[cfg(test)]
     mod test {
+        use std::io::{Read, Write};
         use std::path::Path;
         use std::sync::{Arc, RwLock};
         use std::fs::OpenOptions;
         use tempdir::TempDir;
         use util::HandyRwLock;
-        use super::*;
+        use super::super::SnapshotFileCommon;
+        use super::SnapKey;
+        use super::SnapFile;
 
         #[test]
         fn test_snap_file() {
@@ -854,8 +865,8 @@ mod test {
     use tempdir::TempDir;
 
     use util::HandyRwLock;
-    use super::*;
-    use super::v1::*;
+    use super::{SnapKey, SnapshotFileCommon, new_snap_mgr};
+    use super::v1::{SnapFile, CRC32_BYTES_COUNT};
 
     #[test]
     fn test_snap_mgr() {
