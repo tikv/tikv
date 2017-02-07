@@ -14,33 +14,26 @@
 use std::error;
 use std::io::{self, Write, ErrorKind, Read};
 use std::fmt::{self, Formatter, Display};
-use std::cmp;
-use std::fs::{self, File, OpenOptions, Metadata};
+use std::fs::{self, Metadata};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::result;
 use std::str;
-use std::time::Instant;
-
-use byteorder::BigEndian;
 use protobuf::Message;
-
-use rocksdb::{DB, WriteBatch};
+use rocksdb::DB;
 use kvproto::eraftpb::Snapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
+use raft;
 use raftstore::store::Msg;
 use util::transport::SendCh;
-use util::{HandyRwLock, rocksdb};
-use raft;
+use util::HandyRwLock;
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
-use super::keys::{self, enc_start_key, enc_end_key};
-use super::util;
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &'static str = "gen";
@@ -48,8 +41,6 @@ const SNAP_GEN_PREFIX: &'static str = "gen";
 const SNAP_REV_PREFIX: &'static str = "rev";
 
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
-const CRC32_BYTES_COUNT: usize = 4;
-const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
 
 quick_error! {
     #[derive(Debug)]
@@ -164,13 +155,30 @@ pub fn copy_snapshot_file(mut reader: Box<SendSnapshotFile>,
 }
 
 mod v1 {
+    use std::cmp;
+    use std::io::{self, Read, Write, ErrorKind};
+    use std::fs::{self, File, OpenOptions, Metadata};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, RwLock};
+    use std::str;
+    use std::time::Instant;
     use crc::crc32::{self, Digest, Hasher32};
-    use byteorder::{WriteBytesExt, ReadBytesExt};
-    use rocksdb::Writable;
+    use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
+    use rocksdb::{Writable, WriteBatch};
+    use kvproto::metapb::Region;
+    use raft;
+    use util::{HandyRwLock, rocksdb};
     use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 
-    use super::super::engine::Iterable;
-    use super::*;
+    use super::super::engine::{Snapshot as DbSnapshot, Iterable};
+    use super::super::keys::{self, enc_start_key, enc_end_key};
+    use super::super::util;
+    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey,
+                SnapshotFileCommon, SendSnapshotFileBuilder, SendSnapshotFile,
+                RecvSnapshotFileWriter, RecvSnapshotFileApplier, ApplyOptions, check_abort};
+
+    pub const CRC32_BYTES_COUNT: usize = 4;
+    const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
 
     pub struct SendSnapFile {
         // the corresponding snapshot file
@@ -839,7 +847,8 @@ pub fn new_snap_mgr<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapMa
 #[cfg(test)]
 mod test {
     use std::path::Path;
-    use std::io::*;
+    use std::fs::File;
+    use std::io::Write;
     use std::sync::*;
 
     use tempdir::TempDir;
@@ -899,7 +908,7 @@ mod test {
 
         let key1 = SnapKey::new(1, 1, 1);
         let test_data = b"test_data";
-        let exp_len = (test_data.len() + super::CRC32_BYTES_COUNT) as u64;
+        let exp_len = (test_data.len() + CRC32_BYTES_COUNT) as u64;
         let size_track = Arc::new(RwLock::new(0));
         let mut f1 = SnapFile::new(path_str, size_track.clone(), true, &key1).unwrap();
         let mut f2 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
