@@ -261,7 +261,7 @@ mod test {
         }
 
         fn shutdown(&mut self) {
-            let _ = self.ch.send(0);
+            self.ch.send(0).unwrap();
         }
     }
 
@@ -275,7 +275,7 @@ mod test {
         }
 
         fn shutdown(&mut self) {
-            let _ = self.ch.send(vec![]);
+            self.ch.send(vec![]).unwrap();
         }
     }
 
