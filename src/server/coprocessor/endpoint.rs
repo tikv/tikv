@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::Ordering as CmpOrdering;
-use std::result::Result as StdError;
+use std::result::Result as StdResult;
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta, ByItem};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
@@ -536,7 +536,7 @@ impl SortRow {
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
             let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
-            if let StdError::Err(err) = cmp_ret {
+            if let StdResult::Err(err) = cmp_ret {
                 return Err(box_err!("cmp failed {:?} ", err));
             }
 
@@ -584,13 +584,13 @@ impl TopNHeap {
             try!(row.cmp_and_check(&top_data))
         };
 
-        // push into heap on heap not full
+        // push into heap when heap not full
         if self.rows.len() < self.limit {
             self.rows.push(row);
             return Ok(());
         }
 
-        // switch top value with row when heap is full and current row is smaller than top data
+        // swap top value with row when heap is full and current row is less than top data
         let mut top_value = self.rows.peek_mut().unwrap();
         if CmpOrdering::Less == order {
             *top_value = row;

@@ -860,8 +860,8 @@ fn test_order_by_column() {
     (4, Some("name:0"), 1),
     (5, Some("name:6"), 4),
     (6, Some("name:5"), 4),
-    (7, Some("name:4"),4 ),
-    (8,None,4),
+    (7, Some("name:4"), 4),
+    (8, None,           4),
     ];
 
     let exp = vec![
