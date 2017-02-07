@@ -97,12 +97,12 @@ impl AssertionStorage {
         assert_eq!(result, expect);
     }
 
-    pub fn prewrite_ok_or_not_leader(&self,
-                                     ctx: Context,
-                                     mutations: Vec<Mutation>,
-                                     primary: Vec<u8>,
-                                     start_ts: u64)
-                                     -> Option<()> {
+    fn prewrite_ok_or_not_leader(&self,
+                                 ctx: Context,
+                                 mutations: Vec<Mutation>,
+                                 primary: Vec<u8>,
+                                 start_ts: u64)
+                                 -> Option<()> {
         let res = self.store.prewrite(ctx, mutations, primary, start_ts);
         if res.is_err() {
             if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
@@ -118,12 +118,12 @@ impl AssertionStorage {
         None
     }
 
-    pub fn commit_ok_or_not_leader(&self,
-                                   ctx: Context,
-                                   keys: Vec<Key>,
-                                   start_ts: u64,
-                                   commit_ts: u64)
-                                   -> Option<()> {
+    fn commit_ok_or_not_leader(&self,
+                               ctx: Context,
+                               keys: Vec<Key>,
+                               start_ts: u64,
+                               commit_ts: u64)
+                               -> Option<()> {
         let res = self.store.commit(ctx, keys, start_ts, commit_ts);
         if res.is_err() {
             if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
@@ -136,9 +136,7 @@ impl AssertionStorage {
                 panic!("expect not leader error, but got {:?}", res);
             }
         }
-
         None
-
     }
 
     pub fn put_ok_for_cluster(&mut self,
@@ -159,7 +157,7 @@ impl AssertionStorage {
             }
             self.update_with_key_byte(cluster, key)
         }
-        assert_eq!(success, true);
+        assert!(success);
 
         success = false;
         for _ in 0..3 {
@@ -173,7 +171,7 @@ impl AssertionStorage {
             }
             self.update_with_key_byte(cluster, key)
         }
-        assert_eq!(success, true);
+        assert!(success);
     }
 
 
