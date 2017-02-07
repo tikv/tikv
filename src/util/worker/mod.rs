@@ -150,8 +150,7 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
         let t = rx.recv();
         match t {
             Ok(Some(t)) => buffer.push(t),
-            Ok(None) => break,
-            _ => return,
+            _ => break,
         }
         while buffer.len() < batch_size {
             match rx.try_recv() {
