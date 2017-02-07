@@ -530,6 +530,9 @@ impl SortRow {
     }
 
     fn cmp_and_check(&self, right: &SortRow) -> Result<CmpOrdering> {
+        if self.key.len() != right.key.len() || self.key.len() != self.order_cols.len() {
+            return Err(box_err!("cmp failed with key's len not equal"));
+        }
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
             let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
