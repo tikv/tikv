@@ -116,8 +116,8 @@ impl Evaluator {
             ExprType::GE => self.eval_ge(ctx, expr),
             ExprType::GT => self.eval_gt(ctx, expr),
             ExprType::NullEQ => self.eval_null_eq(ctx, expr),
-            ExprType::And => self.eval_and(ctx, expr),
-            ExprType::Or => self.eval_or(ctx, expr),
+            ExprType::And => self.eval_logic(ctx, expr, Some(false), eval_and),
+            ExprType::Or => self.eval_logic(ctx, expr, Some(true), eval_or),
             ExprType::Not => self.eval_not(ctx, expr),
             ExprType::Like => self.eval_like(ctx, expr),
             ExprType::Float32 |
@@ -216,36 +216,20 @@ impl Evaluator {
         left.cmp(ctx, &right).map(Some).map_err(From::from)
     }
 
-    fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
+    fn get_two_children<'a>(&mut self, expr: &'a Expr) -> Result<(&'a Expr, &'a Expr)> {
         let l = expr.get_children().len();
         if l != 2 {
-            return Err(Error::Expr(format!("need 2 operands but got {}", l)));
+            return Err(Error::Expr(format!("{:?} need 2 operands but got {}", expr.get_tp(), l)));
         }
         let children = expr.get_children();
-        let left = try!(self.eval(ctx, &children[0]));
-        let right = try!(self.eval(ctx, &children[1]));
+        Ok((&children[0], &children[1]))
+    }
+
+    fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
+        let (left_expr, right_expr) = try!(self.get_two_children(expr));
+        let left = try!(self.eval(ctx, left_expr));
+        let right = try!(self.eval(ctx, right_expr));
         Ok((left, right))
-    }
-
-    fn eval_and(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        self.eval_two_children_as_bool(ctx, expr)
-            .map(|p| {
-                match p {
-                    (Some(true), Some(true)) => true.into(),
-                    (Some(false), _) | (_, Some(false)) => false.into(),
-                    _ => Datum::Null,
-                }
-            })
-    }
-
-    fn eval_or(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        self.eval_two_children_as_bool(ctx, expr).map(|p| {
-            match p {
-                (Some(true), _) | (_, Some(true)) => true.into(),
-                (Some(false), Some(false)) => false.into(),
-                _ => Datum::Null,
-            }
-        })
     }
 
     fn eval_not(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -285,16 +269,6 @@ impl Evaluator {
         } else {
             Ok(target_str.eq(&pattern_str).into())
         }
-    }
-
-    fn eval_two_children_as_bool(&mut self,
-                                 ctx: &EvalContext,
-                                 expr: &Expr)
-                                 -> Result<(Option<bool>, Option<bool>)> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
-        let left_bool = try!(left.into_bool(ctx));
-        let right_bool = try!(right.into_bool(ctx));
-        Ok((left_bool, right_bool))
     }
 
     fn eval_in(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -406,6 +380,46 @@ impl Evaluator {
         } else {
             Ok(left)
         }
+    }
+
+    fn eval_logic<F>(&mut self,
+                     ctx: &EvalContext,
+                     expr: &Expr,
+                     break_res: Option<bool>,
+                     logic_func: F)
+                     -> Result<Datum>
+        where F: FnOnce(Option<bool>, Option<bool>) -> Datum
+    {
+        let (left_expr, right_expr) = try!(self.get_two_children(expr));
+        let left_datum = try!(self.eval(ctx, left_expr));
+        let left = try!(left_datum.into_bool(ctx));
+        if left == break_res {
+            return Ok(left.into());
+        }
+        let right_datum = try!(self.eval(ctx, right_expr));
+        let right = try!(right_datum.into_bool(ctx));
+        if right == break_res {
+            return Ok(right.into());
+        }
+        Ok(logic_func(left, right))
+    }
+}
+
+// lhs and rhs can't be Some(false)
+#[inline]
+fn eval_and(lhs: Option<bool>, rhs: Option<bool>) -> Datum {
+    match (lhs, rhs) {
+        (Some(true), Some(true)) => true.into(),
+        _ => Datum::Null,
+    }
+}
+
+// lhs and rhs can't be Some(true)
+#[inline]
+fn eval_or(lhs: Option<bool>, rhs: Option<bool>) -> Datum {
+    match (lhs, rhs) {
+        (Some(false), Some(false)) => false.into(),
+        _ => Datum::Null,
     }
 }
 
@@ -622,6 +636,8 @@ mod test {
         (bin_expr(Datum::I64(0), Datum::I64(1), ExprType::And), Datum::I64(0)),
         (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::And), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::Null, ExprType::And), Datum::Null),
+        (bin_expr(Datum::Null, Datum::I64(1), ExprType::And), Datum::Null),
+        (bin_expr(Datum::I64(0), Datum::Null, ExprType::And), Datum::I64(0)),
         (bin_expr(Datum::Null, Datum::I64(0), ExprType::And), Datum::I64(0)),
         (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
             ExprType::And), Datum::I64(0)),
@@ -631,8 +647,10 @@ mod test {
         (bin_expr(Datum::Dec(Decimal::from_f64(2.0).unwrap()), Datum::Dec(0u64.into()),
             ExprType::Or), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::Null, ExprType::Or), Datum::I64(1)),
+        (bin_expr(Datum::Null, Datum::I64(1), ExprType::Or), Datum::I64(1)),
         (bin_expr(Datum::Null, Datum::Null, ExprType::Or), Datum::Null),
         (bin_expr(Datum::Null, Datum::I64(0), ExprType::Or), Datum::Null),
+        (bin_expr(Datum::I64(0), Datum::Null, ExprType::Or), Datum::Null),
         (build_expr_r(vec![bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ),
             bin_expr(Datum::I64(1), Datum::I64(1), ExprType::EQ)], ExprType::And), Datum::I64(1)),
         (not_expr(Datum::I64(1)), Datum::I64(0)),
