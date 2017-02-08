@@ -24,7 +24,7 @@ use std::result;
 use std::str;
 use protobuf::Message;
 use rocksdb::DB;
-use kvproto::eraftpb::Snapshot;
+use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use raft;
@@ -86,13 +86,13 @@ impl SnapKey {
     }
 
     #[inline]
-    pub fn from_region_snap(region_id: u64, snap: &Snapshot) -> SnapKey {
+    pub fn from_region_snap(region_id: u64, snap: &RaftSnapshot) -> SnapKey {
         let index = snap.get_metadata().get_index();
         let term = snap.get_metadata().get_term();
         SnapKey::new(region_id, term, index)
     }
 
-    pub fn from_snap(snap: &Snapshot) -> io::Result<SnapKey> {
+    pub fn from_snap(snap: &RaftSnapshot) -> io::Result<SnapKey> {
         let mut snap_data = RaftSnapshotData::new();
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
             return Err(io::Error::new(ErrorKind::Other, e));
@@ -108,29 +108,31 @@ impl Display for SnapKey {
     }
 }
 
-/// `SendSnapshotFileCreator` is a trait that creates snapshot file from `RocksDB` snapshot,
-/// the created snapshot file is used to replicate local db data to other remote raftstores.
-pub trait SendSnapshotFileCreator {
-    fn create(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()>;
-    fn total_size(&self) -> io::Result<u64>;
+/// `SnapshotGenerator` is a trait that generates snapshot from `RocksDB` snapshot,
+/// the generated snapshot is used to replicate local db data to other remote raftstores.
+pub trait SnapshotGenerator {
+    // Generate a snapashot, and return the total size of the snapshot.
+    fn generate(&mut self,
+                snap: &DbSnapshot,
+                region: &Region,
+                snap_data: &mut RaftSnapshotData)
+                -> raft::Result<()>;
 }
 
-pub trait SnapshotFileCommon {
+pub trait SnapshotCommon {
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
-}
-
-/// `SendSnapshotFile` is a trait that reads local snapshot file, and then send it to other
-/// remote raftstores.
-pub trait SendSnapshotFile: SnapshotFileCommon + Read {
-    fn meta(&self) -> io::Result<Metadata>;
-    fn total_size(&self) -> io::Result<u64>;
     fn delete(&self);
 }
 
-/// `RecvSnapshotFileWriter` is a trait that receives snapshot file for remote raftstore,
-/// and then save it locally.
-pub trait RecvSnapshotFileWriter: SnapshotFileCommon + Write + Send {
+/// `Snapshot` is a trait for snapshot.
+/// It's used in these scenarios:
+///   1. read local snapshot and then replicate it to remote raftstores
+///   2. receive snapshot from remote raftstore and write it to local storage
+///   3. snapshot gc
+pub trait Snapshot: SnapshotCommon + Read + Write + Send {
+    fn meta(&self) -> io::Result<Metadata>;
+    fn total_size(&self) -> io::Result<u64>;
     fn save(&mut self) -> io::Result<()>;
 }
 
@@ -143,21 +145,18 @@ pub struct ApplyOptions<'a> {
     pub snapshot_kv_count: &'a mut usize,
 }
 
-/// `RecvSnapshotFileApplier` is a trait that read the snapshot file which is received from
-/// remote raftstore, and then apply the snapshot file to local `RocksDB`.
-pub trait RecvSnapshotFileApplier: SnapshotFileCommon {
-    fn delete(&self);
+/// `SnapshotApplier` is a trait that applies the snapshot which is received from
+/// remote raftstore to local `RocksDB`.
+pub trait SnapshotApplier: SnapshotCommon {
     fn apply(&mut self, options: ApplyOptions) -> Result<()>;
 }
 
-// A helper function to copy snapshot file from send file to recv writer.
+// A helper function to copy snapshot.
 // Only used in tests.
-pub fn copy_snapshot_file(mut f: Box<SendSnapshotFile>,
-                          mut writer: Box<RecvSnapshotFileWriter>)
-                          -> io::Result<()> {
-    if !writer.exists() {
-        try!(io::copy(&mut f, &mut writer));
-        try!(writer.save());
+pub fn copy_snapshot(mut from: Box<Snapshot>, mut to: Box<Snapshot>) -> io::Result<()> {
+    if !to.exists() {
+        try!(io::copy(&mut from, &mut to));
+        try!(to.save());
     }
     Ok(())
 }
@@ -174,6 +173,7 @@ mod v1 {
     use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
     use rocksdb::{Writable, WriteBatch};
     use kvproto::metapb::Region;
+    use kvproto::raft_serverpb::RaftSnapshotData;
     use raft;
     use storage::CF_RAFT;
     use util::{HandyRwLock, rocksdb};
@@ -183,86 +183,70 @@ mod v1 {
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey,
-                SnapshotFileCommon, SendSnapshotFileCreator, SendSnapshotFile,
-                RecvSnapshotFileWriter, RecvSnapshotFileApplier, ApplyOptions, check_abort};
+                SnapshotCommon, SnapshotGenerator, Snapshot, ApplyOptions, SnapshotApplier,
+                check_abort};
 
     pub const CRC32_BYTES_COUNT: usize = 4;
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
 
-    pub struct SendSnapFile {
-        // the corresponding snapshot file
-        snap_file: SnapFile,
-        // reader to the os file
-        reader: File,
-    }
 
-    impl SendSnapFile {
-        pub fn new<T: Into<PathBuf>>(snap_dir: T,
-                                     size_track: Arc<RwLock<u64>>,
-                                     key: &SnapKey)
-                                     -> io::Result<SendSnapFile> {
-            let f = try!(SnapFile::new(snap_dir, size_track, true, key));
-            let reader = try!(f.raw_reader());
-            Ok(SendSnapFile {
-                snap_file: f,
-                reader: reader,
-            })
-        }
-    }
-
-    impl SnapshotFileCommon for SendSnapFile {
-        fn path(&self) -> &str {
-            self.snap_file.path()
-        }
-
-        fn exists(&self) -> bool {
-            self.snap_file.exists()
-        }
-    }
-
-    impl SendSnapshotFile for SendSnapFile {
-        fn meta(&self) -> io::Result<Metadata> {
-            self.snap_file.meta()
-        }
-
-        fn total_size(&self) -> io::Result<u64> {
-            self.snap_file.total_size()
-        }
-
-        fn delete(&self) {
-            self.snap_file.delete()
-        }
-    }
-
-    impl Read for SendSnapFile {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.reader.read(buf)
-        }
-    }
-
-    /// A structure represents the snapshot file.
+    /// A structure represents the snapshot.
     ///
     /// All changes to the file will be written to `tmp_file` first, and use
     /// `save` method to make them persistent. When saving a crc32 checksum
     /// will be appended to the file end automatically.
-    pub struct SnapFile {
+    pub struct Snap {
         file: PathBuf,
-        digest: Digest,
+        digest: Option<Digest>,
         size_track: Arc<RwLock<u64>>,
         // File is the file obj represent the tmpfile, string is the actual path to
         // tmpfile.
         tmp_file: Option<(File, String)>,
+        reader: Option<File>,
     }
 
-    impl SnapFile {
-        pub fn new<T: Into<PathBuf>>(snap_dir: T,
-                                     size_track: Arc<RwLock<u64>>,
-                                     is_sending: bool,
-                                     key: &SnapKey)
-                                     -> io::Result<SnapFile> {
-            let mut file_path = snap_dir.into();
-            if !file_path.exists() {
-                try!(fs::create_dir_all(file_path.as_path()));
+    impl Snap {
+        pub fn new_to_write<T: Into<PathBuf>>(dir: T,
+                                              size_track: Arc<RwLock<u64>>,
+                                              is_sending: bool,
+                                              key: &SnapKey)
+                                              -> io::Result<Snap> {
+            let mut path = dir.into();
+            try!(Snap::prepare_path(&mut path, is_sending, key));
+
+            let mut f = Snap {
+                file: path,
+                digest: Some(Digest::new(crc32::IEEE)),
+                size_track: size_track,
+                tmp_file: None,
+                reader: None,
+            };
+            try!(f.init());
+            Ok(f)
+        }
+
+        pub fn new_to_read<T: Into<PathBuf>>(dir: T,
+                                             size_track: Arc<RwLock<u64>>,
+                                             is_sending: bool,
+                                             key: &SnapKey)
+                                             -> io::Result<Snap> {
+            let mut path = dir.into();
+            try!(Snap::prepare_path(&mut path, is_sending, key));
+
+            let reader = try!(File::open(&path));
+            let f = Snap {
+                file: path,
+                digest: None,
+                size_track: size_track,
+                tmp_file: None,
+                reader: Some(reader),
+            };
+            Ok(f)
+        }
+
+        fn prepare_path(path: &mut PathBuf, is_sending: bool, key: &SnapKey) -> io::Result<()> {
+            if !path.exists() {
+                try!(fs::create_dir_all(path.as_path()));
             }
             let prefix = if is_sending {
                 SNAP_GEN_PREFIX
@@ -270,19 +254,11 @@ mod v1 {
                 SNAP_REV_PREFIX
             };
             let file_name = format!("{}_{}.snap", prefix, key);
-            file_path.push(&file_name);
-
-            let mut f = SnapFile {
-                file: file_path,
-                digest: Digest::new(crc32::IEEE),
-                size_track: size_track,
-                tmp_file: None,
-            };
-            try!(f.init());
-            Ok(f)
+            path.push(&file_name);
+            Ok(())
         }
 
-        pub fn init(&mut self) -> io::Result<()> {
+        fn init(&mut self) -> io::Result<()> {
             if self.exists() || self.tmp_file.is_some() {
                 return Ok(());
             }
@@ -293,26 +269,12 @@ mod v1 {
             Ok(())
         }
 
-        pub fn meta(&self) -> io::Result<Metadata> {
-            self.file.metadata()
-        }
-
-        pub fn raw_reader(&self) -> io::Result<File> {
-            File::open(self.path())
-        }
-
         /// Get a validation reader.
-        pub fn reader(&self) -> io::Result<SnapValidationReader> {
+        fn reader(&self) -> io::Result<SnapValidationReader> {
             SnapValidationReader::open(self.path())
         }
 
-        pub fn delete(&self) {
-            if let Err(e) = self.try_delete() {
-                error!("failed to delete {}: {:?}", self.path(), e);
-            }
-        }
-
-        pub fn try_delete(&self) -> io::Result<()> {
+        fn try_delete(&self) -> io::Result<()> {
             debug!("deleting {}", self.path());
             if !self.exists() {
                 return Ok(());
@@ -334,7 +296,7 @@ mod v1 {
             debug!("saving to {}", self.file.as_path().display());
             if let Some((mut f, path)) = self.tmp_file.take() {
                 if append_checksum {
-                    try!(f.write_u32::<BigEndian>(self.digest.sum32()));
+                    try!(f.write_u32::<BigEndian>(self.digest.as_ref().unwrap().sum32()));
                 }
                 try!(f.flush());
                 let file_len = try!(fs::metadata(&path)).len();
@@ -346,91 +308,21 @@ mod v1 {
         }
     }
 
-    impl SnapshotFileCommon for SnapFile {
-        fn path(&self) -> &str {
-            self.file.as_path().to_str().unwrap()
-        }
-
-        fn exists(&self) -> bool {
-            self.file.exists() && self.file.is_file()
-        }
-    }
-
-    impl RecvSnapshotFileApplier for SnapFile {
-        fn delete(&self) {
-            self.delete()
-        }
-
-        fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-            let mut reader = box_try!(self.reader());
-            loop {
-                try!(check_abort(&options.abort));
-                let cf = box_try!(reader.decode_compact_bytes());
-                if cf.is_empty() {
-                    break;
-                }
-                let handle = box_try!(rocksdb::get_cf_handle(&options.db, unsafe {
-                    str::from_utf8_unchecked(&cf)
-                }));
-                let mut wb = WriteBatch::new();
-                let mut batch_size = 0;
-                loop {
-                    try!(check_abort(&options.abort));
-                    let key = box_try!(reader.decode_compact_bytes());
-                    if key.is_empty() {
-                        box_try!(options.db.write(wb));
-                        *options.snapshot_size += batch_size;
-                        break;
-                    }
-                    *options.snapshot_kv_count += 1;
-                    box_try!(util::check_key_in_region(keys::origin_key(&key), options.region));
-                    batch_size += key.len();
-                    let value = box_try!(reader.decode_compact_bytes());
-                    batch_size += value.len();
-                    box_try!(wb.put_cf(handle, &key, &value));
-                    if batch_size >= options.write_batch_size {
-                        box_try!(options.db.write(wb));
-                        *options.snapshot_size += batch_size;
-                        wb = WriteBatch::new();
-                        batch_size = 0;
-                    }
-                }
-            }
-
-            box_try!(reader.validate());
+    impl SnapshotGenerator for Snap {
+        fn generate(&mut self,
+                    snap: &DbSnapshot,
+                    region: &Region,
+                    snap_data: &mut RaftSnapshotData)
+                    -> raft::Result<()> {
+            try!(self.do_generate(snap, region));
+            let size = try!(self.total_size());
+            snap_data.set_file_size(size);
             Ok(())
         }
     }
 
-    impl RecvSnapshotFileWriter for SnapFile {
-        /// Use the content in temporary files replace the target file.
-        ///
-        /// Please note that this method can only be called once.
-        fn save(&mut self) -> io::Result<()> {
-            self.save_impl(false)
-        }
-    }
-
-    impl Write for SnapFile {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            if self.tmp_file.is_none() {
-                return Ok(0);
-            }
-            let written = try!(self.tmp_file.as_mut().unwrap().0.write(buf));
-            self.digest.write(&buf[..written]);
-            Ok(written)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            if self.tmp_file.is_none() {
-                return Ok(());
-            }
-            self.tmp_file.as_mut().unwrap().0.flush()
-        }
-    }
-
-    impl SendSnapshotFileCreator for SnapFile {
-        fn create(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
+    impl Snap {
+        fn do_generate(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
             if self.exists() {
                 match self.reader().and_then(|mut r| r.validate()) {
                     Ok(()) => return Ok(()),
@@ -483,14 +375,113 @@ mod v1 {
                   t.elapsed());
             Ok(())
         }
+    }
+
+    impl SnapshotCommon for Snap {
+        fn path(&self) -> &str {
+            self.file.as_path().to_str().unwrap()
+        }
+
+        fn exists(&self) -> bool {
+            self.file.exists() && self.file.is_file()
+        }
+
+        fn delete(&self) {
+            if let Err(e) = self.try_delete() {
+                error!("failed to delete {}: {:?}", self.path(), e);
+            }
+        }
+    }
+
+    impl Snapshot for Snap {
+        fn meta(&self) -> io::Result<Metadata> {
+            self.file.metadata()
+        }
 
         fn total_size(&self) -> io::Result<u64> {
             let meta = try!(self.meta());
             Ok(meta.len())
         }
+
+        /// Use the content in temporary files replace the target file.
+        ///
+        /// Please note that this method can only be called once.
+        fn save(&mut self) -> io::Result<()> {
+            self.save_impl(false)
+        }
     }
 
-    impl Drop for SnapFile {
+
+    impl SnapshotApplier for Snap {
+        fn apply(&mut self, options: ApplyOptions) -> Result<()> {
+            let mut reader = box_try!(self.reader());
+            loop {
+                try!(check_abort(&options.abort));
+                let cf = box_try!(reader.decode_compact_bytes());
+                if cf.is_empty() {
+                    break;
+                }
+                let handle = box_try!(rocksdb::get_cf_handle(&options.db, unsafe {
+                    str::from_utf8_unchecked(&cf)
+                }));
+                let mut wb = WriteBatch::new();
+                let mut batch_size = 0;
+                loop {
+                    try!(check_abort(&options.abort));
+                    let key = box_try!(reader.decode_compact_bytes());
+                    if key.is_empty() {
+                        box_try!(options.db.write(wb));
+                        *options.snapshot_size += batch_size;
+                        break;
+                    }
+                    *options.snapshot_kv_count += 1;
+                    box_try!(util::check_key_in_region(keys::origin_key(&key), options.region));
+                    batch_size += key.len();
+                    let value = box_try!(reader.decode_compact_bytes());
+                    batch_size += value.len();
+                    box_try!(wb.put_cf(handle, &key, &value));
+                    if batch_size >= options.write_batch_size {
+                        box_try!(options.db.write(wb));
+                        *options.snapshot_size += batch_size;
+                        wb = WriteBatch::new();
+                        batch_size = 0;
+                    }
+                }
+            }
+
+            box_try!(reader.validate());
+            Ok(())
+        }
+    }
+
+    impl Read for Snap {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.reader.is_none() {
+                return Ok(0);
+            }
+            self.reader.as_mut().unwrap().read(buf)
+        }
+    }
+
+    impl Write for Snap {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.tmp_file.is_none() {
+                return Ok(0);
+            }
+            let written = try!(self.tmp_file.as_mut().unwrap().0.write(buf));
+            self.digest.as_mut().unwrap().write(&buf[..written]);
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.tmp_file.is_none() {
+                return Ok(());
+            }
+            self.tmp_file.as_mut().unwrap().0.flush()
+        }
+    }
+
+    impl Drop for Snap {
         fn drop(&mut self) {
             if let Some((_, path)) = self.tmp_file.take() {
                 debug!("deleting {}", path);
@@ -578,8 +569,8 @@ mod v1 {
         use std::fs::OpenOptions;
         use tempdir::TempDir;
         use util::HandyRwLock;
-        use super::super::{SnapKey, SnapshotFileCommon};
-        use super::SnapFile;
+        use super::super::{SnapKey, SnapshotCommon};
+        use super::Snap;
 
         #[test]
         fn test_snap_file() {
@@ -591,8 +582,8 @@ mod v1 {
             let test_data = b"test_data";
             let exp_len = (test_data.len() + super::CRC32_BYTES_COUNT) as u64;
             let size_track = Arc::new(RwLock::new(0));
-            let mut f1 = SnapFile::new(&path, size_track.clone(), true, &key).unwrap();
-            let mut f2 = SnapFile::new(&path, size_track.clone(), false, &key).unwrap();
+            let mut f1 = Snap::new_to_write(&path, size_track.clone(), true, &key).unwrap();
+            let mut f2 = Snap::new_to_write(&path, size_track.clone(), false, &key).unwrap();
             assert!(!f1.exists());
             assert!(Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
             assert!(!f2.exists());
@@ -604,8 +595,8 @@ mod v1 {
             assert!(!f2.exists());
             assert!(Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
             let key2 = SnapKey::new(2, 1, 1);
-            let mut f3 = SnapFile::new(&path, size_track.clone(), true, &key2).unwrap();
-            let mut f4 = SnapFile::new(&path, size_track.clone(), false, &key2).unwrap();
+            let mut f3 = Snap::new_to_write(&path, size_track.clone(), true, &key2).unwrap();
+            let mut f4 = Snap::new_to_write(&path, size_track.clone(), false, &key2).unwrap();
             f3.write_all(test_data).unwrap();
             f4.write_all(test_data).unwrap();
             assert_eq!(*size_track.rl(), 0);
@@ -623,7 +614,7 @@ mod v1 {
 
             let key1 = SnapKey::new(1, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut f1 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
+            let mut f1 = Snap::new_to_write(path_str, size_track.clone(), false, &key1).unwrap();
             f1.write_all(b"testdata").unwrap();
             f1.save_with_checksum().unwrap();
             let mut reader = f1.reader().unwrap();
@@ -749,30 +740,23 @@ impl SnapManagerCore {
         self.registry.contains_key(key)
     }
 
-    pub fn get_send_snapshot_file_creator(&self,
-                                          key: &SnapKey)
-                                          -> io::Result<Box<SendSnapshotFileCreator>> {
-        let f = try!(v1::SnapFile::new(&self.base, self.snap_size.clone(), true, key));
+    pub fn get_snapshot_generator(&self, key: &SnapKey) -> io::Result<Box<SnapshotGenerator>> {
+        let f = try!(v1::Snap::new_to_write(&self.base, self.snap_size.clone(), true, key));
         Ok(Box::new(f))
     }
 
-    pub fn get_send_snapshot_file(&self, key: &SnapKey) -> io::Result<Box<SendSnapshotFile>> {
-        let reader = try!(v1::SendSnapFile::new(&self.base, self.snap_size.clone(), key));
+    pub fn get_snapshot_to_read(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
+        let reader = try!(v1::Snap::new_to_read(&self.base, self.snap_size.clone(), true, key));
         Ok(Box::new(reader))
     }
 
-    pub fn get_recv_snapshot_file_writer(&self,
-                                         key: &SnapKey,
-                                         _data: &[u8])
-                                         -> io::Result<Box<RecvSnapshotFileWriter>> {
-        let f = try!(v1::SnapFile::new(&self.base, self.snap_size.clone(), false, key));
+    pub fn get_snapshot_to_write(&self, key: &SnapKey, _data: &[u8]) -> io::Result<Box<Snapshot>> {
+        let f = try!(v1::Snap::new_to_write(&self.base, self.snap_size.clone(), false, key));
         Ok(Box::new(f))
     }
 
-    pub fn get_recv_snapshot_file_applier(&self,
-                                          key: &SnapKey)
-                                          -> io::Result<Box<RecvSnapshotFileApplier>> {
-        let f = try!(v1::SnapFile::new(&self.base, self.snap_size.clone(), false, key));
+    pub fn get_snapshot_applier(&self, key: &SnapKey) -> io::Result<Box<SnapshotApplier>> {
+        let f = try!(v1::Snap::new_to_read(&self.base, self.snap_size.clone(), false, key));
         Ok(Box::new(f))
     }
 
@@ -871,8 +855,8 @@ mod test {
     use tempdir::TempDir;
 
     use util::HandyRwLock;
-    use super::{SnapKey, SnapshotFileCommon, new_snap_mgr};
-    use super::v1::{SnapFile, CRC32_BYTES_COUNT};
+    use super::{SnapKey, SnapshotCommon, new_snap_mgr};
+    use super::v1::{Snap, CRC32_BYTES_COUNT};
 
     #[test]
     fn test_snap_mgr() {
@@ -896,12 +880,12 @@ mod test {
         let path3 = path.path().to_str().unwrap().to_owned() + "/snap3";
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let f1 = SnapFile::new(&path3, size_track.clone(), true, &key1).unwrap();
-        let f2 = SnapFile::new(&path3, size_track.clone(), false, &key1).unwrap();
+        let f1 = Snap::new_to_write(&path3, size_track.clone(), true, &key1).unwrap();
+        let f2 = Snap::new_to_write(&path3, size_track.clone(), false, &key1).unwrap();
         let key2 = SnapKey::new(2, 1, 1);
-        let mut f3 = SnapFile::new(&path3, size_track.clone(), true, &key2).unwrap();
+        let mut f3 = Snap::new_to_write(&path3, size_track.clone(), true, &key2).unwrap();
         f3.save_with_checksum().unwrap();
-        let mut f4 = SnapFile::new(&path3, size_track.clone(), false, &key2).unwrap();
+        let mut f4 = Snap::new_to_write(&path3, size_track.clone(), false, &key2).unwrap();
         f4.save_with_checksum().unwrap();
         assert!(!f1.exists());
         assert!(!f2.exists());
@@ -927,15 +911,15 @@ mod test {
         let test_data = b"test_data";
         let exp_len = (test_data.len() + CRC32_BYTES_COUNT) as u64;
         let size_track = Arc::new(RwLock::new(0));
-        let mut f1 = SnapFile::new(path_str, size_track.clone(), true, &key1).unwrap();
-        let mut f2 = SnapFile::new(path_str, size_track.clone(), false, &key1).unwrap();
+        let mut f1 = Snap::new_to_write(path_str, size_track.clone(), true, &key1).unwrap();
+        let mut f2 = Snap::new_to_write(path_str, size_track.clone(), false, &key1).unwrap();
         f1.write_all(test_data).unwrap();
         f2.write_all(test_data).unwrap();
         let key2 = SnapKey::new(2, 1, 1);
-        let mut f3 = SnapFile::new(path_str, size_track.clone(), true, &key2).unwrap();
+        let mut f3 = Snap::new_to_write(path_str, size_track.clone(), true, &key2).unwrap();
         f3.write_all(test_data).unwrap();
         f3.save_with_checksum().unwrap();
-        let mut f4 = SnapFile::new(path_str, size_track.clone(), false, &key2).unwrap();
+        let mut f4 = Snap::new_to_write(path_str, size_track.clone(), false, &key2).unwrap();
         f4.write_all(test_data).unwrap();
         f4.save_with_checksum().unwrap();
 
@@ -944,9 +928,9 @@ mod test {
         // temporary file should not be count in snap size.
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len * 2);
 
-        mgr.rl().get_send_snapshot_file(&key2).unwrap().delete();
+        mgr.rl().get_snapshot_to_read(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
-        mgr.rl().get_recv_snapshot_file_applier(&key2).unwrap().delete();
+        mgr.rl().get_snapshot_applier(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
     }
 }

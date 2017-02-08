@@ -856,7 +856,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     mgr.wl().register(key.clone(), SnapEntry::Generating);
     defer!(mgr.wl().deregister(&key, &SnapEntry::Generating));
 
-    let mut state: RegionLocalState = try!(snap.get_msg(&keys::region_state_key(key.region_id))
+    let state: RegionLocalState = try!(snap.get_msg(&keys::region_state_key(key.region_id))
         .and_then(|res| {
             match res {
                 None => Err(box_err!("could not find region info")),
@@ -881,16 +881,12 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut creator = try!(mgr.rl().get_send_snapshot_file_creator(&key));
-    try!(creator.create(snap, state.get_region()));
+    let mut generator = try!(mgr.rl().get_snapshot_generator(&key));
 
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
-    snap_data.set_region(state.take_region());
-
-    let len = try!(creator.total_size());
-    snap_data.set_file_size(len);
-
+    snap_data.set_region(state.get_region().clone());
+    try!(generator.generate(snap, state.get_region(), &mut snap_data));
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
     snapshot.set_data(v);
@@ -968,7 +964,7 @@ mod test {
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, new_snap_mgr, SnapKey, copy_snapshot_file};
+    use raftstore::store::{bootstrap, new_snap_mgr, SnapKey, copy_snapshot};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
     use util::worker::{Worker, Scheduler};
@@ -1285,9 +1281,9 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
-        let f = mgr.rl().get_send_snapshot_file(&key).unwrap();
-        let writer = mgr.rl().get_recv_snapshot_file_writer(&key, b"").unwrap();
-        copy_snapshot_file(f, writer).unwrap();
+        let from = mgr.rl().get_snapshot_to_read(&key).unwrap();
+        let to = mgr.rl().get_snapshot_to_write(&key, b"").unwrap();
+        copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(sched, &td2);

@@ -80,18 +80,18 @@ impl Channel<RaftMessage> for ChannelTransport {
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
-            let f = match self.rl().snap_paths.get(&from_store) {
+            let from = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_send_snapshot_file(&key).unwrap()
+                    p.0.rl().get_snapshot_to_read(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
-            let writer = match self.rl().snap_paths.get(&to_store) {
+            let to = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
-                    p.0.rl().get_recv_snapshot_file_writer(&key, data).unwrap()
+                    p.0.rl().get_snapshot_to_write(&key, data).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -102,7 +102,7 @@ impl Channel<RaftMessage> for ChannelTransport {
                 core.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
             });
 
-            try!(copy_snapshot_file(f, writer));
+            try!(copy_snapshot(from, to));
         }
 
         match self.core.rl().routers.get(&to_store) {

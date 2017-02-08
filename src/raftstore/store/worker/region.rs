@@ -193,7 +193,7 @@ impl Runner {
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        let mut applier = box_try!(self.mgr.rl().get_recv_snapshot_file_applier(&snap_key));
+        let mut applier = box_try!(self.mgr.rl().get_snapshot_applier(&snap_key));
         self.mgr.wl().register(snap_key.clone(), SnapEntry::Applying);
         defer!({
             self.mgr.wl().deregister(&snap_key, &SnapEntry::Applying);
