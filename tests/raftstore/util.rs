@@ -203,13 +203,6 @@ pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     cmd
 }
 
-pub fn new_compact_log_cmd(index: u64) -> AdminRequest {
-    let mut cmd = AdminRequest::new();
-    cmd.set_cmd_type(AdminCmdType::CompactLog);
-    cmd.mut_compact_log().set_compact_index(index);
-    cmd
-}
-
 pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::new();
     peer.set_store_id(store_id);
