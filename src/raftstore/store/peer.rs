@@ -204,7 +204,7 @@ impl PendingCmdQueue {
 }
 
 /// Call the callback of `cmd` that the region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
+pub fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     let region_not_found = Error::RegionNotFound(region_id);
     let mut resp = cmd_resp::new_error(region_not_found);
     cmd_resp::bind_uuid(&mut resp, cmd.uuid);
@@ -854,7 +854,12 @@ impl Peer {
         meta.renew_lease_time = Some(clocktime::raw_now());
 
 
-        let t = ApplyTask::propose(self.region_id, meta.uuid, is_conf_change, meta.term, cb);
+        let t = ApplyTask::propose(self.peer_id(),
+                                   self.region_id,
+                                   meta.uuid,
+                                   is_conf_change,
+                                   meta.term,
+                                   cb);
         self.apply_scheduler.schedule(t).unwrap();
 
         self.proposals.push(meta);

@@ -30,7 +30,8 @@ use kvproto::raft_serverpb::RaftApplyState;
 use util::worker::{Runnable, Scheduler};
 use raftstore::store::{cmd_resp, Store, util};
 use raftstore::store::msg::Callback;
-use raftstore::store::peer::{Peer, ExecResult, ApplyDelegate, PendingCmd, notify_stale_command};
+use raftstore::store::peer::{self, Peer, ExecResult, ApplyDelegate, PendingCmd,
+                             notify_stale_command};
 use super::RegionTask;
 
 pub struct Apply {
@@ -67,6 +68,7 @@ impl Registration {
 }
 
 pub struct Propose {
+    id: u64,
     region_id: u64,
     is_conf_change: bool,
     uuid: Uuid,
@@ -122,13 +124,15 @@ impl Task {
         })
     }
 
-    pub fn propose(region_id: u64,
+    pub fn propose(id: u64,
+                   region_id: u64,
                    uuid: Uuid,
                    is_conf_change: bool,
                    term: u64,
                    cb: Callback)
                    -> Task {
         Task::Propose(Propose {
+            id: id,
             region_id: region_id,
             uuid: uuid,
             term: term,
@@ -256,7 +260,14 @@ impl Runner {
             term: p.term,
             cb: Some(p.cb),
         };
-        let delegate = self.delegates.get_mut(&p.region_id).unwrap();
+        let delegate = match self.delegates.get_mut(&p.region_id) {
+            Some(d) => d,
+            None => {
+                peer::notify_region_removed(p.region_id, p.id, cmd);
+                return;
+            }
+        };
+        assert_eq!(delegate.id, p.id);
         if p.is_conf_change {
             if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
                 // if it loses leadership before conf change is replicated, there may be
