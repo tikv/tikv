@@ -326,11 +326,9 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     let mut stores: HashSet<u64> = HashSet::new();
     for k in &keys {
-        store.update_with_key(&mut cluster, k);
+        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
+        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v2", 15, 20);
         let store_id = store.ctx.get_peer().get_store_id();
-        store.put_ok(k.as_bytes(), b"v1", 5, 10);
-        store.update_with_key(&mut cluster, k);
-        store.put_ok(k.as_bytes(), b"v2", 15, 20);
         if !stores.contains(&store_id) {
             stores.insert(store_id);
         }
@@ -348,15 +346,50 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
         store.get_none(k.as_bytes(), 15);
     }
 }
-#[test]
-fn test_txn_store_gc2() {
-    for &i in &[0, 1, GC_BATCH_SIZE - 1, GC_BATCH_SIZE, GC_BATCH_SIZE + 1, GC_BATCH_SIZE * 2] {
-        test_txn_store_gc_multiple_keys(1, i);
-    }
 
-    for &i in &[1, MAX_TXN_WRITE_SIZE / 2, MAX_TXN_WRITE_SIZE + 1] {
-        test_txn_store_gc_multiple_keys(i, 3);
-    }
+#[test]
+fn test_txn_store_gc2_1() {
+    test_txn_store_gc_multiple_keys(1, 0);
+}
+
+#[test]
+fn test_txn_store_gc2_2() {
+    test_txn_store_gc_multiple_keys(1, 1);
+}
+
+#[test]
+fn test_txn_store_gc2_3() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE - 1);
+}
+
+#[test]
+fn test_txn_store_gc2_4() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE);
+}
+
+#[test]
+fn test_txn_store_gc2_5() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE + 1);
+}
+
+#[test]
+fn test_txn_store_gc2_6() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE * 2);
+}
+
+#[test]
+fn test_txn_store_gc2_7() {
+    test_txn_store_gc_multiple_keys(1, 3);
+}
+
+#[test]
+fn test_txn_store_gc2_8() {
+    test_txn_store_gc_multiple_keys(MAX_TXN_WRITE_SIZE / 2, 3);
+}
+
+#[test]
+fn test_txn_store_gc2_9() {
+    test_txn_store_gc_multiple_keys(MAX_TXN_WRITE_SIZE + 1, 3);
 }
 
 #[test]
