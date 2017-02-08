@@ -21,6 +21,8 @@ use raftstore::server::ServerCluster;
 use tikv::util::HandyRwLock;
 use super::util::new_raft_storage_with_store_count;
 use tikv::storage::config::Config;
+use tikv::storage::engine;
+
 
 #[derive(Clone)]
 pub struct AssertionStorage {
@@ -50,8 +52,13 @@ impl AssertionStorage {
     }
 
     pub fn update_with_key(&mut self, cluster: &mut Cluster<ServerCluster>, key: &str) {
-        cluster.must_get(key.as_bytes());
-        let region = cluster.get_region(key.as_bytes());
+        self.update_with_key_byte(cluster, key.as_bytes());
+    }
+
+    pub fn update_with_key_byte(&mut self, cluster: &mut Cluster<ServerCluster>, key: &[u8]) {
+        // ensure the leader of range which contains current key has been elected
+        cluster.must_get(key);
+        let region = cluster.get_region(key);
         let leader = cluster.leader_of_region(region.get_id()).unwrap();
         if leader.get_store_id() == self.ctx.get_peer().get_store_id() {
             return;
@@ -90,6 +97,84 @@ impl AssertionStorage {
         let expect: Vec<Vec<u8>> = expect.into_iter().map(|x| x.to_vec()).collect();
         assert_eq!(result, expect);
     }
+
+    fn prewrite_ok_or_not_leader(&self,
+                                 ctx: Context,
+                                 mutations: Vec<Mutation>,
+                                 primary: Vec<u8>,
+                                 start_ts: u64)
+                                 -> Option<()> {
+        let res = self.store.prewrite(ctx, mutations, primary, start_ts);
+        if res.is_err() {
+            if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
+                   *res.as_ref()
+                .err()
+                .unwrap() {
+                assert!(e.has_not_leader());
+                return Some(());
+            } else {
+                panic!("expect not leader error, but got {:?}", res);
+            }
+        }
+        None
+    }
+
+    fn commit_ok_or_not_leader(&self,
+                               ctx: Context,
+                               keys: Vec<Key>,
+                               start_ts: u64,
+                               commit_ts: u64)
+                               -> Option<()> {
+        let res = self.store.commit(ctx, keys, start_ts, commit_ts);
+        if res.is_err() {
+            if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
+                   *res.as_ref()
+                .err()
+                .unwrap() {
+                assert!(e.has_not_leader());
+                return Some(());
+            } else {
+                panic!("expect not leader error, but got {:?}", res);
+            }
+        }
+        None
+    }
+
+    pub fn put_ok_for_cluster(&mut self,
+                              cluster: &mut Cluster<ServerCluster>,
+                              key: &[u8],
+                              value: &[u8],
+                              start_ts: u64,
+                              commit_ts: u64) {
+        let mut success = false;
+        for _ in 0..3 {
+            if self.prewrite_ok_or_not_leader(self.ctx.clone(),
+                                           vec![Mutation::Put((make_key(key), value.to_vec()))],
+                                           key.to_vec(),
+                                           start_ts)
+                .is_none() {
+                success = true;
+                break;
+            }
+            self.update_with_key_byte(cluster, key)
+        }
+        assert!(success);
+
+        success = false;
+        for _ in 0..3 {
+            if self.commit_ok_or_not_leader(self.ctx.clone(),
+                                         vec![make_key(key)],
+                                         start_ts,
+                                         commit_ts)
+                .is_none() {
+                success = true;
+                break;
+            }
+            self.update_with_key_byte(cluster, key)
+        }
+        assert!(success);
+    }
+
 
     pub fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
         self.store
