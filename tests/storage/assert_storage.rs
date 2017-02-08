@@ -56,6 +56,7 @@ impl AssertionStorage {
     }
 
     pub fn update_with_key_byte(&mut self, cluster: &mut Cluster<ServerCluster>, key: &[u8]) {
+        // ensure the leader of range which contains current key has been elected
         cluster.must_get(key);
         let region = cluster.get_region(key);
         let leader = cluster.leader_of_region(region.get_id()).unwrap();
