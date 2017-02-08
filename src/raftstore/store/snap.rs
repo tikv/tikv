@@ -175,6 +175,7 @@ mod v1 {
     use rocksdb::{Writable, WriteBatch};
     use kvproto::metapb::Region;
     use raft;
+    use storage::CF_RAFT;
     use util::{HandyRwLock, rocksdb};
     use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 
@@ -449,6 +450,12 @@ mod v1 {
             let mut snap_key_cnt = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
             for cf in snap.cf_names() {
+                if *cf == *CF_RAFT {
+                    // Data in CF_RAFT should be excluded for a snapshot.
+                    // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
+                    // in this range [begin_key, end_key) usually.
+                    continue;
+                }
                 box_try!(self.encode_compact_bytes(cf.as_bytes()));
                 try!(snap.scan_cf(cf,
                                   &begin_key,
