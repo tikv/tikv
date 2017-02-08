@@ -1435,7 +1435,10 @@ impl Peer {
 
         let mut ctx = ExecContext::new(self, index, term, req);
         let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-            error!("{} execute raft command err: {:?}", self.tag, e);
+            match e {
+                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                _ => error!("{} execute raft command err: {:?}", self.tag, e),
+            }
             (cmd_resp::new_error(e), None)
         });
 
