@@ -350,6 +350,10 @@ impl<'a> EngineIterator for RegionIterator<'a> {
         RegionIterator::seek(self, key.encoded()).map_err(From::from)
     }
 
+    fn seek_for_prev(&mut self, key: &Key) -> engine::Result<bool> {
+        RegionIterator::seek_for_prev(self, key.encoded()).map_err(From::from)
+    }
+
     fn seek_to_first(&mut self) -> bool {
         RegionIterator::seek_to_first(self)
     }
