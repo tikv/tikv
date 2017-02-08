@@ -866,7 +866,7 @@ fn test_order_by_column() {
 
     let exp = vec![
     (8,None,4),
-    (7, Some("name:4"),4 ),
+    (7, Some("name:4"), 4),
     (6, Some("name:5"), 4),
     (5, Some("name:6"), 4),
     (2, Some("name:3"), 3),

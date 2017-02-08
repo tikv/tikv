@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::Ordering as CmpOrdering;
 use std::result::Result as StdResult;
+use std::cell::RefCell;
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta, ByItem};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
@@ -510,6 +511,7 @@ struct SortRow {
     data: Vec<u8>,
     order_cols: Vec<ByItem>,
     ctx: Rc<EvalContext>,
+    err: Rc<RefCell<Option<String>>>,
 }
 
 
@@ -518,7 +520,8 @@ impl SortRow {
            order_cols: Vec<ByItem>,
            ctx: Rc<EvalContext>,
            data: Vec<u8>,
-           key: Vec<Datum>)
+           key: Vec<Datum>,
+           err: Rc<RefCell<Option<String>>>)
            -> SortRow {
         SortRow {
             key: key,
@@ -526,17 +529,30 @@ impl SortRow {
             data: data,
             order_cols: order_cols,
             ctx: ctx,
+            err: err,
         }
     }
 
     fn cmp_and_check(&self, right: &SortRow) -> Result<CmpOrdering> {
-        if self.key.len() != right.key.len() || self.key.len() != self.order_cols.len() {
-            return Err(box_err!("cmp failed with key's len not equal"));
+
+        // check err
+        {
+            if let Some(ref err_msg) = *self.err.as_ref().borrow_mut() {
+                return Err(box_err!("{:?}", err_msg));
+            }
         }
+        // check len
+        if self.key.len() != right.key.len() || self.key.len() != self.order_cols.len() {
+            let err_msg = "cmp failed with key's len not equal";
+            *self.err.borrow_mut() = Some(format!("{:?}", err_msg));
+            return Err(box_err!("{:?}", err_msg));
+        }
+
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
             let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
             if let StdResult::Err(err) = cmp_ret {
+                *self.err.as_ref().borrow_mut() = Some(format!("cmp failed {:?} ", err));
                 return Err(box_err!("cmp failed {:?} ", err));
             }
 
@@ -559,6 +575,7 @@ impl SortRow {
 struct TopNHeap {
     rows: BinaryHeap<SortRow>,
     limit: usize,
+    err: Rc<RefCell<Option<String>>>,
 }
 
 impl TopNHeap {
@@ -569,37 +586,48 @@ impl TopNHeap {
                 _ => BinaryHeap::with_capacity(limit + 1),
             },
             limit: limit,
+            err: Rc::new(RefCell::new(None)),
         }
     }
 
-    fn try_add_row(&mut self, row: SortRow) -> Result<()> {
-        if self.rows.is_empty() {
-            self.rows.push(row);
-            return Ok(());
-        }
-
-        // check row data
-        let order = {
-            let top_data = self.rows.peek().unwrap();
-            try!(row.cmp_and_check(&top_data))
-        };
-
-        // push into heap when heap not full
-        if self.rows.len() < self.limit {
-            self.rows.push(row);
-            return Ok(());
-        }
-
-        // swap top value with row when heap is full and current row is less than top data
-        let mut top_value = self.rows.peek_mut().unwrap();
-        if CmpOrdering::Less == order {
-            *top_value = row;
+    fn get_err(&self) -> Result<()> {
+        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
+            return Err(box_err!("{:?}", err_msg));
         }
         Ok(())
     }
 
-    fn into_sorted_vec(self) -> Vec<SortRow> {
-        self.rows.into_sorted_vec()
+    fn try_add_row(&mut self,
+                   handle: i64,
+                   order_cols: Vec<ByItem>,
+                   ctx: Rc<EvalContext>,
+                   data: Vec<u8>,
+                   key: Vec<Datum>)
+                   -> Result<()> {
+        let row = SortRow::new(handle, order_cols, ctx, data, key, self.err.clone());
+        // push into heap when heap not full
+        if self.rows.len() < self.limit {
+            self.rows.push(row);
+        } else {
+            // swap top value with row when heap is full and current row is less than top data
+            let mut top_data = self.rows.peek_mut().unwrap();
+            let order = try!(row.cmp_and_check(&top_data));
+            if CmpOrdering::Less == order {
+                *top_data = row;
+            }
+        }
+        self.get_err()
+    }
+
+    fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
+        try!(self.get_err());
+        let res = {
+            self.rows.into_sorted_vec()
+        };
+        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
+            return Err(box_err!("{:?}", err_msg));
+        }
+        Ok(res)
     }
 }
 
@@ -789,9 +817,8 @@ impl SelectContextCore {
         // encode cols
         let mut data = Vec::new();
         try!(encode_row_from_cols(cols, h, values, &mut data));
-        let sort_row = SortRow::new(h, order_by, self.ctx.clone(), data, sort_keys);
         if let Some(heap) = self.topn_heap.as_mut() {
-            try!(heap.try_add_row(sort_row));
+            try!(heap.try_add_row(h, order_by, self.ctx.clone(), data, sort_keys));
         }
         Ok(())
     }
@@ -855,7 +882,7 @@ impl SelectContextCore {
     }
 
     fn topn_rows(&mut self) -> Result<()> {
-        let sorted_data = self.topn_heap.take().unwrap().into_sorted_vec();
+        let sorted_data = try!(self.topn_heap.take().unwrap().into_sorted_vec());
         for row in sorted_data {
             // self.topn_heap.convert_to_sorted_vec() {
             let mut meta = RowMeta::new();
@@ -1133,7 +1160,7 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use server::coprocessor::endpoint::{SortRow, TopNHeap};
+    use server::coprocessor::endpoint::TopNHeap;
     use util::worker::Worker;
     use storage::engine::{self, TEMP_DIR};
 
@@ -1250,14 +1277,14 @@ mod tests {
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
-            let row = SortRow::new(handle as i64,
-                                   order_cols.clone(),
-                                   ctx.clone(),
-                                   data.into_bytes(),
-                                   cur_key);
-            topn_heap.try_add_row(row).unwrap();
+            topn_heap.try_add_row(handle as i64,
+                             order_cols.clone(),
+                             ctx.clone(),
+                             data.into_bytes(),
+                             cur_key)
+                .unwrap();
         }
-        let result = topn_heap.into_sorted_vec();
+        let result = topn_heap.into_sorted_vec().unwrap();
         assert_eq!(result.len(), exp.len());
         for (row, (handle, data, name, count)) in result.iter().zip(exp) {
             let get_data = String::from_utf8(row.data.clone()).unwrap();
@@ -1267,6 +1294,58 @@ mod tests {
             assert_eq!(row.key, exp_keys);
             assert_eq!(get_data, data);
         }
+    }
+
+    #[test]
+    fn test_topn_heap_with_cmp_error() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(5);
+
+        let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
+        topn_heap.try_add_row(0 as i64,
+                         order_cols.clone(),
+                         ctx.clone(),
+                         b"name:0".to_vec(),
+                         std_key)
+            .unwrap();
+
+        let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
+        topn_heap.try_add_row(0 as i64,
+                         order_cols.clone(),
+                         ctx.clone(),
+                         b"name:0".to_vec(),
+                         std_key2)
+            .unwrap();
+
+        let bad_key1: Vec<Datum> =
+            vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2), Datum::I64(2)];
+        assert!(topn_heap.try_add_row(0 as i64,
+                         order_cols.clone(),
+                         ctx.clone(),
+                         b"name:0".to_vec(),
+                         bad_key1)
+            .is_err());
+
+        let bad_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec())];
+        assert!(topn_heap.try_add_row(0 as i64,
+                         order_cols.clone(),
+                         ctx.clone(),
+                         b"name:0".to_vec(),
+                         bad_key2)
+            .is_err());
+
+        let std_key3: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
+        assert!(topn_heap.try_add_row(0 as i64,
+                         order_cols.clone(),
+                         ctx.clone(),
+                         b"name:0".to_vec(),
+                         std_key3)
+            .is_err());
+
+        assert!(topn_heap.into_sorted_vec().is_err());
     }
 
     #[test]
@@ -1294,15 +1373,15 @@ mod tests {
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
-            let row = SortRow::new(handle as i64,
-                                   order_cols.clone(),
-                                   ctx.clone(),
-                                   data.into_bytes(),
-                                   cur_key);
-            topn_heap.try_add_row(row).unwrap();
+            topn_heap.try_add_row(handle as i64,
+                             order_cols.clone(),
+                             ctx.clone(),
+                             data.into_bytes(),
+                             cur_key)
+                .unwrap();
         }
 
-        let result = topn_heap.into_sorted_vec();
+        let result = topn_heap.into_sorted_vec().unwrap();
         assert_eq!(result.len(), exp.len());
         for (row, (handle, data, name, count)) in result.iter().zip(exp) {
             let get_data = String::from_utf8(row.data.clone()).unwrap();
