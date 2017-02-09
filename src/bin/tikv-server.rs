@@ -59,7 +59,6 @@ use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
-use tikv::raftstore::store::config::*;
 
 fn print_usage(program: &str, opts: &Options) {
     let brief = format!("Usage: {} [options]", program);
