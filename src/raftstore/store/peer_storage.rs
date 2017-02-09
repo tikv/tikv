@@ -881,12 +881,12 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut generator = try!(mgr.rl().get_snapshot_generator(&key));
+    let mut s = try!(mgr.rl().get_snapshot_to_build(&key));
 
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
-    try!(generator.generate(snap, state.get_region(), &mut snap_data));
+    try!(s.build(snap, state.get_region(), &mut snap_data));
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
     snapshot.set_data(v);
@@ -1281,8 +1281,8 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
-        let from = mgr.rl().get_snapshot_to_read(&key).unwrap();
-        let to = mgr.rl().get_snapshot_to_write(&key, b"").unwrap();
+        let from = mgr.rl().get_snapshot_for_reading(&key).unwrap();
+        let to = mgr.rl().get_snapshot_for_writing(&key, b"").unwrap();
         copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();

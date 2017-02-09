@@ -1570,7 +1570,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             if is_sending {
-                let s = try!(self.snap_mgr.rl().get_snapshot_to_read(&key));
+                let s = try!(self.snap_mgr.rl().get_snapshot_for_reading(&key));
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
@@ -1592,7 +1592,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] snap file {} has been applied, delete.",
                       key.region_id,
                       key);
-                let a = try!(self.snap_mgr.rl().get_snapshot_to_apply(&key));
+                let a = try!(self.snap_mgr.rl().get_snapshot_for_applying(&key));
                 a.delete();
             }
         }

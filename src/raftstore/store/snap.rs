@@ -108,23 +108,19 @@ impl Display for SnapKey {
     }
 }
 
-/// `SnapshotGenerator` is a trait that generates snapshot from `RocksDB` snapshot,
-/// the generated snapshot is used to replicate local db data to other remote raftstores.
-pub trait SnapshotGenerator {
-    fn generate(&mut self,
-                snap: &DbSnapshot,
-                region: &Region,
-                snap_data: &mut RaftSnapshotData)
-                -> raft::Result<()>;
-}
-
 /// `Snapshot` is a trait for snapshot.
 /// It's used in these scenarios:
+///   1. build local snapshot
 ///   1. read local snapshot and then replicate it to remote raftstores
 ///   2. receive snapshot from remote raftstore and write it to local storage
 ///   3. snapshot gc
 ///   4. apply snapshot
 pub trait Snapshot: Read + Write + Send {
+    fn build(&mut self,
+             snap: &DbSnapshot,
+             region: &Region,
+             snap_data: &mut RaftSnapshotData)
+             -> raft::Result<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
     fn delete(&self);
@@ -174,8 +170,8 @@ mod v1 {
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey,
-                SnapshotGenerator, Snapshot, ApplyOptions, check_abort};
+    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey, Snapshot,
+                ApplyOptions, check_abort};
 
     pub const CRC32_BYTES_COUNT: usize = 4;
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
@@ -197,11 +193,11 @@ mod v1 {
     }
 
     impl Snap {
-        pub fn new_to_write<T: Into<PathBuf>>(dir: T,
-                                              size_track: Arc<RwLock<u64>>,
-                                              is_sending: bool,
-                                              key: &SnapKey)
-                                              -> io::Result<Snap> {
+        pub fn new_for_writing<T: Into<PathBuf>>(dir: T,
+                                                 size_track: Arc<RwLock<u64>>,
+                                                 is_sending: bool,
+                                                 key: &SnapKey)
+                                                 -> io::Result<Snap> {
             let mut path = dir.into();
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
@@ -212,15 +208,15 @@ mod v1 {
                 tmp_file: None,
                 reader: None,
             };
-            try!(f.init_to_write());
+            try!(f.init_for_writing());
             Ok(f)
         }
 
-        pub fn new_to_read<T: Into<PathBuf>>(dir: T,
-                                             size_track: Arc<RwLock<u64>>,
-                                             is_sending: bool,
-                                             key: &SnapKey)
-                                             -> io::Result<Snap> {
+        pub fn new_for_reading<T: Into<PathBuf>>(dir: T,
+                                                 size_track: Arc<RwLock<u64>>,
+                                                 is_sending: bool,
+                                                 key: &SnapKey)
+                                                 -> io::Result<Snap> {
             let mut path = dir.into();
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
@@ -249,7 +245,7 @@ mod v1 {
             Ok(())
         }
 
-        fn init_to_write(&mut self) -> io::Result<()> {
+        fn init_for_writing(&mut self) -> io::Result<()> {
             if self.exists() || self.tmp_file.is_some() {
                 return Ok(());
             }
@@ -297,43 +293,25 @@ mod v1 {
             }
             Ok(())
         }
-    }
 
-    impl SnapshotGenerator for Snap {
-        fn generate(&mut self,
-                    snap: &DbSnapshot,
-                    region: &Region,
-                    snap_data: &mut RaftSnapshotData)
-                    -> raft::Result<()> {
-            try!(self.do_generate(snap, region));
-            let size = try!(self.total_size());
-            snap_data.set_file_size(size);
-            Ok(())
-        }
-    }
-
-    impl Snap {
         fn need_to_pack(cf: &str) -> bool {
-            if *cf == *CF_RAFT {
-                // Data in CF_RAFT should be excluded for a snapshot.
-                // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
-                // in the range [begin_key, end_key) of a RocksDB snapshot usually.
-                return false;
-            }
-            true
+            // Data in CF_RAFT should be excluded for a snapshot.
+            // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
+            // in the range [begin_key, end_key) of a RocksDB snapshot usually.
+            cf != CF_RAFT
         }
 
-        fn do_generate(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
+        fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
             if self.exists() {
                 match self.get_validation_reader().and_then(|r| r.validate()) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
-                        error!("[region {}] file {} is invalid, will regenerate: {:?}",
+                        error!("[region {}] file {} is invalid, will rebuild: {:?}",
                                region.get_id(),
                                self.path(),
                                e);
                         try!(self.try_delete());
-                        try!(self.init_to_write());
+                        try!(self.init_for_writing());
                     }
                 }
             }
@@ -375,6 +353,17 @@ mod v1 {
     }
 
     impl Snapshot for Snap {
+        fn build(&mut self,
+                 snap: &DbSnapshot,
+                 region: &Region,
+                 snap_data: &mut RaftSnapshotData)
+                 -> raft::Result<()> {
+            try!(self.do_build(snap, region));
+            let size = try!(self.total_size());
+            snap_data.set_file_size(size);
+            Ok(())
+        }
+
         fn path(&self) -> &str {
             self.file.as_path().to_str().unwrap()
         }
@@ -574,8 +563,8 @@ mod v1 {
             let test_data = b"test_data";
             let exp_len = (test_data.len() + super::CRC32_BYTES_COUNT) as u64;
             let size_track = Arc::new(RwLock::new(0));
-            let mut f1 = Snap::new_to_write(&path, size_track.clone(), true, &key).unwrap();
-            let mut f2 = Snap::new_to_write(&path, size_track.clone(), false, &key).unwrap();
+            let mut f1 = Snap::new_for_writing(&path, size_track.clone(), true, &key).unwrap();
+            let mut f2 = Snap::new_for_writing(&path, size_track.clone(), false, &key).unwrap();
             assert!(!f1.exists());
             assert!(Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
             assert!(!f2.exists());
@@ -587,8 +576,8 @@ mod v1 {
             assert!(!f2.exists());
             assert!(Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
             let key2 = SnapKey::new(2, 1, 1);
-            let mut f3 = Snap::new_to_write(&path, size_track.clone(), true, &key2).unwrap();
-            let mut f4 = Snap::new_to_write(&path, size_track.clone(), false, &key2).unwrap();
+            let mut f3 = Snap::new_for_writing(&path, size_track.clone(), true, &key2).unwrap();
+            let mut f4 = Snap::new_for_writing(&path, size_track.clone(), false, &key2).unwrap();
             f3.write_all(test_data).unwrap();
             f4.write_all(test_data).unwrap();
             assert_eq!(*size_track.rl(), 0);
@@ -606,7 +595,7 @@ mod v1 {
 
             let key1 = SnapKey::new(1, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut f1 = Snap::new_to_write(path_str, size_track.clone(), false, &key1).unwrap();
+            let mut f1 = Snap::new_for_writing(path_str, size_track.clone(), false, &key1).unwrap();
             f1.write_all(b"testdata").unwrap();
             f1.save_with_checksum().unwrap();
             let mut reader = f1.get_validation_reader().unwrap();
@@ -732,23 +721,26 @@ impl SnapManagerCore {
         self.registry.contains_key(key)
     }
 
-    pub fn get_snapshot_generator(&self, key: &SnapKey) -> io::Result<Box<SnapshotGenerator>> {
-        let f = try!(v1::Snap::new_to_write(&self.base, self.snap_size.clone(), true, key));
+    pub fn get_snapshot_to_build(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
+        let f = try!(v1::Snap::new_for_writing(&self.base, self.snap_size.clone(), true, key));
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_to_read(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
-        let reader = try!(v1::Snap::new_to_read(&self.base, self.snap_size.clone(), true, key));
+    pub fn get_snapshot_for_reading(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
+        let reader = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), true, key));
         Ok(Box::new(reader))
     }
 
-    pub fn get_snapshot_to_write(&self, key: &SnapKey, _data: &[u8]) -> io::Result<Box<Snapshot>> {
-        let f = try!(v1::Snap::new_to_write(&self.base, self.snap_size.clone(), false, key));
+    pub fn get_snapshot_for_writing(&self,
+                                    key: &SnapKey,
+                                    _data: &[u8])
+                                    -> io::Result<Box<Snapshot>> {
+        let f = try!(v1::Snap::new_for_writing(&self.base, self.snap_size.clone(), false, key));
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_to_apply(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
-        let f = try!(v1::Snap::new_to_read(&self.base, self.snap_size.clone(), false, key));
+    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
+        let f = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), false, key));
         Ok(Box::new(f))
     }
 
@@ -872,12 +864,12 @@ mod test {
         let path3 = path.path().to_str().unwrap().to_owned() + "/snap3";
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let f1 = Snap::new_to_write(&path3, size_track.clone(), true, &key1).unwrap();
-        let f2 = Snap::new_to_write(&path3, size_track.clone(), false, &key1).unwrap();
+        let f1 = Snap::new_for_writing(&path3, size_track.clone(), true, &key1).unwrap();
+        let f2 = Snap::new_for_writing(&path3, size_track.clone(), false, &key1).unwrap();
         let key2 = SnapKey::new(2, 1, 1);
-        let mut f3 = Snap::new_to_write(&path3, size_track.clone(), true, &key2).unwrap();
+        let mut f3 = Snap::new_for_writing(&path3, size_track.clone(), true, &key2).unwrap();
         f3.save_with_checksum().unwrap();
-        let mut f4 = Snap::new_to_write(&path3, size_track.clone(), false, &key2).unwrap();
+        let mut f4 = Snap::new_for_writing(&path3, size_track.clone(), false, &key2).unwrap();
         f4.save_with_checksum().unwrap();
         assert!(!f1.exists());
         assert!(!f2.exists());
@@ -903,15 +895,15 @@ mod test {
         let test_data = b"test_data";
         let exp_len = (test_data.len() + CRC32_BYTES_COUNT) as u64;
         let size_track = Arc::new(RwLock::new(0));
-        let mut f1 = Snap::new_to_write(path_str, size_track.clone(), true, &key1).unwrap();
-        let mut f2 = Snap::new_to_write(path_str, size_track.clone(), false, &key1).unwrap();
+        let mut f1 = Snap::new_for_writing(path_str, size_track.clone(), true, &key1).unwrap();
+        let mut f2 = Snap::new_for_writing(path_str, size_track.clone(), false, &key1).unwrap();
         f1.write_all(test_data).unwrap();
         f2.write_all(test_data).unwrap();
         let key2 = SnapKey::new(2, 1, 1);
-        let mut f3 = Snap::new_to_write(path_str, size_track.clone(), true, &key2).unwrap();
+        let mut f3 = Snap::new_for_writing(path_str, size_track.clone(), true, &key2).unwrap();
         f3.write_all(test_data).unwrap();
         f3.save_with_checksum().unwrap();
-        let mut f4 = Snap::new_to_write(path_str, size_track.clone(), false, &key2).unwrap();
+        let mut f4 = Snap::new_for_writing(path_str, size_track.clone(), false, &key2).unwrap();
         f4.write_all(test_data).unwrap();
         f4.save_with_checksum().unwrap();
 
@@ -920,9 +912,9 @@ mod test {
         // temporary file should not be count in snap size.
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len * 2);
 
-        mgr.rl().get_snapshot_to_read(&key2).unwrap().delete();
+        mgr.rl().get_snapshot_for_reading(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
-        mgr.rl().get_snapshot_to_apply(&key2).unwrap().delete();
+        mgr.rl().get_snapshot_for_applying(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
     }
 }
