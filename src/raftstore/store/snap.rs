@@ -315,7 +315,7 @@ mod v1 {
     impl Snap {
         fn do_generate(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
             if self.exists() {
-                match self.get_validation_reader().and_then(|mut r| r.validate()) {
+                match self.get_validation_reader().and_then(|r| r.validate()) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         error!("[region {}] file {} is invalid, will regenerate: {:?}",
@@ -510,7 +510,7 @@ mod v1 {
         ///
         /// If the reader will be consumed after calling this method, no further data can be
         /// read from this reader again.
-        pub fn validate(&mut self) -> io::Result<()> {
+        pub fn validate(mut self) -> io::Result<()> {
             if self.res.is_none() {
                 if self.left > 0 {
                     let cap = cmp::min(self.left, DEFAULT_READ_BUFFER_SIZE);
