@@ -667,7 +667,7 @@ impl PeerStorage {
 
     /// Check whether the storage has finished applying snapshot.
     #[inline]
-    pub fn is_applying(&self) -> bool {
+    pub fn is_applying_snapshot(&self) -> bool {
         match *self.snap_state.borrow() {
             SnapState::Applying(_) => true,
             _ => false,

@@ -426,7 +426,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // When having pending snapshot, if election timeout is met, it can't pass
             // the pending conf change check because first index has been updated to
             // a value that is larger than last index.
-            if !peer.is_applying() && !peer.has_pending_snap() {
+            if !peer.is_applying_snapshot() && !peer.has_pending_snap() {
                 peer.raft_group.tick();
 
                 // If this peer detects the leader is missing for a long long time,
@@ -491,7 +491,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             has_peer = true;
             let target_peer_id = target.get_id();
             if p.peer_id() < target_peer_id {
-                if p.is_applying() && !p.mut_store().cancel_applying_snap() {
+                if p.is_applying_snapshot() && !p.mut_store().cancel_applying_snap() {
                     info!("[region {}] Stale peer {} is applying snapshot, will destroy next \
                            time.",
                           region_id,
@@ -884,7 +884,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // Can we destroy it in another thread later?
         let mut p = self.region_peers.remove(&region_id).unwrap();
         // We can't destroy a peer which is applying snapshot.
-        assert!(!p.is_applying());
+        assert!(!p.is_applying_snapshot());
 
         let is_initialized = p.is_initialized();
         if let Err(e) = p.destroy() {
@@ -1616,7 +1616,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         let s = peer.get_store();
                         compacted_idx = s.truncated_index();
                         compacted_term = s.truncated_term();
-                        is_applying_snap = s.is_applying();
+                        is_applying_snap = s.is_applying_snapshot();
                     }
                 };
             }
@@ -1992,7 +1992,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                         }
                     });
                     if let Some(p) = self.region_peers.get_mut(&res.region_id) {
-                        assert!(!p.is_applying());
+                        assert!(!p.is_applying_snapshot());
                         p.raft_group.advance_apply(res.apply_state.get_applied_index());
                         p.mut_store().apply_state = res.apply_state;
                         if has_split {

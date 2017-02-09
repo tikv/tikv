@@ -445,8 +445,8 @@ impl Peer {
         self.raft_group.mut_store()
     }
 
-    pub fn is_applying(&self) -> bool {
-        self.get_store().is_applying()
+    pub fn is_applying_snapshot(&self) -> bool {
+        self.get_store().is_applying_snapshot()
     }
 
     pub fn has_pending_snap(&self) -> bool {
@@ -695,7 +695,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if self.is_applying() {
+        if self.is_applying_snapshot() {
             // Snapshot's metadata has been applied.
             self.last_ready_idx = self.get_store().truncated_index();
         } else {
@@ -724,7 +724,7 @@ impl Peer {
         }
 
         self.raft_group.advance_append(ready);
-        if self.is_applying() {
+        if self.is_applying_snapshot() {
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply(self.last_ready_idx);
@@ -1226,7 +1226,9 @@ impl Peer {
 }
 
 pub struct ApplyDelegate {
+    // peer_id
     pub id: u64,
+    // peer_tag, "[region region_id] peer_id"
     pub tag: String,
     pub engine: Arc<DB>,
     pub region: metapb::Region,
