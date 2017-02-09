@@ -249,18 +249,18 @@ impl RowColMeta {
 }
 
 impl RowColsDict {
-    pub fn new(cols_num: usize, val: Vec<u8>) -> RowColsDict {
+    fn new(cols_num: usize, val: Vec<u8>) -> RowColsDict {
         RowColsDict {
             value: val,
             cols: HashMap::with_capacity(cols_num),
         }
     }
 
-    pub fn set_value(&mut self, val: Vec<u8>) {
+    fn set_value(&mut self, val: Vec<u8>) {
         self.value = val;
     }
 
-    pub fn insert(&mut self, key: i64, offset: usize, length: usize) -> Option<RowColMeta> {
+    fn insert(&mut self, key: i64, offset: usize, length: usize) -> Option<RowColMeta> {
         let value = RowColMeta::new(offset, length);
         self.cols.insert(key, value)
     }
@@ -285,12 +285,12 @@ impl RowColsDict {
 // Row layout:value,colID1=>(offset1,length1), colID2=>(offset2,length2)  .....
 pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     if cols.is_empty() || data.is_empty() || data.len() == 1 && data[0] == datum::NIL_FLAG {
-        return Ok(RowColsDict::new(cols.len(), data));
+        return Ok(RowColsDict::new(0, data));
     }
 
-    let mut res = RowColsDict::new(cols.len(), Vec::new());
     // parse cols from data
-    {
+    let mut res = {
+        let mut res = RowColsDict::new(cols.len(), Vec::new());
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && res.len() < cols.len() {
@@ -302,32 +302,40 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
             }
             tmp_data = rem;
         }
-    }
+        res
+    };
     res.set_value(data);
     Ok(res)
 }
 
-// `cut_idx_key` cuts encoded index key into colIDs to (offset,length) map.
-pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Vec<u8>)> {
-    let key = &key[PREFIX_LEN + ID_LEN..];
-    if col_ids.is_empty() {
-        return Ok((RowColsDict::new(0, Vec::new()), key.to_vec()));
+fn parse_handle(mut data: &[u8]) -> Result<Option<i64>> {
+    if data.is_empty() {
+        return Ok(None);
     }
-
+    let handle = box_try!(data.decode_datum()).i64();
+    Ok(Some(handle))
+}
+// `cut_idx_key` cuts encoded index key into colIDs to (offset,length) map.
+pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option<i64>)> {
+    if col_ids.is_empty() {
+        let handle = box_try!(parse_handle(&key[PREFIX_LEN + ID_LEN..]));
+        return Ok((RowColsDict::new(0, key), handle));
+    }
     let mut values = RowColsDict::new(col_ids.len(), Vec::new());
-    let data = {
-        let mut tmp_data: &[u8] = key;
-        let length = tmp_data.len();
+    let handle = {
+        let mut tmp_data: &[u8] = &key[PREFIX_LEN + ID_LEN..];
+        let length = key.len();
+        // parse cols from data
         for &id in col_ids {
             let offset = length - tmp_data.len();
             let (val, rem) = try!(datum::split_datum(tmp_data, false));
             values.insert(id, offset, val.len());
             tmp_data = rem;
         }
-        tmp_data
+        box_try!(parse_handle(tmp_data))
     };
-    values.set_value(key.to_vec());
-    Ok((values, data.to_vec()))
+    values.set_value(key);
+    Ok((values, handle))
 }
 
 #[cfg(test)]
@@ -386,9 +394,9 @@ mod test {
         to_hash_map(&res)
     }
 
-    fn cut_idx_key_as_owned(bs: &[u8], ids: &[i64]) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
+    fn cut_idx_key_as_owned(bs: &[u8], ids: &[i64]) -> (HashMap<i64, Vec<u8>>, Option<i64>) {
         let (res, left) = cut_idx_key(bs.to_vec(), ids).unwrap();
-        (to_hash_map(&res), left.to_vec())
+        (to_hash_map(&res), left)
     }
 
     #[test]
@@ -458,7 +466,7 @@ mod test {
                              new_col_info(types::NEW_DECIMAL)];
         let col_values =
             vec![Datum::I64(100), Datum::Bytes(b"abc".to_vec()), Datum::Dec(10.into())];
-        let mut col_encoded: HashMap<_, _> = col_ids.iter()
+        let col_encoded: HashMap<_, _> = col_ids.iter()
             .zip(&col_types)
             .zip(&col_values)
             .map(|((id, t), v)| {
@@ -477,9 +485,9 @@ mod test {
 
         let mut res: (HashMap<_, _>, _) = cut_idx_key_as_owned(&bs, &col_ids);
         assert_eq!(col_encoded, res.0);
-        assert!(res.1.is_empty());
+        assert!(res.1.is_none());
 
-        let handle = col_encoded.remove(&3).unwrap();
+        let handle = Some(3 as i64);//col_encoded.remove(&3).unwrap();
         col_ids.remove(2);
         res = cut_idx_key_as_owned(&bs, &col_ids);
         assert_eq!(col_encoded, res.0);
@@ -490,6 +498,6 @@ mod test {
         assert!(decode_index_key(&Default::default(), &bs, &[]).unwrap().is_empty());
         res = cut_idx_key_as_owned(&bs, &[]);
         assert!(res.0.is_empty());
-        assert!(res.1.is_empty());
+        assert!(res.1.is_none());
     }
 }

@@ -33,7 +33,6 @@ use kvproto::errorpb::{self, ServerIsBusy};
 use storage::{self, Engine, SnapshotStore, ScanMetrics, engine, Snapshot, Key, ScanMode};
 use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
-use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either};
@@ -886,10 +885,10 @@ impl<'a> SelectContext<'a> {
                     let ids = self.core.cols.as_ref().right().unwrap();
                     box_try!(table::cut_idx_key(key, ids))
                 };
-                let handle = if handle.is_empty() {
+                let handle = if handle.is_none() {
                     box_try!(val.as_slice().read_i64::<BigEndian>())
                 } else {
-                    box_try!((handle.as_slice() as &[u8]).decode_datum()).i64()
+                    handle.unwrap()
                 };
                 row_cnt += try!(self.core.handle_row(handle, values));
             }
