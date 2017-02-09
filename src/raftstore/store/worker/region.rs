@@ -207,21 +207,17 @@ impl Runner {
         }
         try!(check_abort(&abort));
         let timer = Instant::now();
-        let mut snapshot_size = 0;
-        let mut snapshot_kv_count = 0;
-        {
-            let apply_context = ApplyContext {
-                db: self.db.clone(),
-                region: &region,
-                abort: abort.clone(),
-                write_batch_size: self.batch_size,
-                snapshot_size: &mut snapshot_size,
-                snapshot_kv_count: &mut snapshot_kv_count,
-            };
-            try!(s.apply(apply_context));
-        }
-        SNAPSHOT_KV_COUNT_HISTOGRAM.observe(snapshot_kv_count as f64);
-        SNAPSHOT_SIZE_HISTOGRAM.observe(snapshot_size as f64);
+        let mut apply_context = ApplyContext {
+            db: self.db.clone(),
+            region: region.clone(),
+            abort: abort.clone(),
+            write_batch_size: self.batch_size,
+            snapshot_size: 0,
+            snapshot_kv_count: 0,
+        };
+        try!(s.apply(&mut apply_context));
+        SNAPSHOT_KV_COUNT_HISTOGRAM.observe(apply_context.snapshot_kv_count as f64);
+        SNAPSHOT_SIZE_HISTOGRAM.observe(apply_context.snapshot_size as f64);
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
         s.delete();

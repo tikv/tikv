@@ -86,7 +86,6 @@ impl SnapKey {
         }
     }
 
-    #[inline]
     pub fn from_region_snap(region_id: u64, snap: &RaftSnapshot) -> SnapKey {
         let index = snap.get_metadata().get_index();
         let term = snap.get_metadata().get_term();
@@ -109,13 +108,13 @@ impl Display for SnapKey {
     }
 }
 
-pub struct ApplyContext<'a> {
+pub struct ApplyContext {
     pub db: Arc<DB>,
-    pub region: &'a Region,
+    pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
-    pub snapshot_size: &'a mut usize,
-    pub snapshot_kv_count: &'a mut usize,
+    pub snapshot_size: usize,
+    pub snapshot_kv_count: usize,
 }
 
 /// `Snapshot` is a trait for snapshot.
@@ -137,7 +136,7 @@ pub trait Snapshot: Read + Write + Send {
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn save(&mut self) -> io::Result<()>;
-    fn apply(&mut self, context: ApplyContext) -> Result<()>;
+    fn apply(&mut self, context: &mut ApplyContext) -> Result<()>;
 }
 
 // A helper function to copy snapshot.
@@ -395,7 +394,7 @@ mod v1 {
             self.save_impl(false)
         }
 
-        fn apply(&mut self, context: ApplyContext) -> Result<()> {
+        fn apply(&mut self, context: &mut ApplyContext) -> Result<()> {
             let mut reader = box_try!(self.get_validation_reader());
             loop {
                 try!(check_abort(&context.abort));
@@ -413,18 +412,18 @@ mod v1 {
                     let key = box_try!(reader.decode_compact_bytes());
                     if key.is_empty() {
                         box_try!(context.db.write(wb));
-                        *context.snapshot_size += batch_size;
+                        context.snapshot_size += batch_size;
                         break;
                     }
-                    *context.snapshot_kv_count += 1;
-                    box_try!(util::check_key_in_region(keys::origin_key(&key), context.region));
+                    context.snapshot_kv_count += 1;
+                    box_try!(util::check_key_in_region(keys::origin_key(&key), &context.region));
                     batch_size += key.len();
                     let value = box_try!(reader.decode_compact_bytes());
                     batch_size += value.len();
                     box_try!(wb.put_cf(handle, &key, &value));
                     if batch_size >= context.write_batch_size {
                         box_try!(context.db.write(wb));
-                        *context.snapshot_size += batch_size;
+                        context.snapshot_size += batch_size;
                         wb = WriteBatch::new();
                         batch_size = 0;
                     }
