@@ -28,7 +28,7 @@ use util::{escape, HandyRwLock, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption, SeekMode};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
-use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyOptions, keys,
+use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyContext, keys,
                        Peekable};
 use raftstore::store::snap::{Error, Result};
 use storage::CF_RAFT;
@@ -210,7 +210,7 @@ impl Runner {
         let mut snapshot_size = 0;
         let mut snapshot_kv_count = 0;
         {
-            let apply_options = ApplyOptions {
+            let apply_context = ApplyContext {
                 db: self.db.clone(),
                 region: &region,
                 abort: abort.clone(),
@@ -218,7 +218,7 @@ impl Runner {
                 snapshot_size: &mut snapshot_size,
                 snapshot_kv_count: &mut snapshot_kv_count,
             };
-            try!(s.apply(apply_options));
+            try!(s.apply(apply_context));
         }
         SNAPSHOT_KV_COUNT_HISTOGRAM.observe(snapshot_kv_count as f64);
         SNAPSHOT_SIZE_HISTOGRAM.observe(snapshot_size as f64);

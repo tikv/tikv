@@ -29,6 +29,7 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use raft;
 use raftstore::store::Msg;
+use storage::CF_RAFT;
 use util::transport::SendCh;
 use util::HandyRwLock;
 
@@ -108,6 +109,15 @@ impl Display for SnapKey {
     }
 }
 
+pub struct ApplyContext<'a> {
+    pub db: Arc<DB>,
+    pub region: &'a Region,
+    pub abort: Arc<AtomicUsize>,
+    pub write_batch_size: usize,
+    pub snapshot_size: &'a mut usize,
+    pub snapshot_kv_count: &'a mut usize,
+}
+
 /// `Snapshot` is a trait for snapshot.
 /// It's used in these scenarios:
 ///   1. build local snapshot
@@ -127,16 +137,7 @@ pub trait Snapshot: Read + Write + Send {
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn save(&mut self) -> io::Result<()>;
-    fn apply(&mut self, options: ApplyOptions) -> Result<()>;
-}
-
-pub struct ApplyOptions<'a> {
-    pub db: Arc<DB>,
-    pub region: &'a Region,
-    pub abort: Arc<AtomicUsize>,
-    pub write_batch_size: usize,
-    pub snapshot_size: &'a mut usize,
-    pub snapshot_kv_count: &'a mut usize,
+    fn apply(&mut self, context: ApplyContext) -> Result<()>;
 }
 
 // A helper function to copy snapshot.
@@ -147,6 +148,13 @@ pub fn copy_snapshot(mut from: Box<Snapshot>, mut to: Box<Snapshot>) -> io::Resu
         try!(to.save());
     }
     Ok(())
+}
+
+fn need_to_pack(cf: &str) -> bool {
+    // Data in CF_RAFT should be excluded for a snapshot.
+    // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
+    // in the range [begin_key, end_key) of a RocksDB snapshot usually.
+    cf != CF_RAFT
 }
 
 mod v1 {
@@ -163,7 +171,6 @@ mod v1 {
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft;
-    use storage::CF_RAFT;
     use util::{HandyRwLock, rocksdb};
     use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 
@@ -171,17 +178,10 @@ mod v1 {
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey, Snapshot,
-                ApplyOptions, check_abort};
+                ApplyContext, check_abort, need_to_pack};
 
     pub const CRC32_BYTES_COUNT: usize = 4;
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
-
-    fn need_to_pack(cf: &str) -> bool {
-        // Data in CF_RAFT should be excluded for a snapshot.
-        // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
-        // in the range [begin_key, end_key) of a RocksDB snapshot usually.
-        cf != CF_RAFT
-    }
 
     /// A structure represents the snapshot.
     ///
@@ -395,36 +395,36 @@ mod v1 {
             self.save_impl(false)
         }
 
-        fn apply(&mut self, options: ApplyOptions) -> Result<()> {
+        fn apply(&mut self, context: ApplyContext) -> Result<()> {
             let mut reader = box_try!(self.get_validation_reader());
             loop {
-                try!(check_abort(&options.abort));
+                try!(check_abort(&context.abort));
                 let cf = box_try!(reader.decode_compact_bytes());
                 if cf.is_empty() {
                     break;
                 }
-                let handle = box_try!(rocksdb::get_cf_handle(&options.db, unsafe {
+                let handle = box_try!(rocksdb::get_cf_handle(&context.db, unsafe {
                     str::from_utf8_unchecked(&cf)
                 }));
                 let mut wb = WriteBatch::new();
                 let mut batch_size = 0;
                 loop {
-                    try!(check_abort(&options.abort));
+                    try!(check_abort(&context.abort));
                     let key = box_try!(reader.decode_compact_bytes());
                     if key.is_empty() {
-                        box_try!(options.db.write(wb));
-                        *options.snapshot_size += batch_size;
+                        box_try!(context.db.write(wb));
+                        *context.snapshot_size += batch_size;
                         break;
                     }
-                    *options.snapshot_kv_count += 1;
-                    box_try!(util::check_key_in_region(keys::origin_key(&key), options.region));
+                    *context.snapshot_kv_count += 1;
+                    box_try!(util::check_key_in_region(keys::origin_key(&key), context.region));
                     batch_size += key.len();
                     let value = box_try!(reader.decode_compact_bytes());
                     batch_size += value.len();
                     box_try!(wb.put_cf(handle, &key, &value));
-                    if batch_size >= options.write_batch_size {
-                        box_try!(options.db.write(wb));
-                        *options.snapshot_size += batch_size;
+                    if batch_size >= context.write_batch_size {
+                        box_try!(context.db.write(wb));
+                        *context.snapshot_size += batch_size;
                         wb = WriteBatch::new();
                         batch_size = 0;
                     }
