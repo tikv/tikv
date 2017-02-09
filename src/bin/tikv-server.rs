@@ -298,7 +298,8 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
 fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
                          block_cache_default: i64,
-                         use_bloom_filter: bool)
+                         use_bloom_filter: bool,
+                         whole_key_filtering: bool)
                          -> RocksdbOptions {
     let prefix = String::from("rocksdb.") + cf + ".";
     let mut opts = RocksdbOptions::new();
@@ -328,6 +329,8 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                                                       .as_str(),
                                                   Some(false));
         block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
+
+        block_base_opts.set_whole_key_filtering(whole_key_filtering);
     }
     opts.set_block_based_table_factory(&block_base_opts);
 
@@ -385,17 +388,23 @@ fn get_rocksdb_default_cf_option(config: &toml::Value) -> RocksdbOptions {
     get_rocksdb_cf_option(config,
                           "defaultcf",
                           1024 * 1024 * 1024,
-                          true /* bloom filter */)
+                          true, // bloom filter
+                          true /* whole key filtering */)
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
-    // Don't need set bloom filter for write cf, because we use seek to get the correct
-    // version base on provided timestamp.
-    get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, false)
+    let mut opt = get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, true, false);
+    // prefix extractor(trim the timestamp at tail) for write cf.
+    opt.set_prefix_extractor("FixedSuffixSliceTransform",
+                              Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
+        .unwrap();
+    // create prefix bloom for memtable.
+    opt.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+    opt
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false)
+    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false)
 }
 
 fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
