@@ -880,19 +880,20 @@ impl<'a> SelectContext<'a> {
                        escape(r.get_end()));
                 break;
             }
+            seek_key = if desc { key.clone() } else { prefix_next(&key) };
             {
-                let (values, mut handle) = {
+                let (values, handle) = {
                     let ids = self.core.cols.as_ref().right().unwrap();
-                    box_try!(table::cut_idx_key(&key, ids))
+                    box_try!(table::cut_idx_key(key, ids))
                 };
                 let handle = if handle.is_empty() {
                     box_try!(val.as_slice().read_i64::<BigEndian>())
                 } else {
-                    box_try!(handle.decode_datum()).i64()
+                    box_try!((handle.as_slice() as &[u8]).decode_datum()).i64()
                 };
                 row_cnt += try!(self.core.handle_row(handle, values));
             }
-            seek_key = if desc { key } else { prefix_next(&key) };
+
         }
         Ok(row_cnt)
     }
