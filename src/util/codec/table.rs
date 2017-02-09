@@ -237,7 +237,8 @@ pub struct RowColMeta {
 pub struct RowColsDict {
     // data of current row
     value: Vec<u8>,
-    // map contains each col's meta:col_id1=>(offset1,len1),col_id2=>(offset2,len2)
+    // cols contains meta of each column in the format of:
+    // (col_id1,(offset1,len1)),(col_id2,(offset2,len2),...)
     cols: HashMap<i64, RowColMeta>,
 }
 
@@ -283,8 +284,8 @@ impl RowColsDict {
     }
 }
 
-// `cut_row` cut encoded row into (offset,length) and return interested columns' byte slice.
-// Row layout:value,colID1=>(offset1,length1), colID2=>(offset2,length2)  .....
+// `cut_row` cut encoded row into (col_id,offset,length)
+// and return interested columns' meta in RowColsDict
 pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     if cols.is_empty() || data.is_empty() || data.len() == 1 && data[0] == datum::NIL_FLAG {
         return Ok(RowColsDict::new(0, data));
@@ -317,7 +318,7 @@ fn parse_handle(mut data: &[u8]) -> Result<Option<i64>> {
     let handle = box_try!(data.decode_datum()).i64();
     Ok(Some(handle))
 }
-// `cut_idx_key` cuts encoded index key into colIDs to (offset,length) map and handle .
+// `cut_idx_key` cuts encoded index key into RowColsDict and handle .
 pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option<i64>)> {
     if col_ids.is_empty() {
         let handle = box_try!(parse_handle(&key[PREFIX_LEN + ID_LEN..]));
