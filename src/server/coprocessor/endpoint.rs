@@ -767,7 +767,7 @@ impl<'a> SelectContext<'a> {
             };
             let values = {
                 let ids = self.core.cols.as_ref().left().unwrap();
-                box_try!(table::cut_row(&value, ids))
+                box_try!(table::cut_row(value, ids))
             };
             let h = box_try!(table::decode_handle(range.get_start()));
             row_count += try!(self.core.handle_row(h, values));
@@ -812,7 +812,7 @@ impl<'a> SelectContext<'a> {
                 let h = box_try!(table::decode_handle(&key));
                 let row_data = {
                     let ids = self.core.cols.as_ref().left().unwrap();
-                    box_try!(table::cut_row(&value, ids))
+                    box_try!(table::cut_row(value, ids))
                 };
                 row_count += try!(self.core.handle_row(h, row_data));
                 seek_key = if desc {

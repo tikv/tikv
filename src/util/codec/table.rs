@@ -228,7 +228,6 @@ pub trait TableDecoder: DatumDecoder {
 }
 
 impl<T: BytesDecoder> TableDecoder for T {}
-pub type ValDict<'a> = HashMap<i64, &'a [u8]>;
 
 pub struct RowColMeta {
     offset: usize,
@@ -253,13 +252,7 @@ impl RowColsDict {
     pub fn new(cols_num: usize, val: Vec<u8>) -> RowColsDict {
         RowColsDict {
             value: val,
-            cols: {
-                if cols_num == 0 {
-                    HashMap::new()
-                } else {
-                    HashMap::with_capacity(cols_num)
-                }
-            },
+            cols: HashMap::with_capacity(cols_num),
         }
     }
 
@@ -278,39 +271,26 @@ impl RowColsDict {
 
     pub fn get(&self, key: &i64) -> Option<&[u8]> {
         if let Some(meta) = self.cols.get(key) {
-            return Some(&self.value.as_slice()[meta.offset..(meta.offset + meta.length)]);
+            return Some(&self.value[meta.offset..(meta.offset + meta.length)]);
         }
         None
-    }
-
-    pub fn to_hash_map(&self) -> HashMap<i64, Vec<u8>> {
-        if self.cols.is_empty() {
-            return HashMap::new();
-        }
-        let mut data = HashMap::with_capacity(self.cols.len());
-        for key in self.cols.keys() {
-            if let Some(value) = self.get(key) {
-                data.insert(*key, value.to_vec());
-            }
-        }
-        data
     }
 }
 
 // `cut_row` cut encoded row into (offset,length) and return interested columns' byte slice.
 // Row layout:value,colID1=>(offset1,length1), colID2=>(offset2,length2)  .....
-pub fn cut_row(mut data: &[u8], cols: &HashSet<i64>) -> Result<RowColsDict> {
-    let mut origin_data = Vec::new();
-    origin_data.extend_from_slice(data);
+pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     if cols.is_empty() {
-        return Ok(RowColsDict::new(0, origin_data));
+        return Ok(RowColsDict::new(0, data.clone()));
     }
-    let mut res = RowColsDict::new(cols.len(), origin_data);
+    let mut res = RowColsDict::new(cols.len(), data.clone());
     if data.is_empty() || data.len() == 1 && data[0] == datum::NIL_FLAG {
         return Ok(res);
     }
     let length = data.len();
+    let mut data: &[u8] = data.as_ref();
     while !data.is_empty() && res.len() < cols.len() {
+
         let id = try!(data.decode_datum()).i64();
         let offset = length - data.len();
         let (val, rem) = try!(datum::split_datum(data, false));
@@ -381,14 +361,26 @@ mod test {
         col_info
     }
 
+    fn to_hash_map(row: &RowColsDict) -> HashMap<i64, Vec<u8>> {
+        let mut data = HashMap::with_capacity(row.cols.len());
+        if row.cols.is_empty() {
+            return data;
+        }
+        for (key, meta) in &row.cols {
+            data.insert(*key,
+                        row.value[meta.offset..(meta.offset + meta.length)].to_vec());
+        }
+        data
+    }
+
     fn cut_row_as_owned(bs: &[u8], col_id_set: &HashSet<i64>) -> HashMap<i64, Vec<u8>> {
-        let res = cut_row(bs, col_id_set).unwrap();
-        res.to_hash_map()
+        let res = cut_row(bs.to_vec(), col_id_set).unwrap();
+        to_hash_map(&res)
     }
 
     fn cut_idx_key_as_owned(bs: &[u8], ids: &[i64]) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
         let (res, left) = cut_idx_key(bs, ids).unwrap();
-        (res.to_hash_map(), left.to_vec())
+        (to_hash_map(&res), left.to_vec())
     }
 
     #[test]
