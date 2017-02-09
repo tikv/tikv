@@ -176,6 +176,12 @@ mod v1 {
     pub const CRC32_BYTES_COUNT: usize = 4;
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
 
+    fn need_to_pack(cf: &str) -> bool {
+        // Data in CF_RAFT should be excluded for a snapshot.
+        // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
+        // in the range [begin_key, end_key) of a RocksDB snapshot usually.
+        cf != CF_RAFT
+    }
 
     /// A structure represents the snapshot.
     ///
@@ -294,12 +300,7 @@ mod v1 {
             Ok(())
         }
 
-        fn need_to_pack(cf: &str) -> bool {
-            // Data in CF_RAFT should be excluded for a snapshot.
-            // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
-            // in the range [begin_key, end_key) of a RocksDB snapshot usually.
-            cf != CF_RAFT
-        }
+
 
         fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
             if self.exists() {
@@ -321,7 +322,7 @@ mod v1 {
             let mut snap_key_cnt = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
             for cf in snap.cf_names() {
-                if !Snap::need_to_pack(cf) {
+                if !need_to_pack(cf) {
                     continue;
                 }
                 box_try!(self.encode_compact_bytes(cf.as_bytes()));
