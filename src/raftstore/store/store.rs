@@ -1208,6 +1208,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let mut total_gc_logs = 0;
+
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
@@ -1264,6 +1266,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
+            total_gc_logs += compact_idx - first_idx;
+
             let term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
 
             // Create a compact log request and notify directly.
@@ -1274,6 +1278,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as f64).unwrap();
         self.register_raft_gc_log_tick(event_loop);
     }
 
