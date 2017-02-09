@@ -57,7 +57,7 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
-use tikv::pd::RpcClient;
+use tikv::pd::{RpcClient, PdClient};
 use tikv::util::time_monitor::TimeMonitor;
 
 fn print_usage(program: &str, opts: &Options) {
@@ -767,7 +767,7 @@ fn main() {
     }
 
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
-    let cluster_id = pd_client.cluster_id;
+    let cluster_id = pd_client.get_cluster_id().unwrap();
 
     let mut cfg = build_cfg(&matches, &config, cluster_id, addr);
     cfg.labels = get_store_labels(&matches, &config);

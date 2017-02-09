@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,21 +21,29 @@ use kvproto::{metapb, pdpb};
 use kvproto::pdpb2;
 use kvproto::pdpb2_grpc::{self, PD};
 use super::PdClient;
-use super::{Result, Error};
+use super::Result;
 
 pub struct Client {
     list: Option<pdpb2::GetPDMembersResponse>,
-
-    // TODO: use async client.
     inner: pdpb2_grpc::PDClient,
 }
 
 impl Client {
-    // FIXME: pass address.
-    pub fn new() -> Result<Client> {
+    pub fn new(mut endpoints: Vec<String>) -> Result<Client> {
+        // TODO: utilize all endpoints.
+        // TODO: validate endpoints.
+        let (host, port) = endpoints.pop()
+            .and_then(|addr| {
+                let mut parts = addr.split(':');
+                Some((parts.next().unwrap().to_owned(),
+                      parts.next().unwrap().parse::<u16>().unwrap()))
+            })
+            .unwrap();
+
         let mut conf: grpc::client::GrpcClientConf = Default::default();
         conf.http.no_delay = Some(true);
-        let inner = pdpb2_grpc::PDClient::new("127.0.0.1", 2379, false, conf).unwrap();
+
+        let inner = pdpb2_grpc::PDClient::new(&host, port, false, conf).unwrap();
         let list = box_try!(inner.GetPDMembers(pdpb2::GetPDMembersRequest::new()));
 
         let client = Client {
@@ -62,11 +70,7 @@ fn check_resp_header(header: &pdpb2::ResponseHeader) -> Result<()> {
     }
     // TODO: translate more error types
     let err = header.get_error();
-    if err.field_type == pdpb2::ErrorType::BOOTSTRAPPED {
-        Err(Error::ClusterBootstrapped(header.get_cluster_id()))
-    } else {
-        Err(box_err!(err.get_message()))
-    }
+    Err(box_err!(err.get_message()))
 }
 
 impl fmt::Debug for Client {
