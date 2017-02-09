@@ -313,6 +313,16 @@ mod v1 {
     }
 
     impl Snap {
+        fn need_to_pack(cf: &str) -> bool {
+            if *cf == *CF_RAFT {
+                // Data in CF_RAFT should be excluded for a snapshot.
+                // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
+                // in the range [begin_key, end_key) of a RocksDB snapshot usually.
+                return false;
+            }
+            true
+        }
+
         fn do_generate(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
             if self.exists() {
                 match self.get_validation_reader().and_then(|r| r.validate()) {
@@ -333,10 +343,7 @@ mod v1 {
             let mut snap_key_cnt = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
             for cf in snap.cf_names() {
-                if *cf == *CF_RAFT {
-                    // Data in CF_RAFT should be excluded for a snapshot.
-                    // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
-                    // in this range [begin_key, end_key) usually.
+                if !Snap::need_to_pack(cf) {
                     continue;
                 }
                 box_try!(self.encode_compact_bytes(cf.as_bytes()));
@@ -345,8 +352,7 @@ mod v1 {
                                   &end_key,
                                   false,
                                   &mut |key, value| {
-                    snap_size += key.len();
-                    snap_size += value.len();
+                    snap_size += key.len() + value.len();
                     snap_key_cnt += 1;
                     try!(self.encode_compact_bytes(key));
                     try!(self.encode_compact_bytes(value));
