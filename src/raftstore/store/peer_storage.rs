@@ -1281,8 +1281,8 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
-        let from = mgr.rl().get_snapshot_for_reading(&key).unwrap();
-        let to = mgr.rl().get_snapshot_for_writing(&key, b"").unwrap();
+        let from = mgr.rl().get_snapshot_for_sending(&key).unwrap();
+        let to = mgr.rl().get_snapshot_for_receiving(&key, b"").unwrap();
         copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();

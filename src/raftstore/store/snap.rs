@@ -225,13 +225,12 @@ mod v1 {
             let mut path = dir.into();
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
-            let reader = try!(File::open(&path));
             let f = Snap {
                 file: path,
                 digest: None,
                 size_track: size_track,
                 tmp_file: None,
-                reader: Some(reader),
+                reader: None,
             };
             Ok(f)
         }
@@ -298,8 +297,6 @@ mod v1 {
             }
             Ok(())
         }
-
-
 
         fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
             if self.exists() {
@@ -438,7 +435,8 @@ mod v1 {
     impl Read for Snap {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if self.reader.is_none() {
-                return Ok(0);
+                let reader = try!(File::open(&self.file));
+                self.reader = Some(reader);
             }
             self.reader.as_mut().unwrap().read(buf)
         }
@@ -503,7 +501,7 @@ mod v1 {
 
         /// Validate the file
         ///
-        /// If the reader will be consumed after calling this method, no further data can be
+        /// If the reader is consumed after calling this method, no further data can be
         /// read from this reader again.
         pub fn validate(mut self) -> io::Result<()> {
             if self.res.is_none() {
@@ -726,15 +724,15 @@ impl SnapManagerCore {
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_for_reading(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
+    pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
         let reader = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), true, key));
         Ok(Box::new(reader))
     }
 
-    pub fn get_snapshot_for_writing(&self,
-                                    key: &SnapKey,
-                                    _data: &[u8])
-                                    -> io::Result<Box<Snapshot>> {
+    pub fn get_snapshot_for_receiving(&self,
+                                      key: &SnapKey,
+                                      _data: &[u8])
+                                      -> io::Result<Box<Snapshot>> {
         let f = try!(v1::Snap::new_for_writing(&self.base, self.snap_size.clone(), false, key));
         Ok(Box::new(f))
     }
@@ -912,7 +910,7 @@ mod test {
         // temporary file should not be count in snap size.
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len * 2);
 
-        mgr.rl().get_snapshot_for_reading(&key2).unwrap().delete();
+        mgr.rl().get_snapshot_for_sending(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
         mgr.rl().get_snapshot_for_applying(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);

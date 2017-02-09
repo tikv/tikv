@@ -85,7 +85,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(&snap));
     mgr.wl().register(key.clone(), SnapEntry::Sending);
-    let mut s = box_try!(mgr.rl().get_snapshot_for_reading(&key));
+    let mut s = box_try!(mgr.rl().get_snapshot_for_sending(&key));
     defer!({
         mgr.wl().deregister(&key, &SnapEntry::Sending);
     });
@@ -149,8 +149,8 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let mgr = self.snap_mgr.clone();
                 match SnapKey::from_snap(meta.get_message().get_snapshot()).and_then(|key| {
                     mgr.rl()
-                        .get_snapshot_for_writing(&key,
-                                                  meta.get_message().get_snapshot().get_data())
+                        .get_snapshot_for_receiving(&key,
+                                                    meta.get_message().get_snapshot().get_data())
                         .map(|s| (s, key))
                 }) {
                     Ok((snap, key)) => {
