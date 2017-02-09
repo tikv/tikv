@@ -36,6 +36,7 @@ use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback,
             Iterator as EngineIterator};
 use storage::{Key, Value, CfName, CF_DEFAULT};
 use super::metrics::*;
+use raftstore::store::engine::IterOption;
 
 quick_error! {
     #[derive(Debug)]
@@ -318,23 +319,17 @@ impl Snapshot for RegionSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self,
-                upper_bound: Option<&[u8]>,
-                fill_cache: bool,
-                mode: ScanMode)
-                -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound, fill_cache), mode))
+    fn iter<'b>(&'b self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor<'b>> {
+        Ok(Cursor::new(RegionSnapshot::iter(self, iter_opt), mode))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self,
                    cf: CfName,
-                   upper_bound: Option<&[u8]>,
-                   fill_cache: bool,
+                   iter_opt: IterOption,
                    mode: ScanMode)
                    -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound, fill_cache)),
-                       mode))
+        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, iter_opt)), mode))
     }
 
     fn clone(&self) -> Box<Snapshot> {
