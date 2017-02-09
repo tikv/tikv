@@ -536,39 +536,50 @@ impl SortRow {
     fn cmp_and_check(&self, right: &SortRow) -> Result<CmpOrdering> {
 
         // check err
-        {
-            if let Some(ref err_msg) = *self.err.as_ref().borrow_mut() {
-                return Err(box_err!("{:?}", err_msg));
-            }
-        }
+        try!(self.get_err());
         // check len
-        if self.key.len() != right.key.len() || self.key.len() != self.order_cols.len() {
-            let err_msg = "cmp failed with key's len not equal";
-            *self.err.borrow_mut() = Some(format!("{:?}", err_msg));
-            return Err(box_err!("{:?}", err_msg));
+        if self.key.len() != right.key.len() {
+            let err_msg = format!("cmp failed with key's len {} != {} ",
+                                  self.key.len(),
+                                  right.key.len());
+            try!(self.set_err(err_msg));
         }
 
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
             let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
             if let StdResult::Err(err) = cmp_ret {
-                *self.err.as_ref().borrow_mut() = Some(format!("cmp failed {:?} ", err));
-                return Err(box_err!("cmp failed {:?} ", err));
-            }
-
-            let order = cmp_ret.unwrap();
-            if order == CmpOrdering::Equal {
-                continue;
-            }
-            // less or equal
-            if col.get_desc() {
-                // heap pop the biggest first
-                return Ok(order.reverse());
+                try!(self.set_err(format!("cmp failed with:{:?}", err)));
             } else {
-                return Ok(order);
+                let order = cmp_ret.unwrap();
+                if order == CmpOrdering::Equal {
+                    continue;
+                }
+                // less or equal
+                if col.get_desc() {
+                    // heap pop the biggest first
+                    return Ok(order.reverse());
+                } else {
+                    return Ok(order);
+                }
             }
         }
         Ok(CmpOrdering::Equal)
+    }
+
+    fn get_err(&self) -> Result<()> {
+        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
+            return Err(box_err!("{:?}", err_msg));
+        }
+        Ok(())
+    }
+
+    fn set_err(&self, err_msg: String) -> Result<()> {
+        if err_msg.is_empty() {
+            return Ok(());
+        }
+        *self.err.borrow_mut() = Some(err_msg.clone());
+        Err(box_err!("{:?}", err_msg))
     }
 }
 
@@ -604,6 +615,7 @@ impl TopNHeap {
                    data: Vec<u8>,
                    key: Vec<Datum>)
                    -> Result<()> {
+        try!(self.get_err());
         let row = SortRow::new(handle, order_cols, ctx, data, key, self.err.clone());
         // push into heap when heap not full
         if self.rows.len() < self.limit {
@@ -621,13 +633,7 @@ impl TopNHeap {
 
     fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
         try!(self.get_err());
-        let res = {
-            self.rows.into_sorted_vec()
-        };
-        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
-            return Err(box_err!("{:?}", err_msg));
-        }
-        Ok(res)
+        Ok(self.rows.into_sorted_vec())
     }
 }
 
