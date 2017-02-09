@@ -31,7 +31,7 @@ use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
 
 use storage::{self, Engine, SnapshotStore, ScanMetrics, engine, Snapshot, Key, ScanMode};
-use util::codec::table::TableDecoder;
+use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
 use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
@@ -450,7 +450,7 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 #[inline]
 fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                            ctx: &EvalContext,
-                           values: &HashMap<i64, &[u8]>,
+                           values: &RowColsDict,
                            cols: T,
                            h: i64)
                            -> Result<()>
@@ -557,10 +557,9 @@ impl SelectContextCore {
         })
     }
 
-    fn handle_row(&mut self, h: i64, row_data: HashMap<i64, &[u8]>) -> Result<usize> {
+    fn handle_row(&mut self, h: i64, row_data: RowColsDict) -> Result<usize> {
         // clear all dirty values.
         self.eval.row.clear();
-
         if try!(self.should_skip(h, &row_data)) {
             return Ok(0);
         }
@@ -574,7 +573,7 @@ impl SelectContextCore {
         }
     }
 
-    fn should_skip(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<bool> {
+    fn should_skip(&mut self, h: i64, values: &RowColsDict) -> Result<bool> {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
@@ -584,7 +583,7 @@ impl SelectContextCore {
         Ok(b.map_or(true, |v| !v))
     }
 
-    fn get_row(&mut self, h: i64, values: HashMap<i64, &[u8]>) -> Result<()> {
+    fn get_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
         let chunk = get_chunk(&mut self.chunks);
         let mut meta = RowMeta::new();
         meta.set_handle(h);
@@ -627,7 +626,7 @@ impl SelectContextCore {
         Ok(res)
     }
 
-    fn aggregate(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<()> {
+    fn aggregate(&mut self, h: i64, values: &RowColsDict) -> Result<()> {
         try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.aggr_cols, h));
         let gk = Rc::new(try!(self.get_group_key()));
         let aggr_exprs = self.sel.get_aggregates();

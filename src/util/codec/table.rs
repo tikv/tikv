@@ -228,44 +228,118 @@ pub trait TableDecoder: DatumDecoder {
 }
 
 impl<T: BytesDecoder> TableDecoder for T {}
+pub type ValDict<'a> = HashMap<i64, &'a [u8]>;
 
-// `cut_row` cut encoded row into byte slices and return interested columns' byte slice.
-// Row layout: colID1, value1, colID2, value2, .....
-pub fn cut_row<'a>(mut data: &'a [u8], cols: &HashSet<i64>) -> Result<ValDict<'a>> {
-    // hack: HashMap will still allocate memeory when capacity is 0, need to use new instead.
-    if cols.is_empty() {
-        return Ok(HashMap::new());
+pub struct RowColMeta {
+    offset: usize,
+    length: usize,
+}
+
+pub struct RowColsDict {
+    value: Vec<u8>,
+    cols: HashMap<i64, RowColMeta>,
+}
+
+impl RowColMeta {
+    pub fn new(offset: usize, length: usize) -> RowColMeta {
+        RowColMeta {
+            offset: offset,
+            length: length,
+        }
     }
-    let mut res = HashMap::with_capacity(cols.len());
+}
+
+impl RowColsDict {
+    pub fn new(cols_num: usize, val: Vec<u8>) -> RowColsDict {
+        RowColsDict {
+            value: val,
+            cols: {
+                if cols_num == 0 {
+                    HashMap::new()
+                } else {
+                    HashMap::with_capacity(cols_num)
+                }
+            },
+        }
+    }
+
+    pub fn insert(&mut self, key: i64, offset: usize, length: usize) -> Option<RowColMeta> {
+        let value = RowColMeta::new(offset, length);
+        self.cols.insert(key, value)
+    }
+
+    pub fn len(&self) -> usize {
+        self.cols.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cols.is_empty()
+    }
+
+    pub fn get(&self, key: &i64) -> Option<&[u8]> {
+        if let Some(meta) = self.cols.get(key) {
+            return Some(&self.value.as_slice()[meta.offset..(meta.offset + meta.length)]);
+        }
+        None
+    }
+
+    pub fn to_hash_map(&self) -> HashMap<i64, Vec<u8>> {
+        if self.cols.is_empty() {
+            return HashMap::new();
+        }
+        let mut data = HashMap::with_capacity(self.cols.len());
+        for key in self.cols.keys() {
+            if let Some(value) = self.get(key) {
+                data.insert(*key, value.to_vec());
+            }
+        }
+        data
+    }
+}
+
+// `cut_row` cut encoded row into (offset,length) and return interested columns' byte slice.
+// Row layout:value,colID1=>(offset1,length1), colID2=>(offset2,length2)  .....
+pub fn cut_row(mut data: &[u8], cols: &HashSet<i64>) -> Result<RowColsDict> {
+    let mut origin_data = Vec::new();
+    origin_data.extend_from_slice(data);
+    if cols.is_empty() {
+        return Ok(RowColsDict::new(0, origin_data));
+    }
+    let mut res = RowColsDict::new(cols.len(), origin_data);
     if data.is_empty() || data.len() == 1 && data[0] == datum::NIL_FLAG {
         return Ok(res);
     }
+    let length = data.len();
     while !data.is_empty() && res.len() < cols.len() {
         let id = try!(data.decode_datum()).i64();
+        let offset = length - data.len();
         let (val, rem) = try!(datum::split_datum(data, false));
         if cols.contains(&id) {
-            res.insert(id, val);
+            res.insert(id, offset, val.len());
         }
         data = rem;
     }
     Ok(res)
 }
 
-pub type ValDict<'a> = HashMap<i64, &'a [u8]>;
-
-// `cut_idx_key` cuts encoded index key into colIDs to bytes slices map.
-pub fn cut_idx_key<'a>(mut key: &'a [u8], col_ids: &[i64]) -> Result<(ValDict<'a>, &'a [u8])> {
-    key = &key[PREFIX_LEN + ID_LEN..];
+// `cut_idx_key` cuts encoded index key into colIDs to (offset,length) map.
+pub fn cut_idx_key<'a>(key: &'a [u8], col_ids: &[i64]) -> Result<(RowColsDict, &'a [u8])> {
+    let mut data = &key[PREFIX_LEN + ID_LEN..];
     if col_ids.is_empty() {
-        return Ok((HashMap::new(), key));
+        return Ok((RowColsDict::new(0, Vec::new()), data));
     }
-    let mut values = HashMap::with_capacity(col_ids.len());
+    let mut origin_value = Vec::new();
+    origin_value.extend_from_slice(data);
+    let mut values = RowColsDict::new(col_ids.len(), origin_value);
+
+    let length = data.len();
     for &id in col_ids {
-        let (val, rem) = try!(datum::split_datum(key, false));
-        values.insert(id, val);
-        key = rem;
+        let offset = length - data.len();
+        let (val, rem) = try!(datum::split_datum(data, false));
+        values.insert(id, offset, val.len());
+        data = rem;
     }
-    Ok((values, key))
+    Ok((values, data))
 }
 
 #[cfg(test)]
@@ -309,12 +383,12 @@ mod test {
 
     fn cut_row_as_owned(bs: &[u8], col_id_set: &HashSet<i64>) -> HashMap<i64, Vec<u8>> {
         let res = cut_row(bs, col_id_set).unwrap();
-        res.iter().map(|(k, v)| (*k, v.to_vec())).collect()
+        res.to_hash_map()
     }
 
     fn cut_idx_key_as_owned(bs: &[u8], ids: &[i64]) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
         let (res, left) = cut_idx_key(bs, ids).unwrap();
-        (res.iter().map(|(k, v)| (*k, v.to_vec())).collect(), left.to_vec())
+        (res.to_hash_map(), left.to_vec())
     }
 
     #[test]
