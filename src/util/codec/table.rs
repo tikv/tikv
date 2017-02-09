@@ -235,7 +235,9 @@ pub struct RowColMeta {
 }
 
 pub struct RowColsDict {
+    // data of current row
     value: Vec<u8>,
+    // map contains each col's meta:col_id1=>(offset1,len1),col_id2=>(offset2,len2)
     cols: HashMap<i64, RowColMeta>,
 }
 
@@ -315,7 +317,7 @@ fn parse_handle(mut data: &[u8]) -> Result<Option<i64>> {
     let handle = box_try!(data.decode_datum()).i64();
     Ok(Some(handle))
 }
-// `cut_idx_key` cuts encoded index key into colIDs to (offset,length) map.
+// `cut_idx_key` cuts encoded index key into colIDs to (offset,length) map and handle .
 pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option<i64>)> {
     if col_ids.is_empty() {
         let handle = box_try!(parse_handle(&key[PREFIX_LEN + ID_LEN..]));
@@ -466,7 +468,7 @@ mod test {
                              new_col_info(types::NEW_DECIMAL)];
         let col_values =
             vec![Datum::I64(100), Datum::Bytes(b"abc".to_vec()), Datum::Dec(10.into())];
-        let col_encoded: HashMap<_, _> = col_ids.iter()
+        let mut col_encoded: HashMap<_, _> = col_ids.iter()
             .zip(&col_types)
             .zip(&col_values)
             .map(|((id, t), v)| {
@@ -487,7 +489,8 @@ mod test {
         assert_eq!(col_encoded, res.0);
         assert!(res.1.is_none());
 
-        let handle = Some(3 as i64);//col_encoded.remove(&3).unwrap();
+        let handle_data = col_encoded.remove(&3).unwrap();
+        let handle = parse_handle(&handle_data).unwrap();
         col_ids.remove(2);
         res = cut_idx_key_as_owned(&bs, &col_ids);
         assert_eq!(col_encoded, res.0);
