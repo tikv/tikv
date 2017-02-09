@@ -269,8 +269,8 @@ impl RowColsDict {
         self.cols.is_empty()
     }
 
-    pub fn get(&self, key: &i64) -> Option<&[u8]> {
-        if let Some(meta) = self.cols.get(key) {
+    pub fn get(&self, key: i64) -> Option<&[u8]> {
+        if let Some(meta) = self.cols.get(&key) {
             return Some(&self.value[meta.offset..(meta.offset + meta.length)]);
         }
         None

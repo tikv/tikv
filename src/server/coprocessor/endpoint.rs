@@ -463,7 +463,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                 let v = get_pk(col, h);
                 e.insert(v);
             } else {
-                let value = match values.get(&col_id) {
+                let value = match values.get(col_id) {
                     None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                         return Err(box_err!("column {} of {} is missing", col_id, h));
                     }
@@ -595,7 +595,7 @@ impl SelectContextCore {
         let last_len = chunk.get_rows_data().len();
         for col in cols {
             let col_id = col.get_column_id();
-            if let Some(v) = values.get(&col_id) {
+            if let Some(v) = values.get(col_id) {
                 chunk.mut_rows_data().extend_from_slice(v);
                 continue;
             }
