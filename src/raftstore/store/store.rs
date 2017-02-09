@@ -1587,7 +1587,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] snap file {} has been applied, delete.",
                       key.region_id,
                       key);
-                let a = try!(self.snap_mgr.rl().get_snapshot_applier(&key));
+                let a = try!(self.snap_mgr.rl().get_snapshot_to_apply(&key));
                 a.delete();
             }
         }

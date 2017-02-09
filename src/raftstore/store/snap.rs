@@ -111,7 +111,6 @@ impl Display for SnapKey {
 /// `SnapshotGenerator` is a trait that generates snapshot from `RocksDB` snapshot,
 /// the generated snapshot is used to replicate local db data to other remote raftstores.
 pub trait SnapshotGenerator {
-    // Generate a snapashot, and return the total size of the snapshot.
     fn generate(&mut self,
                 snap: &DbSnapshot,
                 region: &Region,
@@ -119,21 +118,20 @@ pub trait SnapshotGenerator {
                 -> raft::Result<()>;
 }
 
-pub trait SnapshotCommon {
-    fn path(&self) -> &str;
-    fn exists(&self) -> bool;
-    fn delete(&self);
-}
-
 /// `Snapshot` is a trait for snapshot.
 /// It's used in these scenarios:
 ///   1. read local snapshot and then replicate it to remote raftstores
 ///   2. receive snapshot from remote raftstore and write it to local storage
 ///   3. snapshot gc
-pub trait Snapshot: SnapshotCommon + Read + Write + Send {
+///   4. apply snapshot
+pub trait Snapshot: Read + Write + Send {
+    fn path(&self) -> &str;
+    fn exists(&self) -> bool;
+    fn delete(&self);
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn save(&mut self) -> io::Result<()>;
+    fn apply(&mut self, options: ApplyOptions) -> Result<()>;
 }
 
 pub struct ApplyOptions<'a> {
@@ -143,12 +141,6 @@ pub struct ApplyOptions<'a> {
     pub write_batch_size: usize,
     pub snapshot_size: &'a mut usize,
     pub snapshot_kv_count: &'a mut usize,
-}
-
-/// `SnapshotApplier` is a trait that applies the snapshot which is received from
-/// remote raftstore to local `RocksDB`.
-pub trait SnapshotApplier: SnapshotCommon {
-    fn apply(&mut self, options: ApplyOptions) -> Result<()>;
 }
 
 // A helper function to copy snapshot.
@@ -183,8 +175,7 @@ mod v1 {
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey,
-                SnapshotCommon, SnapshotGenerator, Snapshot, ApplyOptions, SnapshotApplier,
-                check_abort};
+                SnapshotGenerator, Snapshot, ApplyOptions, check_abort};
 
     pub const CRC32_BYTES_COUNT: usize = 4;
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
@@ -221,7 +212,7 @@ mod v1 {
                 tmp_file: None,
                 reader: None,
             };
-            try!(f.init());
+            try!(f.init_to_write());
             Ok(f)
         }
 
@@ -258,7 +249,7 @@ mod v1 {
             Ok(())
         }
 
-        fn init(&mut self) -> io::Result<()> {
+        fn init_to_write(&mut self) -> io::Result<()> {
             if self.exists() || self.tmp_file.is_some() {
                 return Ok(());
             }
@@ -270,7 +261,7 @@ mod v1 {
         }
 
         /// Get a validation reader.
-        fn reader(&self) -> io::Result<SnapValidationReader> {
+        fn get_validation_reader(&self) -> io::Result<SnapValidationReader> {
             SnapValidationReader::open(self.path())
         }
 
@@ -324,7 +315,7 @@ mod v1 {
     impl Snap {
         fn do_generate(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
             if self.exists() {
-                match self.reader().and_then(|mut r| r.validate()) {
+                match self.get_validation_reader().and_then(|mut r| r.validate()) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         error!("[region {}] file {} is invalid, will regenerate: {:?}",
@@ -332,7 +323,7 @@ mod v1 {
                                self.path(),
                                e);
                         try!(self.try_delete());
-                        try!(self.init());
+                        try!(self.init_to_write());
                     }
                 }
             }
@@ -377,7 +368,7 @@ mod v1 {
         }
     }
 
-    impl SnapshotCommon for Snap {
+    impl Snapshot for Snap {
         fn path(&self) -> &str {
             self.file.as_path().to_str().unwrap()
         }
@@ -391,9 +382,7 @@ mod v1 {
                 error!("failed to delete {}: {:?}", self.path(), e);
             }
         }
-    }
 
-    impl Snapshot for Snap {
         fn meta(&self) -> io::Result<Metadata> {
             self.file.metadata()
         }
@@ -409,12 +398,9 @@ mod v1 {
         fn save(&mut self) -> io::Result<()> {
             self.save_impl(false)
         }
-    }
 
-
-    impl SnapshotApplier for Snap {
         fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-            let mut reader = box_try!(self.reader());
+            let mut reader = box_try!(self.get_validation_reader());
             loop {
                 try!(check_abort(&options.abort));
                 let cf = box_try!(reader.decode_compact_bytes());
@@ -569,7 +555,7 @@ mod v1 {
         use std::fs::OpenOptions;
         use tempdir::TempDir;
         use util::HandyRwLock;
-        use super::super::{SnapKey, SnapshotCommon};
+        use super::super::{SnapKey, Snapshot};
         use super::Snap;
 
         #[test]
@@ -617,22 +603,22 @@ mod v1 {
             let mut f1 = Snap::new_to_write(path_str, size_track.clone(), false, &key1).unwrap();
             f1.write_all(b"testdata").unwrap();
             f1.save_with_checksum().unwrap();
-            let mut reader = f1.reader().unwrap();
+            let mut reader = f1.get_validation_reader().unwrap();
             reader.validate().unwrap();
 
             // read partially should not affect validation.
-            reader = f1.reader().unwrap();
+            reader = f1.get_validation_reader().unwrap();
             reader.read(&mut [0, 0]).unwrap();
             reader.validate().unwrap();
 
             // read fully should not affect validation.
-            reader = f1.reader().unwrap();
+            reader = f1.get_validation_reader().unwrap();
             while reader.read(&mut [0, 0]).unwrap() != 0 {}
             reader.validate().unwrap();
 
             let mut f = OpenOptions::new().write(true).open(f1.path()).unwrap();
             f.write_all(b"et").unwrap();
-            reader = f1.reader().unwrap();
+            reader = f1.get_validation_reader().unwrap();
             reader.validate().unwrap_err();
         }
     }
@@ -755,7 +741,7 @@ impl SnapManagerCore {
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_applier(&self, key: &SnapKey) -> io::Result<Box<SnapshotApplier>> {
+    pub fn get_snapshot_to_apply(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
         let f = try!(v1::Snap::new_to_read(&self.base, self.snap_size.clone(), false, key));
         Ok(Box::new(f))
     }
@@ -855,7 +841,7 @@ mod test {
     use tempdir::TempDir;
 
     use util::HandyRwLock;
-    use super::{SnapKey, SnapshotCommon, new_snap_mgr};
+    use super::{SnapKey, Snapshot, new_snap_mgr};
     use super::v1::{Snap, CRC32_BYTES_COUNT};
 
     #[test]
@@ -930,7 +916,7 @@ mod test {
 
         mgr.rl().get_snapshot_to_read(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
-        mgr.rl().get_snapshot_applier(&key2).unwrap().delete();
+        mgr.rl().get_snapshot_to_apply(&key2).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
     }
 }
