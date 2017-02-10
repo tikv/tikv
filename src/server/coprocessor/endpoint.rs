@@ -480,35 +480,11 @@ fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
     chunks.last_mut().unwrap()
 }
 
-#[inline]
-fn encode_row_from_cols(cols: &[ColumnInfo],
-                        h: i64,
-                        values: RowColsDict,
-                        data: &mut Vec<u8>)
-                        -> Result<()> {
-    for col in cols {
-        let col_id = col.get_column_id();
-        if let Some(v) = values.get(col_id) {
-            data.extend_from_slice(v);
-            continue;
-        }
-        if col.get_pk_handle() {
-            box_try!(datum::encode_to(data, &[get_pk(col, h)], false));
-        } else if mysql::has_not_null_flag(col.get_flag() as u64) {
-            return Err(box_err!("column {} of {} is missing", col_id, h));
-        } else {
-            box_try!(datum::encode_to(data, &[Datum::Null], false));
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
 struct SortRow {
     key: Vec<Datum>,
     handle: i64,
-    data: Vec<u8>,
-    order_cols: Vec<ByItem>,
+    data: RowColsDict,
+    order_cols: Rc<Vec<ByItem>>,
     ctx: Rc<EvalContext>,
     err: Rc<RefCell<Option<String>>>,
 }
@@ -516,9 +492,9 @@ struct SortRow {
 
 impl SortRow {
     fn new(handle: i64,
-           order_cols: Vec<ByItem>,
+           order_cols: Rc<Vec<ByItem>>,
            ctx: Rc<EvalContext>,
-           data: Vec<u8>,
+           data: RowColsDict,
            key: Vec<Datum>,
            err: Rc<RefCell<Option<String>>>)
            -> SortRow {
@@ -545,7 +521,7 @@ impl SortRow {
         }
 
         let values = self.key.iter().zip(right.key.iter());
-        for (col, (v1, v2)) in self.order_cols.iter().zip(values) {
+        for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
             let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
             if let StdResult::Err(err) = cmp_ret {
                 try!(self.set_err(format!("cmp failed with:{:?}", err)));
@@ -609,9 +585,9 @@ impl TopNHeap {
 
     fn try_add_row(&mut self,
                    handle: i64,
-                   order_cols: Vec<ByItem>,
+                   order_cols: Rc<Vec<ByItem>>,
                    ctx: Rc<EvalContext>,
-                   data: Vec<u8>,
+                   data: RowColsDict,
                    key: Vec<Datum>)
                    -> Result<()> {
         try!(self.get_err());
@@ -671,6 +647,7 @@ pub struct SelectContextCore {
     aggr_cols: Vec<ColumnInfo>,
     topn: bool,
     topn_heap: Option<TopNHeap>,
+    order_cols: Rc<Vec<ByItem>>,
     limit: usize,
     desc_scan: bool,
     gks: Vec<Rc<Vec<u8>>>,
@@ -682,6 +659,7 @@ impl SelectContextCore {
     fn new(mut sel: SelectRequest) -> Result<SelectContextCore> {
         let cond_cols;
         let topn_cols;
+        let mut order_by_cols: Vec<ByItem> = Vec::new();
         let mut aggr_cols = vec![];
         {
             let select_cols = if sel.has_table_info() {
@@ -712,6 +690,7 @@ impl SelectContextCore {
                 try!(collect_col_in_expr(&mut topn_col_map, select_cols, item.get_expr()))
             }
             topn_cols = topn_col_map.drain().map(|(_, v)| v).collect();
+            order_by_cols.extend_from_slice(sel.get_order_by())
         }
 
         let limit = if sel.has_limit() {
@@ -768,6 +747,7 @@ impl SelectContextCore {
                     None
                 }
             },
+            order_cols: Rc::new(order_by_cols),
             limit: limit,
             desc_scan: desc_can,
         })
@@ -806,23 +786,17 @@ impl SelectContextCore {
     fn get_topn_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
         try!(inflate_with_col(&mut self.eval, &self.ctx, &values, &self.topn_cols, h));
         let mut sort_keys = Vec::with_capacity(self.sel.get_order_by().len());
-        let mut order_by = Vec::new();
-        order_by.extend_from_slice(self.sel.get_order_by());
         // parse order by
         for col in self.sel.get_order_by() {
             let v = box_try!(self.eval.eval(&self.ctx, col.get_expr()));
             sort_keys.push(v);
         }
-        let cols = if self.sel.has_table_info() {
-            self.sel.get_table_info().get_columns()
-        } else {
-            self.sel.get_index_info().get_columns()
-        };
-        // encode cols
-        let mut data = Vec::new();
-        try!(encode_row_from_cols(cols, h, values, &mut data));
         if let Some(heap) = self.topn_heap.as_mut() {
-            try!(heap.try_add_row(h, order_by, self.ctx.clone(), data, sort_keys));
+            try!(heap.try_add_row(h,
+                                  self.order_cols.clone(),
+                                  self.ctx.clone(),
+                                  values,
+                                  sort_keys));
         }
         Ok(())
     }
@@ -835,7 +809,20 @@ impl SelectContextCore {
         } else {
             self.sel.get_index_info().get_columns()
         };
-        try!(encode_row_from_cols(cols, h, values, chunk.mut_rows_data()));
+        for col in cols {
+            let col_id = col.get_column_id();
+            if let Some(v) = values.get(col_id) {
+                chunk.mut_rows_data().extend_from_slice(v);
+                continue;
+            }
+            if col.get_pk_handle() {
+                box_try!(datum::encode_to(chunk.mut_rows_data(), &[get_pk(col, h)], false));
+            } else if mysql::has_not_null_flag(col.get_flag() as u64) {
+                return Err(box_err!("column {} of {} is missing", col_id, h));
+            } else {
+                box_try!(datum::encode_to(chunk.mut_rows_data(), &[Datum::Null], false));
+            }
+        }
         let mut meta = RowMeta::new();
         meta.set_handle(h);
         meta.set_length((chunk.get_rows_data().len() - last_len) as i64);
@@ -888,13 +875,7 @@ impl SelectContextCore {
     fn topn_rows(&mut self) -> Result<()> {
         let sorted_data = try!(self.topn_heap.take().unwrap().into_sorted_vec());
         for row in sorted_data {
-            // self.topn_heap.convert_to_sorted_vec() {
-            let mut meta = RowMeta::new();
-            meta.set_length(row.data.len() as i64);
-            meta.set_handle(row.handle);
-            let chunk = get_chunk(&mut self.chunks);
-            chunk.mut_rows_data().extend_from_slice(row.data.as_slice());
-            chunk.mut_rows_meta().push(meta);
+            try!(self.get_row(row.handle, row.data));
         }
         Ok(())
     }
@@ -1177,6 +1158,7 @@ mod tests {
     use util::codec::number::*;
     use util::codec::Datum;
     use util::xeval::EvalContext;
+    use util::codec::table::RowColsDict;
 
     use std::rc::Rc;
     use std::sync::*;
@@ -1257,6 +1239,7 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(5);
         let test_data = vec![
@@ -1281,22 +1264,20 @@ mod tests {
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
+            let row_data = RowColsDict::new(HashMap::new(), data.into_bytes());
             topn_heap.try_add_row(handle as i64,
                              order_cols.clone(),
                              ctx.clone(),
-                             data.into_bytes(),
+                             row_data,
                              cur_key)
                 .unwrap();
         }
         let result = topn_heap.into_sorted_vec().unwrap();
         assert_eq!(result.len(), exp.len());
-        for (row, (handle, data, name, count)) in result.iter().zip(exp) {
-            let get_data = String::from_utf8(row.data.clone()).unwrap();
-            // println!("{:?},{:?},{:?}",row.meta.get_handle(),row.key,get_data);
+        for (row, (handle, _, name, count)) in result.iter().zip(exp) {
             let exp_keys: Vec<Datum> = vec![name, count];
             assert_eq!(row.handle, handle);
             assert_eq!(row.key, exp_keys);
-            assert_eq!(get_data, data);
         }
     }
 
@@ -1305,47 +1286,50 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(5);
 
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
-        topn_heap.try_add_row(0 as i64,
-                         order_cols.clone(),
-                         ctx.clone(),
-                         b"name:0".to_vec(),
-                         std_key)
+        let row_data = RowColsDict::new(HashMap::new(), b"name:1".to_vec());
+        topn_heap.try_add_row(0 as i64, order_cols.clone(), ctx.clone(), row_data, std_key)
             .unwrap();
 
         let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
+        let row_data2 = RowColsDict::new(HashMap::new(), b"name:2".to_vec());
         topn_heap.try_add_row(0 as i64,
                          order_cols.clone(),
                          ctx.clone(),
-                         b"name:0".to_vec(),
+                         row_data2,
                          std_key2)
             .unwrap();
 
         let bad_key1: Vec<Datum> =
             vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2), Datum::I64(2)];
+        let row_data3 = RowColsDict::new(HashMap::new(), b"name:3".to_vec());
+
         assert!(topn_heap.try_add_row(0 as i64,
                          order_cols.clone(),
                          ctx.clone(),
-                         b"name:0".to_vec(),
+                         row_data3,
                          bad_key1)
             .is_err());
 
         let bad_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec())];
+        let row_data4 = RowColsDict::new(HashMap::new(), b"name:4".to_vec());
         assert!(topn_heap.try_add_row(0 as i64,
                          order_cols.clone(),
                          ctx.clone(),
-                         b"name:0".to_vec(),
+                         row_data4,
                          bad_key2)
             .is_err());
 
         let std_key3: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
+        let row_data5 = RowColsDict::new(HashMap::new(), b"name:5".to_vec());
         assert!(topn_heap.try_add_row(0 as i64,
                          order_cols.clone(),
                          ctx.clone(),
-                         b"name:0".to_vec(),
+                         row_data5,
                          std_key3)
             .is_err());
 
@@ -1357,6 +1341,7 @@ mod tests {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(10);
         let test_data = vec![
@@ -1377,23 +1362,21 @@ mod tests {
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
+            let row_data = RowColsDict::new(HashMap::new(), data.into_bytes());
             topn_heap.try_add_row(handle as i64,
                              order_cols.clone(),
                              ctx.clone(),
-                             data.into_bytes(),
+                             row_data,
                              cur_key)
                 .unwrap();
         }
 
         let result = topn_heap.into_sorted_vec().unwrap();
         assert_eq!(result.len(), exp.len());
-        for (row, (handle, data, name, count)) in result.iter().zip(exp) {
-            let get_data = String::from_utf8(row.data.clone()).unwrap();
-            // println!("{:?},{:?},{:?}",row.meta.get_handle(),row.key,get_data);
+        for (row, (handle, _, name, count)) in result.iter().zip(exp) {
             let exp_keys: Vec<Datum> = vec![name, count];
             assert_eq!(row.handle, handle);
             assert_eq!(row.key, exp_keys);
-            assert_eq!(get_data, data);
         }
     }
 }
