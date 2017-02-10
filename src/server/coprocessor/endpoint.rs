@@ -880,6 +880,7 @@ impl SelectContextCore {
         }
         Ok(())
     }
+
     /// Convert aggregate partial result to rows.
     /// Data layout example:
     /// SQL: select count(c1), sum(c2), avg(c3) from t;
