@@ -278,10 +278,11 @@ impl RowColsDict {
 // `cut_row` cut encoded row into (col_id,offset,length)
 // and return interested columns' meta in RowColsDict
 pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
-    let meta_map: HashMap<i64, RowColMeta> = if cols.is_empty() || data.is_empty() ||
-                                                (data.len() == 1 && data[0] == datum::NIL_FLAG) {
-        HashMap::with_capacity(0)
-    } else {
+    if cols.is_empty() || data.is_empty() || (data.len() == 1 && data[0] == datum::NIL_FLAG) {
+        return Ok(RowColsDict::new(HashMap::with_capacity(0), data));
+    }
+
+    let meta_map = {
         let mut meta_map = HashMap::with_capacity(cols.len());
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
