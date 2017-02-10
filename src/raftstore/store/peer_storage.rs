@@ -143,7 +143,6 @@ pub struct ApplySnapResult {
     // prev_region is the region before snapshot applied.
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
-    pub status: Arc<AtomicUsize>,
 }
 
 pub struct InvokeContext {
@@ -235,7 +234,11 @@ fn init_last_term(engine: &DB,
     }
     let last_log_key = keys::raft_log_key(region.get_id(), last_idx);
     Ok(match try!(engine.get_msg_cf::<Entry>(CF_RAFT, &last_log_key)) {
-        None => return Err(box_err!("entry at {} doesn't exist, may lose data.", last_idx)),
+        None => {
+            return Err(box_err!("[region {}] entry at {} doesn't exist, may lose data.",
+                                region.get_id(),
+                                last_idx))
+        }
         Some(e) => e.get_term(),
     })
 }
@@ -399,6 +402,11 @@ impl PeerStorage {
     #[inline]
     pub fn applied_index(&self) -> u64 {
         self.apply_state.get_applied_index()
+    }
+
+    #[inline]
+    pub fn committed_index(&self) -> u64 {
+        self.raft_state.get_hard_state().get_commit()
     }
 
     #[inline]
@@ -750,10 +758,15 @@ impl PeerStorage {
         self.region.get_id()
     }
 
-    pub fn set_applying_snapshot(&mut self) -> Arc<AtomicUsize> {
+    pub fn schedule_applying_snapshot(&mut self) {
         let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
         self.set_snap_state(SnapState::Applying(status.clone()));
-        status
+        let task = RegionTask::Apply {
+            region_id: self.get_region_id(),
+            status: status,
+        };
+        // TODO: gracefully remove region instead.
+        self.region_sched.schedule(task).expect("snap apply job should not fail");
     }
 
     /// Save memory states to disk.
@@ -818,14 +831,13 @@ impl PeerStorage {
             }
         }
 
-        let status = self.set_applying_snapshot();
+        self.schedule_applying_snapshot();
         let prev_region = self.region.clone();
         self.region = snap_region;
 
         Some(ApplySnapResult {
             prev_region: prev_region,
             region: self.region.clone(),
-            status: status,
         })
     }
 }

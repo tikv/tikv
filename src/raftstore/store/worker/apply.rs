@@ -13,7 +13,6 @@
 
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::fmt::{self, Display, Formatter};
@@ -27,12 +26,11 @@ use kvproto::eraftpb::Entry;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftApplyState;
 
-use util::worker::{Runnable, Scheduler};
+use util::worker::Runnable;
 use raftstore::store::{cmd_resp, Store, util};
 use raftstore::store::msg::Callback;
 use raftstore::store::peer::{self, Peer, ExecResult, ApplyDelegate, PendingCmd,
                              notify_stale_command};
-use super::RegionTask;
 
 pub struct Apply {
     region_id: u64,
@@ -80,17 +78,11 @@ pub struct Destroy {
     region_id: u64,
 }
 
-pub struct Snapshot {
-    reg: Registration,
-    status: Arc<AtomicUsize>,
-}
-
 /// region related task.
 pub enum Task {
     Apply(Apply),
     Read(Read),
     Registration(Registration),
-    Snapshot(Snapshot),
     Propose(Propose),
     Destroy(Destroy),
 }
@@ -115,13 +107,6 @@ impl Task {
 
     pub fn register(peer: &Peer) -> Task {
         Task::Registration(Registration::new(peer))
-    }
-
-    pub fn snapshot(peer: &Peer, status: Arc<AtomicUsize>) -> Task {
-        Task::Snapshot(Snapshot {
-            reg: Registration::new(peer),
-            status: status,
-        })
     }
 
     pub fn propose(id: u64,
@@ -155,17 +140,12 @@ impl Display for Task {
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
-            Task::Snapshot(ref s) => {
-                write!(f,
-                       "[region {}] Snap for {}",
-                       s.reg.region.get_id(),
-                       s.reg.id)
-            }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
         }
     }
 }
 
+#[derive(Debug)]
 pub struct ApplyRes {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
@@ -187,7 +167,6 @@ pub struct Runner {
     db: Arc<DB>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
-    snap_scheduler: Scheduler<RegionTask>,
 }
 
 impl Runner {
@@ -208,7 +187,6 @@ impl Runner {
             db: store.engine(),
             delegates: delegates,
             notifier: notifier,
-            snap_scheduler: store.snap_scheduler(),
         }
     }
 
@@ -310,17 +288,6 @@ impl Runner {
         }
     }
 
-    fn handle_snapshot(&mut self, s: Snapshot) {
-        let region_id = s.reg.region.get_id();
-        self.handle_registration(s.reg);
-        self.snap_scheduler
-            .schedule(RegionTask::Apply {
-                region_id: region_id,
-                status: s.status,
-            })
-            .unwrap();
-    }
-
     fn handle_destroy(&mut self, d: Destroy) {
         // Only respond when the meta exists. Otherwise if destroy is triggered
         // multiple times, the store may destroy wrong target peer.
@@ -343,7 +310,6 @@ impl Runnable<Task> for Runner {
             Task::Apply(a) => self.handle_apply(a),
             Task::Propose(p) => self.handle_propose(p),
             Task::Registration(s) => self.handle_registration(s),
-            Task::Snapshot(s) => self.handle_snapshot(s),
             Task::Read(r) => self.handle_read(r),
             Task::Destroy(d) => self.handle_destroy(d),
         }

@@ -235,8 +235,7 @@ impl<T, C> Store<T, C> {
                 info!("region {:?} is applying in store {}",
                       local_state.get_region(),
                       self.store_id());
-                let status = peer.mut_store().set_applying_snapshot();
-                self.apply_worker.schedule(ApplyTask::snapshot(&peer, status)).unwrap();
+                peer.mut_store().schedule_applying_snapshot();
             }
 
             self.region_ranges.insert(enc_end_key(region), region_id);
@@ -426,6 +425,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // When having pending snapshot, if election timeout is met, it can't pass
             // the pending conf change check because first index has been updated to
             // a value that is larger than last index.
+            self.pending_raft_groups.insert(region_id);
             if !peer.is_applying_snapshot() && !peer.has_pending_snap() {
                 peer.raft_group.tick();
 
@@ -445,13 +445,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // and it would check with pd to confirm whether it's still a member of the cluster.
                 // If not, it destroys itself as a stale peer which is removed out already.
                 match peer.check_stale_state(self.cfg.max_leader_missing_duration) {
-                    StaleState::Valid => {
-                        self.pending_raft_groups.insert(region_id);
-                    }
+                    StaleState::Valid => {}
                     StaleState::ToValidate => {
                         // for peer B in case 1 above
                         info!("{} detects leader missing for a long time. To check with pd \
-                               whether it's still valid",
+                                whether it's still valid",
                               peer.tag);
                         let task = PdTask::ValidatePeer {
                             peer: peer.peer.clone(),
@@ -460,8 +458,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         if let Err(e) = self.pd_worker.schedule(task) {
                             error!("{} failed to notify pd: {}", peer.tag, e)
                         }
-
-                        self.pending_raft_groups.insert(region_id);
                     }
                 }
             }
@@ -1992,7 +1988,10 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                         }
                     });
                     if let Some(p) = self.region_peers.get_mut(&res.region_id) {
-                        assert!(!p.is_applying_snapshot());
+                        debug!("{} async apply finish: {:?}", p.tag, res);
+                        if p.is_applying_snapshot() {
+                            panic!("{} should not applying snapshot.", p.tag);
+                        }
                         p.raft_group.advance_apply(res.apply_state.get_applied_index());
                         p.mut_store().apply_state = res.apply_state;
                         if has_split {
@@ -2006,6 +2005,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                         p.mut_store().applied_index_term = res.applied_index_term;
                         p.written_keys += res.written_keys;
                         p.written_bytes += res.written_bytes;
+                        if p.has_pending_snap() && p.ready_to_handle_pending_snap() {
+                            self.pending_raft_groups.insert(p.region().get_id());
+                        }
                     }
                     self.on_ready_result(res.region_id, res.exec_res);
                 }

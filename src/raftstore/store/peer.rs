@@ -449,6 +449,7 @@ impl Peer {
         self.get_store().is_applying_snapshot()
     }
 
+    #[inline]
     pub fn has_pending_snap(&self) -> bool {
         self.raft_group.get_snap().is_some()
     }
@@ -614,6 +615,13 @@ impl Peer {
         }
     }
 
+    #[inline]
+    pub fn ready_to_handle_pending_snap(&self) -> bool {
+        // If committed_index doesn't equal to applied_index, written apply state may be overwritten
+        // by apply worker. So we have to wait here.
+        self.get_store().committed_index() == self.get_store().applied_index()
+    }
+
     pub fn handle_raft_ready_append<T: Transport>(&mut self, ctx: &mut ReadyContext<T>) {
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -621,6 +629,14 @@ impl Peer {
             // to full message queue under high load.
             debug!("{} still applying snapshot, skip further handling.",
                    self.tag);
+            return;
+        }
+
+        if self.has_pending_snap() && !self.ready_to_handle_pending_snap() {
+            debug!("{} apply index {} != committed index {}, skip applying snapshot.",
+                   self.tag,
+                   self.get_store().applied_index(),
+                   self.get_store().committed_index());
             return;
         }
 
@@ -679,9 +695,9 @@ impl Peer {
             });
         }
 
-        if let Some(ref res) = apply_snap_result {
-            let snap = ApplyTask::snapshot(self, res.status.clone());
-            self.apply_scheduler.schedule(snap).unwrap();
+        if apply_snap_result.is_some() {
+            let reg = ApplyTask::register(self);
+            self.apply_scheduler.schedule(reg).unwrap();
         }
 
         apply_snap_result
