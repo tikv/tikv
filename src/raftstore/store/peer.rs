@@ -894,7 +894,7 @@ impl Peer {
 
     fn should_read_local(&mut self, req: &RaftCmdRequest) -> bool {
         if (req.has_header() && req.get_header().get_read_quorum()) ||
-           !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
+           req.get_requests().len() == 0 {
             return false;
         }
 
