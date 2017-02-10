@@ -1166,6 +1166,7 @@ mod tests {
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
+    use std::collections::HashMap;
 
 
 
