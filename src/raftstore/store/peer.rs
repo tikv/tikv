@@ -894,13 +894,7 @@ impl Peer {
 
     fn should_read_local(&mut self, req: &RaftCmdRequest) -> bool {
         if (req.has_header() && req.get_header().get_read_quorum()) ||
-           req.get_requests().len() == 0 {
-            return false;
-        }
-
-        if !self.raft_group.raft.in_lease() {
-            // Clear lease when it doesn't hold the lease to ensure lease safty.
-            self.leader_lease_expired_time = None;
+           !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
             return false;
         }
 
@@ -1048,6 +1042,12 @@ impl Peer {
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
         info!("{} transfer leader to {:?}", self.tag, peer);
+
+        // After a leader transfer procedure is triggered, the lease for the old leader
+        // may be expired earlier than usual, since a new leader may be elected and
+        // the old leader doesn't step down due to network partition from the new leader.
+        // Clear the lease when a transfer leader request occurs to ensure lease safty.
+        self.leader_lease_expired_time = None;
 
         self.raft_group.transfer_leader(peer.get_id());
     }

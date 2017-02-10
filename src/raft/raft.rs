@@ -348,24 +348,7 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn in_lease(&self) -> bool {
-        self.state == StateRole::Leader && self.check_quorum &&
-        // After a leader transfer procedure is triggered, the lease for the old leader
-        // may be expired earlier than usual, since a new leader may be elected and
-        // the previous leader doesn't step down due to network partition from the new leader.
-        // The leader transfer triggered by a MsgTimeoutNow message. This message is sent to
-        // the tranferee node when and only when
-        //   1. there is a tranfer leader request sent to old leader
-        //   2. the matched index of the corresponding progress for transferee node matches
-        //      the last log index of current node.
-        //  (please refer to the handling of MsgTransferLeader in `step_leader()` for more info).
-        // Here both conditions above are checked to ensure that the lease for the old leader
-        // is strictly safe under this scenario.
-        self.lead_transferee.and_then(|transferee|
-            if self.prs[&transferee].matched == self.raft_log.last_index() {
-                Some(transferee)
-            } else {
-                None
-            }).is_none()
+        self.state == StateRole::Leader && self.check_quorum
     }
 
     fn quorum(&self) -> usize {
