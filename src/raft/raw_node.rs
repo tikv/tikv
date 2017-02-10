@@ -227,8 +227,8 @@ impl<T: Storage> RawNode<T> {
     }
 
     // Tick advances the internal logical clock by a single tick.
-    pub fn tick(&mut self) {
-        self.raft.tick();
+    pub fn tick(&mut self) -> bool {
+        self.raft.tick()
     }
 
     // Campaign causes this RawNode to transition to candidate state.
@@ -305,17 +305,13 @@ impl<T: Storage> RawNode<T> {
 
     pub fn has_ready_since(&self, applied_idx: Option<u64>) -> bool {
         let raft = &self.raft;
-        if raft.soft_state() != self.prev_ss {
+        if !raft.msgs.is_empty() || raft.raft_log.unstable_entries().is_some() {
             return true;
         }
-        let hs = raft.hard_state();
-        if hs != HardState::new() && hs != self.prev_hs {
+        if !raft.read_states.is_empty() {
             return true;
         }
         if self.get_snap().map_or(false, |s| !is_empty_snap(s)) {
-            return true;
-        }
-        if !raft.msgs.is_empty() || raft.raft_log.unstable_entries().is_some() {
             return true;
         }
         let has_unapplied_entries = match applied_idx {
@@ -325,7 +321,11 @@ impl<T: Storage> RawNode<T> {
         if has_unapplied_entries {
             return true;
         }
-        if !raft.read_states.is_empty() {
+        if raft.soft_state() != self.prev_ss {
+            return true;
+        }
+        let hs = raft.hard_state();
+        if hs != HardState::new() && hs != self.prev_hs {
             return true;
         }
         false

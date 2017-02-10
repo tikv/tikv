@@ -403,42 +403,44 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_timer();
         for (&region_id, peer) in &mut self.region_peers {
-            if !peer.get_store().is_applying() {
-                peer.raft_group.tick();
+            if peer.get_store().is_applying() {
+                // need to check if snapshot is applied.
+                self.pending_raft_groups.insert(region_id);
+                continue;
+            }
 
-                // If this peer detects the leader is missing for a long long time,
-                // it should consider itself as a stale peer which is removed from
-                // the original cluster.
-                // This most likely happens in the following scenario:
-                // At first, there are three peer A, B, C in the cluster, and A is leader.
-                // Peer B gets down. And then A adds D, E, F into the cluster.
-                // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
-                // After all these peer in and out, now the cluster has peer D, E, F.
-                // If peer B goes up at this moment, it still thinks it is one of the cluster
-                // and has peers A, C. However, it could not reach A, C since they are removed
-                // from the cluster or probably destroyed.
-                // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
-                // In this case, peer B would notice that the leader is missing for a long time,
-                // and it would check with pd to confirm whether it's still a member of the cluster.
-                // If not, it destroys itself as a stale peer which is removed out already.
-                match peer.check_stale_state(self.cfg.max_leader_missing_duration) {
-                    StaleState::Valid => {
-                        self.pending_raft_groups.insert(region_id);
-                    }
-                    StaleState::ToValidate => {
-                        // for peer B in case 1 above
-                        info!("{} detects leader missing for a long time. To check with pd \
-                               whether it's still valid",
-                              peer.tag);
-                        let task = PdTask::ValidatePeer {
-                            peer: peer.peer.clone(),
-                            region: peer.region().clone(),
-                        };
-                        if let Err(e) = self.pd_worker.schedule(task) {
-                            error!("{} failed to notify pd: {}", peer.tag, e)
-                        }
+            if peer.raft_group.tick() {
+                self.pending_raft_groups.insert(region_id);
+            }
 
-                        self.pending_raft_groups.insert(region_id);
+            // If this peer detects the leader is missing for a long long time,
+            // it should consider itself as a stale peer which is removed from
+            // the original cluster.
+            // This most likely happens in the following scenario:
+            // At first, there are three peer A, B, C in the cluster, and A is leader.
+            // Peer B gets down. And then A adds D, E, F into the cluster.
+            // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
+            // After all these peer in and out, now the cluster has peer D, E, F.
+            // If peer B goes up at this moment, it still thinks it is one of the cluster
+            // and has peers A, C. However, it could not reach A, C since they are removed
+            // from the cluster or probably destroyed.
+            // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
+            // In this case, peer B would notice that the leader is missing for a long time,
+            // and it would check with pd to confirm whether it's still a member of the cluster.
+            // If not, it destroys itself as a stale peer which is removed out already.
+            match peer.check_stale_state(self.cfg.max_leader_missing_duration) {
+                StaleState::Valid => {}
+                StaleState::ToValidate => {
+                    // for peer B in case 1 above
+                    info!("{} detects leader missing for a long time. To check with pd \
+                            whether it's still valid",
+                          peer.tag);
+                    let task = PdTask::ValidatePeer {
+                        peer: peer.peer.clone(),
+                        region: peer.region().clone(),
+                    };
+                    if let Err(e) = self.pd_worker.schedule(task) {
+                        error!("{} failed to notify pd: {}", peer.tag, e)
                     }
                 }
             }
@@ -964,7 +966,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
                     for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
-                        new_peer.raft_group.tick()
+                        new_peer.raft_group.tick();
                     }
                 }
 
