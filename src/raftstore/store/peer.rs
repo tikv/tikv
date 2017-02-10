@@ -898,6 +898,12 @@ impl Peer {
             return false;
         }
 
+        if !self.raft_group.raft.in_lease() {
+            // Clear lease when it doesn't hold the lease to ensure lease safty.
+            self.leader_lease_expired_time = None;
+            return false;
+        }
+
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
         if self.get_store().applied_index_term != self.raft_group.raft.term {
