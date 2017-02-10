@@ -62,6 +62,7 @@ signal = "0.2"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
+branch = "zhangjinpeng/get-histogram"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"

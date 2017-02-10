@@ -21,7 +21,8 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
 use std::u64;
 
-use rocksdb::DB;
+use rocksdb::{DB, DBStatisticsTickerType as TickerType, DBStatisticsHistogramType as HistType,
+              HistogramData};
 use mio::{self, EventLoop, EventLoopBuilder, Sender};
 use protobuf;
 use fs2;
@@ -68,6 +69,123 @@ const ROCKSDB_TABLE_READERS_MEM_PROPERTY: &'static str = "rocksdb.estimate-table
 const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES_PROPERTY: &'static str = "rocksdb.cur-size-all-mem-tables";
 const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
 const MIO_TICK_RATIO: u64 = 10;
+
+const ENGINE_TICKER_TYPES: &'static [TickerType] = &[TickerType::BlockCacheMiss,
+                                                     TickerType::BlockCacheHit,
+                                                     TickerType::MemtableHit,
+                                                     TickerType::MemtableMiss,
+                                                     TickerType::GetHitL0,
+                                                     TickerType::GetHitL1,
+                                                     TickerType::GetHitL2AndUp,
+                                                     TickerType::BloomFilterUseful,
+                                                     TickerType::BloomFilterPrefixChecked,
+                                                     TickerType::BloomFilterPrefixUseful,
+                                                     TickerType::NumberKeysWritten,
+                                                     TickerType::NumberKeysRead,
+                                                     TickerType::BytesWritten,
+                                                     TickerType::BytesRead,
+                                                     TickerType::IterBytesRead,
+                                                     TickerType::StallMicros];
+
+const ENGINE_HIST_TYPES: &'static [HistType] =
+    &[HistType::DbGetMicros, HistType::DbWriteMicros, HistType::DbSeekMicros];
+
+fn engine_ticker_metrics_set(t: TickerType, value: u64) {
+    match t {
+        TickerType::BlockCacheMiss => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_miss"])
+                .set(value as f64);
+        }
+        TickerType::BlockCacheHit => {
+            STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_hit"])
+                .set(value as f64);
+        }
+        TickerType::MemtableHit => {
+            STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC.with_label_values(&["memtable_hit"])
+                .set(value as f64);
+        }
+        TickerType::MemtableMiss => {
+            STORE_ENGINE_MEMTABLE_EFFICIENCY_VEC.with_label_values(&["memtable_miss"])
+                .set(value as f64);
+        }
+        TickerType::GetHitL0 => {
+            STORE_ENGINE_READ_SURVED_VEC.with_label_values(&["get_hit_l0"]).set(value as f64);
+        }
+        TickerType::GetHitL1 => {
+            STORE_ENGINE_READ_SURVED_VEC.with_label_values(&["get_hit_l1"]).set(value as f64);
+        }
+        TickerType::GetHitL2AndUp => {
+            STORE_ENGINE_READ_SURVED_VEC.with_label_values(&["get_hit_l2_and_up"])
+                .set(value as f64);
+        }
+        TickerType::BloomFilterUseful => {
+            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_useful"])
+                .set(value as f64);
+        }
+        TickerType::BloomFilterPrefixChecked => {
+            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_prefix_checked"])
+                .set(value as f64);
+        }
+        TickerType::BloomFilterPrefixUseful => {
+            STORE_ENGINE_BLOOM_EFFICIENCY_VEC.with_label_values(&["bloom_prefix_useful"])
+                .set(value as f64);
+        }
+        TickerType::NumberKeysWritten => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["keys_written"]).set(value as f64);
+        }
+        TickerType::NumberKeysRead => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["keys_read"]).set(value as f64);
+        }
+        TickerType::BytesWritten => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["bytes_written"]).set(value as f64);
+        }
+        TickerType::BytesRead => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["bytes_read"]).set(value as f64);
+        }
+        TickerType::IterBytesRead => {
+            STORE_ENGINE_FLOW_VEC.with_label_values(&["iter_bytes_read"]).set(value as f64);
+        }
+        TickerType::StallMicros => {
+            STORE_ENGINE_STALL_MICROS.set(value as f64);
+        }
+        _ => {}
+    }
+}
+
+fn engine_hist_metrics_set(t: HistType, value: HistogramData) {
+    match t {
+        HistType::DbGetMicros => {
+            STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_median"]).set(value.median);
+            STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_average"]).set(value.average);
+            STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::DbWriteMicros => {
+            STORE_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_median"]).set(value.median);
+            STORE_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_average"]).set(value.average);
+            STORE_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+        HistType::DbSeekMicros => {
+            STORE_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_median"]).set(value.median);
+            STORE_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_percentile95"])
+                .set(value.percentile95);
+            STORE_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_percentile99"])
+                .set(value.percentile99);
+            STORE_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_average"]).set(value.average);
+            STORE_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_standard_deviation"])
+                .set(value.standard_deviation);
+        }
+    }
+}
 
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
@@ -365,6 +483,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
         self.register_report_region_flow_tick(event_loop);
+        self.register_engine_statistics_detail_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
@@ -1539,6 +1658,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_store_heartbeat_tick(event_loop);
     }
 
+    fn engine_statistics_detail(&mut self) {
+        for t in ENGINE_TICKER_TYPES {
+            let v = self.engine.get_and_reset_statistics_ticker_count(*t);
+            engine_ticker_metrics_set(*t, v);
+        }
+
+        for t in ENGINE_HIST_TYPES {
+            if let Some(v) = self.engine.get_statistics_histogram(*t) {
+                engine_hist_metrics_set(*t, v);
+            }
+        }
+    }
+
+    fn on_engine_statistics_detail_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        self.engine_statistics_detail();
+        self.register_engine_statistics_detail_tick(event_loop);
+    }
+
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
         let mut snap_keys = try!(self.snap_mgr.wl().list_snap());
         if snap_keys.is_empty() {
@@ -1626,6 +1763,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        Tick::PdStoreHeartbeat,
                                        self.cfg.pd_store_heartbeat_tick_interval) {
             error!("{} register pd store heartbeat tick err: {:?}", self.tag, e);
+        };
+    }
+
+    fn register_engine_statistics_detail_tick(&self, event_loop: &mut EventLoop<Self>) {
+        if let Err(e) = register_timer(event_loop,
+                                       Tick::EngineStatDetail,
+                                       self.cfg.report_engine_detail_interval) {
+            error!("{} register engine statistics detail tick err: {:?}",
+                   self.tag,
+                   e);
         };
     }
 
@@ -1905,6 +2052,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
             Tick::ReportRegionFlow => self.on_report_region_flow(event_loop),
+            Tick::EngineStatDetail => self.on_engine_statistics_detail_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

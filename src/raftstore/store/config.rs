@@ -51,6 +51,7 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
 const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
+const DEFAULT_REPORT_ENGINE_DETAIL_INTERVAL: u64 = 60000; // 1 min
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -117,6 +118,7 @@ pub struct Config {
     pub consistency_check_tick_interval: u64,
 
     pub report_region_flow_interval: u64,
+    pub report_engine_detail_interval: u64,
 }
 
 impl Default for Config {
@@ -151,6 +153,7 @@ impl Default for Config {
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
+            report_engine_detail_interval: DEFAULT_REPORT_ENGINE_DETAIL_INTERVAL,
         }
     }
 }
