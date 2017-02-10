@@ -88,7 +88,7 @@ pub fn new_store_cfg() -> Config {
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: Duration::from_secs(3),
         report_region_flow_interval: 100, // 100ms
-        raft_store_lease: TimeDuration::milliseconds(25 * 10),
+        raft_store_leader_lease: TimeDuration::milliseconds(25 * 10),
         ..Config::default()
     }
 }

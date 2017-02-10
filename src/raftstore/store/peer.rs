@@ -593,7 +593,7 @@ impl Peer {
         // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
         // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
         // which is "send_to_quorum_ts + election_timeout" in short.
-        send_to_quorum_ts + self.cfg.raft_store_lease
+        send_to_quorum_ts + self.cfg.raft_store_leader_lease
     }
 
     fn update_leader_lease(&mut self, ready: &Ready) {
