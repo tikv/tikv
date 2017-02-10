@@ -605,7 +605,7 @@ impl Peer {
                     // The local read can only be performed after a new leader has applied
                     // the first empty entry on its term. After that the lease expiring time
                     // should be updated to
-                    //   send_to_quorum_ts + election_timeout
+                    //   send_to_quorum_ts + max_lease
                     // as the comments in `next_lease_expired_time` function explain.
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
