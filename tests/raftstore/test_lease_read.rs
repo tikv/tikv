@@ -99,7 +99,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let election_timeout =
         Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval *
                               cluster.cfg.raft_store.raft_election_timeout_ticks as u64);
-    cluster.cfg.raft_store.raft_store_leader_lease = TimeDuration::from_std(election_timeout)
+    cluster.cfg.raft_store.raft_store_max_leader_lease = TimeDuration::from_std(election_timeout)
         .unwrap();
 
     let node_id = 1u64;

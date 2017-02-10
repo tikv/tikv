@@ -590,10 +590,10 @@ impl Peer {
 
     fn next_lease_expired_time(&self, send_to_quorum_ts: Timespec) -> Timespec {
         // The valid leader lease should be
-        // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
+        // "lease = max_lease - (quorum_commit_ts - send_to_quorum_ts)"
         // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
-        // which is "send_to_quorum_ts + election_timeout" in short.
-        send_to_quorum_ts + self.cfg.raft_store_leader_lease
+        // which is "send_to_quorum_ts + max_lease" in short.
+        send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
     }
 
     fn update_leader_lease(&mut self, ready: &Ready) {
