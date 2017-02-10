@@ -509,18 +509,8 @@ impl SortRow {
     }
 
     fn cmp_and_check(&self, right: &SortRow) -> Result<CmpOrdering> {
-
         // check err
         try!(self.check_err());
-        // check len
-        if self.key.len() != right.key.len() {
-            let err_msg = format!("cmp failed with key's len {} != {} ",
-                                  self.key.len(),
-                                  right.key.len());
-            self.set_err(err_msg);
-            try!(self.check_err());
-        }
-
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
             let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
@@ -544,17 +534,15 @@ impl SortRow {
         Ok(CmpOrdering::Equal)
     }
 
+    #[inline]
     fn check_err(&self) -> Result<()> {
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
-            return Err(box_err!("{:?}", err_msg));
+            return Err(box_err!(err_msg.to_owned()));
         }
         Ok(())
     }
 
     fn set_err(&self, err_msg: String) {
-        if err_msg.is_empty() {
-            return;
-        }
         *self.err.borrow_mut() = Some(err_msg);
     }
 }
@@ -566,20 +554,21 @@ struct TopNHeap {
 }
 
 impl TopNHeap {
-    fn new(limit: usize) -> TopNHeap {
-        TopNHeap {
-            rows: match limit {
-                usize::MAX => BinaryHeap::new(),
-                _ => BinaryHeap::with_capacity(limit + 1),
-            },
+    fn new(limit: usize) -> Result<TopNHeap> {
+        if limit == usize::MAX {
+            return Err(box_err!("invalid limit"));
+        }
+        Ok(TopNHeap {
+            rows: BinaryHeap::with_capacity(limit),
             limit: limit,
             err: Rc::new(RefCell::new(None)),
-        }
+        })
     }
 
+    #[inline]
     fn check_err(&self) -> Result<()> {
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
-            return Err(box_err!("{:?}", err_msg));
+            return Err(box_err!(err_msg.to_owned()));
         }
         Ok(())
     }
@@ -591,7 +580,6 @@ impl TopNHeap {
                    data: RowColsDict,
                    key: Vec<Datum>)
                    -> Result<()> {
-        try!(self.check_err());
         let row = SortRow::new(handle, order_cols, ctx, data, key, self.err.clone());
         // push into heap when heap not full
         if self.rows.len() < self.limit {
@@ -608,8 +596,12 @@ impl TopNHeap {
     }
 
     fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
-        try!(self.check_err());
-        Ok(self.rows.into_sorted_vec())
+        let sorted_data = self.rows.into_sorted_vec();
+        // check is needed here since err may caused by any call of cmp
+        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
+            return Err(box_err!(err_msg.to_owned()));
+        }
+        Ok(sorted_data)
     }
 }
 
@@ -743,7 +735,7 @@ impl SelectContextCore {
             topn: topn,
             topn_heap: {
                 if topn {
-                    Some(TopNHeap::new(limit))
+                    Some(try!(TopNHeap::new(limit)))
                 } else {
                     None
                 }
@@ -1244,7 +1236,7 @@ mod tests {
         order_cols.push(new_order_by(1, false));
         let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
-        let mut topn_heap = TopNHeap::new(5);
+        let mut topn_heap = TopNHeap::new(5).unwrap();
         let test_data = vec![
         (1,String::from("data1"),Datum::Null, Datum::I64(1)),
         (2,String::from("data2"),Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
@@ -1291,7 +1283,7 @@ mod tests {
         order_cols.push(new_order_by(1, false));
         let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
-        let mut topn_heap = TopNHeap::new(5);
+        let mut topn_heap = TopNHeap::new(5).unwrap();
 
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::new(), b"name:1".to_vec());
@@ -1307,8 +1299,7 @@ mod tests {
                          std_key2)
             .unwrap();
 
-        let bad_key1: Vec<Datum> =
-            vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2), Datum::I64(2)];
+        let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
         let row_data3 = RowColsDict::new(HashMap::new(), b"name:3".to_vec());
 
         assert!(topn_heap.try_add_row(0 as i64,
@@ -1316,24 +1307,6 @@ mod tests {
                          ctx.clone(),
                          row_data3,
                          bad_key1)
-            .is_err());
-
-        let bad_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec())];
-        let row_data4 = RowColsDict::new(HashMap::new(), b"name:4".to_vec());
-        assert!(topn_heap.try_add_row(0 as i64,
-                         order_cols.clone(),
-                         ctx.clone(),
-                         row_data4,
-                         bad_key2)
-            .is_err());
-
-        let std_key3: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
-        let row_data5 = RowColsDict::new(HashMap::new(), b"name:5".to_vec());
-        assert!(topn_heap.try_add_row(0 as i64,
-                         order_cols.clone(),
-                         ctx.clone(),
-                         row_data5,
-                         std_key3)
             .is_err());
 
         assert!(topn_heap.into_sorted_vec().is_err());
@@ -1346,7 +1319,7 @@ mod tests {
         order_cols.push(new_order_by(1, false));
         let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
-        let mut topn_heap = TopNHeap::new(10);
+        let mut topn_heap = TopNHeap::new(10).unwrap();
         let test_data = vec![
             (3,String::from("data3"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
             (4,String::from("data4"),Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
