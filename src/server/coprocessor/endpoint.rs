@@ -33,9 +33,8 @@ use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
 
 use storage::{self, Engine, SnapshotStore, ScanMetrics, engine, Snapshot, Key, ScanMode};
-use util::codec::table::TableDecoder;
+use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
-use util::codec::datum::DatumDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either};
@@ -445,7 +444,7 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 #[inline]
 fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                            ctx: &EvalContext,
-                           values: &HashMap<i64, &[u8]>,
+                           values: &RowColsDict,
                            cols: T,
                            h: i64)
                            -> Result<()>
@@ -458,7 +457,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                 let v = get_pk(col, h);
                 e.insert(v);
             } else {
-                let value = match values.get(&col_id) {
+                let value = match values.get(col_id) {
                     None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                         return Err(box_err!("column {} of {} is missing", col_id, h));
                     }
@@ -484,12 +483,12 @@ fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
 #[inline]
 fn encode_row_from_cols(cols: &[ColumnInfo],
                         h: i64,
-                        values: HashMap<i64, &[u8]>,
+                        values: RowColsDict,
                         data: &mut Vec<u8>)
                         -> Result<()> {
     for col in cols {
         let col_id = col.get_column_id();
-        if let Some(v) = values.get(&col_id) {
+        if let Some(v) = values.get(col_id) {
             data.extend_from_slice(v);
             continue;
         }
@@ -774,10 +773,9 @@ impl SelectContextCore {
         })
     }
 
-    fn handle_row(&mut self, h: i64, row_data: HashMap<i64, &[u8]>) -> Result<usize> {
+    fn handle_row(&mut self, h: i64, row_data: RowColsDict) -> Result<usize> {
         // clear all dirty values.
         self.eval.row.clear();
-
         if try!(self.should_skip(h, &row_data)) {
             return Ok(0);
         }
@@ -795,7 +793,7 @@ impl SelectContextCore {
         }
     }
 
-    fn should_skip(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<bool> {
+    fn should_skip(&mut self, h: i64, values: &RowColsDict) -> Result<bool> {
         if !self.sel.has_field_where() {
             return Ok(false);
         }
@@ -805,7 +803,7 @@ impl SelectContextCore {
         Ok(b.map_or(true, |v| !v))
     }
 
-    fn get_topn_row(&mut self, h: i64, values: HashMap<i64, &[u8]>) -> Result<()> {
+    fn get_topn_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
         try!(inflate_with_col(&mut self.eval, &self.ctx, &values, &self.topn_cols, h));
         let mut sort_keys = Vec::with_capacity(self.sel.get_order_by().len());
         let mut order_by = Vec::new();
@@ -829,7 +827,7 @@ impl SelectContextCore {
         Ok(())
     }
 
-    fn get_row(&mut self, h: i64, values: HashMap<i64, &[u8]>) -> Result<()> {
+    fn get_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
         let chunk = get_chunk(&mut self.chunks);
         let last_len = chunk.get_rows_data().len();
         let cols = if self.sel.has_table_info() {
@@ -859,7 +857,7 @@ impl SelectContextCore {
         Ok(res)
     }
 
-    fn aggregate(&mut self, h: i64, values: &HashMap<i64, &[u8]>) -> Result<()> {
+    fn aggregate(&mut self, h: i64, values: &RowColsDict) -> Result<()> {
         try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.aggr_cols, h));
         let gk = Rc::new(try!(self.get_group_key()));
         let aggr_exprs = self.sel.get_aggregates();
@@ -1015,7 +1013,7 @@ impl<'a> SelectContext<'a> {
             };
             let values = {
                 let ids = self.core.cols.as_ref().left().unwrap();
-                box_try!(table::cut_row(&value, ids))
+                box_try!(table::cut_row(value, ids))
             };
             let h = box_try!(table::decode_handle(range.get_start()));
             row_count += try!(self.core.handle_row(h, values));
@@ -1060,7 +1058,7 @@ impl<'a> SelectContext<'a> {
                 let h = box_try!(table::decode_handle(&key));
                 let row_data = {
                     let ids = self.core.cols.as_ref().left().unwrap();
-                    box_try!(table::cut_row(&value, ids))
+                    box_try!(table::cut_row(value, ids))
                 };
                 row_count += try!(self.core.handle_row(h, row_data));
                 seek_key = if self.core.desc_scan {
@@ -1128,23 +1126,23 @@ impl<'a> SelectContext<'a> {
                        escape(r.get_end()));
                 break;
             }
-            {
-                let (values, mut handle) = {
-                    let ids = self.core.cols.as_ref().right().unwrap();
-                    box_try!(table::cut_idx_key(&key, ids))
-                };
-                let handle = if handle.is_empty() {
-                    box_try!(val.as_slice().read_i64::<BigEndian>())
-                } else {
-                    box_try!(handle.decode_datum()).i64()
-                };
-                row_cnt += try!(self.core.handle_row(handle, values));
-            }
             seek_key = if self.core.desc_scan {
-                key
+                key.clone()
             } else {
                 prefix_next(&key)
             };
+            {
+                let (values, handle) = {
+                    let ids = self.core.cols.as_ref().right().unwrap();
+                    box_try!(table::cut_idx_key(key, ids))
+                };
+                let handle = if handle.is_none() {
+                    box_try!(val.as_slice().read_i64::<BigEndian>())
+                } else {
+                    handle.unwrap()
+                };
+                row_cnt += try!(self.core.handle_row(handle, values));
+            }
         }
         Ok(row_cnt)
     }
