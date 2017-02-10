@@ -511,20 +511,22 @@ impl SortRow {
     fn cmp_and_check(&self, right: &SortRow) -> Result<CmpOrdering> {
 
         // check err
-        try!(self.get_err());
+        try!(self.check_err());
         // check len
         if self.key.len() != right.key.len() {
             let err_msg = format!("cmp failed with key's len {} != {} ",
                                   self.key.len(),
                                   right.key.len());
-            try!(self.set_err(err_msg));
+            self.set_err(err_msg);
+            try!(self.check_err());
         }
 
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
             let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
             if let StdResult::Err(err) = cmp_ret {
-                try!(self.set_err(format!("cmp failed with:{:?}", err)));
+                self.set_err(format!("cmp failed with:{:?}", err));
+                try!(self.check_err());
             } else {
                 let order = cmp_ret.unwrap();
                 if order == CmpOrdering::Equal {
@@ -542,19 +544,18 @@ impl SortRow {
         Ok(CmpOrdering::Equal)
     }
 
-    fn get_err(&self) -> Result<()> {
+    fn check_err(&self) -> Result<()> {
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
             return Err(box_err!("{:?}", err_msg));
         }
         Ok(())
     }
 
-    fn set_err(&self, err_msg: String) -> Result<()> {
+    fn set_err(&self, err_msg: String) {
         if err_msg.is_empty() {
-            return Ok(());
+            return;
         }
-        *self.err.borrow_mut() = Some(err_msg.clone());
-        Err(box_err!("{:?}", err_msg))
+        *self.err.borrow_mut() = Some(err_msg);
     }
 }
 
@@ -576,7 +577,7 @@ impl TopNHeap {
         }
     }
 
-    fn get_err(&self) -> Result<()> {
+    fn check_err(&self) -> Result<()> {
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
             return Err(box_err!("{:?}", err_msg));
         }
@@ -590,7 +591,7 @@ impl TopNHeap {
                    data: RowColsDict,
                    key: Vec<Datum>)
                    -> Result<()> {
-        try!(self.get_err());
+        try!(self.check_err());
         let row = SortRow::new(handle, order_cols, ctx, data, key, self.err.clone());
         // push into heap when heap not full
         if self.rows.len() < self.limit {
@@ -603,11 +604,11 @@ impl TopNHeap {
                 *top_data = row;
             }
         }
-        self.get_err()
+        self.check_err()
     }
 
     fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
-        try!(self.get_err());
+        try!(self.check_err());
         Ok(self.rows.into_sorted_vec())
     }
 }
