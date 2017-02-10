@@ -30,8 +30,10 @@ use util::{escape, HandyRwLock, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption, SeekMode};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
-use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, keys, Peekable, util};
+use raftstore::store::{self, SnapManager, SnapKey, SnapEntry, SnapshotFileRecvReader, keys,
+                       Peekable, util};
 use storage::CF_RAFT;
+use rocksdb::IngestExternalFileOptions;
 
 use super::metrics::*;
 
@@ -224,62 +226,80 @@ impl Runner {
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        let snap_file = box_try!(self.mgr.rl().get_snap_file(&snap_key, false));
+        let apply_reader = box_try!(self.mgr.rl().get_snapshot_file_apply_reader(&snap_key));
         self.mgr.wl().register(snap_key.clone(), SnapEntry::Applying);
         defer!({
             self.mgr.wl().deregister(&snap_key, &SnapEntry::Applying);
         });
-        if !snap_file.exists() {
-            return Err(box_err!("missing snap file {}", snap_file.path().display()));
-        }
         try!(check_abort(&abort));
-        let mut reader = box_try!(snap_file.reader());
 
         let timer = Instant::now();
-        let mut snapshot_size = 0;
-        let mut snapshot_kv_count = 0;
         // Write the snapshot into the region.
-        loop {
-            // TODO: avoid too many allocation
-            try!(check_abort(&abort));
-            let cf = box_try!(reader.decode_compact_bytes());
-            if cf.is_empty() {
-                break;
+        let mut snapshot_size = 0;
+        match apply_reader {
+            SnapshotFileRecvReader::V1(f) => {
+                let mut reader = box_try!(f.reader());
+                let mut snapshot_kv_count = 0;
+                loop {
+                    // TODO: avoid too many allocation
+                    try!(check_abort(&abort));
+
+                    let cf = box_try!(reader.decode_compact_bytes());
+                    if cf.is_empty() {
+                        break;
+                    }
+                    let handle = box_try!(rocksdb::get_cf_handle(&self.db, unsafe {
+                        str::from_utf8_unchecked(&cf)
+                    }));
+                    let mut wb = WriteBatch::new();
+                    let mut batch_size = 0;
+                    loop {
+                        try!(check_abort(&abort));
+                        let key = box_try!(reader.decode_compact_bytes());
+                        if key.is_empty() {
+                            box_try!(self.db.write(wb));
+                            snapshot_size += batch_size;
+                            break;
+                        }
+                        snapshot_kv_count += 1;
+                        box_try!(util::check_key_in_region(keys::origin_key(&key), &region));
+                        batch_size += key.len();
+                        let value = box_try!(reader.decode_compact_bytes());
+                        batch_size += value.len();
+                        box_try!(wb.put_cf(handle, &key, &value));
+                        if batch_size >= self.batch_size {
+                            box_try!(self.db.write(wb));
+                            snapshot_size += batch_size;
+                            wb = WriteBatch::new();
+                            batch_size = 0;
+                        }
+                    }
+                }
+
+                SNAPSHOT_KV_COUNT_HISTOGRAM.observe(snapshot_kv_count as f64);
+
+                box_try!(reader.validate());
             }
-            let handle = box_try!(rocksdb::get_cf_handle(&self.db,
-                                                         unsafe { str::from_utf8_unchecked(&cf) }));
-            let mut wb = WriteBatch::new();
-            let mut batch_size = 0;
-            loop {
-                try!(check_abort(&abort));
-                let key = box_try!(reader.decode_compact_bytes());
-                if key.is_empty() {
-                    box_try!(self.db.write(wb));
-                    snapshot_size += batch_size;
-                    break;
+            SnapshotFileRecvReader::V2(reader) => {
+                for (cf, fpath, size) in reader.list_cf_files() {
+                    // TODO: avoid too many allocation
+                    try!(check_abort(&abort));
+
+                    let cf_handle = box_try!(rocksdb::get_cf_handle(&self.db, &cf));
+                    let ingest_opt = IngestExternalFileOptions::new().move_files(true);
+                    if let Err(e) = self.db
+                        .ingest_external_file_cf(cf_handle, &ingest_opt, &[&fpath]) {
+                        return Err(Error::Other(box_err!(e)));
+                    }
+                    snapshot_size += size as usize;
                 }
-                snapshot_kv_count += 1;
-                box_try!(util::check_key_in_region(keys::origin_key(&key), &region));
-                batch_size += key.len();
-                let value = box_try!(reader.decode_compact_bytes());
-                batch_size += value.len();
-                box_try!(wb.put_cf(handle, &key, &value));
-                if batch_size >= self.batch_size {
-                    box_try!(self.db.write(wb));
-                    snapshot_size += batch_size;
-                    wb = WriteBatch::new();
-                    batch_size = 0;
-                }
+                reader.delete();
             }
         }
-
-        SNAPSHOT_KV_COUNT_HISTOGRAM.observe(snapshot_kv_count as f64);
         SNAPSHOT_SIZE_HISTOGRAM.observe(snapshot_size as f64);
-        box_try!(reader.validate());
 
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
-        snap_file.delete();
         info!("[region {}] apply new data takes {:?}",
               region_id,
               timer.elapsed());

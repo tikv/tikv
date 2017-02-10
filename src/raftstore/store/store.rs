@@ -1547,7 +1547,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         snap_keys.sort();
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         let mut is_applying_snap = false;
-        for (key, is_sending) in snap_keys {
+        for (key, is_sending, is_v1) in snap_keys {
             if self.snap_mgr.rl().has_registered(&key) {
                 continue;
             }
@@ -1569,8 +1569,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 };
             }
 
-            let f = try!(self.snap_mgr.rl().get_snap_file(&key, is_sending));
             if is_sending {
+                let f = try!(self.snap_mgr.rl().get_snapshot_file_send_reader(&key, is_v1));
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
@@ -1592,6 +1592,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] snap file {} has been applied, delete.",
                       key.region_id,
                       key);
+                let f = try!(self.snap_mgr.rl().get_snapshot_file_recv_reader(&key, is_v1));
                 f.delete();
             }
         }

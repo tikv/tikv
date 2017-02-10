@@ -79,7 +79,7 @@ lazy_static! {
         register_histogram!(
             "tikv_snapshot_kv_count",
             "Total number of kv in snapshot",
-             exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
+            exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
         ).unwrap();
     pub static ref SNAPSHOT_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
