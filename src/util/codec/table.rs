@@ -327,8 +327,9 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
 mod test {
     use super::*;
     use util::codec::mysql::types;
-    use util::codec::datum::{self, Datum};
+    use util::codec::datum::{self, Datum, DatumDecoder};
     use util::codec::number::NumberEncoder;
+
     use tipb::schema::ColumnInfo;
     use std::i64;
     use std::collections::{HashSet, HashMap};
@@ -382,14 +383,6 @@ mod test {
     fn cut_idx_key_as_owned(bs: &[u8], ids: &[i64]) -> (HashMap<i64, Vec<u8>>, Option<i64>) {
         let (res, left) = cut_idx_key(bs.to_vec(), ids).unwrap();
         (to_hash_map(&res), left)
-    }
-
-    fn parse_handle(mut data: &[u8]) -> Result<Option<i64>> {
-        if data.is_empty() {
-            return Ok(None);
-        }
-        let handle = box_try!(data.decode_datum()).i64();
-        Ok(Some(handle))
     }
 
     #[test]
@@ -481,7 +474,11 @@ mod test {
         assert!(res.1.is_none());
 
         let handle_data = col_encoded.remove(&3).unwrap();
-        let handle = parse_handle(&handle_data).unwrap();
+        let handle = if handle_data.is_empty() {
+            None
+        } else {
+            Some((handle_data.as_ref() as &[u8]).decode_datum().unwrap().i64())
+        };
         col_ids.remove(2);
         res = cut_idx_key_as_owned(&bs, &col_ids);
         assert_eq!(col_encoded, res.0);
