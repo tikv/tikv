@@ -14,6 +14,8 @@
 use std::u64;
 use std::time::Duration;
 
+use time::Duration as TimeDuration;
+
 use raftstore::Result;
 
 const RAFT_BASE_TICK_INTERVAL: u64 = 100;
@@ -51,6 +53,8 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
 const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
+
+const DEFAULT_RAFT_STORE_LEASE: i64 = 5; // 5 seconds
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -117,6 +121,8 @@ pub struct Config {
     pub consistency_check_tick_interval: u64,
 
     pub report_region_flow_interval: u64,
+    // The lease provided by a successfully proposed and applied entry.
+    pub raft_store_lease: TimeDuration,
 }
 
 impl Default for Config {
@@ -151,6 +157,7 @@ impl Default for Config {
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
+            raft_store_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE),
         }
     }
 }
@@ -190,6 +197,15 @@ impl Config {
             return Err(box_err!("region max size {} must >= split size {}",
                                 self.region_max_size,
                                 self.region_split_size));
+        }
+
+        let election_timeout = self.raft_base_tick_interval *
+                               self.raft_election_timeout_ticks as u64;
+        let lease = self.raft_store_lease.num_milliseconds() as u64;
+        if election_timeout < lease {
+            return Err(box_err!("election timeout {} ms is less than lease {} ms",
+                                election_timeout,
+                                lease));
         }
 
         Ok(())
