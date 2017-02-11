@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use raftstore::Result;
 
-const RAFT_BASE_TICK_INTERVAL: u64 = 100;
-const RAFT_HEARTBEAT_TICKS: usize = 10;
-const RAFT_ELECTION_TIMEOUT_TICKS: usize = 50;
+const RAFT_BASE_TICK_INTERVAL: u64 = 1000;
+const RAFT_HEARTBEAT_TICKS: usize = 1;
+const RAFT_ELECTION_TIMEOUT_TICKS: usize = 5;
 const RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 const RAFT_MAX_INFLIGHT_MSGS: usize = 256;
 const RAFT_ENTRY_MAX_SIZE: u64 = 8 * 1024 * 1024;
