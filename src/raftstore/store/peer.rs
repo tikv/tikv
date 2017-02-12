@@ -641,9 +641,7 @@ impl Peer {
 
         debug!("{} handle raft ready", self.tag);
 
-        let ready_timer = PEER_GET_READY_HISTOGRAM.start_timer();
         let mut ready = self.raft_group.ready();
-        ready_timer.observe_duration();
 
         self.update_leader_lease(&ready);
 
@@ -1184,14 +1182,7 @@ impl Peer {
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
-        let from_peer = match self.get_peer_from_cache(msg.get_from()) {
-            Some(p) => p,
-            None => {
-                return Err(box_err!("failed to lookup sender peer {} in region {}",
-                                    msg.get_from(),
-                                    self.region_id))
-            }
-        };
+        let from_peer = self.peer.clone();
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
