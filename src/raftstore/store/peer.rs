@@ -1184,14 +1184,7 @@ impl Peer {
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
-        let from_peer = match self.get_peer_from_cache(msg.get_from()) {
-            Some(p) => p,
-            None => {
-                return Err(box_err!("failed to lookup sender peer {} in region {}",
-                                    msg.get_from(),
-                                    self.region_id))
-            }
-        };
+        let from_peer = self.peer.clone();
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
