@@ -168,6 +168,14 @@ impl Config {
         self.raft_election_timeout_ticks - 1
     }
 
+    /// Log the slow raft operation if the time takes more than `raft_slow_time_ms`.
+    #[inline]
+    pub fn raft_slow_time_ms(&self) -> u64 {
+        // For every `raft_base_tick_interval`, we will step the raft, if the operation
+        // takes more than this time, the peer is delayed and not accurate.
+        self.raft_base_tick_interval
+    }
+
     pub fn validate(&self) -> Result<()> {
         if self.raft_heartbeat_ticks == 0 {
             return Err(box_err!("heartbeat tick must greater than 0"));
