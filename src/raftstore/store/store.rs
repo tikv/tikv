@@ -764,7 +764,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
-        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
@@ -793,7 +792,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                         invoke_ctx);
             ready_results.push((region_id, ready, res));
         }
-        append_timer.observe_duration();
+
+        self.raft_metrics.append_log.observe(duration_to_sec(t.elapsed()) as f64);
 
         let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
         self.sent_snapshot_count += sent_snapshot_count;
