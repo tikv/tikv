@@ -554,9 +554,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.insert_peer_cache(msg.take_to_peer());
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let timer = SlowTimer::new();
         try!(peer.step(msg.take_message()));
-        slow_log!(timer, "{} raft step", peer.tag);
 
         // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
@@ -1044,8 +1042,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.on_ready_apply_snapshot(apply_result);
         }
 
-        let t = SlowTimer::new();
-        let result_count = ready_result.exec_results.len();
         // handle executing committed log results
         for result in ready_result.exec_results {
             match result {
@@ -1062,10 +1058,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
-        slow_log!(t,
-                  "[region {}] on ready {} results",
-                  region_id,
-                  result_count);
     }
 
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
@@ -1569,21 +1561,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 };
             }
 
-            let f = try!(self.snap_mgr.rl().get_snap_file(&key, is_sending));
             if is_sending {
+                let s = try!(self.snap_mgr.rl().get_snapshot_for_sending(&key));
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
                           key);
-                    f.delete();
-                } else if let Ok(meta) = f.meta() {
+                    s.delete();
+                } else if let Ok(meta) = s.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
                             info!("[region {}] snap file {} has been expired, delete.",
                                   key.region_id,
                                   key);
-                            f.delete();
+                            s.delete();
                         }
                     }
                 }
@@ -1592,7 +1584,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] snap file {} has been applied, delete.",
                       key.region_id,
                       key);
-                f.delete();
+                let a = try!(self.snap_mgr.rl().get_snapshot_for_applying(&key));
+                a.delete();
             }
         }
         Ok(())
@@ -1858,8 +1851,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Message = Msg;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
-        let t = SlowTimer::new();
-        let msg_str = format!("{:?}", msg);
         match msg {
             Msg::RaftMessage(data) => {
                 if let Err(e) = self.on_raft_message(data) {
@@ -1889,7 +1880,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_hash_computed(region_id, index, hash);
             }
         }
-        slow_log!(t, "{} handle {}", self.tag, msg_str);
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {
