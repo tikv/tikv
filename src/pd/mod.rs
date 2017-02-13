@@ -14,13 +14,12 @@
 use std::vec::Vec;
 
 mod client;
-mod v1client;
-mod v2client;
 mod metrics;
 
 pub mod errors;
 pub use self::errors::{Result, Error};
 pub use self::client::RpcClient;
+pub use self::client::validate_endpoints;
 
 use kvproto::metapb;
 use kvproto::pdpb;

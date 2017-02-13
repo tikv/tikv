@@ -15,7 +15,7 @@ use std::env;
 
 use kvproto::metapb;
 
-use tikv::pd::{PdClient, RpcClient};
+use tikv::pd::{PdClient, RpcClient, validate_endpoints};
 
 #[test]
 fn test_rpc_client() {
@@ -26,8 +26,7 @@ fn test_rpc_client() {
     };
 
     let client = RpcClient::new(&endpoints).unwrap();
-    assert!(client.cluster_id != 0);
-    assert_eq!(client.cluster_id, client.get_cluster_id().unwrap());
+    assert!(client.get_cluster_id().unwrap() != 0);
 
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
@@ -63,7 +62,9 @@ fn test_rpc_client() {
     }
 }
 
+// Waiting pingcap/kvproto#135 and pingcap/pd#493
 #[test]
+#[ignore]
 fn test_rpc_client_safely_new() {
     let endpoints_1 = match env::var("PD_ENDPOINTS") {
         Ok(v) => v,
@@ -73,7 +74,7 @@ fn test_rpc_client_safely_new() {
         Ok(v) => v,
         Err(_) => return,
     };
-    let endpoints = [endpoints_1, endpoints_2];
+    let endpoints = &[endpoints_1.as_str(), endpoints_2.as_str()];
 
-    assert!(RpcClient::validate_endpoints(&endpoints).is_err());
+    assert!(validate_endpoints(endpoints).is_err());
 }
