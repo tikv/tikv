@@ -19,8 +19,8 @@ use time::Duration as TimeDuration;
 use raftstore::Result;
 
 const RAFT_BASE_TICK_INTERVAL: u64 = 100;
-const RAFT_HEARTBEAT_TICKS: usize = 10;
-const RAFT_ELECTION_TIMEOUT_TICKS: usize = 50;
+const RAFT_HEARTBEAT_TICKS: usize = 20;
+const RAFT_ELECTION_TIMEOUT_TICKS: usize = 100;
 const RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 const RAFT_MAX_INFLIGHT_MSGS: usize = 256;
 const RAFT_ENTRY_MAX_SIZE: u64 = 8 * 1024 * 1024;
@@ -54,7 +54,7 @@ const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
 const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
 
-const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 5; // 5 seconds
+const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 5 seconds
 
 #[derive(Debug, Clone)]
 pub struct Config {
