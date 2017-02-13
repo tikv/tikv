@@ -945,16 +945,16 @@ impl Peer {
         }
 
         let mut reset_lease_expired_time = false;
-        let mut lease_lost = false;
+        let mut lost_lease = false;
         let now = clocktime::raw_now();
         match self.leader_lease_expired_time.as_ref().unwrap().as_ref() {
             Either::Left(safe_expired_time) => {
                 if now > *safe_expired_time {
                     reset_lease_expired_time = true;
-                    lease_lost = true;
+                    lost_lease = true;
                 }
             }
-            _ => lease_lost = true,
+            _ => lost_lease = true,
         }
         if reset_lease_expired_time {
             debug!("{} leader lease expired time {:?} is outdated",
@@ -963,7 +963,7 @@ impl Peer {
             // Reset leader lease expiring time.
             self.leader_lease_expired_time = None;
         }
-        if lease_lost {
+        if lost_lease {
             // Perform a consistent read to Raft quorum and try to renew the leader lease.
             return false;
         }
