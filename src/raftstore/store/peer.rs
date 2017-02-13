@@ -650,9 +650,7 @@ impl Peer {
 
         debug!("{} handle raft ready", self.tag);
 
-        let ready_timer = PEER_GET_READY_HISTOGRAM.start_timer();
         let mut ready = self.raft_group.ready();
-        ready_timer.observe_duration();
 
         self.update_leader_lease(&ready);
 
