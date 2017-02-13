@@ -1180,7 +1180,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
-        for peer in &mut self.region_peers.values_mut() {
+        for peer in self.region_peers.values_mut() {
             if !peer.is_leader() {
                 peer.written_bytes = 0;
                 peer.written_keys = 0;
@@ -1290,7 +1290,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.register_split_region_check_tick(event_loop);
             return;
         }
-        for peer in &mut self.region_peers.values_mut() {
+        for peer in self.region_peers.values_mut() {
             if !peer.is_leader() {
                 continue;
             }
@@ -1321,7 +1321,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for peer in &mut self.region_peers.values_mut() {
+        for peer in self.region_peers.values_mut() {
             if peer.delete_keys_hint < self.cfg.region_compact_delete_keys_count {
                 continue;
             }
