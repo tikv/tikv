@@ -28,6 +28,7 @@ extern crate signal;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
+extern crate sysinfo;
 
 mod signal_handler;
 
@@ -45,6 +46,7 @@ use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
+use sysinfo::System;
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
@@ -59,6 +61,9 @@ use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
+
+const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
+const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
 
 fn print_usage(program: &str, opts: &Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -297,7 +302,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
 
 fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
-                         block_cache_default: i64,
+                         block_cache_default: u64,
                          use_bloom_filter: bool,
                          whole_key_filtering: bool)
                          -> RocksdbOptions {
@@ -310,7 +315,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     block_base_opts.set_block_size(block_size as usize);
     let block_cache_size = get_toml_int(config,
                                         (prefix.clone() + "block-cache-size").as_str(),
-                                        Some(block_cache_default));
+                                        Some(block_cache_default as i64));
     block_base_opts.set_lru_cache(block_cache_size as usize);
 
     let cache_index_and_filter =
@@ -383,17 +388,19 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     opts
 }
 
-fn get_rocksdb_default_cf_option(config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
     // Default column family uses bloom filter.
+    let default_block_cache_size = (total_mem as f64 * 0.4) as u64;
     get_rocksdb_cf_option(config,
                           "defaultcf",
-                          1024 * 1024 * 1024,
+                          default_block_cache_size,
                           true, // bloom filter
                           true /* whole key filtering */)
 }
 
-fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
-    let mut opt = get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, true, false);
+fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+    let default_block_cache_size = (total_mem as f64 * 0.15) as u64;
+    let mut opt = get_rocksdb_cf_option(config, "writecf", default_block_cache_size, true, false);
     // prefix extractor(trim the timestamp at tail) for write cf.
     opt.set_prefix_extractor("FixedSuffixSliceTransform",
                               Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
@@ -403,8 +410,16 @@ fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
     opt
 }
 
-fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false)
+fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+    let mut default_block_cache_size = (total_mem as f64 * 0.01) as u64;
+    if default_block_cache_size < RAFTCF_MIN_MEM {
+        default_block_cache_size = RAFTCF_MIN_MEM;
+    }
+    if default_block_cache_size > RAFTCF_MAX_MEM {
+        default_block_cache_size = RAFTCF_MAX_MEM;
+    }
+
+    get_rocksdb_cf_option(config, "raftcf", default_block_cache_size, false, false)
 }
 
 fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
@@ -430,19 +445,37 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
     opts
 }
 
+fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
+    if total_cpu_num >= 8 {
+        (total_cpu_num as f32 * 0.8) as usize
+    } else {
+        4
+    }
+}
+
+fn adjust_sched_workers_by_cpu_num(total_cpu_num: usize) -> usize {
+    if total_cpu_num >= 16 { 8 } else { 4 }
+}
 
 // TODO: merge this function with Config::new
 // Currently, to add a new option, we will define three default value
 // in config.rs, this file and config-template.toml respectively. It may be more
 // maintainable to keep things in one place.
-fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: String) -> Config {
+fn build_cfg(matches: &Matches,
+             config: &toml::Value,
+             cluster_id: u64,
+             addr: String,
+             total_cpu_num: usize)
+             -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
     cfg_usize(&mut cfg.notify_capacity, config, "server.notify-capacity");
-    cfg_usize(&mut cfg.end_point_concurrency,
-              config,
-              "server.end-point-concurrency");
+    if !cfg_usize(&mut cfg.end_point_concurrency,
+                  config,
+                  "server.end-point-concurrency") {
+        cfg.end_point_concurrency = adjust_end_points_by_cpu_num(total_cpu_num);
+    }
     cfg_usize(&mut cfg.messages_per_tick,
               config,
               "server.messages-per-tick");
@@ -534,9 +567,11 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_usize(&mut cfg.storage.sched_concurrency,
               config,
               "storage.scheduler-concurrency");
-    cfg_usize(&mut cfg.storage.sched_worker_pool_size,
-              config,
-              "storage.scheduler-worker-pool-size");
+    if !cfg_usize(&mut cfg.storage.sched_worker_pool_size,
+                  config,
+                  "storage.scheduler-worker-pool-size") {
+        cfg.storage.sched_worker_pool_size = adjust_sched_workers_by_cpu_num(total_cpu_num);
+    }
 
     cfg
 }
@@ -544,15 +579,16 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
 fn build_raftkv(config: &toml::Value,
                 ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
-                cfg: &Config)
+                cfg: &Config,
+                total_mem: u64)
                 -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_db_option(config);
-    let cfs_opts = vec![get_rocksdb_default_cf_option(config),
+    let cfs_opts = vec![get_rocksdb_default_cf_option(config, total_mem),
                         get_rocksdb_lock_cf_option(),
-                        get_rocksdb_write_cf_option(config),
-                        get_rocksdb_raftlog_cf_option(config)];
+                        get_rocksdb_write_cf_option(config, total_mem),
+                        get_rocksdb_raftlog_cf_option(config, total_mem)];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine =
@@ -638,7 +674,11 @@ fn start_server<T, S>(mut server: Server<T, S>,
     h.join().unwrap();
 }
 
-fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config: &toml::Value) {
+fn run_raft_server(pd_client: RpcClient,
+                   cfg: Config,
+                   backup_path: &str,
+                   config: &toml::Value,
+                   total_mem: u64) {
     let mut event_loop = create_event_loop(&cfg).unwrap();
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
@@ -654,7 +694,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config:
     }
 
     let (mut node, mut store, raft_router, snap_mgr, engine) =
-        build_raftkv(config, ch.clone(), pd_client, &cfg);
+        build_raftkv(config, ch.clone(), pd_client, &cfg, total_mem);
     info!("tikv server config: {:?}", cfg);
 
     initial_metric(config, Some(node.id()));
@@ -786,7 +826,12 @@ fn main() {
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
     let cluster_id = pd_client.cluster_id;
 
-    let mut cfg = build_cfg(&matches, &config, cluster_id, addr);
+    let mut system = System::new();
+    system.refresh_all();
+    let total_cpu_num = system.get_processor_list().len();
+    let total_mem = system.get_total_memory();
+
+    let mut cfg = build_cfg(&matches, &config, cluster_id, addr, total_cpu_num);
     cfg.labels = get_store_labels(&matches, &config);
     let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
     cfg.storage.path = store_path;
@@ -795,5 +840,5 @@ fn main() {
         panic!("in raftkv, cluster_id must greater than 0");
     }
     let _m = TimeMonitor::default();
-    run_raft_server(pd_client, cfg, &backup_path, &config);
+    run_raft_server(pd_client, cfg, &backup_path, &config, total_mem);
 }
