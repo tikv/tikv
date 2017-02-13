@@ -863,7 +863,7 @@ impl SelectContextCore {
         Ok(())
     }
 
-    fn topn_rows(&mut self) -> Result<()> {
+    fn collect_topn_rows(&mut self) -> Result<()> {
         let sorted_data = try!(self.topn_heap.take().unwrap().into_sorted_vec());
         for row in sorted_data {
             try!(self.get_row(row.handle, row.data));
@@ -961,7 +961,7 @@ impl<'a> SelectContext<'a> {
             try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
         }
         if self.core.topn {
-            self.core.topn_rows()
+            self.core.collect_topn_rows()
         } else if self.core.aggr {
             self.core.aggr_rows()
         } else {
