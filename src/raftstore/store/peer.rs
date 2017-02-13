@@ -276,8 +276,8 @@ pub struct Peer {
 
     // `leader_lease_expired_time` contains either timestamps of
     //   1. Either::Left<Timespec>
-    //      A safe leader lease expired time, which marks the leader hold the lease for now.
-    //      The lease is safe until the clock time go over this timestamp.
+    //      A safe leader lease expired time, which marks the leader holds the lease for now.
+    //      The lease is safe until the clock time goes over this timestamp.
     //      It would increase when raft log entries are applied in current term.
     //   2. Either::Right<Timespec>
     //      An unsafe leader lease expired time, which marks the leader may still hold or lose
