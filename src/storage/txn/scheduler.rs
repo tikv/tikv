@@ -65,7 +65,7 @@ pub enum ProcessResult {
     Value { value: Option<Value> },
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
-    Failed { err: StorageError },
+    Failed { err: Box<StorageError> },
 }
 
 /// Message types for the scheduler event loop.
@@ -118,35 +118,35 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
         StorageCb::Boolean(cb) => {
             match pr {
                 ProcessResult::Res => cb(Ok(())),
-                ProcessResult::Failed { err } => cb(Err(err)),
+                ProcessResult::Failed { err } => cb(Err(*err)),
                 _ => panic!("process result mismatch"),
             }
         }
         StorageCb::Booleans(cb) => {
             match pr {
                 ProcessResult::MultiRes { results } => cb(Ok(results)),
-                ProcessResult::Failed { err } => cb(Err(err)),
+                ProcessResult::Failed { err } => cb(Err(*err)),
                 _ => panic!("process result mismatch"),
             }
         }
         StorageCb::SingleValue(cb) => {
             match pr {
                 ProcessResult::Value { value } => cb(Ok(value)),
-                ProcessResult::Failed { err } => cb(Err(err)),
+                ProcessResult::Failed { err } => cb(Err(*err)),
                 _ => panic!("process result mismatch"),
             }
         }
         StorageCb::KvPairs(cb) => {
             match pr {
                 ProcessResult::MultiKvpairs { pairs } => cb(Ok(pairs)),
-                ProcessResult::Failed { err } => cb(Err(err)),
+                ProcessResult::Failed { err } => cb(Err(*err)),
                 _ => panic!("process result mismatch"),
             }
         }
         StorageCb::Locks(cb) => {
             match pr {
                 ProcessResult::Locks { locks } => cb(Ok(locks)),
-                ProcessResult::Failed { err } => cb(Err(err)),
+                ProcessResult::Failed { err } => cb(Err(*err)),
                 _ => panic!("process result mismatch"),
             }
         }
@@ -274,7 +274,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             let res = snap_store.get(key);
             match res {
                 Ok(val) => ProcessResult::Value { value: val },
-                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+                Err(e) => ProcessResult::Failed { err: Box::new(StorageError::from(e)) },
             }
         }
         // Batch gets from the snapshot.
@@ -294,7 +294,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                     }
                     ProcessResult::MultiKvpairs { pairs: res }
                 }
-                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+                Err(e) => ProcessResult::Failed { err: Box::new(StorageError::from(e)) },
             }
         }
         // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
@@ -311,7 +311,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             KV_COMMAND_SCAN_EFFICIENCY.observe(metrics.efficiency());
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
-                Err(e) => ProcessResult::Failed { err: e.into() },
+                Err(e) => ProcessResult::Failed { err: Box::new(e.into()) },
             }
         }
         // Scans locks with timestamp <= `max_ts`
@@ -335,7 +335,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 });
             match res {
                 Ok(locks) => ProcessResult::Locks { locks: locks },
-                Err(e) => ProcessResult::Failed { err: e.into() },
+                Err(e) => ProcessResult::Failed { err: Box::new(e.into()) },
             }
         }
         // Scan the locks with timestamp `start_ts`, then either commit them if the command has
@@ -366,7 +366,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
-                Err(e) => ProcessResult::Failed { err: e.into() },
+                Err(e) => ProcessResult::Failed { err: Box::new(e.into()) },
             }
         }
         // Collects garbage.
@@ -398,14 +398,14 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
-                Err(e) => ProcessResult::Failed { err: e.into() },
+                Err(e) => ProcessResult::Failed { err: Box::new(e.into()) },
             }
         }
         Command::RawGet { ref key, .. } => {
             KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag]).observe(1f64);
             match snapshot.get(key) {
                 Ok(val) => ProcessResult::Value { value: val },
-                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+                Err(e) => ProcessResult::Failed { err: Box::new(StorageError::from(e)) },
             }
         }
         _ => panic!("unsupported read command"),
@@ -609,7 +609,7 @@ impl Scheduler {
 
         let mut ctx = self.remove_ctx(cid);
         let cb = ctx.callback.take().unwrap();
-        let pr = ProcessResult::Failed { err: StorageError::from(err) };
+        let pr = ProcessResult::Failed { err: Box::new(StorageError::from(err)) };
         execute_callback(cb, pr);
 
         self.release_lock(&ctx.lock, cid);
@@ -650,13 +650,13 @@ impl Scheduler {
         // write flow control
         if !cmd.readonly() && self.too_busy() {
             execute_callback(callback,
-                             ProcessResult::Failed { err: StorageError::SchedTooBusy });
+                             ProcessResult::Failed { err: Box::new(StorageError::SchedTooBusy) });
             return;
         }
         // Allow 1 GC command at the same time.
         if cmd.tag() == CMD_TAG_GC && self.has_gc_command {
             execute_callback(callback,
-                             ProcessResult::Failed { err: StorageError::SchedTooBusy });
+                             ProcessResult::Failed { err: Box::new(StorageError::SchedTooBusy) });
             return;
 
         }
@@ -781,7 +781,7 @@ impl Scheduler {
         let cb = ctx.callback.take().unwrap();
         let pr = match result {
             Ok(()) => pr,
-            Err(e) => ProcessResult::Failed { err: ::storage::Error::from(e) },
+            Err(e) => ProcessResult::Failed { err: Box::new(::storage::Error::from(e)) },
         };
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[ctx.tag, "next_cmd"]).inc();

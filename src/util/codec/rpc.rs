@@ -43,7 +43,7 @@ pub fn encode_msg<T: io::Write, M: protobuf::Message + ?Sized>(w: &mut T,
                                                                -> Result<()> {
     let payload_len = msg.compute_size();
     let header = encode_msg_header(msg_id, payload_len as usize);
-    try!(w.write(&header));
+    try!(w.write_all(&header));
     try!(msg.write_to_writer(w));
 
     Ok(())
@@ -62,8 +62,8 @@ pub fn decode_msg<T: io::Read, M: protobuf::Message>(r: &mut T, m: &mut M) -> Re
 pub fn encode_data<T: io::Write>(w: &mut T, msg_id: u64, data: &[u8]) -> Result<()> {
     let header = encode_msg_header(msg_id, data.len());
 
-    try!(w.write(&header));
-    try!(w.write(data));
+    try!(w.write_all(&header));
+    try!(w.write_all(data));
 
     Ok(())
 }
