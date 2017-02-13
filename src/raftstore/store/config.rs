@@ -54,7 +54,7 @@ const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
 const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
 
-const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 5 seconds
+const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 9 seconds
 
 #[derive(Debug, Clone)]
 pub struct Config {
