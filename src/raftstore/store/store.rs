@@ -76,9 +76,9 @@ pub struct StoreChannel {
 }
 
 pub struct Store<T, C: 'static> {
-    cfg: Config,
-    store: metapb::Store,
+    cfg: Rc<Config>,
     engine: Arc<DB>,
+    store: metapb::Store,
     sendch: SendCh<Msg>,
 
     sent_snapshot_count: u64,
@@ -158,7 +158,7 @@ impl<T, C> Store<T, C> {
         let tag = format!("[store {}]", meta.get_id());
 
         let mut s = Store {
-            cfg: cfg,
+            cfg: Rc::new(cfg),
             store: meta,
             engine: engine,
             sendch: sendch,
@@ -294,8 +294,8 @@ impl<T, C> Store<T, C> {
         self.store.get_id()
     }
 
-    pub fn config(&self) -> &Config {
-        &self.cfg
+    pub fn config(&self) -> Rc<Config> {
+        self.cfg.clone()
     }
 
     pub fn peer_cache(&self) -> Rc<RefCell<HashMap<u64, metapb::Peer>>> {
