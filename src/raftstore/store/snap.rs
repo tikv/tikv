@@ -509,7 +509,7 @@ mod v1 {
                     let cap = cmp::min(self.left, DEFAULT_READ_BUFFER_SIZE);
                     let mut buf = vec![0; cap];
                     while self.left > 0 {
-                        try!(self.read_exact(&mut buf));
+                        let _ = try!(self.read(&mut buf));
                     }
                 }
                 self.res = Some(try!(self.reader.read_u32::<BigEndian>()));
