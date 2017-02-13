@@ -493,7 +493,16 @@ impl Peer {
                 MessageType::MsgHeartbeat => metrics.heartbeat += 1,
                 MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
                 MessageType::MsgTransferLeader => metrics.transfer_leader += 1,
-                MessageType::MsgTimeoutNow => metrics.timeout_now += 1,
+                MessageType::MsgTimeoutNow => {
+                    // After a leader transfer procedure is triggered, the lease for
+                    // the old leader may be expired earlier than usual, since a new leader
+                    // may be elected and the old leader doesn't step down due to
+                    // network partition from the new leader.
+                    // Clear the lease when a transfer leader starts to ensure lease safty.
+                    self.leader_lease_expired_time = None;
+
+                    metrics.timeout_now += 1;
+                }
                 _ => {}
             }
         }
@@ -1042,12 +1051,6 @@ impl Peer {
 
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
         info!("{} transfer leader to {:?}", self.tag, peer);
-
-        // After a leader transfer procedure is triggered, the lease for the old leader
-        // may be expired earlier than usual, since a new leader may be elected and
-        // the old leader doesn't step down due to network partition from the new leader.
-        // Clear the lease when a transfer leader request occurs to ensure lease safty.
-        self.leader_lease_expired_time = None;
 
         self.raft_group.transfer_leader(peer.get_id());
     }
