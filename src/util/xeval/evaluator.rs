@@ -38,7 +38,7 @@ pub const FLAG_IGNORE_TRUNCATE: u64 = 1;
 /// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
 pub const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Some global variables needed in an evaluation.
 pub struct EvalContext {
     /// timezone to use when parse/calculate time.
