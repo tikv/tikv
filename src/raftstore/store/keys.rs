@@ -80,6 +80,10 @@ pub fn region_raft_prefix(region_id: u64) -> Vec<u8> {
     key
 }
 
+pub fn region_raft_prefix_len() -> usize {
+    REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>()
+}
+
 pub fn raft_log_key(region_id: u64, log_index: u64) -> Vec<u8> {
     let mut key = make_region_id_key(region_id, RAFT_LOG_SUFFIX, mem::size_of::<u64>());
     // no need check error here, can't panic;

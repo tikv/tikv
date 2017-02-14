@@ -57,6 +57,7 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
+use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
@@ -404,7 +405,11 @@ fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false)
+    let mut opt = get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false);
+    opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
+        Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
+    .unwrap();
+    opt
 }
 
 fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
