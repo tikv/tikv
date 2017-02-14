@@ -52,6 +52,8 @@ const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
 const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
 
+const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = false;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     // store capacity.
@@ -117,6 +119,8 @@ pub struct Config {
     pub consistency_check_tick_interval: u64,
 
     pub report_region_flow_interval: u64,
+
+    pub use_sst_file_snapshot: bool,
 }
 
 impl Default for Config {
@@ -151,6 +155,7 @@ impl Default for Config {
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
+            use_sst_file_snapshot: DEFAULT_USE_SST_FILE_SNAPSHOT,
         }
     }
 }

@@ -881,7 +881,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = try!(mgr.rl().get_snapshot_to_build(&key));
+    let mut s = try!(mgr.rl().get_snapshot_for_building(&key));
 
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
