@@ -489,7 +489,6 @@ struct SortRow {
     err: Rc<RefCell<Option<String>>>,
 }
 
-
 impl SortRow {
     fn new(handle: i64,
            order_cols: Rc<Vec<ByItem>>,
@@ -513,21 +512,23 @@ impl SortRow {
         try!(self.check_err());
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
-            let cmp_ret = v1.cmp(self.ctx.as_ref(), v2);
-            if let StdResult::Err(err) = cmp_ret {
-                self.set_err(format!("cmp failed with:{:?}", err));
-                try!(self.check_err());
-            } else {
-                let order = cmp_ret.unwrap();
-                if order == CmpOrdering::Equal {
-                    continue;
+            match v1.cmp(self.ctx.as_ref(), v2) {
+                Ok(order) => {
+                    if order == CmpOrdering::Equal {
+                        continue;
+                    }
+
+                    // less or equal
+                    if col.get_desc() {
+                        // heap pop the biggest first
+                        return Ok(order.reverse());
+                    } else {
+                        return Ok(order);
+                    }
                 }
-                // less or equal
-                if col.get_desc() {
-                    // heap pop the biggest first
-                    return Ok(order.reverse());
-                } else {
-                    return Ok(order);
+                StdResult::Err(err) => {
+                    self.set_err(format!("cmp failed with:{:?}", err));
+                    try!(self.check_err());
                 }
             }
         }
@@ -1332,7 +1333,7 @@ mod tests {
             (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
             (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
             (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
-            ];
+        ];
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];

@@ -855,29 +855,29 @@ fn test_aggr_extre() {
 #[test]
 fn test_order_by_column() {
     let data = vec![
-    (1, Some("name:0"), 2),
-    (2, Some("name:3"), 3),
-    (4, Some("name:0"), 1),
-    (5, Some("name:6"), 4),
-    (6, Some("name:5"), 4),
-    (7, Some("name:4"), 4),
-    (8, None,           4),
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:6"), 4),
+        (6, Some("name:5"), 4),
+        (7, Some("name:4"), 4),
+        (8, None, 4),
     ];
 
     let exp = vec![
-    (8,None,4),
-    (7, Some("name:4"), 4),
-    (6, Some("name:5"), 4),
-    (5, Some("name:6"), 4),
-    (2, Some("name:3"), 3),
+        (8, None, 4),
+        (7, Some("name:4"), 4),
+        (6, Some("name:5"), 4),
+        (5, Some("name:6"), 4),
+        (2, Some("name:3"), 3),
     ];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
     let req = Select::from(&product.table)
-        .limit(5)
         .order_by(product.count, true)
         .order_by(product.name, false)
+        .limit(5)
         .build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), 5);
