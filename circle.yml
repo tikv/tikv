@@ -10,7 +10,7 @@ machine:
     CPPFLAGS: "-I$HOME/.local/include"
     CXXFLAGS: "-I$HOME/.local/include"
     PKG_CONFIG_PATH: "$PKG_CONFIG_PATH:$HOME/.local/lib/pkgconfig"
-    RUSTC_DATE: "2016-12-19"
+    RUSTC_DATE: "2017-02-12"
     LOCAL_PREFIX: "$HOME/.local"
     # used by cargo
     LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"

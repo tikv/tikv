@@ -28,13 +28,6 @@ lazy_static! {
             &["type", "status"]
         ).unwrap();
 
-    pub static ref PEER_GET_READY_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_get_ready_duration_seconds",
-            "Bucketed histogram of peer getting ready duration",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap();
-
     pub static ref PEER_APPEND_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_append_log_duration_seconds",
