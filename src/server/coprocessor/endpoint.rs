@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::Ordering as CmpOrdering;
-use std::result::Result as StdResult;
 use std::cell::RefCell;
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta, ByItem};
 use tipb::schema::ColumnInfo;
@@ -513,20 +512,17 @@ impl SortRow {
         let values = self.key.iter().zip(right.key.iter());
         for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
             match v1.cmp(self.ctx.as_ref(), v2) {
+                Ok(CmpOrdering::Equal) => {
+                    continue;
+                }
                 Ok(order) => {
-                    if order == CmpOrdering::Equal {
-                        continue;
-                    }
-
-                    // less or equal
                     if col.get_desc() {
                         // heap pop the biggest first
                         return Ok(order.reverse());
-                    } else {
-                        return Ok(order);
                     }
+                    return Ok(order);
                 }
-                StdResult::Err(err) => {
+                Err(err) => {
                     self.set_err(format!("cmp failed with:{:?}", err));
                     try!(self.check_err());
                 }
