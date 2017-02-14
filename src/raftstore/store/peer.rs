@@ -38,7 +38,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::PdTask;
 use util::worker::{Worker, Scheduler};
-use raftstore::store::worker::ApplyTask;
+use raftstore::store::worker::{ApplyTask, ApplyMetrics};
 use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
@@ -215,7 +215,7 @@ pub fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) 
     cmd.call(resp);
 }
 
-/// Call the callback of `cmd` when it can not be continue processed.
+/// Call the callback of `cmd` when it can not be processed further.
 pub fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, term);
     info!("{} command {} is stale, skip", tag, cmd.uuid);
@@ -444,6 +444,7 @@ impl Peer {
         self.raft_group.mut_store()
     }
 
+    #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
         self.get_store().is_applying_snapshot()
     }
@@ -819,8 +820,14 @@ impl Peer {
         if self.should_read_local(&req) {
             metrics.local_read += 1;
 
-            let read_task = ApplyTask::read(self.region_id, self.term(), req, cb);
-            self.apply_scheduler.schedule(read_task).unwrap();
+            let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
+                error!("{} execute raft command err: {:?}", self.tag, e);
+                cmd_resp::new_error(e)
+            });
+
+            cmd_resp::bind_uuid(&mut resp, meta.uuid);
+            cmd_resp::bind_term(&mut resp, self.term());
+            cb(resp);
             return false;
         } else if get_transfer_leader_cmd(&req).is_some() {
             metrics.transfer_leader += 1;
@@ -1229,6 +1236,69 @@ impl Peer {
 
         Ok(())
     }
+
+    fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
+        let snap = Snapshot::new(self.engine.clone());
+        let requests = req.get_requests();
+        let mut responses = Vec::with_capacity(requests.len());
+
+        for req in requests {
+            let cmd_type = req.get_cmd_type();
+            let mut resp = match cmd_type {
+                CmdType::Get => try!(do_get(&self.tag, self.region(), &snap, req)),
+                CmdType::Snap => try!(do_snap(self.region().to_owned())),
+                CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
+            };
+
+            resp.set_cmd_type(cmd_type);
+
+            responses.push(resp);
+        }
+
+        let mut resp = RaftCmdResponse::new();
+        resp.set_responses(protobuf::RepeatedField::from_vec(responses));
+        Ok(resp)
+    }
+}
+
+fn check_data_key(key: &[u8], region: &metapb::Region) -> Result<()> {
+    // region key range has no data prefix, so we must use origin key to check.
+    try!(util::check_key_in_region(key, region));
+
+    Ok(())
+}
+
+fn do_get(tag: &str, region: &metapb::Region, snap: &Snapshot, req: &Request) -> Result<Response> {
+    // TODO: the get_get looks wried, maybe we should figure out a better name later.
+    let key = req.get_get().get_key();
+    try!(check_data_key(key, &region));
+
+    let mut resp = Response::new();
+    let res = if req.get_get().has_cf() {
+        let cf = req.get_get().get_cf();
+        // TODO: check whether cf exists or not.
+        snap.get_value_cf(cf, &keys::data_key(key)).unwrap_or_else(|e| {
+            panic!("{} failed to get {} with cf {}: {:?}",
+                   tag,
+                   escape(key),
+                   cf,
+                   e)
+        })
+    } else {
+        snap.get_value(&keys::data_key(key))
+            .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", tag, escape(key), e))
+    };
+    if let Some(res) = res {
+        resp.mut_get().set_value(res.to_vec());
+    }
+
+    Ok(resp)
+}
+
+fn do_snap(region: metapb::Region) -> Result<Response> {
+    let mut resp = Response::new();
+    resp.mut_snap().set_region(region);
+    Ok(resp)
 }
 
 pub struct ApplyDelegate {
@@ -1245,13 +1315,7 @@ pub struct ApplyDelegate {
     pub applied_index_term: u64,
     pub term: u64,
     pub pending_cmds: PendingCmdQueue,
-    /// an inaccurate difference in region size since last reset.
-    pub size_diff_hint: i64,
-    /// delete keys' count since last reset.
-    pub delete_keys_hint: u64,
-
-    pub written_bytes: u64,
-    pub written_keys: u64,
+    pub metrics: ApplyMetrics,
 }
 
 impl ApplyDelegate {
@@ -1272,10 +1336,7 @@ impl ApplyDelegate {
             applied_index_term: applied_index_term,
             term: term,
             pending_cmds: Default::default(),
-            size_diff_hint: 0,
-            delete_keys_hint: 0,
-            written_bytes: 0,
-            written_keys: 0,
+            metrics: Default::default(),
         }
     }
 
@@ -1469,8 +1530,8 @@ impl ApplyDelegate {
                 .unwrap_or_else(|e| panic!("{} failed to save apply context: {:?}", self.tag, e));
         }
 
-        self.written_bytes += ctx.wb.data_size() as u64;
-        self.written_keys += ctx.wb.count() as u64;
+        self.metrics.written_bytes += ctx.wb.data_size() as u64;
+        self.metrics.written_keys += ctx.wb.count() as u64;
 
         // Commit write and change storage fields atomically.
         self.engine
@@ -1490,8 +1551,8 @@ impl ApplyDelegate {
                 ExecResult::CompactLog { .. } => {}
                 ExecResult::SplitRegion { ref left, .. } => {
                     self.region = left.clone();
-                    self.size_diff_hint = 0;
-                    self.delete_keys_hint = 0;
+                    self.metrics.size_diff_hint = 0;
+                    self.metrics.delete_keys_hint = 0;
                 }
             }
         }
@@ -1868,49 +1929,18 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn check_data_key(&self, key: &[u8]) -> Result<()> {
-        // region key range has no data prefix, so we must use origin key to check.
-        try!(util::check_key_in_region(key, &self.region));
-
-        Ok(())
-    }
-
     fn do_get(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
-        // TODO: the get_get looks wried, maybe we should figure out a better name later.
-        let key = req.get_get().get_key();
-        try!(self.check_data_key(key));
-
-        let mut resp = Response::new();
-        let res = if req.get_get().has_cf() {
-            let cf = req.get_get().get_cf();
-            // TODO: check whether cf exists or not.
-            ctx.snap.get_value_cf(cf, &keys::data_key(key)).unwrap_or_else(|e| {
-                panic!("{} failed to get {} with cf {}: {:?}",
-                       self.tag,
-                       escape(key),
-                       cf,
-                       e)
-            })
-        } else {
-            ctx.snap
-                .get_value(&keys::data_key(key))
-                .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", self.tag, escape(key), e))
-        };
-        if let Some(res) = res {
-            resp.mut_get().set_value(res.to_vec());
-        }
-
-        Ok(resp)
+        do_get(&self.tag, &self.region, &ctx.snap, req)
     }
 
     fn do_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
-        try!(self.check_data_key(key));
+        try!(check_data_key(key, &self.region));
 
         let resp = Response::new();
         let key = keys::data_key(key);
-        self.size_diff_hint += key.len() as i64;
-        self.size_diff_hint += value.len() as i64;
+        self.metrics.size_diff_hint += key.len() as i64;
+        self.metrics.size_diff_hint += value.len() as i64;
         if req.get_put().has_cf() {
             let cf = req.get_put().get_cf();
             // TODO: check whether cf exists or not.
@@ -1938,11 +1968,11 @@ impl ApplyDelegate {
 
     fn do_delete(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
-        try!(self.check_data_key(key));
+        try!(check_data_key(key, &self.region));
 
         let key = keys::data_key(key);
         // since size_diff_hint is not accurate, so we just skip calculate the value size.
-        self.size_diff_hint -= key.len() as i64;
+        self.metrics.size_diff_hint -= key.len() as i64;
         let resp = Response::new();
         if req.get_delete().has_cf() {
             let cf = req.get_delete().get_cf();
@@ -1954,22 +1984,20 @@ impl ApplyDelegate {
                 });
             // lock cf is compact periodically.
             if cf != CF_LOCK {
-                self.delete_keys_hint += 1;
+                self.metrics.delete_keys_hint += 1;
             }
         } else {
             ctx.wb.delete(&key).unwrap_or_else(|e| {
                 panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
             });
-            self.delete_keys_hint += 1;
+            self.metrics.delete_keys_hint += 1;
         }
 
         Ok(resp)
     }
 
     fn do_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
-        let mut resp = Response::new();
-        resp.mut_snap().set_region(self.region.clone());
-        Ok(resp)
+        do_snap(self.region.clone())
     }
 }
 

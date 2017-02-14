@@ -23,11 +23,10 @@ use uuid::Uuid;
 
 use kvproto::metapb::Region;
 use kvproto::eraftpb::Entry;
-use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftApplyState;
 
 use util::worker::Runnable;
-use raftstore::store::{cmd_resp, Store, util};
+use raftstore::store::Store;
 use raftstore::store::msg::Callback;
 use raftstore::store::peer::{self, Peer, ExecResult, ApplyDelegate, PendingCmd,
                              notify_stale_command};
@@ -36,13 +35,6 @@ pub struct Apply {
     region_id: u64,
     term: u64,
     entries: Vec<Entry>,
-}
-
-pub struct Read {
-    region_id: u64,
-    term: u64,
-    cmd: RaftCmdRequest,
-    cb: Callback,
 }
 
 pub struct Registration {
@@ -81,7 +73,6 @@ pub struct Destroy {
 /// region related task.
 pub enum Task {
     Apply(Apply),
-    Read(Read),
     Registration(Registration),
     Propose(Propose),
     Destroy(Destroy),
@@ -93,15 +84,6 @@ impl Task {
             region_id: region_id,
             term: term,
             entries: entries,
-        })
-    }
-
-    pub fn read(region_id: u64, term: u64, cmd: RaftCmdRequest, cb: Callback) -> Task {
-        Task::Read(Read {
-            region_id: region_id,
-            term: term,
-            cmd: cmd,
-            cb: cb,
         })
     }
 
@@ -136,7 +118,6 @@ impl Display for Task {
         match *self {
             Task::Apply(ref a) => write!(f, "[region {}] async apply", a.region_id),
             Task::Propose(ref p) => write!(f, "[region {}] propose", p.region_id),
-            Task::Read(ref r) => write!(f, "[region {}] read", r.region_id),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
@@ -145,16 +126,24 @@ impl Display for Task {
     }
 }
 
+#[derive(Default, Clone, Debug)]
+pub struct ApplyMetrics {
+    /// an inaccurate difference in region size since last reset.
+    pub size_diff_hint: i64,
+    /// delete keys' count since last reset.
+    pub delete_keys_hint: u64,
+
+    pub written_bytes: u64,
+    pub written_keys: u64,
+}
+
 #[derive(Debug)]
 pub struct ApplyRes {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
-    pub size_diff_hint: i64,
-    pub delete_keys_hint: u64,
     pub applied_index_term: u64,
-    pub written_keys: u64,
-    pub written_bytes: u64,
     pub exec_res: Vec<ExecResult>,
+    pub metrics: ApplyMetrics,
 }
 
 pub enum TaskRes {
@@ -203,11 +192,8 @@ impl Runner {
         };
         {
             let delegate = e.get_mut();
+            delegate.metrics = ApplyMetrics::default();
             delegate.term = apply.term;
-            delegate.size_diff_hint = 0;
-            delegate.delete_keys_hint = 0;
-            delegate.written_keys = 0;
-            delegate.written_bytes = 0;
             let results = delegate.handle_raft_committed_entries(apply.entries);
 
             if delegate.pending_remove {
@@ -219,10 +205,7 @@ impl Runner {
                     region_id: apply.region_id,
                     apply_state: delegate.apply_state.clone(),
                     exec_res: results,
-                    size_diff_hint: delegate.size_diff_hint,
-                    delete_keys_hint: delegate.delete_keys_hint,
-                    written_keys: delegate.written_keys,
-                    written_bytes: delegate.written_bytes,
+                    metrics: delegate.metrics.clone(),
                     applied_index_term: delegate.applied_index_term,
                 }))
                 .unwrap();
@@ -258,19 +241,6 @@ impl Runner {
         } else {
             delegate.pending_cmds.append_normal(cmd);
         }
-    }
-
-    fn handle_read(&mut self, r: Read) {
-        let delegate = self.delegates.get_mut(&r.region_id).unwrap();
-        let mut ctx = delegate.new_ctx(0, 0, &r.cmd);
-        let (mut resp, _) = delegate.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-            error!("[region {}] execute raft command err: {:?}", r.region_id, e);
-            (cmd_resp::new_error(e), None)
-        });
-
-        cmd_resp::bind_uuid(&mut resp, util::get_uuid_from_req(&r.cmd).unwrap());
-        cmd_resp::bind_term(&mut resp, r.term);
-        (r.cb)(resp);
     }
 
     fn handle_registration(&mut self, s: Registration) {
@@ -310,7 +280,6 @@ impl Runnable<Task> for Runner {
             Task::Apply(a) => self.handle_apply(a),
             Task::Propose(p) => self.handle_propose(p),
             Task::Registration(s) => self.handle_registration(s),
-            Task::Read(r) => self.handle_read(r),
             Task::Destroy(d) => self.handle_destroy(d),
         }
     }
