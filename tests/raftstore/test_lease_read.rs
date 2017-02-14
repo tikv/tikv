@@ -16,6 +16,8 @@
 use std::thread;
 use std::time::Duration;
 
+use time::Duration as TimeDuration;
+
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::RaftLocalState;
@@ -92,13 +94,21 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
     cluster.cfg.raft_store.raft_base_tick_interval = 50;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 90;
 
-    let election_timeout = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
-                           cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    let election_timeout =
+        Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval *
+                              cluster.cfg.raft_store.raft_election_timeout_ticks as u64);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = TimeDuration::from_std(election_timeout)
+        .unwrap();
+
     let node_id = 1u64;
     let store_id = 1u64;
     let peer = new_peer(store_id, node_id);
     cluster.run();
+
+    // Wait for election
+    thread::sleep(election_timeout);
 
     // Write the initial value for a key.
     let key = b"k";

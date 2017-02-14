@@ -31,8 +31,8 @@ use kvproto::eraftpb::*;
 use protobuf::{self, ProtobufEnum};
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
-use test_raft::*;
-use test_raft_paper::*;
+use super::test_raft::*;
+use super::test_raft_paper::*;
 
 fn new_peer(id: u64) -> Peer {
     Peer { id: id, ..Default::default() }

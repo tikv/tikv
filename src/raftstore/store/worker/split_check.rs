@@ -20,7 +20,7 @@ use rocksdb::DB;
 
 use kvproto::metapb::RegionEpoch;
 use raftstore::store::{PeerStorage, keys, Msg};
-use raftstore::store::engine::Iterable;
+use raftstore::store::engine::{Iterable, IterOption, SeekMode};
 use raftstore::Result;
 use rocksdb::DBIterator;
 use util::escape;
@@ -83,7 +83,10 @@ impl<'a> MergedIterator<'a> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.into_iter().enumerate() {
-            let mut iter = try!(db.new_iterator_cf(cf, Some(end_key), fill_cache));
+            let mut iter = try!(db.new_iterator_cf(cf,
+                                                   IterOption::new(Some(end_key.to_vec()),
+                                                                   fill_cache,
+                                                                   SeekMode::TotalOrderSeek)));
             if iter.seek(start_key.into()) {
                 heap.push(KeyEntry::new(iter.key().to_vec(), pos, iter.value().len()));
             }

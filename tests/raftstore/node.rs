@@ -18,7 +18,6 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
-use std::fs;
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -81,17 +80,18 @@ impl Channel<RaftMessage> for ChannelTransport {
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
-            let source_file = match self.rl().snap_paths.get(&from_store) {
+            let from = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_snap_file(&key, true).unwrap()
+                    p.0.rl().get_snapshot_for_sending(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
-            let dst_file = match self.rl().snap_paths.get(&to_store) {
+            let to = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
-                    p.0.rl().get_snap_file(&key, false).unwrap()
+                    let data = msg.get_message().get_snapshot().get_data();
+                    p.0.rl().get_snapshot_for_receiving(&key, data).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -102,9 +102,7 @@ impl Channel<RaftMessage> for ChannelTransport {
                 core.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
             });
 
-            if !dst_file.exists() {
-                try!(fs::copy(source_file.path(), dst_file.path()));
-            }
+            try!(copy_snapshot(from, to));
         }
 
         match self.core.rl().routers.get(&to_store) {

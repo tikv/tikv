@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, GaugeVec, Histogram, HistogramVec, exponential_buckets};
+use prometheus::{Counter, CounterVec, GaugeVec, Histogram, HistogramVec, exponential_buckets};
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
@@ -26,13 +26,6 @@ lazy_static! {
             "tikv_raftstore_admin_cmd_total",
             "Total number of admin cmd processed.",
             &["type", "status"]
-        ).unwrap();
-
-    pub static ref PEER_GET_READY_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_get_ready_duration_seconds",
-            "Bucketed histogram of peer getting ready duration",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref PEER_APPEND_LOG_HISTOGRAM: Histogram =
@@ -162,5 +155,11 @@ lazy_static! {
             "tikv_raftstore_request_wait_time_duration_secs",
             "Bucketed histogram of request wait time duration",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref PEER_GC_RAFT_LOG_COUNTER: Counter =
+        register_counter!(
+            "tikv_raftstore_gc_raft_log_total",
+            "Total number of GC raft log."
         ).unwrap();
 }

@@ -26,6 +26,7 @@ mod rocksdb;
 pub mod raftkv;
 mod metrics;
 use self::metrics::*;
+use super::super::raftstore::store::engine::IterOption;
 
 // only used for rocksdb without persistent.
 pub const TEMP_DIR: &'static str = "";
@@ -95,16 +96,11 @@ pub trait Snapshot: Send {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     #[allow(needless_lifetimes)]
-    fn iter<'a>(&'a self,
-                upper_bound: Option<&[u8]>,
-                fill_cache: bool,
-                mode: ScanMode)
-                -> Result<Cursor<'a>>;
+    fn iter<'a>(&'a self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<'a>>;
     #[allow(needless_lifetimes)]
     fn iter_cf<'a>(&'a self,
                    cf: CfName,
-                   upper_bound: Option<&[u8]>,
-                   fill_cache: bool,
+                   iter_opt: IterOption,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
     fn clone(&self) -> Box<Snapshot>;
@@ -114,6 +110,7 @@ pub trait Iterator {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn seek(&mut self, key: &Key) -> Result<bool>;
+    fn seek_for_prev(&mut self, key: &Key) -> Result<bool>;
     fn seek_to_first(&mut self) -> bool;
     fn seek_to_last(&mut self) -> bool;
     fn valid(&self) -> bool;
@@ -234,13 +231,13 @@ impl<'a> Cursor<'a> {
             }
             return Ok(None);
         }
-        if try!(self.near_reverse_seek_le(key)) && self.iter.key() == &**key.encoded() {
+        if try!(self.near_seek_for_prev(key)) && self.iter.key() == &**key.encoded() {
             return Ok(Some(self.iter.value()));
         }
         Ok(None)
     }
 
-    fn reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
         assert!(self.scan_mode != ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             try!(self.iter.validate_key(key));
@@ -252,27 +249,18 @@ impl<'a> Cursor<'a> {
             return Ok(true);
         }
 
-        if !try!(self.iter.seek(key)) && !self.iter.seek_to_last() {
-            self.min_key = Some(key.encoded().to_owned());
-            if self.max_key.as_ref().map_or(true, |k| k > key.encoded()) {
-                self.max_key = Some(key.encoded().to_owned());
-            }
-            return Ok(false);
-        }
-
-        if self.iter.key() > key.encoded() && !self.iter.prev() {
+        if !try!(self.iter.seek_for_prev(key)) {
             self.min_key = Some(key.encoded().to_owned());
             return Ok(false);
         }
-
         Ok(true)
     }
 
     /// Find the largest key that is not greater than the specific key.
-    fn near_reverse_seek_le(&mut self, key: &Key) -> Result<bool> {
+    pub fn near_seek_for_prev(&mut self, key: &Key) -> Result<bool> {
         assert!(self.scan_mode != ScanMode::Forward);
         if !self.iter.valid() {
-            return self.reverse_seek_le(key);
+            return self.seek_for_prev(key);
         }
         let ord = self.iter.key().cmp(key.encoded());
         if ord == Ordering::Equal ||
@@ -287,7 +275,7 @@ impl<'a> Cursor<'a> {
 
         if ord == Ordering::Less {
             near_loop!(self.iter.next() && self.iter.key() < key.encoded(),
-                       self.reverse_seek_le(key));
+                       self.seek_for_prev(key));
             if self.iter.valid() {
                 if self.iter.key() > key.encoded() {
                     self.iter.prev();
@@ -298,7 +286,7 @@ impl<'a> Cursor<'a> {
             }
         } else {
             near_loop!(self.iter.prev() && self.iter.key() > key.encoded(),
-                       self.reverse_seek_le(key));
+                       self.seek_for_prev(key));
         }
 
         if !self.iter.valid() {
@@ -309,7 +297,7 @@ impl<'a> Cursor<'a> {
     }
 
     pub fn reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        if !try!(self.reverse_seek_le(key)) {
+        if !try!(self.seek_for_prev(key)) {
             return Ok(false);
         }
 
@@ -327,7 +315,7 @@ impl<'a> Cursor<'a> {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
     pub fn near_reverse_seek(&mut self, key: &Key) -> Result<bool> {
-        if !try!(self.near_reverse_seek_le(key)) {
+        if !try!(self.near_seek_for_prev(key)) {
             return Ok(false);
         }
 
@@ -416,6 +404,7 @@ mod tests {
     use util::codec::bytes;
     use util::escape;
     use kvproto::kvrpcpb::Context;
+    use super::super::super::raftstore::store::engine::IterOption;
 
     const TEST_ENGINE_CFS: &'static [CfName] = &["cf"];
 
@@ -484,7 +473,8 @@ mod tests {
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
         iter.seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -492,7 +482,8 @@ mod tests {
 
     fn assert_reverse_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
         iter.reverse_seek(&make_key(key)).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -546,7 +537,8 @@ mod tests {
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
         assert!(!iter.seek(&make_key(b"z\x00")).unwrap());
         assert!(!iter.reverse_seek(&make_key(b"x")).unwrap());
         must_delete(engine, b"x");
@@ -557,7 +549,8 @@ mod tests {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
         assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
@@ -571,7 +564,7 @@ mod tests {
             must_put(engine, key.as_bytes(), b"3");
         }
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed).unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"z", (b"z", b"2"));
 
@@ -585,7 +578,8 @@ mod tests {
 
     fn test_empty_seek(engine: &Engine) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(None, true, ScanMode::Mixed).unwrap();
+        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed)
+            .unwrap();
         assert!(!cursor.near_reverse_seek(&make_key(b"x")).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"z")).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"w")).unwrap());
@@ -605,46 +599,66 @@ mod tests {
         })
     }
 
+    #[derive(PartialEq, Eq, Clone, Copy)]
+    enum SeekMode {
+        Normal,
+        Reverse,
+        ForPrev,
+    }
+
+    #[allow(cyclomatic_complexity)]
     // use step to controll the distance between target key and current key in cursor.
     fn test_linear_seek(snapshot: &Snapshot,
                         mode: ScanMode,
-                        reverse: bool,
+                        seek_mode: SeekMode,
                         start: usize,
                         step: usize) {
-        let mut cursor = snapshot.iter(None, false, mode).unwrap();
-        let mut near_cursor = snapshot.iter(None, false, mode).unwrap();
+        let mut cursor = snapshot.iter(IterOption::default(), mode)
+            .unwrap();
+        let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 
         for (_, mut i) in (start..SEEK_BOUND * 30).enumerate().filter(|&(i, _)| i % step == 0) {
-            if reverse {
+            if seek_mode != SeekMode::Normal {
                 i = SEEK_BOUND * 30 - 1 - i;
             }
             let key = format!("key_{:03}", i);
             let seek_key = make_key(key.as_bytes());
             let exp_kv = if i <= 100 {
-                if reverse {
-                    None
-                } else {
-                    Some(("key_100".to_owned(), "value_50".to_owned()))
+                match seek_mode {
+                    SeekMode::Reverse => None,
+                    SeekMode::ForPrev if i < 100 => None,
+                    SeekMode::Normal | SeekMode::ForPrev => {
+                        Some(("key_100".to_owned(), "value_50".to_owned()))
+                    }
                 }
             } else if i <= limit {
-                if reverse {
+                if seek_mode == SeekMode::Reverse {
                     Some((format!("key_{}", (i - 1) / 2 * 2), format!("value_{}", (i - 1) / 2)))
+                } else if seek_mode == SeekMode::ForPrev {
+                    Some((format!("key_{}", i / 2 * 2), format!("value_{}", i / 2)))
                 } else {
                     Some((format!("key_{}", (i + 1) / 2 * 2), format!("value_{}", (i + 1) / 2)))
                 }
-            } else if reverse {
+            } else if seek_mode != SeekMode::Normal {
                 Some((format!("key_{:03}", limit), format!("value_{:03}", limit / 2)))
             } else {
                 None
             };
 
-            if reverse {
-                assert_seek!(cursor, reverse_seek, seek_key, exp_kv);
-                assert_seek!(near_cursor, near_reverse_seek, seek_key, exp_kv);
-            } else {
-                assert_seek!(cursor, seek, seek_key, exp_kv);
-                assert_seek!(near_cursor, near_seek, seek_key, exp_kv);
+            match seek_mode {
+                SeekMode::Reverse => {
+                    assert_seek!(cursor, reverse_seek, seek_key, exp_kv);
+                    assert_seek!(near_cursor, near_reverse_seek, seek_key, exp_kv);
+                }
+                SeekMode::Normal => {
+                    assert_seek!(cursor, seek, seek_key, exp_kv);
+                    assert_seek!(near_cursor, near_seek, seek_key, exp_kv);
+                }
+                SeekMode::ForPrev => {
+                    assert_seek!(cursor, seek_for_prev, seek_key, exp_kv);
+                    assert_seek!(near_cursor, near_seek_for_prev, seek_key, exp_kv);
+                }
             }
         }
     }
@@ -665,22 +679,27 @@ mod tests {
             for start in 0..10 {
                 test_linear_seek(snapshot.as_ref(),
                                  ScanMode::Forward,
-                                 false,
+                                 SeekMode::Normal,
                                  start * SEEK_BOUND,
                                  step);
                 test_linear_seek(snapshot.as_ref(),
                                  ScanMode::Backward,
-                                 true,
+                                 SeekMode::Reverse,
+                                 start * SEEK_BOUND,
+                                 step);
+                test_linear_seek(snapshot.as_ref(),
+                                 ScanMode::Backward,
+                                 SeekMode::ForPrev,
                                  start * SEEK_BOUND,
                                  step);
             }
         }
-        for &reverse in &[true, false] {
+        for &seek_mode in &[SeekMode::Reverse, SeekMode::Normal, SeekMode::ForPrev] {
             for step in 1..SEEK_BOUND * 3 {
                 for start in 0..10 {
                     test_linear_seek(snapshot.as_ref(),
                                      ScanMode::Mixed,
-                                     reverse,
+                                     seek_mode,
                                      start * SEEK_BOUND,
                                      step);
                 }
