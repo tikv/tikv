@@ -147,7 +147,6 @@ impl Drop for PdStoreAddrResolver {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::collections::HashMap;
     use std::time::{Instant, Duration};
     use std::ops::Sub;
     use std::net::SocketAddr;
@@ -158,6 +157,7 @@ mod tests {
     use kvproto::metapb;
     use pd::{PdClient, Result};
     use util;
+    use fnv::FnvHashMap as HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
 use std::option::Option;
 use std::sync::mpsc::Sender;
 use std::boxed::Box;
@@ -19,6 +18,7 @@ use std::net::SocketAddr;
 
 use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
+use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
@@ -124,10 +124,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let svr = Server {
             listener: listener,
             sendch: sendch,
-            conns: HashMap::new(),
+            conns: HashMap::default(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
-            store_tokens: HashMap::new(),
-            store_resolving: HashSet::new(),
+            store_tokens: HashMap::default(),
+            store_resolving: HashSet::default(),
             ch: ch,
             store: store_handler,
             end_point_worker: end_point_worker,

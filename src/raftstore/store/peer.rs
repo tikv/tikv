@@ -14,7 +14,8 @@
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+use std::collections::hash_map::Values;
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
@@ -23,6 +24,7 @@ use time::Timespec;
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;
+use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
@@ -350,7 +352,7 @@ impl Peer {
             proposals: Default::default(),
             pending_cmds: Default::default(),
             peer_cache: store.peer_cache(),
-            peer_heartbeats: HashMap::new(),
+            peer_heartbeats: HashMap::default(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -940,9 +942,9 @@ impl Peer {
     /// 2. it's a follower, and it does not lag behind the leader a lot.
     ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node(&self, progress: &HashMap<u64, Progress>) -> usize {
+    fn count_healthy_node(&self, progress: Values<u64, Progress>) -> usize {
         let mut healthy = 0;
-        for pr in progress.values() {
+        for pr in progress {
             if pr.matched >= self.get_store().truncated_index() {
                 healthy += 1;
             }
@@ -985,7 +987,7 @@ impl Peer {
                 }
             }
         }
-        let healthy = self.count_healthy_node(&status.progress);
+        let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());
         if healthy >= quorum_after_change {
             return Ok(());
