@@ -1912,10 +1912,10 @@ impl ApplyDelegate {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                CmdType::Get => self.do_get(ctx, req),
-                CmdType::Put => self.do_put(ctx, req),
-                CmdType::Delete => self.do_delete(ctx, req),
-                CmdType::Snap => self.do_snap(ctx, req),
+                CmdType::Get => self.handle_get(ctx, req),
+                CmdType::Put => self.handle_put(ctx, req),
+                CmdType::Delete => self.handle_delete(ctx, req),
+                CmdType::Snap => self.handle_snap(ctx, req),
                 CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted")),
             });
 
@@ -1929,11 +1929,11 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn do_get(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+    fn handle_get(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         do_get(&self.tag, &self.region, &ctx.snap, req)
     }
 
-    fn do_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+    fn handle_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         try!(check_data_key(key, &self.region));
 
@@ -1966,7 +1966,7 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn do_delete(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+    fn handle_delete(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
         let key = req.get_delete().get_key();
         try!(check_data_key(key, &self.region));
 
@@ -1996,7 +1996,7 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn do_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
+    fn handle_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
         do_snap(self.region.clone())
     }
 }
