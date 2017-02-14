@@ -9,14 +9,7 @@ matrix:
   include:
     - os: linux
       rust: nightly
-      env: COMPILER=g++-4.8 RUSTC_DATE=2017-02-12 RUSTFMT_VERSION=v0.6.0 SKIP_FORMAT_CHECK=true CXX=g++-4.8
-      addons:
-         apt:
-            sources: ['ubuntu-toolchain-r-test']
-            packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
-    - os: linux
-      rust: nightly
-      env: COMPILER=g++-4.8 RUSTC_DATE=2017-02-12 RUSTFMT_VERSION=v0.6.0 ENABLE_FEATURES=default SKIP_TESTS=true CXX=g++-4.8
+      env: COMPILER=g++-4.8 RUSTC_DATE=2017-02-12 RUSTFMT_VERSION=v0.6.0 CXX=g++-4.8
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
