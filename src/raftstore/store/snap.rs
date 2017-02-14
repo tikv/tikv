@@ -509,7 +509,7 @@ mod v1 {
                     let cap = cmp::min(self.left, DEFAULT_READ_BUFFER_SIZE);
                     let mut buf = vec![0; cap];
                     while self.left > 0 {
-                        try!(self.read(&mut buf));
+                        let _ = try!(self.read(&mut buf));
                     }
                 }
                 self.res = Some(try!(self.reader.read_u32::<BigEndian>()));
@@ -601,7 +601,7 @@ mod v1 {
 
             // read partially should not affect validation.
             reader = f1.get_validation_reader().unwrap();
-            reader.read(&mut [0, 0]).unwrap();
+            reader.read_exact(&mut [0, 0]).unwrap();
             reader.validate().unwrap();
 
             // read fully should not affect validation.
