@@ -18,21 +18,21 @@ use std::io::Read;
 use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
 use std::time::{Instant, Duration};
+
 use threadpool::ThreadPool;
 use mio::Token;
+use kvproto::raft_serverpb::RaftMessage;
 
-use super::metrics::*;
-use super::{Result, ConnData, Msg};
-use super::transport::RaftStoreRouter;
-use fnv::FnvHashMap as HashMap;
 use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
 use util::codec::rpc;
 use util::buf::PipeBuffer;
-use util::HandyRwLock;
+use util::{HandyRwLock, HashMap};
 use util::transport::SendCh;
 
-use kvproto::raft_serverpb::RaftMessage;
+use super::metrics::*;
+use super::{Result, ConnData, Msg};
+use super::transport::RaftStoreRouter;
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 

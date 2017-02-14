@@ -11,11 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use fnv::FnvHashMap as HashMap;
+use util::HashMap;
+
+use super::Result;
 
 pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
-use super::Result;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";

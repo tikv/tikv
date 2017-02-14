@@ -17,11 +17,12 @@ use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
 use std::time::Instant;
 
-use fnv::FnvHashMap as HashMap;
-use util;
+use kvproto::metapb;
+
+use util::{self, HashMap};
 use util::worker::{Runnable, Worker};
 use pd::PdClient;
-use kvproto::metapb;
+
 use super::Result;
 use super::metrics::*;
 
@@ -156,8 +157,7 @@ mod tests {
     use kvproto::pdpb;
     use kvproto::metapb;
     use pd::{PdClient, Result};
-    use util;
-    use fnv::FnvHashMap as HashMap;
+    use util::{self, HashMap};
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

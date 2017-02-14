@@ -33,19 +33,20 @@
 
 use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
+
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
+use mio::{self, EventLoop};
+use kvproto::kvrpcpb::{Context, LockInfo};
+
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode};
-use kvproto::kvrpcpb::{Context, LockInfo};
 use storage::mvcc::{MvccTxn, ScanMetrics, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
-use storage::engine::CbContext;
-use fnv::FnvHashMap as HashMap;
-use mio::{self, EventLoop};
+use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
 use util::transport::{SendCh, Error as TransportError};
-use util::SlowTimer;
-use storage::engine::{Result as EngineResult, Callback as EngineCallback, Modify};
+use util::{SlowTimer, HashMap};
+
 use super::Result;
 use super::Error;
 use super::store::SnapshotStore;

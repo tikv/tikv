@@ -18,24 +18,25 @@ use std::net::SocketAddr;
 
 use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
-use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
-use super::{Msg, ConnData};
-use super::conn::Conn;
-use super::{Result, OnResponse, Config};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
+use raft::SnapshotStatus;
+use util::sockopt::SocketOpt;
+use util::{HashMap, HashSet};
+
+use super::{Msg, ConnData};
+use super::conn::Conn;
+use super::{Result, OnResponse, Config};
 use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
-use raft::SnapshotStatus;
-use util::sockopt::SocketOpt;
 use super::metrics::*;
 
 const SERVER_TOKEN: Token = Token(1);

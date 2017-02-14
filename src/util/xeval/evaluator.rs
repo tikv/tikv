@@ -11,21 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
+use std::ascii::AsciiExt;
+
+use chrono::FixedOffset;
+use tipb::expression::{Expr, ExprType};
+use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
 use util::codec::mysql::DecimalDecoder;
 use util::codec::mysql::{MAX_FSP, Duration};
 use util::TryInsertWith;
-use super::{Result, Error};
-use util::codec;
+use util::{codec, HashMap};
 
-use fnv::FnvHashMap as HashMap;
-use std::cmp::Ordering;
-use std::ascii::AsciiExt;
-use tipb::expression::{Expr, ExprType};
-use tipb::select::SelectRequest;
-use chrono::FixedOffset;
+use super::{Result, Error};
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
 /// truncate error.

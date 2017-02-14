@@ -27,7 +27,6 @@ use protobuf;
 use fs2;
 use uuid::Uuid;
 use time::{self, Timespec};
-use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
@@ -43,8 +42,9 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::rocksdb;
+use util::{rocksdb, HashMap, HashSet};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner};

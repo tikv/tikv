@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 
-use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
@@ -35,7 +34,7 @@ use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
-use util::{escape, duration_to_ms, duration_to_sec, Either};
+use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 

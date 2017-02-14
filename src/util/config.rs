@@ -15,9 +15,10 @@ use std::str::FromStr;
 use std::net::{SocketAddrV4, SocketAddrV6};
 
 use url;
-use rocksdb::{DBCompressionType, DBRecoveryMode};
 use regex::Regex;
-use fnv::FnvHashMap as HashMap;
+
+use util::HashMap;
+use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {
     #[derive(Debug)]

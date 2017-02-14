@@ -19,13 +19,11 @@ use std::collections::hash_map::Values;
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
-use time::Timespec;
 
+use time::Timespec;
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;
-use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
-
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
@@ -33,6 +31,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
+
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
@@ -40,9 +39,10 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::PdTask;
 use util::worker::Worker;
-use util::{escape, SlowTimer, rocksdb, clocktime};
+use util::{escape, SlowTimer, rocksdb, clocktime, HashMap, HashSet};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
+
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, ApplySnapResult, write_initial_state,
                           write_peer_state, InvokeContext, compact_raft_log};

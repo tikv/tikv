@@ -21,17 +21,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::Path;
 use std::result;
 use std::str;
+
 use protobuf::Message;
 use rocksdb::DB;
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
+
 use raft;
 use raftstore::store::Msg;
 use storage::CF_RAFT;
 use util::transport::SendCh;
-use util::HandyRwLock;
-use fnv::FnvHashMap as HashMap;
+use util::{HandyRwLock, HashMap};
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
