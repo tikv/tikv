@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
-use time::{Timespec, Duration as TimeDuration};
+use time::Timespec;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message, MessageStatic};
@@ -240,6 +240,7 @@ pub struct ConsistencyState {
 
 pub struct Peer {
     engine: Arc<DB>,
+    cfg: Rc<Config>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
     pub peer: metapb::Peer,
     region_id: u64,
@@ -269,7 +270,6 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
 
     leader_lease_expired_time: Option<Timespec>,
-    election_timeout: TimeDuration,
 
     pub written_bytes: u64,
     pub written_keys: u64,
@@ -359,9 +359,8 @@ impl Peer {
             },
             raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size,
+            cfg: cfg,
             leader_lease_expired_time: None,
-            election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
-                              cfg.raft_election_timeout_ticks as i32,
             written_bytes: 0,
             written_keys: 0,
         };
@@ -581,10 +580,10 @@ impl Peer {
 
     fn next_lease_expired_time(&self, send_to_quorum_ts: Timespec) -> Timespec {
         // The valid leader lease should be
-        // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
+        // "lease = max_lease - (quorum_commit_ts - send_to_quorum_ts)"
         // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
-        // which is "send_to_quorum_ts + election_timeout" in short.
-        send_to_quorum_ts + self.election_timeout
+        // which is "send_to_quorum_ts + max_lease" in short.
+        send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
     }
 
     fn update_leader_lease(&mut self, ready: &Ready) {
@@ -596,7 +595,7 @@ impl Peer {
                     // The local read can only be performed after a new leader has applied
                     // the first empty entry on its term. After that the lease expiring time
                     // should be updated to
-                    //   send_to_quorum_ts + election_timeout
+                    //   send_to_quorum_ts + max_lease
                     // as the comments in `next_lease_expired_time` function explain.
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
@@ -646,9 +645,7 @@ impl Peer {
 
         debug!("{} handle raft ready", self.tag);
 
-        let ready_timer = PEER_GET_READY_HISTOGRAM.start_timer();
         let mut ready = self.raft_group.ready_since(self.last_ready_idx);
-        ready_timer.observe_duration();
 
         self.update_leader_lease(&ready);
 
@@ -1173,14 +1170,7 @@ impl Peer {
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
-        let from_peer = match self.get_peer_from_cache(msg.get_from()) {
-            Some(p) => p,
-            None => {
-                return Err(box_err!("failed to lookup sender peer {} in region {}",
-                                    msg.get_from(),
-                                    self.region_id))
-            }
-        };
+        let from_peer = self.peer.clone();
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
@@ -1466,7 +1456,10 @@ impl ApplyDelegate {
 
         let mut ctx = self.new_ctx(index, term, req);
         let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-            error!("{} execute raft command err: {:?}", self.tag, e);
+            match e {
+                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                _ => error!("{} execute raft command err: {:?}", self.tag, e),
+            }
             (cmd_resp::new_error(e), None)
         });
 

@@ -77,9 +77,9 @@ pub struct StoreChannel {
 }
 
 pub struct Store<T, C: 'static> {
-    cfg: Config,
-    store: metapb::Store,
+    cfg: Rc<Config>,
     engine: Arc<DB>,
+    store: metapb::Store,
     sendch: SendCh<Msg>,
 
     sent_snapshot_count: u64,
@@ -162,7 +162,7 @@ impl<T, C> Store<T, C> {
         let tag = format!("[store {}]", meta.get_id());
 
         let mut s = Store {
-            cfg: cfg,
+            cfg: Rc::new(cfg),
             store: meta,
             engine: engine,
             sendch: sendch,
@@ -308,8 +308,8 @@ impl<T, C> Store<T, C> {
         &self.region_peers
     }
 
-    pub fn config(&self) -> &Config {
-        &self.cfg
+    pub fn config(&self) -> Rc<Config> {
+        self.cfg.clone()
     }
 
     pub fn peer_cache(&self) -> Rc<RefCell<HashMap<u64, metapb::Peer>>> {
@@ -533,7 +533,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let start_key = data_key(msg.get_start_key());
         if let Some((_, &exist_region_id)) = self.region_ranges
-            .range(Excluded(&start_key), Unbounded::<&Key>)
+            .range((Excluded(start_key), Unbounded::<Key>))
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
@@ -582,9 +582,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.insert_peer_cache(msg.take_to_peer());
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
-        let timer = SlowTimer::new();
         try!(peer.step(msg.take_message()));
-        slow_log!(timer, "{} raft step", peer.tag);
 
         // Add into pending raft groups for later handling ready.
         self.pending_raft_groups.insert(region_id);
@@ -773,7 +771,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(false);
         }
         if let Some((_, &exist_region_id)) = self.region_ranges
-            .range(Excluded(&enc_start_key(&snap_region)), Unbounded::<&Key>)
+            .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
@@ -805,7 +803,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
-        let append_timer = PEER_APPEND_LOG_HISTOGRAM.start_timer();
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
@@ -834,7 +831,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                         invoke_ctx);
             ready_results.push((region_id, ready, res));
         }
-        append_timer.observe_duration();
+
+        self.raft_metrics.append_log.observe(duration_to_sec(t.elapsed()) as f64);
 
         let sent_snapshot_count = self.raft_metrics.message.snapshot - previous_sent_snapshot_count;
         self.sent_snapshot_count += sent_snapshot_count;
@@ -1095,8 +1093,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_ready_result(&mut self, region_id: u64, exec_results: Vec<ExecResult>) {
-        let t = SlowTimer::new();
-        let result_count = exec_results.len();
         // handle executing committed log results
         for result in exec_results {
             match result {
@@ -1115,10 +1111,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             }
         }
-        slow_log!(t,
-                  "[region {}] on ready {} results",
-                  region_id,
-                  result_count);
     }
 
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
@@ -1211,7 +1203,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
             if let Some((_, &next_region_id)) = self.region_ranges
-                .range(Excluded(&enc_end_key(peer.region())), Unbounded::<&Key>)
+                .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
                 .next() {
                 let next_region = self.region_peers[&next_region_id].region();
                 new_regions.push(next_region.to_owned());
@@ -1241,7 +1233,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (_, peer) in &mut self.region_peers {
+        for peer in self.region_peers.values_mut() {
             if !peer.is_leader() {
                 peer.written_bytes = 0;
                 peer.written_keys = 0;
@@ -1261,6 +1253,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        let mut total_gc_logs = 0;
+
         for (&region_id, peer) in &mut self.region_peers {
             if !peer.is_leader() {
                 continue;
@@ -1317,6 +1311,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
+            total_gc_logs += compact_idx - first_idx;
+
             let term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
 
             // Create a compact log request and notify directly.
@@ -1327,6 +1323,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as f64).unwrap();
         self.register_raft_gc_log_tick(event_loop);
     }
 
@@ -1346,7 +1343,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.register_split_region_check_tick(event_loop);
             return;
         }
-        for (_, peer) in &mut self.region_peers {
+        for peer in self.region_peers.values_mut() {
             if !peer.is_leader() {
                 continue;
             }
@@ -1377,7 +1374,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_compact_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        for (_, peer) in &mut self.region_peers {
+        for peer in self.region_peers.values_mut() {
             if peer.delete_keys_hint < self.cfg.region_compact_delete_keys_count {
                 continue;
             }
@@ -1617,21 +1614,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 };
             }
 
-            let f = try!(self.snap_mgr.rl().get_snap_file(&key, is_sending));
             if is_sending {
+                let s = try!(self.snap_mgr.rl().get_snapshot_for_sending(&key));
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
                           key);
-                    f.delete();
-                } else if let Ok(meta) = f.meta() {
+                    s.delete();
+                } else if let Ok(meta) = s.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed > Duration::from_secs(self.cfg.snap_gc_timeout) {
                             info!("[region {}] snap file {} has been expired, delete.",
                                   key.region_id,
                                   key);
-                            f.delete();
+                            s.delete();
                         }
                     }
                 }
@@ -1640,7 +1637,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] snap file {} has been applied, delete.",
                       key.region_id,
                       key);
-                f.delete();
+                let a = try!(self.snap_mgr.rl().get_snapshot_for_applying(&key));
+                a.delete();
             }
         }
         Ok(())
@@ -1906,8 +1904,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     type Message = Msg;
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
-        let t = SlowTimer::new();
-        let msg_str = format!("{:?}", msg);
         match msg {
             Msg::RaftMessage(data) => {
                 if let Err(e) = self.on_raft_message(data) {
@@ -1937,7 +1933,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 self.on_hash_computed(region_id, index, hash);
             }
         }
-        slow_log!(t, "{} handle {}", self.tag, msg_str);
     }
 
     fn timeout(&mut self, event_loop: &mut EventLoop<Self>, timeout: Tick) {

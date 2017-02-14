@@ -28,6 +28,7 @@
 
 #![allow(module_inception)]
 #![allow(should_implement_trait)]
+#![allow(large_enum_variant)]
 
 #[macro_use]
 extern crate log;
