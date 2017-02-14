@@ -28,6 +28,7 @@ use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use raft;
+use raftstore::Result as RaftStoreResult;
 use raftstore::store::Msg;
 use storage::CF_RAFT;
 use util::transport::SendCh;
@@ -630,19 +631,21 @@ mod v2 {
     use kvproto::raft_serverpb::{KeyValue, RaftSnapshotData};
     use rocksdb::{EnvOptions, Options, SstFileWriter, IngestExternalFileOptions};
     use raft;
-    use storage::{ALL_CFS, CF_RAFT};
+    use storage::ALL_CFS;
+    use raftstore::Result as RaftStoreResult;
     use util::{HandyRwLock, rocksdb};
-    use util::codec::number;
+    use util::codec::number::{self, NumberEncoder, NumberDecoder};
     use util::codec::bytes::{BytesEncoder, BytesDecoder};
-    use super::super::keys::{self, enc_start_key, enc_end_key};
-    use super::super::engine::Snapshot as DbSnapshot;
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey, Snapshot,
-                ApplyContext, check_abort, need_to_pack};
+    use super::super::keys::{enc_start_key, enc_end_key};
+    use super::super::engine::{Snapshot as DbSnapshot, Iterable};
+    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Error, Result, SnapKey,
+                Snapshot, ApplyContext, check_abort, need_to_pack};
 
     const SST_FILE_SUFFIX: &'static str = ".sst";
     const META_FILE_SUFFIX: &'static str = ".meta";
     const SNAPSHOT_META_PREFIX_SIZE: &'static str = "size";
     const SNAPSHOT_META_PREFIX_CHECKSUM: &'static str = "checksum";
+    const ENCODE_DECODE_DESC: bool = false;
     const DIGEST_BUFFER_SIZE: usize = 10240;
 
     fn get_snapshot_cfs() -> Vec<String> {
@@ -652,7 +655,7 @@ mod v2 {
             if !need_to_pack(cf) {
                 continue;
             }
-            cfs.push(cf.to_owned());
+            cfs.push(cf.to_string());
         }
         cfs
     }
@@ -677,7 +680,7 @@ mod v2 {
 
     fn calc_checksum(p: &str) -> io::Result<u32> {
         let mut digest = Digest::new(crc32::IEEE);
-        let f = try!(OpenOptions::new().read(true).open(&p));
+        let mut f = try!(OpenOptions::new().read(true).open(&p));
         let mut buf = vec![0; DIGEST_BUFFER_SIZE];
         loop {
             let n = try!(f.read(&mut buf[..]));
@@ -688,14 +691,14 @@ mod v2 {
         }
     }
 
-    fn parse_cf_size_checksums(kvs: &[KeyValue]) -> io::Result<Vec<(String, u64, u32)>> {
+    fn parse_cf_size_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(String, u64, u32)>> {
         let snapshot_cfs = get_snapshot_cfs();
-        let mut cf_sizes: Vec<(String, u64, u32)> = vec![];
+        let mut cf_sizes: Vec<(String, u64)> = vec![];
         let mut cf_checksums: Vec<(String, u32)> = vec![];
         for kv in kvs {
-            let key_bytes = kv.get_key();
-            let decoded = try!(key_bytes.decode_bytes(false));
-            let key = match String::from_utf8(decoded) {
+            let mut key_bytes = kv.get_key();
+            let decoded = try!(key_bytes.decode_bytes(ENCODE_DECODE_DESC));
+            let key = match String::from_utf8(decoded.clone()) {
                 Ok(s) => s,
                 Err(e) => {
                     return Err(box_err!("fail to parse snapshot meta key {:?}, err: {:?}",
@@ -708,49 +711,52 @@ mod v2 {
                 return Err(box_err!("invalid snapshot meta key {}", key));
             }
             let cf = strs[1].to_owned();
-            if snapshot_cfs.iter().find(|&&s| s == cf).is_none() {
+            if snapshot_cfs.iter().find(|&s| *s == cf).is_none() {
                 return Err(box_err!("invalid snapshot cf {}", cf));
             }
             match strs[0] {
                 SNAPSHOT_META_PREFIX_SIZE => {
-                    let value_bytes = kv.get_value();
-                    let size = try!(value_bytes.decode_u64());
+                    let mut value_bytes = kv.get_value();
+                    let size = box_try!(value_bytes.decode_u64());
                     cf_sizes.push((cf, size));
                 }
                 SNAPSHOT_META_PREFIX_CHECKSUM => {
-                    let value_bytes = kv.get_value();
-                    let value = try!(value_bytes.decode_u64());
-                    if value > u32::max_value() {
+                    let mut value_bytes = kv.get_value();
+                    let value = box_try!(value_bytes.decode_u64());
+                    if value > u32::max_value() as u64 {
                         return Err(box_err!("invalid snapshot checksum {} for cf {}", value, cf));
                     }
-                    cf_checksums.push((cf, value));
+                    cf_checksums.push((cf, value as u32));
                 }
                 _ => return Err(box_err!("invalid snapshot meta prefix {}", strs[0])),
             }
         }
         if cf_sizes.len() != snapshot_cfs.len() {
-            return box_err!("missing snapshot meta cf size");
+            return Err(box_err!("invalid number of snapshot meta cf size: {}, expected: {}",
+                                cf_sizes.len(),
+                                snapshot_cfs.len()));
         }
         if cf_checksums.len() != snapshot_cfs.len() {
-            return box_err!("missing snapshot meta cf checksum");
+            return Err(box_err!("invalid number of snapshot meta cf checksum: {}, expected: {}",
+                                cf_checksums.len(),
+                                snapshot_cfs.len()));
         }
         let mut cf_size_checksums = Vec::with_capacity(snapshot_cfs.len());
         for (cf, size) in cf_sizes {
-            let iter = cf_checksums.iter().filter(|c| c.0 == cf);
-            let checksum = iter.next().unwrap().1;
+            let checksum = cf_checksums.iter().find(|c| c.0 == cf).unwrap().1;
             cf_size_checksums.push((cf, size, checksum));
         }
         Ok(cf_size_checksums)
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Default)]
     struct CfFile {
         pub cf: String,
         pub path: String,
         pub size: u64,
 
         // for building snapshot
-        pub sst_writer: Option<Box<SstFileWriter>>,
+        pub sst_writer: Option<SstFileWriter>,
         pub kv_count: u64,
         // for sending/receiving snapshot
         pub file: Option<File>,
@@ -762,7 +768,7 @@ mod v2 {
         pub digest: u32,
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Default)]
     struct MetaFile {
         pub data: RaftSnapshotData,
         pub path: String,
@@ -773,7 +779,6 @@ mod v2 {
     }
 
     pub struct Snap {
-        dir_path: PathBuf,
         display_path: String,
         cf_files: Vec<CfFile>,
         cf_index: usize,
@@ -782,10 +787,10 @@ mod v2 {
     }
 
     impl Snap {
-        pub fn new_for_building<T: Into<PathBuf>>(dir: T,
-                                                  key: &SnapKey,
-                                                  size_track: Arc<RwLock<u64>>)
-                                                  -> io::Result<Snap> {
+        fn new<T: Into<PathBuf>>(dir: T,
+                                 key: &SnapKey,
+                                 size_track: Arc<RwLock<u64>>)
+                                 -> io::Result<Snap> {
             let dir_path = dir.into();
             if !dir_path.exists() {
                 try!(fs::create_dir_all(dir_path.as_path()));
@@ -797,40 +802,38 @@ mod v2 {
             for cf in snapshot_cfs {
                 let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
                 let path = dir_path.join(filename).as_path().to_str().unwrap().to_owned();
-                let tmp_filename = format!("{}_{}{}", prefix, cf, TMP_FILE_SUFFIX);
-                let tmp_path = dir_path.join(tmp_filename).as_path().to_str().unwrap().to_owned();
+                let tmp_path = format!("{}{}", path, TMP_FILE_SUFFIX);
                 let cf_file = CfFile {
                     cf: cf,
                     path: path,
-                    size: 0,
-                    sst_writer: None,
-                    kv_count: 0,
-                    file: None,
                     tmp_path: tmp_path,
-                    written_size: 0,
-                    digest: 0,
+                    ..Default::default()
                 };
                 cf_files.push(cf_file);
             }
             let meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
-            let meta_tmp_filename = format!("{}{}", meta_filename, TMP_FILE_SUFFIX);
             let meta_path = dir_path.join(meta_filename).as_path().to_str().unwrap().to_owned();
-            let meta_tmp_path =
-                dir_path.join(meta_tmp_filename).as_path().to_str().unwrap().to_owned();
+            let meta_tmp_path = format!("{}{}", meta_path, TMP_FILE_SUFFIX);
             let meta_file = MetaFile {
-                data: RaftSnapshotData::new(),
                 path: meta_path,
-                file: None,
                 tmp_path: meta_tmp_path,
+                ..Default::default()
             };
-            let mut s = Snap {
-                dir_path: dir_path,
+            let s = Snap {
                 display_path: display_path,
                 cf_files: cf_files,
                 cf_index: 0,
                 meta_file: meta_file,
                 size_track: size_track,
             };
+            Ok(s)
+        }
+
+        pub fn new_for_building<T: Into<PathBuf>>(dir: T,
+                                                  key: &SnapKey,
+                                                  size_track: Arc<RwLock<u64>>)
+                                                  -> io::Result<Snap> {
+            let mut s = try!(Snap::new(dir, key, size_track));
             try!(s.init_for_building());
             Ok(s)
         }
@@ -838,115 +841,49 @@ mod v2 {
         pub fn new_for_sending<T: Into<PathBuf>>(dir: T,
                                                  key: &SnapKey,
                                                  size_track: Arc<RwLock<u64>>)
-                                                 -> io::Result<Snap> {
-            let dir_path = dir.into();
-            if !dir_path.exists() {
-                try!(fs::create_dir_all(dir_path.as_path()));
-            }
-            let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-            let display_path = Snap::get_display_path(&dir_path, &prefix);
-            let snapshot_cfs = get_snapshot_cfs();
-            let mut cf_files = Vec::with_capacity(snapshot_cfs.len());
-            for cf in snapshot_cfs {
-                let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
-                let path = dir_path.join(filename).as_path().to_str().unwrap().to_owned();
-                let tmp_filename = format!("{}_{}{}", prefix, cf, TMP_FILE_SUFFIX);
-                let tmp_path = dir_path.join(tmp_filename).as_path().to_str().unwrap().to_owned();
-                //
-                let size = try!(get_file_size(&path));
-                let file = try!(File::open(&path));
-                let cf_file = CfFile {
-                    cf: cf,
-                    path: path,
-                    size: size,
-                    sst_writer: None,
-                    kv_count: 0,
-                    file: Some(file),
-                    tmp_path: tmp_path,
-                    written_size: 0,
-                    digest: 0,
-                };
-                cf_files.push(cf_file);
-            }
-            let meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
-            let meta_tmp_filename = format!("{}{}", meta_filename, TMP_FILE_SUFFIX);
-            let meta_path = dir_path.join(meta_filename).as_path().to_str().unwrap().to_owned();
-            let meta_tmp_path =
-                dir_path.join(meta_tmp_filename).as_path().to_str().unwrap().to_string();
-            //
-            let size = try!(get_file_size(&meta_path));
-            let file = try!(File::open(meta_path));
-            let mut buf = Vec::with_capacity(size);
-            buf.resize(size);
-            try!(file.read_all(&mut buf[..]));
-            let mut snapshot_data = RaftSnapshotData::new();
-            try!(snapshot_data.merge_from_bytes(&buf));
-            let meta_file = MetaFile {
-                data: snapshot_data,
-                path: meta_path,
-                file: None,
-                tmp_path: meta_tmp_path,
-            };
-            Ok(Snap {
-                dir_path: dir_path,
-                display_path: display_path,
-                cf_files: cf_files,
-                cf_index: 0,
-                meta_file: meta_file,
-                size_track: size_track,
-            })
+                                                 -> RaftStoreResult<Snap> {
+            let mut s = try!(Snap::new(dir, key, size_track));
+            try!(s.init_for_sending());
+            Ok(s)
         }
 
         pub fn new_for_receiving<T: Into<PathBuf>>(dir: T,
                                                    key: &SnapKey,
-                                                   size_track: Arc<RwLock<u64>>,
-                                                   data: &[u8])
-                                                   -> raft::Result<Snap> {
-            let snapshot_cfs = get_snapshot_cfs();
-            let mut snapshot_data = RaftSnapshotData::new();
-            try!(snapshot_data.merge_from_bytes(data));
+                                                   snapshot_data: RaftSnapshotData,
+                                                   size_track: Arc<RwLock<u64>>)
+                                                   -> RaftStoreResult<Snap> {
             let cf_size_checksums = try!(parse_cf_size_checksums(snapshot_data.get_data()));
-
-            //
             let dir_path = dir.into();
             if !dir_path.exists() {
                 try!(fs::create_dir_all(dir_path.as_path()));
             }
             let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
             let display_path = Snap::get_display_path(&dir_path, &prefix);
-            let mut cf_files = Vec::with_capacity(snapshot_cfs.len());
+            let mut cf_files = Vec::with_capacity(cf_size_checksums.len());
             for (cf, size, checksum) in cf_size_checksums {
                 let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
                 let path = dir_path.join(filename).as_path().to_str().unwrap().to_owned();
-                let tmp_filename = format!("{}_{}{}", prefix, cf, TMP_FILE_SUFFIX);
-                let tmp_path = dir_path.join(tmp_filename).as_path().to_str().unwrap().to_owned();
-                //
+                let tmp_path = format!("{}{}", path, TMP_FILE_SUFFIX);
                 let cf_file = CfFile {
                     cf: cf,
                     path: path,
                     size: size,
-                    sst_writer: None,
-                    kv_count: 0,
-                    file: None,
                     tmp_path: tmp_path,
-                    written_size: 0,
                     digest: checksum,
+                    ..Default::default()
                 };
                 cf_files.push(cf_file);
             }
             let meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
-            let meta_tmp_filename = format!("{}{}", meta_filename, TMP_FILE_SUFFIX);
             let meta_path = dir_path.join(meta_filename).as_path().to_str().unwrap().to_owned();
-            let meta_tmp_path =
-                dir_path.join(meta_tmp_filename).as_path().to_str().unwrap().to_owned();
+            let meta_tmp_path = format!("{}{}", meta_path, TMP_FILE_SUFFIX);
             let meta_file = MetaFile {
                 data: snapshot_data,
                 path: meta_path,
-                file: None,
                 tmp_path: meta_tmp_path,
+                ..Default::default()
             };
             let mut s = Snap {
-                dir_path: dir_path,
                 display_path: display_path,
                 cf_files: cf_files,
                 cf_index: 0,
@@ -960,55 +897,10 @@ mod v2 {
         pub fn new_for_applying<T: Into<PathBuf>>(dir: T,
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
-                                                  -> io::Result<Snap> {
-            let dir_path = dir.into();
-            if !dir_path.exists() {
-                try!(fs::create_dir_all(dir_path.as_path()));
-            }
-            let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
-            let display_path = Snap::get_display_path(&dir_path, &prefix);
-            let snapshot_cfs = get_snapshot_cfs();
-            let mut cf_files = Vec::with_capacity(snapshot_cfs.len());
-            for cf in snapshot_cfs {
-                let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
-                let path = dir_path.join(filename).as_path().to_str().unwrap().to_owned();
-                //
-                let cf_file = CfFile {
-                    cf: cf,
-                    path: path,
-                    size: 0,
-                    sst_writer: None,
-                    kv_count: 0,
-                    file: None,
-                    tmp_path: "",
-                    written_size: 0,
-                };
-                cf_file.push(cf_file);
-            }
-            let meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
-            let meta_path = dir_path.join(meta_filename).as_path().to_str().unwrap().to_owned();
-            //
-            let size = try!(get_file_size(&meta_path));
-            let file = try!(File::open(meta_path));
-            let mut buf = Vec::with_capacity(size);
-            buf.resize(size);
-            try!(file.read_all(&mut buf[..]));
-            let mut snapshot_data = RaftSnapshotData::new();
-            try!(snapshot_data.merge_from_bytes(&buf));
-            let meta_file = MetaFile {
-                data: snapshot_data,
-                path: meta_path,
-                file: None,
-                tmp_path: "",
-            };
-            Ok(Snap {
-                dir_path: dir_path,
-                display_path: display_path,
-                cf_files: cf_files,
-                cf_index: 0,
-                meta_file: meta_file,
-                size_track: size_track,
-            })
+                                                  -> RaftStoreResult<Snap> {
+            let mut s = try!(Snap::new(dir, key, size_track));
+            try!(s.init_for_applying());
+            Ok(s)
         }
 
         fn init_for_building(&mut self) -> io::Result<()> {
@@ -1020,7 +912,7 @@ mod v2 {
                 if let Err(e) = writer.open(&cf_file.tmp_path) {
                     return Err(io::Error::new(ErrorKind::Other, e));
                 }
-                cf_file.writer = Some(writer);
+                cf_file.sst_writer = Some(writer);
             }
             let f = try!(OpenOptions::new()
                 .write(true)
@@ -1028,6 +920,20 @@ mod v2 {
                 .open(&self.meta_file.tmp_path));
             self.meta_file.file = Some(f);
             Ok(())
+        }
+
+        fn init_for_sending(&mut self) -> RaftStoreResult<()> {
+            if !self.exists() {
+                return Err(box_err!("snapshot file {} not exist", self.path()));
+            }
+            for cf_file in &mut self.cf_files {
+                // initialize cf file size and reader
+                let size = try!(get_file_size(&cf_file.path));
+                let file = try!(File::open(&cf_file.path));
+                cf_file.size = size;
+                cf_file.file = Some(file);
+            }
+            self.load_snapshot_metadata()
         }
 
         fn init_for_receiving(&mut self) -> io::Result<()> {
@@ -1048,15 +954,30 @@ mod v2 {
             Ok(())
         }
 
+        fn init_for_applying(&mut self) -> RaftStoreResult<()> {
+            self.load_snapshot_metadata()
+        }
+
+        fn load_snapshot_metadata(&mut self) -> RaftStoreResult<()> {
+            let size = try!(get_file_size(&self.meta_file.path));
+            let mut file = try!(File::open(&self.meta_file.path));
+            let mut buf = Vec::with_capacity(size as usize);
+            try!(file.read_to_end(&mut buf));
+            let mut snapshot_data = RaftSnapshotData::new();
+            try!(snapshot_data.merge_from_bytes(&buf));
+            self.meta_file.data = snapshot_data;
+            Ok(())
+        }
+
         fn get_display_path(dir_path: &PathBuf, prefix: &str) -> String {
             let mut cf_names = String::from("");
-            for (i, cf) in get_snapshot_cfs().enumerate() {
+            for (i, cf) in get_snapshot_cfs().iter().enumerate() {
                 if i == 0 {
                     cf_names += "(";
-                    cf_names += &cf;
+                    cf_names += cf;
                 } else {
                     cf_names += "|";
-                    cf_names += &cf;
+                    cf_names += cf;
                 }
             }
             cf_names += ")";
@@ -1074,7 +995,7 @@ mod v2 {
             if self.exists() {
                 sub_size = true;
             }
-            for cf_file in self.cf_files {
+            for cf_file in &self.cf_files {
                 delete_file(&cf_file.tmp_path);
                 if sub_size {
                     total_size += try!(get_file_size(&cf_file.path));
@@ -1090,21 +1011,30 @@ mod v2 {
             Ok(())
         }
 
-        fn validate(&self) -> io::Result<()> {
-            let cf_size_checksums = try!(parse_cf_size_checksums(self.meta_file.data.get_data()));
+        fn validate(&self) -> raft::Result<()> {
+            let cf_size_checksums =
+                box_try!(parse_cf_size_checksums(self.meta_file.data.get_data()));
             for (cf, expected_size, expected_checksum) in cf_size_checksums {
                 let mut checked = false;
-                for cf_file in self.cf_files {
+                for cf_file in &self.cf_files {
                     if cf_file.cf != cf {
                         continue;
                     }
                     let size = try!(get_file_size(&cf_file.path));
                     if size != expected_size {
-                        return Err(box_err!("snapshot file {} for cf {} size mismatches"));
+                        return Err(box_err!("invalid snapshot file size {} for cf {}, expected \
+                                             {}",
+                                            size,
+                                            cf_file.cf,
+                                            expected_size));
                     }
                     let checksum = try!(calc_checksum(&cf_file.path));
                     if checksum != expected_checksum {
-                        return Err(box_err!("snapshot file {} for cf {} checksum mismatches"));
+                        return Err(box_err!("invalid snapshot file checksum {} for cf {}, \
+                                             expected {}",
+                                            checksum,
+                                            cf_file.cf,
+                                            expected_checksum));
                     }
                     checked = true;
                 }
@@ -1116,7 +1046,7 @@ mod v2 {
         fn next_file(&mut self, cf: String) -> io::Result<()> {
             let mut cf_found = false;
             let mut index = 0;
-            for (i, f) in &self.cf_files.iter().enumerate() {
+            for (i, f) in self.cf_files.iter().enumerate() {
                 if f.cf == cf {
                     cf_found = true;
                     index = i;
@@ -1132,7 +1062,7 @@ mod v2 {
 
         fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
             let mut cf_file = &mut self.cf_files[self.cf_index];
-            let mut writer = cf_file.writer.as_mut().unwrap();
+            let mut writer = cf_file.sst_writer.as_mut().unwrap();
             if let Err(e) = writer.add(k, v) {
                 return Err(io::Error::new(ErrorKind::Other, e));
             }
@@ -1147,7 +1077,7 @@ mod v2 {
                     try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
                     cf_file.size = 0;
                 } else {
-                    let writer = cf_file.writer.as_mut().unwrap();
+                    let writer = cf_file.sst_writer.as_mut().unwrap();
                     if let Err(e) = writer.finish() {
                         return Err(io::Error::new(ErrorKind::Other, e));
                     }
@@ -1160,13 +1090,15 @@ mod v2 {
             }
             let mut size_track = self.size_track.wl();
             *size_track = size_track.saturating_add(total_size);
+            Ok(())
         }
 
-        fn save_meta_file(&mut self) -> io::Result<()> {
+        fn save_meta_file(&mut self) -> raft::Result<()> {
             let mut v = vec![];
-            try!(self.meta_file.data.write_to_vec(&mut v));
-            try!(self.meta_file.file.write_all(&v[..]));
-            try!(self.meta_file.file.flush());
+            box_try!(self.meta_file.data.write_to_vec(&mut v));
+            let mut f = self.meta_file.file.as_mut().unwrap();
+            try!(f.write_all(&v[..]));
+            try!(f.flush());
             try!(fs::rename(&self.meta_file.tmp_path, &self.meta_file.path));
             Ok(())
         }
@@ -1217,8 +1149,8 @@ mod v2 {
         }
 
         fn list_cf_path_sizes(&self) -> io::Result<Vec<(String, String, u64)>> {
-            let mut res = Vec::with_capacity(self.cf_files.len);
-            for cf_file in self.cf_files {
+            let mut res = Vec::with_capacity(self.cf_files.len());
+            for cf_file in &self.cf_files {
                 let size = try!(get_file_size(&cf_file.path));
                 res.push((cf_file.cf.clone(), cf_file.path.clone(), size));
             }
@@ -1241,22 +1173,23 @@ mod v2 {
                 // add size meta for this cf file
                 let size_key = format!("{}_{}", SNAPSHOT_META_PREFIX_SIZE, cf_file.cf);
                 let mut size_key_buf = vec![];
-                size_key_buf.encode_bytes(size_key.as_bytes());
+                box_try!(size_key_buf.encode_bytes(size_key.as_bytes(), ENCODE_DECODE_DESC));
                 let mut size_value = Vec::with_capacity(number::U64_SIZE);
                 size_value.encode_u64(cf_file.size).unwrap();
                 let mut kv = KeyValue::new();
-                kv.set_key(size_key_buf.into_bytes());
-                kv.set_value(size_value.into_bytes());
+                kv.set_key(size_key_buf);
+                kv.set_value(size_value);
                 kvs.push(kv);
                 // add checksum meta for this cf file
                 let checksum_key = format!("{}_{}", SNAPSHOT_META_PREFIX_CHECKSUM, cf_file.cf);
                 let mut checksum_key_buf = vec![];
-                checksum_key_buf.encode_bytes(checksum_key.as_bytes());
+                box_try!(checksum_key_buf.encode_bytes(checksum_key.as_bytes(),
+                    ENCODE_DECODE_DESC));
                 let mut checksum_value = Vec::with_capacity(number::U64_SIZE);
-                checksum_value.encode_u64(cf_file.checksum as u64).unwrap();
+                checksum_value.encode_u64(cf_file.digest as u64).unwrap();
                 let mut kv = KeyValue::new();
-                kv.set_key(checksum_key_buf.into_bytes());
-                kv.set_value(checksum_value.into_bytes());
+                kv.set_key(checksum_key_buf);
+                kv.set_value(checksum_value);
                 kvs.push(kv);
             }
             snap_data.set_file_size(total_size);
@@ -1334,16 +1267,14 @@ mod v2 {
         }
 
         fn apply(&mut self, context: &mut ApplyContext) -> Result<()> {
-            for (cf, path, size) in self.list_cf_path_sizes() {
+            for (cf, path, size) in box_try!(self.list_cf_path_sizes()) {
                 try!(check_abort(&context.abort));
 
-                let cf_handle = box_try!(rocksdb::get_cf_handle(&context.db, unsafe {
-                    str::from_utf8_unchecked(&cf)
-                }));
+                let cf_handle = box_try!(rocksdb::get_cf_handle(&context.db, &cf));
                 let ingest_opt = IngestExternalFileOptions::new().move_files(true);
                 if let Err(e) = context.db
                     .ingest_external_file_cf(cf_handle, &ingest_opt, &[&path]) {
-                    return Err(io::Error::Other(box_err!(e)));
+                    return Err(Error::Other(box_err!(e)));
                 }
                 context.snapshot_size += size as usize;
             }
@@ -1358,11 +1289,11 @@ mod v2 {
                 return Ok(0);
             }
             while self.cf_index < self.cf_files.len() {
-                match self.cf_files[self.cf_index].file.read(buf) {
+                match self.cf_files[self.cf_index].file.as_mut().unwrap().read(buf) {
                     Ok(n) => {
                         if n == 0 {
                             // EOF. switch to next file
-                            self.index += 1;
+                            self.cf_index += 1;
                             continue;
                         }
                         return Ok(n);
@@ -1380,8 +1311,8 @@ mod v2 {
                 return Ok(0);
             }
             let mut next_buf = buf;
-            while self.index < self.cf_files.len() {
-                let cf_file = &mut self.cf_files[self.index];
+            while self.cf_index < self.cf_files.len() {
+                let cf_file = &mut self.cf_files[self.cf_index];
                 let left = (cf_file.size - cf_file.written_size) as usize;
                 if left == 0 {
                     self.cf_index += 1;
@@ -1390,7 +1321,7 @@ mod v2 {
                 let mut file = cf_file.file.as_mut().unwrap();
                 if next_buf.len() > left {
                     try!(file.write_all(&next_buf[0..left]));
-                    cf_file.write_size += left as u64;
+                    cf_file.written_size += left as u64;
                     self.cf_index += 1;
                     next_buf = &next_buf[left..];
                 } else {
@@ -1421,7 +1352,7 @@ mod v2 {
                     break;
                 }
             }
-            if file_exists(self.meta_file.tmp_path) {
+            if file_exists(&self.meta_file.tmp_path) {
                 to_cleanup = true;
             }
             if to_cleanup {
@@ -1540,7 +1471,7 @@ impl SnapManagerCore {
 
     pub fn get_snapshot_for_building(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
         if self.use_sst_file_snapshot {
-            let f = try!(v2::Snap::new_for_building(&self.base, self.snap_size.clone(), key));
+            let f = try!(v2::Snap::new_for_building(&self.base, key, self.snap_size.clone()));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(&self.base, self.snap_size.clone(), true, key));
@@ -1548,22 +1479,40 @@ impl SnapManagerCore {
         }
     }
 
-    pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
-        let reader = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), true, key));
-        Ok(Box::new(reader))
+    pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
+        let s = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), true, key));
+        if s.exists() {
+            return Ok(Box::new(s));
+        }
+        let s = try!(v2::Snap::new_for_sending(&self.base, key, self.snap_size.clone()));
+        Ok(Box::new(s))
     }
 
     pub fn get_snapshot_for_receiving(&self,
                                       key: &SnapKey,
-                                      _data: &[u8])
-                                      -> raft::Result<Box<Snapshot>> {
-        let f = box_try!(v1::Snap::new_for_writing(&self.base, self.snap_size.clone(), false, key));
-        Ok(Box::new(f))
+                                      data: &[u8])
+                                      -> RaftStoreResult<Box<Snapshot>> {
+        let mut snapshot_data = RaftSnapshotData::new();
+        try!(snapshot_data.merge_from_bytes(data));
+        if snapshot_data.get_data().len() == 0 {
+            let f = try!(v1::Snap::new_for_writing(&self.base, self.snap_size.clone(), false, key));
+            Ok(Box::new(f))
+        } else {
+            let f = try!(v2::Snap::new_for_receiving(&self.base,
+                                                     key,
+                                                     snapshot_data,
+                                                     self.snap_size.clone()));
+            Ok(Box::new(f))
+        }
     }
 
-    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
-        let f = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), false, key));
-        Ok(Box::new(f))
+    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
+        let s = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), false, key));
+        if s.exists() {
+            return Ok(Box::new(s));
+        }
+        let s = try!(v2::Snap::new_for_applying(&self.base, key, self.snap_size.clone()));
+        Ok(Box::new(s))
     }
 
     /// Get the approximate size of snap file exists in snap directory.
@@ -1647,8 +1596,11 @@ impl SnapManagerCore {
 
 pub type SnapManager = Arc<RwLock<SnapManagerCore>>;
 
-pub fn new_snap_mgr<T: Into<String>>(path: T, ch: Option<SendCh<Msg>>) -> SnapManager {
-    Arc::new(RwLock::new(SnapManagerCore::new(path, ch)))
+pub fn new_snap_mgr<T: Into<String>>(path: T,
+                                     ch: Option<SendCh<Msg>>,
+                                     use_sst_file_snapshot: bool)
+                                     -> SnapManager {
+    Arc::new(RwLock::new(SnapManagerCore::new(path, ch, use_sst_file_snapshot)))
 }
 
 #[cfg(test)]
@@ -1672,14 +1624,14 @@ mod test {
         let path1 = path.path().to_str().unwrap().to_owned() + "/snap1";
         let p = Path::new(&path1);
         assert!(!p.exists());
-        let mut mgr = new_snap_mgr(path1.clone(), None);
+        let mut mgr = new_snap_mgr(path1.clone(), None, false);
         mgr.wl().init().unwrap();
         assert!(p.exists());
 
         // if target is a file, an error should be returned.
         let path2 = path.path().to_str().unwrap().to_owned() + "/snap2";
         File::create(&path2).unwrap();
-        mgr = new_snap_mgr(path2, None);
+        mgr = new_snap_mgr(path2, None, false);
         assert!(mgr.wl().init().is_err());
 
         // if temporary files exist, they should be deleted.
@@ -1697,7 +1649,7 @@ mod test {
         assert!(!f2.exists());
         assert!(f3.exists());
         assert!(f4.exists());
-        mgr = new_snap_mgr(path3, None);
+        mgr = new_snap_mgr(path3, None, false);
         mgr.wl().init().unwrap();
         assert!(!f1.exists());
         assert!(!f2.exists());
@@ -1709,7 +1661,7 @@ mod test {
     fn test_snap_size() {
         let path = TempDir::new("test-snap-mgr").unwrap();
         let path_str = path.path().to_str().unwrap();
-        let mut mgr = new_snap_mgr(path_str, None);
+        let mut mgr = new_snap_mgr(path_str, None, false);
         mgr.wl().init().unwrap();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
 
@@ -1729,7 +1681,7 @@ mod test {
         f4.write_all(test_data).unwrap();
         f4.save_with_checksum().unwrap();
 
-        mgr = new_snap_mgr(path_str, None);
+        mgr = new_snap_mgr(path_str, None, false);
         mgr.wl().init().unwrap();
         // temporary file should not be count in snap size.
         assert_eq!(mgr.rl().get_total_snap_size(), exp_len * 2);

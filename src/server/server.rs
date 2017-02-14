@@ -725,14 +725,15 @@ mod tests {
             raft_router: router,
             snapshot_status_sender: snapshot_status_sender,
         };
-        let mut server = Server::new(&mut event_loop,
-                                     &cfg,
-                                     listener,
-                                     storage,
-                                     ch,
-                                     resolver,
-                                     store::new_snap_mgr("", None))
-            .unwrap();
+        let mut server =
+            Server::new(&mut event_loop,
+                        &cfg,
+                        listener,
+                        storage,
+                        ch,
+                        resolver,
+                        store::new_snap_mgr("", None, cfg.raft_store.use_sst_file_snapshot))
+                .unwrap();
 
         for i in 0..10 {
             let mut msg = Message::new();

@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
 use std::fmt::{self, Formatter, Display};
 use std::io;
 use std::net::{SocketAddr, TcpStream};
@@ -148,10 +149,12 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
                 match SnapKey::from_snap(meta.get_message().get_snapshot()).and_then(|key| {
-                    mgr.rl()
+                    match mgr.rl()
                         .get_snapshot_for_receiving(&key,
-                                                    meta.get_message().get_snapshot().get_data())
-                        .map(|s| (s, key))
+                                                    meta.get_message().get_snapshot().get_data()) {
+                        Ok(s) => Ok((s, key)),
+                        Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.description())),
+                    }
                 }) {
                     Ok((snap, key)) => {
                         if snap.exists() {

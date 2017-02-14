@@ -1109,14 +1109,25 @@ mod test {
     }
 
     #[test]
-    fn test_storage_create_snapshot() {
+    fn test_storage_create_snapshot_with_old_format() {
+        test_storage_create_snapshot(false);
+    }
+
+    #[test]
+    fn test_storage_create_snapshot_with_sst_file_format() {
+        test_storage_create_snapshot(true);
+    }
+
+    fn test_storage_create_snapshot(use_sst_file_snapshot: bool) {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(), None);
+        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(),
+                               None,
+                               use_sst_file_snapshot);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1259,14 +1270,25 @@ mod test {
     }
 
     #[test]
-    fn test_storage_apply_snapshot() {
+    fn test_storage_apply_snapshot_with_old_format() {
+        test_storage_apply_snapshot(false);
+    }
+
+    #[test]
+    fn test_storage_apply_snapshot_with_sst_file_format() {
+        test_storage_apply_snapshot(true);
+    }
+
+    fn test_storage_apply_snapshot(use_sst_file_snapshot: bool) {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(), None);
+        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(),
+                               None,
+                               use_sst_file_snapshot);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
