@@ -51,21 +51,13 @@ pub fn encode_msg<T: io::Write, M: protobuf::Message + ?Sized>(w: &mut T,
 
 // Decodes encoded message, returns message ID.
 pub fn decode_msg<T: io::Read, M: protobuf::Message>(r: &mut T, m: &mut M) -> Result<u64> {
-    let (message_id, payload) = try!(decode_data(r));
+    let (message_id, payload_len) = try!(decode_msg_header(r));
+    let mut payload = vec![0; payload_len];
+    try!(r.read_exact(&mut payload));
     let mut reader = payload.as_slice();
     try!(decode_body(&mut reader, m));
 
     Ok(message_id)
-}
-
-// Encodes data with message ID and any arbitrary body.
-pub fn encode_data<T: io::Write>(w: &mut T, msg_id: u64, data: &[u8]) -> Result<()> {
-    let header = encode_msg_header(msg_id, data.len());
-
-    try!(w.write_all(&header));
-    try!(w.write_all(data));
-
-    Ok(())
 }
 
 // Encodes msg header to a 16 bytes header buffer.
@@ -78,18 +70,6 @@ pub fn encode_msg_header(msg_id: u64, payload_len: usize) -> Vec<u8> {
     BigEndian::write_u64(&mut buf[8..16], msg_id);
 
     buf
-}
-
-// Decodes encoded data, returns message ID and body.
-pub fn decode_data<T: io::Read>(r: &mut T) -> Result<(u64, Vec<u8>)> {
-    let mut header = vec![0;MSG_HEADER_LEN];
-    try!(r.read_exact(&mut header));
-    let mut reader = header.as_slice();
-    let (msg_id, payload_len) = try!(decode_msg_header(&mut reader));
-    let mut payload = vec![0;payload_len];
-    try!(r.read_exact(&mut payload));
-
-    Ok((msg_id, payload))
 }
 
 // Decodes msg header in header buffer, the buffer length size must be equal MSG_HEADER_LEN;
@@ -124,7 +104,6 @@ pub fn decode_body<R: BufRead, M: protobuf::Message>(payload: &mut R, m: &mut M)
 #[cfg(test)]
 mod tests {
     use bytes::ByteBuf;
-    use std::io::Cursor;
 
     use super::*;
     use kvproto::eraftpb::{Message, MessageType};
@@ -140,18 +119,6 @@ mod tests {
         let mut m2 = Message::new();
         assert_eq!(decode_msg(&mut w.flip(), &mut m2).unwrap(), 1);
         assert_eq!(m1, m2);
-    }
-
-    #[test]
-    fn test_data_codec() {
-        let body = vec![10;10];
-        let mut m1 = vec![];
-        encode_data(&mut m1, 1, &body).unwrap();
-
-        let mut r = Cursor::new(m1.clone());
-        let (msg_id, data) = decode_data(&mut r).unwrap();
-        assert_eq!(msg_id, 1);
-        assert_eq!(&data, &body);
     }
 
     #[test]
