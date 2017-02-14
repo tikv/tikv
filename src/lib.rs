@@ -62,6 +62,7 @@ extern crate backtrace;
 extern crate url;
 extern crate fs2;
 extern crate regex;
+extern crate fnv;
 
 #[macro_use]
 pub mod util;

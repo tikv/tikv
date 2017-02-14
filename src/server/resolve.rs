@@ -15,14 +15,14 @@ use std::sync::Arc;
 use std::boxed::{Box, FnBox};
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
-use std::collections::HashMap;
 use std::time::Instant;
 
-use super::Result;
+use fnv::FnvHashMap as HashMap;
 use util;
 use util::worker::{Runnable, Worker};
 use pd::PdClient;
 use kvproto::metapb;
+use super::Result;
 use super::metrics::*;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -117,7 +117,7 @@ impl PdStoreAddrResolver {
 
         let runner = Runner {
             pd_client: pd_client,
-            store_addrs: HashMap::new(),
+            store_addrs: HashMap::default(),
         };
         box_try!(r.worker.start(runner));
         Ok(r)
@@ -233,7 +233,7 @@ mod tests {
         };
         Runner {
             pd_client: Arc::new(client),
-            store_addrs: HashMap::new(),
+            store_addrs: HashMap::default(),
         }
     }
 

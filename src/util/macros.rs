@@ -67,13 +67,16 @@ macro_rules! map {
     () => {
         {
             use std::collections::HashMap;
-            HashMap::new()
+            use fnv::FnvBuildHasher;
+            HashMap::with_hasher(FnvBuildHasher::default())
         }
     };
     ( $( $k:expr => $v:expr ),+ ) => {
         {
             use std::collections::HashMap;
-            let mut temp_map = HashMap::with_capacity(count_args!($(($k, $v)),+));
+            use fnv::FnvBuildHasher;
+            let mut temp_map = HashMap::with_capacity_and_hasher(
+                count_args!($(($k, $v)),+), FnvBuildHasher::default());
             $(
                 temp_map.insert($k, $v);
             )+

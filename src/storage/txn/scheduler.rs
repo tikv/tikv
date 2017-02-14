@@ -41,7 +41,7 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 use storage::mvcc::{MvccTxn, ScanMetrics, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::CbContext;
-use std::collections::HashMap;
+use fnv::FnvHashMap as HashMap;
 use mio::{self, EventLoop};
 use util::transport::{SendCh, Error as TransportError};
 use util::SlowTimer;
@@ -247,7 +247,7 @@ impl Scheduler {
                -> Scheduler {
         Scheduler {
             engine: engine,
-            cmd_ctxs: HashMap::new(),
+            cmd_ctxs: Default::default(),
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),

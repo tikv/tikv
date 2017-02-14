@@ -13,7 +13,6 @@
 
 
 use std::io::Write;
-use std::collections::{HashMap, HashSet};
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
 
@@ -24,6 +23,7 @@ use super::{Result, Datum, datum};
 use super::mysql::{types, Duration, Time};
 use util::xeval::EvalContext;
 use util::escape;
+use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet, FnvBuildHasher};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -206,12 +206,12 @@ pub trait TableDecoder: DatumDecoder {
                   -> Result<HashMap<i64, Datum>> {
         let mut values = try!(self.decode());
         if values.get(0).map_or(true, |d| *d == Datum::Null) {
-            return Ok(HashMap::new());
+            return Ok(HashMap::default());
         }
         if values.len() & 1 == 1 {
             return Err(box_err!("decoded row values' length should be even!"));
         }
-        let mut row = HashMap::with_capacity(cols.len());
+        let mut row = HashMap::with_capacity_and_hasher(cols.len(), FnvBuildHasher::default());
         let mut drain = values.drain(..);
         loop {
             let id = match drain.next() {
@@ -279,11 +279,11 @@ impl RowColsDict {
 // and return interested columns' meta in RowColsDict
 pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     if cols.is_empty() || data.is_empty() || (data.len() == 1 && data[0] == datum::NIL_FLAG) {
-        return Ok(RowColsDict::new(HashMap::with_capacity(0), data));
+        return Ok(RowColsDict::new(HashMap::default(), data));
     }
 
     let meta_map = {
-        let mut meta_map = HashMap::with_capacity(cols.len());
+        let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), FnvBuildHasher::default());
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
@@ -302,7 +302,8 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
 
 // `cut_idx_key` cuts encoded index key into RowColsDict and handle .
 pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option<i64>)> {
-    let mut meta_map: HashMap<i64, RowColMeta> = HashMap::with_capacity(col_ids.len());
+    let mut meta_map: HashMap<i64, RowColMeta> =
+        HashMap::with_capacity_and_hasher(col_ids.len(), FnvBuildHasher::default());
     let handle = {
         let mut tmp_data: &[u8] = &key[PREFIX_LEN + ID_LEN..];
         let length = key.len();
@@ -332,7 +333,7 @@ mod test {
 
     use tipb::schema::ColumnInfo;
     use std::i64;
-    use std::collections::{HashSet, HashMap};
+    use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet, FnvBuildHasher};
 
     #[test]
     fn test_row_key_codec() {
@@ -364,7 +365,7 @@ mod test {
     }
 
     fn to_hash_map(row: &RowColsDict) -> HashMap<i64, Vec<u8>> {
-        let mut data = HashMap::with_capacity(row.cols.len());
+        let mut data = HashMap::with_capacity_and_hasher(row.cols.len(), FnvBuildHasher::default());
         if row.is_empty() {
             return data;
         }

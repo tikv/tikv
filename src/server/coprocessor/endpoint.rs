@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::usize;
-use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
@@ -20,6 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 
+use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
@@ -80,7 +80,7 @@ impl Host {
         Host {
             engine: engine,
             sched: scheduler,
-            reqs: HashMap::new(),
+            reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
             pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), concurrency),
@@ -509,9 +509,9 @@ impl SelectContextCore {
             } else {
                 sel.get_index_info().get_columns()
             };
-            let mut cond_col_map = HashMap::new();
+            let mut cond_col_map = HashMap::default();
             try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
-            let mut aggr_cols_map = HashMap::new();
+            let mut aggr_cols_map = HashMap::default();
             for aggr in sel.get_aggregates() {
                 try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, aggr));
             }

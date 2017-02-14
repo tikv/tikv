@@ -20,7 +20,7 @@ use util::TryInsertWith;
 use super::{Result, Error};
 use util::codec;
 
-use std::collections::HashMap;
+use fnv::FnvHashMap as HashMap;
 use std::cmp::Ordering;
 use std::ascii::AsciiExt;
 use tipb::expression::{Expr, ExprType};

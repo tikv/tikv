@@ -15,7 +15,6 @@ use std::error;
 use std::io::{self, Write, ErrorKind, Read};
 use std::fmt::{self, Formatter, Display};
 use std::fs::{self, Metadata};
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -32,6 +31,7 @@ use raftstore::store::Msg;
 use storage::CF_RAFT;
 use util::transport::SendCh;
 use util::HandyRwLock;
+use fnv::FnvHashMap as HashMap;
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
