@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use time::Duration as TimeDuration;
 
+use kvproto::eraftpb::MessageType;
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::RaftLocalState;
@@ -72,6 +73,18 @@ fn must_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
             }
         }
         Err(e) => panic!("failed to read for key {}, err {:?}", escape(key), e),
+    }
+}
+
+fn must_error_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
+                                         peer: Peer,
+                                         region: Region,
+                                         key: &[u8],
+                                         timeout: Duration) {
+    if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout) {
+        panic!("key {}, expect error but got {}",
+               escape(key),
+               escape(&value));
     }
 }
 
@@ -222,12 +235,11 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(election_timeout * 2);
 
     // Issue a read request and check the value on response.
-    let timeout = Duration::from_secs(1);
-    if let Ok(value) = read_on_peer(cluster, peer.clone(), region, key, timeout) {
-        panic!("key {}, expect error but got {}",
-               escape(key),
-               escape(&value))
-    }
+    must_error_read_on_peer(cluster,
+                            peer.clone(),
+                            region.clone(),
+                            key,
+                            Duration::from_secs(1));
 }
 
 #[test]
@@ -242,4 +254,96 @@ fn test_server_lease_expired() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
     test_lease_expired(&mut cluster);
+}
+
+// A helper function for testing the leader holds unsafe lease during the leader transfer
+// procedure, so it will not do lease read.
+// Since raft will not propose any request during leader transfer procedure, consistent read/write
+// could not be performed neither.
+// When leader transfer procedure aborts later, the leader would use and update the lease as usual.
+fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Avoid triggering the log compaction in this test case.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+
+    let base_tick = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval);
+    let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+
+    let node_id = 1u64;
+    let store_id = 1u64;
+    let peer = new_peer(store_id, node_id);
+    let peer3_store_id = 3u64;
+    let peer3 = new_peer(peer3_store_id, 3);
+    cluster.run();
+
+    // write the initial value for a key.
+    let key = b"k";
+    cluster.must_put(key, b"v1");
+    // Force `peer1` to became leader.
+    let region = cluster.get_region(key);
+    let region_id = region.get_id();
+    cluster.must_transfer_leader(region_id, peer.clone());
+
+    // Issue a read request and check the value on response.
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+
+    let engine = cluster.get_engine(store_id);
+    let state_key = keys::raft_state_key(region_id);
+    let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
+    let last_index = state.get_last_index();
+
+    // Check if the leader does a local read.
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
+    assert_eq!(state.get_last_index(), last_index);
+
+    // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would abort later.
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(region_id, peer3_store_id)
+        .msg_type(MessageType::MsgTimeoutNow)
+        .direction(Direction::Recv)));
+
+    // Issue a transfer leader request to transfer leader from `peer` to `peer3`.
+    cluster.transfer_leader(region_id, peer3);
+
+    // Delay one tick to ensure transfer leader procedure is triggered inside raft module.
+    thread::sleep(base_tick);
+
+    // Issue a read request and ensure it fails to do lease read or consistent read
+    // during leader transfer procedure.
+    must_error_read_on_peer(cluster,
+                            peer.clone(),
+                            region.clone(),
+                            key,
+                            election_timeout / 2);
+
+    // Make sure the leader transfer procedure timeouts.
+    thread::sleep(election_timeout * 2);
+
+    // Then the leader transfer procedure aborts, now the leader could do lease read or consistent
+    // read/write and renew/reuse the lease as usual.
+
+    // Issue a read request and check the value on response.
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+
+    // Check if the leader does a consistent read and renew its lease.
+    let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
+    assert_eq!(state.get_last_index(), last_index + 1);
+
+    // Check if the leader does a local read.
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
+    assert_eq!(state.get_last_index(), last_index + 1);
+}
+
+#[test]
+fn test_node_lease_unsafe_during_leader_transfers() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_lease_unsafe_during_leader_transfers(&mut cluster);
+}
+
+#[test]
+fn test_server_lease_unsafe_during_leader_transfers() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_lease_unsafe_during_leader_transfers(&mut cluster);
 }
