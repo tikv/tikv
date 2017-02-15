@@ -67,7 +67,7 @@ struct CaseTraceLogger {
 
 impl LogWriter for CaseTraceLogger {
     fn write(&self, args: Arguments) {
-        let tag = util::get_tag_from_thread_name().unwrap_or("".into());
+        let tag = util::get_tag_from_thread_name().unwrap_or_else(|| "".into());
         let _ = if let Some(ref out) = self.f {
             let mut w = out.lock().unwrap();
             write!(w, "{} {}", tag, args)
@@ -89,7 +89,8 @@ impl Drop for CaseTraceLogger {
 // A help function to initial logger.
 pub fn init_log() {
     let output = env::var("LOG_FILE").ok();
-    let level = logger::get_level_by_string(&env::var("LOG_LEVEL").unwrap_or("debug".to_owned()));
+    let level = logger::get_level_by_string(&env::var("LOG_LEVEL")
+        .unwrap_or_else(|_| "debug".to_owned()));
     let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
     // we don't mind set it multiple times.
     let _ = logger::init_log(CaseTraceLogger { f: writer }, level);
