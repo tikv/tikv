@@ -233,6 +233,9 @@ max-bytes-for-level-base = "128MB"
 target-file-size-base = "32MB"
 block-cache-size = "256MB"
 
+# memtable insert with hint prefix extractor.
+# memtable-insert-with-hint = true
+
 [storage]
 # notify capacity of scheduler's channel
 scheduler-notify-capacity = 10240
