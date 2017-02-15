@@ -517,7 +517,6 @@ impl SortRow {
                 }
                 Ok(order) => {
                     if col.get_desc() {
-                        // heap pop the biggest first
                         return Ok(order.reverse());
                     }
                     return Ok(order);
@@ -578,7 +577,7 @@ impl TopNHeap {
                    key: Vec<Datum>)
                    -> Result<()> {
         let row = SortRow::new(handle, order_cols, ctx, data, key, self.err.clone());
-        // push into heap when heap not full
+        // push into heap when heap is not full
         if self.rows.len() < self.limit {
             self.rows.push(row);
         } else {
@@ -715,7 +714,6 @@ impl SelectContextCore {
             }
             Either::Right(cols.iter().map(|c| c.get_column_id()).collect())
         };
-
 
         Ok(SelectContextCore {
             ctx: Rc::new(box_try!(EvalContext::new(&sel))),
@@ -1154,8 +1152,6 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use std::collections::HashMap;
-
-
 
     #[test]
     fn test_get_req_type_str() {
