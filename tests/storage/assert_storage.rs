@@ -106,14 +106,18 @@ impl AssertionStorage {
                                  -> Option<()> {
         let res = self.store.prewrite(ctx, mutations, primary, start_ts);
         if res.is_err() {
-            if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
-                   *res.as_ref()
-                .err()
-                .unwrap() {
-                assert!(e.has_not_leader());
-                return Some(());
-            } else {
-                panic!("expect not leader error, but got {:?}", res);
+            let err = res.err().unwrap();
+            match err {
+                storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
+                storage::Error::Engine(engine::Error::Request(ref e)) => {
+                    assert!(e.has_not_leader());
+                    return Some(());
+                }
+                _ => {
+                    let err_str = format!("{:?}", err);
+                    assert!(err_str.contains("not_leader"));
+                    return Some(());
+                }
             }
         }
         None
@@ -127,17 +131,48 @@ impl AssertionStorage {
                                -> Option<()> {
         let res = self.store.commit(ctx, keys, start_ts, commit_ts);
         if res.is_err() {
-            if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
-                   *res.as_ref()
-                .err()
-                .unwrap() {
-                assert!(e.has_not_leader());
-                return Some(());
-            } else {
-                panic!("expect not leader error, but got {:?}", res);
+            let err = res.err().unwrap();
+            match err {
+                storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
+                storage::Error::Engine(engine::Error::Request(ref e)) => {
+                    assert!(e.has_not_leader());
+                    return Some(());
+                }
+                _ => {
+                    let err_str = format!("{:?}", err);
+                    assert!(err_str.contains("not_leader"));
+                    return Some(());
+                }
             }
         }
         None
+    }
+
+    pub fn get_none_from_cluster(&mut self,
+                                 cluster: &mut Cluster<ServerCluster>,
+                                 key: &[u8],
+                                 ts: u64) {
+        let item = make_key(key);
+        for _ in 0..3 {
+            let ret = self.store.get(self.ctx.clone(), &item, ts);
+            if ret.is_ok() {
+                assert_eq!(ret.unwrap(), None);
+                return;
+            }
+            let err = ret.err().unwrap();
+            match err {
+                storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
+                storage::Error::Engine(engine::Error::Request(ref e)) => {
+                    assert!(e.has_not_leader());
+                    self.update_with_key_byte(cluster, key);
+                }
+                _ => {
+                    let err_str = format!("{:?}", err);
+                    assert!(err_str.contains("not_leader"));
+                }
+            }
+        }
+        panic!("failed with 3 retry!");
     }
 
     pub fn put_ok_for_cluster(&mut self,
