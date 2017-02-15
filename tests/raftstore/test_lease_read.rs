@@ -138,7 +138,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Check if the leader does a consistent read and renewed its lease.
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index + 1);
+    assert_eq!(state.get_last_index(), last_index);
 
     // Wait for the leader lease to expire.
     thread::sleep(election_timeout);
@@ -149,14 +149,14 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Check if the leader has renewed its lease so that it can do lease read.
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index + 2);
+    assert_eq!(state.get_last_index(), last_index + 1);
 
     // Issue a read request and check the value on response.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v2");
 
     // Check if the leader does a local read.
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index + 2);
+    assert_eq!(state.get_last_index(), last_index + 1);
 }
 
 #[test]
