@@ -202,6 +202,7 @@ pub struct RaftMetrics {
     pub propose: RaftProposeMetrics,
     pub process_tick: LocalHistogram,
     pub process_ready: LocalHistogram,
+    pub append_log: LocalHistogram,
 }
 
 impl Default for RaftMetrics {
@@ -212,6 +213,7 @@ impl Default for RaftMetrics {
             propose: Default::default(),
             process_tick: PEER_RAFT_PROCESS_DURATION.with_label_values(&["tick"]).local(),
             process_ready: PEER_RAFT_PROCESS_DURATION.with_label_values(&["ready"]).local(),
+            append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
         }
     }
 }
@@ -224,5 +226,6 @@ impl RaftMetrics {
         self.propose.flush();
         self.process_tick.flush();
         self.process_ready.flush();
+        self.append_log.flush();
     }
 }

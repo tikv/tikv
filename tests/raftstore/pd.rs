@@ -112,7 +112,7 @@ impl Cluster {
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
         self.regions
-            .range::<Key, Key>(Excluded(&key), Unbounded)
+            .range((Excluded(key), Unbounded))
             .next()
             .map(|(_, region)| region.clone())
     }
