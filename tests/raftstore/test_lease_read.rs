@@ -264,9 +264,13 @@ fn test_server_lease_expired() {
 fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    // Increase the Raft tick interval to make this test case running reliably.
+    cluster.cfg.raft_store.raft_base_tick_interval = 50;
 
     let base_tick = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval);
     let election_timeout = base_tick * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = TimeDuration::from_std(election_timeout)
+        .unwrap();
 
     let node_id = 1u64;
     let store_id = 1u64;
