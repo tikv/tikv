@@ -17,6 +17,7 @@ use std::boxed::{Box, FnBox};
 use std::io::Write;
 
 use mio::Token;
+use mio::tcp::TcpStream;
 
 use kvproto::msgpb::{self, MessageType};
 use util::codec::rpc;
@@ -24,6 +25,7 @@ use kvproto::eraftpb::MessageType as RaftMessageType;
 mod conn;
 mod kv;
 mod metrics;
+mod conn_loop;
 
 pub mod config;
 pub mod errors;
@@ -67,6 +69,10 @@ impl ConnData {
     pub fn encode_to<T: Write>(&self, w: &mut T) -> Result<()> {
         try!(rpc::encode_msg(w, self.msg_id, &self.msg));
         Ok(())
+    }
+
+    pub fn get_region_id(&self) -> u64 {
+        self.msg.get_raft().get_region_id()
     }
 }
 
@@ -128,4 +134,5 @@ pub enum Msg {
         data: ConnData,
     },
     CloseConn { token: Token },
+    Connect { token: Token, sock: TcpStream },
 }

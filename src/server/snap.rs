@@ -48,9 +48,9 @@ const DEFAULT_WRITE_TIMEOUT: u64 = 30;
 /// `Discard` discard all the unsaved changes made to snapshot file;
 /// `SendTo` send the snapshot file to specified address.
 pub enum Task {
-    Register(Token, RaftMessage),
-    Write(Token, PipeBuffer),
-    Close(Token),
+    Register(SendCh<Msg>, Token, RaftMessage),
+    Write(SendCh<Msg>, Token, PipeBuffer),
+    Close(SendCh<Msg>, Token),
     Discard(Token),
     SendTo {
         addr: SocketAddr,
@@ -62,9 +62,11 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Register(token, ref meta) => write!(f, "Register {:?} token: {:?}", meta, token),
-            Task::Write(token, _) => write!(f, "Write snap for {:?}", token),
-            Task::Close(token) => write!(f, "Close file {:?}", token),
+            Task::Register(_, token, ref meta) => {
+                write!(f, "Register {:?} token: {:?}", meta, token)
+            }
+            Task::Write(_, token, _) => write!(f, "Write snap for {:?}", token),
+            Task::Close(_, token) => write!(f, "Close file {:?}", token),
             Task::Discard(token) => write!(f, "Discard file {:?}", token),
             Task::SendTo { ref addr, ref data, .. } => {
                 write!(f, "SendTo Snap[to: {}, snap: {:?}]", addr, data.msg)
@@ -119,23 +121,21 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
     files: HashMap<Token, (Box<Snapshot>, RaftMessage)>,
     pool: ThreadPool,
-    ch: SendCh<Msg>,
     raft_router: R,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
+    pub fn new(snap_mgr: SnapManager, r: R) -> Runner<R> {
         Runner {
             snap_mgr: snap_mgr,
             files: map![],
             pool: ThreadPool::new_with_name(thd_name!("snap sender"), DEFAULT_SENDER_POOL_SIZE),
             raft_router: r,
-            ch: ch,
         }
     }
 
-    pub fn close(&self, token: Token) {
-        if let Err(e) = self.ch.send(Msg::CloseConn { token: token }) {
+    pub fn close(&self, ch: SendCh<Msg>, token: Token) {
+        if let Err(e) = ch.send(Msg::CloseConn { token: token }) {
             error!("failed to close connection {:?}: {:?}", token, e);
         }
     }
@@ -144,7 +144,7 @@ impl<R: RaftStoreRouter + 'static> Runner<R> {
 impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Register(token, meta) => {
+            Task::Register(ch, token, meta) => {
                 SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
                 match SnapKey::from_snap(meta.get_message().get_snapshot()).and_then(|key| {
@@ -160,7 +160,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             if let Err(e) = self.raft_router.send_raft_msg(meta) {
                                 error!("send snapshot for key {} token {:?}: {:?}", key, token, e);
                             }
-                            self.close(token);
+                            self.close(ch, token);
                             return;
                         }
                         debug!("begin to receive snap {:?}", meta);
@@ -176,7 +176,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     }
                 }
             }
-            Task::Write(token, mut data) => {
+            Task::Write(ch, token, mut data) => {
                 SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
                 let mut should_close = false;
                 match self.files.entry(token) {
@@ -195,10 +195,10 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     Entry::Vacant(_) => error!("invalid snap token {:?}", token),
                 }
                 if should_close {
-                    self.close(token);
+                    self.close(ch, token);
                 }
             }
-            Task::Close(token) => {
+            Task::Close(ch, token) => {
                 SNAP_TASK_COUNTER.with_label_values(&["close"]).inc();
                 match self.files.remove(&token) {
                     Some((mut snap, msg)) => {
@@ -206,7 +206,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         info!("saving snapshot to {}", snap.path());
                         defer!({
                             self.snap_mgr.wl().deregister(&key, &SnapEntry::Receiving);
-                            self.close(token);
+                            self.close(ch, token);
                         });
                         if let Err(e) = snap.save() {
                             error!("failed to save snapshot file {} for token {:?}: {:?}",
