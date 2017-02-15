@@ -280,7 +280,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     opts.set_max_open_files(max_open_files as i32);
 
-    let enable_statistics = get_toml_boolean(config, "rocksdb.enable-statistics", Some(false));
+    let enable_statistics = get_toml_boolean(config, "rocksdb.enable-statistics", Some(true));
     if enable_statistics {
         opts.enable_statistics();
         let stats_dump_period_sec =
