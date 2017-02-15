@@ -282,7 +282,7 @@ pub struct Peer {
     //      It would increase when raft log entries are applied in current term.
     //   2. Either::Right<Timespec>
     //      An unsafe leader lease expired time, which marks the leader may still hold or lose
-    //      its lease until the clock time go over this timestamp.
+    //      its lease until the clock time goes over this timestamp.
     //      It would be set after the message MsgTimeoutNow is sent by current peer.
     //      The message MsgTimeoutNow starts a leader transfer procedure. During this procedure,
     //      current peer as an old leader may still hold its lease or lose it.
