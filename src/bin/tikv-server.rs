@@ -28,7 +28,6 @@ extern crate signal;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
-extern crate fnv;
 
 mod signal_handler;
 
@@ -41,14 +40,13 @@ use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
 
-use fnv::FnvHashMap as HashMap;
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
