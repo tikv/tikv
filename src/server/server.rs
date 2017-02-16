@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
 use std::option::Option;
 use std::sync::mpsc::Sender;
 use std::boxed::Box;
@@ -22,20 +21,22 @@ use mio::tcp::{TcpListener, TcpStream};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
-use super::{Msg, ConnData};
-use super::conn::Conn;
-use super::{Result, OnResponse, Config};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
+use raft::SnapshotStatus;
+use util::sockopt::SocketOpt;
+use util::{HashMap, HashSet};
+
+use super::{Msg, ConnData};
+use super::conn::Conn;
+use super::{Result, OnResponse, Config};
 use super::kv::StoreHandler;
 use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
-use raft::SnapshotStatus;
-use util::sockopt::SocketOpt;
 use super::metrics::*;
 
 const SERVER_TOKEN: Token = Token(1);
@@ -124,10 +125,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let svr = Server {
             listener: listener,
             sendch: sendch,
-            conns: HashMap::new(),
+            conns: HashMap::default(),
             conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
-            store_tokens: HashMap::new(),
-            store_resolving: HashSet::new(),
+            store_tokens: HashMap::default(),
+            store_resolving: HashSet::default(),
             ch: ch,
             store: store_handler,
             end_point_worker: end_point_worker,
