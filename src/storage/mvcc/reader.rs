@@ -177,18 +177,16 @@ impl<'a> MvccReader<'a> {
         // Check for locks that signal concurrent writes.
         if let Some(lock) = try!(self.load_lock(key)) {
             if lock.ts <= ts {
-                let raw_key = try!(key.raw());
-                let primary_key = lock.primary;
-                if ts == u64::MAX && raw_key == primary_key {
-                    // when ts==MAX(which means it's a point get by pk or unique key),
+                if ts == u64::MAX && try!(key.raw()) == lock.primary {
+                    // when ts==MAX(which means get latest committed version for primary key),
                     // and current key is the primary key,
                     // return latest commit version's value
                     ts = lock.ts - 1;
                 } else {
                     // There is a pending lock. Client should wait or clean it.
                     return Err(Error::KeyIsLocked {
-                        key: raw_key,
-                        primary: primary_key,
+                        key: try!(key.raw()),
+                        primary: lock.primary,
                         ts: lock.ts,
                         ttl: lock.ttl,
                     });
