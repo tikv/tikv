@@ -274,6 +274,7 @@ pub struct Peer {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
+    marked_to_be_checked: bool,
 
     leader_missing_time: Option<Instant>,
 
@@ -357,6 +358,7 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             pending_remove: false,
+            marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
@@ -386,6 +388,13 @@ impl Peer {
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
+    }
+
+    pub fn mark_to_be_checked(&mut self, pending_raft_groups: &mut HashSet<u64>) {
+        if !self.marked_to_be_checked {
+            self.marked_to_be_checked = true;
+            pending_raft_groups.insert(self.region_id);
+        }
     }
 
     pub fn destroy(&mut self) -> Result<()> {
@@ -627,6 +636,7 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self, ctx: &mut ReadyContext<T>) {
+        self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead

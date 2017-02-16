@@ -403,15 +403,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_timer();
-        for (&region_id, peer) in &mut self.region_peers {
+        for peer in self.region_peers.values_mut() {
             if peer.get_store().is_applying() {
                 // need to check if snapshot is applied.
-                self.pending_raft_groups.insert(region_id);
+                peer.mark_to_be_checked(&mut self.pending_raft_groups);
                 continue;
             }
 
             if peer.raft_group.tick() {
-                self.pending_raft_groups.insert(region_id);
+                peer.mark_to_be_checked(&mut self.pending_raft_groups);
             }
 
             // If this peer detects the leader is missing for a long long time,
@@ -560,7 +560,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         try!(peer.step(msg.take_message()));
 
         // Add into pending raft groups for later handling ready.
-        self.pending_raft_groups.insert(region_id);
+        peer.mark_to_be_checked(&mut self.pending_raft_groups);
 
         Ok(())
     }
@@ -1110,7 +1110,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             renew_lease_time: None,
         };
         if peer.propose(meta, cb, msg, resp, &mut self.raft_metrics.propose) {
-            self.pending_raft_groups.insert(region_id);
+            peer.mark_to_be_checked(&mut self.pending_raft_groups);
         }
 
         // TODO: add timeout, if the command is not applied after timeout,
