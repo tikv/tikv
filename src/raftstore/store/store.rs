@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::BTreeMap;
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
@@ -42,8 +42,9 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::rocksdb;
+use util::{rocksdb, HashMap, HashSet};
 use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
@@ -158,7 +159,7 @@ impl<T, C> Store<T, C> {
         try!(cfg.validate());
 
         let sendch = SendCh::new(ch.sender, "raftstore");
-        let peer_cache = HashMap::new();
+        let peer_cache = HashMap::default();
         let tag = format!("[store {}]", meta.get_id());
 
         let mut s = Store {
@@ -168,8 +169,8 @@ impl<T, C> Store<T, C> {
             sendch: sendch,
             sent_snapshot_count: 0,
             snapshot_status_receiver: ch.snapshot_status_receiver,
-            region_peers: HashMap::new(),
-            pending_raft_groups: HashSet::new(),
+            region_peers: HashMap::default(),
+            pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
@@ -449,7 +450,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     // for peer B in case 1 above
                     info!("{} detects leader missing for a long time. To check with pd \
                             whether it's still valid",
-                            peer.tag);
+                          peer.tag);
                     let task = PdTask::ValidatePeer {
                         peer: peer.peer.clone(),
                         region: peer.region().clone(),

@@ -28,6 +28,7 @@ extern crate signal;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
+extern crate fnv;
 
 mod signal_handler;
 
@@ -39,8 +40,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
-use std::collections::HashMap;
 
+use fnv::FnvHashMap as HashMap;
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
@@ -468,6 +469,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_usize(&mut cfg.raft_store.messages_per_tick,
               config,
               "raftstore.messages-per-tick");
+    cfg_u64(&mut cfg.raft_store.raft_base_tick_interval,
+            config,
+            "raftstore.raft-base-tick-interval");
     cfg_usize(&mut cfg.raft_store.raft_heartbeat_ticks,
               config,
               "raftstore.raft-heartbeat-ticks");
