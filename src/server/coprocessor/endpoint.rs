@@ -12,15 +12,16 @@
 // limitations under the License.
 
 use std::usize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BinaryHeap};
 use std::collections::hash_map::Entry;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
-
-use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
+use std::cmp::Ordering as CmpOrdering;
+use std::cell::RefCell;
+use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta, ByItem};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
 use protobuf::{Message as PbMsg, RepeatedField};
@@ -361,21 +362,14 @@ impl TiDbEndPoint {
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.scan_metrics));
         let mut range = t.req.get_ranges().to_vec();
-        let desc = ctx.core.sel.get_order_by().first().map_or(false, |o| o.get_desc());
         debug!("scanning range: {:?}", range);
-        if desc {
+        if ctx.core.desc_scan {
             range.reverse();
         }
-        let limit = if ctx.core.sel.has_limit() {
-            ctx.core.sel.get_limit() as usize
-        } else {
-            usize::MAX
-        };
-
         let res = if t.req.get_tp() == REQ_TYPE_SELECT {
-            ctx.get_rows_from_sel(range, limit, desc)
+            ctx.get_rows_from_sel(range)
         } else {
-            ctx.get_rows_from_idx(range, limit, desc)
+            ctx.get_rows_from_idx(range)
         };
 
         let mut resp = Response::new();
@@ -485,14 +479,166 @@ fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
     chunks.last_mut().unwrap()
 }
 
+struct SortRow {
+    key: Vec<Datum>,
+    handle: i64,
+    data: RowColsDict,
+    order_cols: Rc<Vec<ByItem>>,
+    ctx: Rc<EvalContext>,
+    err: Rc<RefCell<Option<String>>>,
+}
+
+impl SortRow {
+    fn new(handle: i64,
+           order_cols: Rc<Vec<ByItem>>,
+           ctx: Rc<EvalContext>,
+           data: RowColsDict,
+           key: Vec<Datum>,
+           err: Rc<RefCell<Option<String>>>)
+           -> SortRow {
+        SortRow {
+            key: key,
+            handle: handle,
+            data: data,
+            order_cols: order_cols,
+            ctx: ctx,
+            err: err,
+        }
+    }
+
+    fn cmp_and_check(&self, right: &SortRow) -> Result<CmpOrdering> {
+        // check err
+        try!(self.check_err());
+        let values = self.key.iter().zip(right.key.iter());
+        for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
+            match v1.cmp(self.ctx.as_ref(), v2) {
+                Ok(CmpOrdering::Equal) => {
+                    continue;
+                }
+                Ok(order) => {
+                    if col.get_desc() {
+                        return Ok(order.reverse());
+                    }
+                    return Ok(order);
+                }
+                Err(err) => {
+                    self.set_err(format!("cmp failed with:{:?}", err));
+                    try!(self.check_err());
+                }
+            }
+        }
+        Ok(CmpOrdering::Equal)
+    }
+
+    #[inline]
+    fn check_err(&self) -> Result<()> {
+        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
+            return Err(box_err!(err_msg.to_owned()));
+        }
+        Ok(())
+    }
+
+    fn set_err(&self, err_msg: String) {
+        *self.err.borrow_mut() = Some(err_msg);
+    }
+}
+
+struct TopNHeap {
+    rows: BinaryHeap<SortRow>,
+    limit: usize,
+    err: Rc<RefCell<Option<String>>>,
+}
+
+impl TopNHeap {
+    fn new(limit: usize) -> Result<TopNHeap> {
+        if limit == usize::MAX {
+            return Err(box_err!("invalid limit"));
+        }
+        Ok(TopNHeap {
+            rows: BinaryHeap::with_capacity(limit),
+            limit: limit,
+            err: Rc::new(RefCell::new(None)),
+        })
+    }
+
+    #[inline]
+    fn check_err(&self) -> Result<()> {
+        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
+            return Err(box_err!(err_msg.to_owned()));
+        }
+        Ok(())
+    }
+
+    fn try_add_row(&mut self,
+                   handle: i64,
+                   order_cols: Rc<Vec<ByItem>>,
+                   ctx: Rc<EvalContext>,
+                   data: RowColsDict,
+                   key: Vec<Datum>)
+                   -> Result<()> {
+        let row = SortRow::new(handle, order_cols, ctx, data, key, self.err.clone());
+        // push into heap when heap is not full
+        if self.rows.len() < self.limit {
+            self.rows.push(row);
+        } else {
+            // swap top value with row when heap is full and current row is less than top data
+            let mut top_data = self.rows.peek_mut().unwrap();
+            let order = try!(row.cmp_and_check(&top_data));
+            if CmpOrdering::Less == order {
+                *top_data = row;
+            }
+        }
+        self.check_err()
+    }
+
+    fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
+        let sorted_data = self.rows.into_sorted_vec();
+        // check is needed here since err may caused by any call of cmp
+        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
+            return Err(box_err!(err_msg.to_owned()));
+        }
+        Ok(sorted_data)
+    }
+}
+
+impl<'a> Ord for SortRow {
+    fn cmp(&self, right: &SortRow) -> CmpOrdering {
+        if let Ok(order) = self.cmp_and_check(right) {
+            return order;
+        }
+        CmpOrdering::Equal
+    }
+}
+
+impl PartialEq for SortRow {
+    fn eq(&self, right: &SortRow) -> bool {
+        self.cmp(right) == CmpOrdering::Equal
+    }
+}
+
+impl Eq for SortRow {}
+
+impl PartialOrd for SortRow {
+    fn partial_cmp(&self, rhs: &SortRow) -> Option<CmpOrdering> {
+        Some(self.cmp(rhs))
+    }
+}
+
+
 pub struct SelectContextCore {
-    ctx: EvalContext,
+    ctx: Rc<EvalContext>,
     sel: SelectRequest,
     eval: Evaluator,
     cols: Either<HashSet<i64>, Vec<i64>>,
     cond_cols: Vec<ColumnInfo>,
+    topn_cols: Vec<ColumnInfo>,
     aggr: bool,
     aggr_cols: Vec<ColumnInfo>,
+    topn: bool,
+    topn_heap: Option<TopNHeap>,
+    order_cols: Rc<Vec<ByItem>>,
+    limit: usize,
+    desc_scan: bool,
     gks: Vec<Rc<Vec<u8>>>,
     gk_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
     chunks: Vec<Chunk>,
@@ -501,8 +647,9 @@ pub struct SelectContextCore {
 impl SelectContextCore {
     fn new(mut sel: SelectRequest) -> Result<SelectContextCore> {
         let cond_cols;
+        let topn_cols;
+        let mut order_by_cols: Vec<ByItem> = Vec::new();
         let mut aggr_cols = vec![];
-
         {
             let select_cols = if sel.has_table_info() {
                 sel.get_table_info().get_columns()
@@ -525,6 +672,32 @@ impl SelectContextCore {
                 aggr_cols = aggr_cols_map.drain().map(|(_, v)| v).collect();
             }
             cond_cols = cond_col_map.drain().map(|(_, v)| v).collect();
+
+            // get topn cols
+            let mut topn_col_map = HashMap::new();
+            for item in sel.get_order_by() {
+                try!(collect_col_in_expr(&mut topn_col_map, select_cols, item.get_expr()))
+            }
+            topn_cols = topn_col_map.drain().map(|(_, v)| v).collect();
+            order_by_cols.extend_from_slice(sel.get_order_by())
+        }
+
+        let limit = if sel.has_limit() {
+            sel.get_limit() as usize
+        } else {
+            usize::MAX
+        };
+
+        // set topn
+        let mut topn = false;
+        let mut desc_can = false;
+        if sel.get_order_by().len() > 0 {
+            // order by pk,set desc_scan is enough
+            if !sel.get_order_by()[0].has_expr() {
+                desc_can = sel.get_order_by().first().map_or(false, |o| o.get_desc());
+            } else {
+                topn = true;
+            }
         }
 
         let cols = if sel.has_table_info() {
@@ -543,9 +716,10 @@ impl SelectContextCore {
         };
 
         Ok(SelectContextCore {
-            ctx: box_try!(EvalContext::new(&sel)),
+            ctx: Rc::new(box_try!(EvalContext::new(&sel))),
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
             aggr_cols: aggr_cols,
+            topn_cols: topn_cols,
             sel: sel,
             eval: Default::default(),
             cols: cols,
@@ -553,6 +727,17 @@ impl SelectContextCore {
             gks: vec![],
             gk_aggrs: map![],
             chunks: vec![],
+            topn: topn,
+            topn_heap: {
+                if topn {
+                    Some(try!(TopNHeap::new(limit)))
+                } else {
+                    None
+                }
+            },
+            order_cols: Rc::new(order_by_cols),
+            limit: limit,
+            desc_scan: desc_can,
         })
     }
 
@@ -563,7 +748,11 @@ impl SelectContextCore {
             return Ok(0);
         }
 
-        if self.aggr {
+        // topn & aggr won't appear together
+        if self.topn {
+            try!(self.collect_topn_row(h, row_data));
+            Ok(0)
+        } else if self.aggr {
             try!(self.aggregate(h, &row_data));
             Ok(0)
         } else {
@@ -582,16 +771,30 @@ impl SelectContextCore {
         Ok(b.map_or(true, |v| !v))
     }
 
+    fn collect_topn_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
+        try!(inflate_with_col(&mut self.eval, &self.ctx, &values, &self.topn_cols, h));
+        let mut sort_keys = Vec::with_capacity(self.sel.get_order_by().len());
+        // parse order by
+        for col in self.sel.get_order_by() {
+            let v = box_try!(self.eval.eval(&self.ctx, col.get_expr()));
+            sort_keys.push(v);
+        }
+
+        self.topn_heap.as_mut().unwrap().try_add_row(h,
+                                                     self.order_cols.clone(),
+                                                     self.ctx.clone(),
+                                                     values,
+                                                     sort_keys)
+    }
+
     fn get_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
         let chunk = get_chunk(&mut self.chunks);
-        let mut meta = RowMeta::new();
-        meta.set_handle(h);
+        let last_len = chunk.get_rows_data().len();
         let cols = if self.sel.has_table_info() {
             self.sel.get_table_info().get_columns()
         } else {
             self.sel.get_index_info().get_columns()
         };
-        let last_len = chunk.get_rows_data().len();
         for col in cols {
             let col_id = col.get_column_id();
             if let Some(v) = values.get(col_id) {
@@ -606,6 +809,8 @@ impl SelectContextCore {
                 box_try!(datum::encode_to(chunk.mut_rows_data(), &[Datum::Null], false));
             }
         }
+        let mut meta = RowMeta::new();
+        meta.set_handle(h);
         meta.set_length((chunk.get_rows_data().len() - last_len) as i64);
         chunk.mut_rows_meta().push(meta);
         Ok(())
@@ -649,6 +854,14 @@ impl SelectContextCore {
                 self.gks.push(gk);
                 e.insert(aggrs);
             }
+        }
+        Ok(())
+    }
+
+    fn collect_topn_rows(&mut self) -> Result<()> {
+        let sorted_data = try!(self.topn_heap.take().unwrap().into_sorted_vec());
+        for row in sorted_data {
+            try!(self.get_row(row.handle, row.data));
         }
         Ok(())
     }
@@ -728,21 +941,23 @@ impl<'a> SelectContext<'a> {
         })
     }
 
-    fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
+    fn get_rows_from_sel(&mut self, ranges: Vec<KeyRange>) -> Result<()> {
         let mut collected = 0;
         for ran in ranges {
-            if collected >= limit {
+            if collected >= self.core.limit {
                 break;
             }
             let timer = Instant::now();
-            let row_cnt = try!(self.get_rows_from_range(ran, limit, desc));
+            let row_cnt = try!(self.get_rows_from_range(ran));
             debug!("fetch {} rows takes {} ms",
                    row_cnt,
                    duration_to_ms(timer.elapsed()));
             collected += row_cnt;
             try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
         }
-        if self.core.aggr {
+        if self.core.topn {
+            self.core.collect_topn_rows()
+        } else if self.core.aggr {
             self.core.aggr_rows()
         } else {
             Ok(())
@@ -756,7 +971,7 @@ impl<'a> SelectContext<'a> {
         }
     }
 
-    fn get_rows_from_range(&mut self, range: KeyRange, limit: usize, desc: bool) -> Result<usize> {
+    fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
             self.scan_metrics.scanned_keys += 1;
@@ -771,28 +986,28 @@ impl<'a> SelectContext<'a> {
             let h = box_try!(table::decode_handle(range.get_start()));
             row_count += try!(self.core.handle_row(h, values));
         } else {
-            let mut seek_key = if desc {
+            let mut seek_key = if self.core.desc_scan {
                 range.get_end().to_vec()
             } else {
                 range.get_start().to_vec()
             };
-            let upper_bound = if !desc && range.has_end() {
+            let upper_bound = if !self.core.desc_scan && range.has_end() {
                 Some(Key::from_raw(range.get_end()).encoded().clone())
             } else {
                 None
             };
-            let mut scanner = try!(self.snap.scanner(if desc {
+            let mut scanner = try!(self.snap.scanner(if self.core.desc_scan {
                                                          ScanMode::Backward
                                                      } else {
                                                          ScanMode::Forward
                                                      },
                                                      self.key_only(),
                                                      upper_bound));
-            while limit > row_count {
+            while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
                 }
-                let kv = if desc {
+                let kv = if self.core.desc_scan {
                     try!(scanner.reverse_seek(Key::from_raw(&seek_key), self.scan_metrics))
                 } else {
                     try!(scanner.seek(Key::from_raw(&seek_key), self.scan_metrics))
@@ -814,7 +1029,7 @@ impl<'a> SelectContext<'a> {
                     box_try!(table::cut_row(value, ids))
                 };
                 row_count += try!(self.core.handle_row(h, row_data));
-                seek_key = if desc {
+                seek_key = if self.core.desc_scan {
                     box_try!(table::truncate_as_row_key(&key)).to_vec()
                 } else {
                     prefix_next(&key)
@@ -824,13 +1039,13 @@ impl<'a> SelectContext<'a> {
         Ok(row_count)
     }
 
-    fn get_rows_from_idx(&mut self, ranges: Vec<KeyRange>, limit: usize, desc: bool) -> Result<()> {
+    fn get_rows_from_idx(&mut self, ranges: Vec<KeyRange>) -> Result<()> {
         let mut collected = 0;
         for r in ranges {
-            if collected >= limit {
+            if collected >= self.core.limit {
                 break;
             }
-            collected += try!(self.get_idx_row_from_range(r, limit, desc));
+            collected += try!(self.get_idx_row_from_range(r));
             try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
         }
         if self.core.aggr {
@@ -840,30 +1055,30 @@ impl<'a> SelectContext<'a> {
         }
     }
 
-    fn get_idx_row_from_range(&mut self, r: KeyRange, limit: usize, desc: bool) -> Result<usize> {
+    fn get_idx_row_from_range(&mut self, r: KeyRange) -> Result<usize> {
         let mut row_cnt = 0;
-        let mut seek_key = if desc {
+        let mut seek_key = if self.core.desc_scan {
             r.get_end().to_vec()
         } else {
             r.get_start().to_vec()
         };
-        let upper_bound = if !desc && r.has_end() {
+        let upper_bound = if !self.core.desc_scan && r.has_end() {
             Some(Key::from_raw(r.get_end()).encoded().clone())
         } else {
             None
         };
-        let mut scanner = try!(self.snap.scanner(if desc {
+        let mut scanner = try!(self.snap.scanner(if self.core.desc_scan {
                                                      ScanMode::Backward
                                                  } else {
                                                      ScanMode::Forward
                                                  },
                                                  self.key_only(),
                                                  upper_bound));
-        while row_cnt < limit {
+        while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
                 try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
             }
-            let nk = if desc {
+            let nk = if self.core.desc_scan {
                 try!(scanner.reverse_seek(Key::from_raw(&seek_key), self.scan_metrics))
             } else {
                 try!(scanner.seek(Key::from_raw(&seek_key), self.scan_metrics))
@@ -879,7 +1094,11 @@ impl<'a> SelectContext<'a> {
                        escape(r.get_end()));
                 break;
             }
-            seek_key = if desc { key.clone() } else { prefix_next(&key) };
+            seek_key = if self.core.desc_scan {
+                key.clone()
+            } else {
+                prefix_next(&key)
+            };
             {
                 let (values, handle) = {
                     let ids = self.core.cols.as_ref().right().unwrap();
@@ -892,7 +1111,6 @@ impl<'a> SelectContext<'a> {
                 };
                 row_cnt += try!(self.core.handle_row(handle, values));
             }
-
         }
         Ok(row_cnt)
     }
@@ -914,16 +1132,26 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use server::coprocessor::endpoint::TopNHeap;
     use util::worker::Worker;
     use storage::engine::{self, TEMP_DIR};
 
     use kvproto::coprocessor::Request;
     use kvproto::msgpb::MessageType;
 
+    use tipb::expression::{Expr, ExprType};
+    use tipb::select::ByItem;
+
+    use util::codec::number::*;
+    use util::codec::Datum;
+    use util::xeval::EvalContext;
+    use util::codec::table::RowColsDict;
+
+    use std::rc::Rc;
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
+    use std::collections::HashMap;
 
     #[test]
     fn test_get_req_type_str() {
@@ -980,5 +1208,142 @@ mod tests {
             return;
         }
         panic!("suppose to get ServerIsBusy error.");
+    }
+
+    fn new_order_by(col_id: i64, desc: bool) -> ByItem {
+        let mut item = ByItem::new();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ColumnRef);
+        expr.mut_val().encode_i64(col_id).unwrap();
+        item.set_expr(expr);
+        item.set_desc(desc);
+        item
+    }
+
+    #[test]
+    fn test_topn_heap() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(5).unwrap();
+        let test_data = vec![
+            (1, String::from("data1"), Datum::Null, Datum::I64(1)),
+            (2, String::from("data2"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
+            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+            (5, String::from("data5"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(6)),
+            (6, String::from("data6"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(4)),
+            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+        ];
+
+        let exp = vec![
+            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+        ];
+
+        for (handle, data, name, count) in test_data {
+            let cur_key: Vec<Datum> = vec![name, count];
+            let row_data = RowColsDict::new(HashMap::new(), data.into_bytes());
+            topn_heap.try_add_row(handle as i64,
+                             order_cols.clone(),
+                             ctx.clone(),
+                             row_data,
+                             cur_key)
+                .unwrap();
+        }
+        let result = topn_heap.into_sorted_vec().unwrap();
+        assert_eq!(result.len(), exp.len());
+        for (row, (handle, _, name, count)) in result.iter().zip(exp) {
+            let exp_keys: Vec<Datum> = vec![name, count];
+            assert_eq!(row.handle, handle);
+            assert_eq!(row.key, exp_keys);
+        }
+    }
+
+    #[test]
+    fn test_topn_heap_with_cmp_error() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(5).unwrap();
+
+        let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
+        let row_data = RowColsDict::new(HashMap::new(), b"name:1".to_vec());
+        topn_heap.try_add_row(0 as i64, order_cols.clone(), ctx.clone(), row_data, std_key)
+            .unwrap();
+
+        let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
+        let row_data2 = RowColsDict::new(HashMap::new(), b"name:2".to_vec());
+        topn_heap.try_add_row(0 as i64,
+                         order_cols.clone(),
+                         ctx.clone(),
+                         row_data2,
+                         std_key2)
+            .unwrap();
+
+        let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
+        let row_data3 = RowColsDict::new(HashMap::new(), b"name:3".to_vec());
+
+        assert!(topn_heap.try_add_row(0 as i64,
+                         order_cols.clone(),
+                         ctx.clone(),
+                         row_data3,
+                         bad_key1)
+            .is_err());
+
+        assert!(topn_heap.into_sorted_vec().is_err());
+    }
+
+    #[test]
+    fn test_topn_heap_with_few_data() {
+        let mut order_cols = Vec::new();
+        order_cols.push(new_order_by(0, true));
+        order_cols.push(new_order_by(1, false));
+        let order_cols = Rc::new(order_cols);
+        let ctx = Rc::new(EvalContext::default());
+        let mut topn_heap = TopNHeap::new(10).unwrap();
+        let test_data = vec![
+            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+        ];
+
+        let exp = vec![
+            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+        ];
+
+        for (handle, data, name, count) in test_data {
+            let cur_key: Vec<Datum> = vec![name, count];
+            let row_data = RowColsDict::new(HashMap::new(), data.into_bytes());
+            topn_heap.try_add_row(handle as i64,
+                             order_cols.clone(),
+                             ctx.clone(),
+                             row_data,
+                             cur_key)
+                .unwrap();
+        }
+
+        let result = topn_heap.into_sorted_vec().unwrap();
+        assert_eq!(result.len(), exp.len());
+        for (row, (handle, _, name, count)) in result.iter().zip(exp) {
+            let exp_keys: Vec<Datum> = vec![name, count];
+            assert_eq!(row.handle, handle);
+            assert_eq!(row.key, exp_keys);
+        }
     }
 }
