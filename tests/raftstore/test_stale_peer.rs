@@ -13,9 +13,6 @@
 
 //! A module contains test cases of stale peers gc.
 
-use std::time::*;
-use std::thread;
-
 use kvproto::eraftpb::MessageType;
 use kvproto::raft_serverpb::{RegionLocalState, PeerState};
 use tikv::raftstore::store::{keys, Peekable};
@@ -76,9 +73,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Wait for max_leader_missing_duration to time out.
 
-    thread::sleep(cluster.cfg.raft_store.max_leader_missing_duration);
-    // Sleep one more second to make sure there is enough time for the peer to be destroyed.
-    thread::sleep(Duration::from_secs(1));
+    cluster.must_remove_region(2, r1);
 
     // Check whether this region is still functional properly.
     let (key2, value2) = (b"k2", b"v2");
@@ -152,23 +147,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     pd_client.must_remove_peer(new_region_id, new_peer(3, 4));
 
-    let timer = Instant::now();
-    loop {
-        let peer = new_peer(3, 0);
-        let find_leader = new_status_request(new_region_id, peer, new_region_leader_cmd());
-        let resp = cluster.call_command(find_leader, Duration::from_secs(5)).unwrap();
-
-        if is_error_response(&resp) {
-            assert!(resp.get_header().get_error().has_region_not_found(),
-                    "unexpected error resp: {:?}",
-                    resp);
-            break;
-        }
-        if timer.elapsed() > Duration::from_secs(60) {
-            panic!("region {} is not removed after 60s.", new_region_id);
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
+    cluster.must_remove_region(3, new_region_id);
 
     // There must be no data on store 3 belongs to new region
     must_get_none(&engine3, b"k3");
