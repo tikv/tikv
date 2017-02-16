@@ -14,8 +14,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
-use std::result;
+use std::time::*;
+use std::{result, thread};
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -685,6 +685,26 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
+    }
+
+    pub fn must_remove_region(&mut self, store_id: u64, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            let peer = new_peer(store_id, 0);
+            let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+            let resp = self.call_command(find_leader, Duration::from_secs(5)).unwrap();
+
+            if is_error_response(&resp) {
+                assert!(resp.get_header().get_error().has_region_not_found(),
+                        "unexpected error resp: {:?}",
+                        resp);
+                break;
+            }
+            if timer.elapsed() > Duration::from_secs(60) {
+                panic!("region {} is not removed after 60s.", region_id);
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     // it's so common that we provide an API for it
