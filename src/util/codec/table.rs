@@ -252,7 +252,7 @@ impl RowColMeta {
 }
 
 impl RowColsDict {
-    fn new(cols: HashMap<i64, RowColMeta>, val: Vec<u8>) -> RowColsDict {
+    pub fn new(cols: HashMap<i64, RowColMeta>, val: Vec<u8>) -> RowColsDict {
         RowColsDict {
             value: val,
             cols: cols,
