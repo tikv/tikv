@@ -38,7 +38,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::PdTask;
 use util::worker::{Worker, Scheduler};
-use raftstore::store::worker::{ApplyTask, ApplyMetrics};
+use raftstore::store::worker::{ApplyTask, ApplyMetrics, Registration};
 use util::{escape, SlowTimer, rocksdb, clocktime};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
@@ -450,7 +450,7 @@ impl Peer {
     }
 
     #[inline]
-    pub fn has_pending_snap(&self) -> bool {
+    pub fn has_pending_snapshot(&self) -> bool {
         self.raft_group.get_snap().is_some()
     }
 
@@ -632,7 +632,7 @@ impl Peer {
             return;
         }
 
-        if self.has_pending_snap() && !self.ready_to_handle_pending_snap() {
+        if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
             debug!("{} apply index {} != committed index {}, skip applying snapshot.",
                    self.tag,
                    self.get_store().applied_index(),
@@ -1319,22 +1319,21 @@ pub struct ApplyDelegate {
 }
 
 impl ApplyDelegate {
-    pub fn new(id: u64,
-               region: metapb::Region,
-               engine: Arc<DB>,
-               apply_state: RaftApplyState,
-               applied_index_term: u64,
-               term: u64)
-               -> ApplyDelegate {
+    pub fn from_peer(peer: &Peer) -> ApplyDelegate {
+        let reg = Registration::new(peer);
+        ApplyDelegate::from_registration(peer.engine.clone(), reg)
+    }
+
+    pub fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
         ApplyDelegate {
-            id: id,
-            tag: format!("[region {}] {}", region.get_id(), id),
-            engine: engine,
-            region: region,
+            id: reg.id,
+            tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
+            engine: db,
+            region: reg.region,
             pending_remove: false,
-            apply_state: apply_state,
-            applied_index_term: applied_index_term,
-            term: term,
+            apply_state: reg.apply_state,
+            applied_index_term: reg.applied_index_term,
+            term: reg.term,
             pending_cmds: Default::default(),
             metrics: Default::default(),
         }

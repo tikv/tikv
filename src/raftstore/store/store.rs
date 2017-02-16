@@ -426,7 +426,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // the pending conf change check because first index has been updated to
             // a value that is larger than last index.
             self.pending_raft_groups.insert(region_id);
-            if !peer.is_applying_snapshot() && !peer.has_pending_snap() {
+            if !peer.is_applying_snapshot() && !peer.has_pending_snapshot() {
                 peer.raft_group.tick();
 
                 // If this peer detects the leader is missing for a long long time,
@@ -444,20 +444,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // In this case, peer B would notice that the leader is missing for a long time,
                 // and it would check with pd to confirm whether it's still a member of the cluster.
                 // If not, it destroys itself as a stale peer which is removed out already.
-                match peer.check_stale_state(self.cfg.max_leader_missing_duration) {
-                    StaleState::Valid => {}
-                    StaleState::ToValidate => {
-                        // for peer B in case 1 above
-                        info!("{} detects leader missing for a long time. To check with pd \
-                                whether it's still valid",
-                              peer.tag);
-                        let task = PdTask::ValidatePeer {
-                            peer: peer.peer.clone(),
-                            region: peer.region().clone(),
-                        };
-                        if let Err(e) = self.pd_worker.schedule(task) {
-                            error!("{} failed to notify pd: {}", peer.tag, e)
-                        }
+                let max_missing_duration = self.cfg.max_leader_missing_duration;
+                if let StaleState::ToValidate = peer.check_stale_state(max_missing_duration) {
+                    // for peer B in case 1 above
+                    info!("{} detects leader missing for a long time. To check with pd \
+                            whether it's still valid",
+                            peer.tag);
+                    let task = PdTask::ValidatePeer {
+                        peer: peer.peer.clone(),
+                        region: peer.region().clone(),
+                    };
+                    if let Err(e) = self.pd_worker.schedule(task) {
+                        error!("{} failed to notify pd: {}", peer.tag, e)
                     }
                 }
             }
@@ -500,7 +498,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         p.mut_store().applied_index_term = res.applied_index_term;
                         p.written_keys += res.metrics.written_keys;
                         p.written_bytes += res.metrics.written_bytes;
-                        if p.has_pending_snap() && p.ready_to_handle_pending_snap() {
+                        if p.has_pending_snapshot() && p.ready_to_handle_pending_snap() {
                             self.pending_raft_groups.insert(p.region().get_id());
                         }
                     }
@@ -2000,14 +1998,13 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             self.split_check_worker.stop();
+            self.region_worker.stop();
             self.raftlog_gc_worker.stop();
             self.compact_worker.stop();
             self.pd_worker.stop();
             self.consistency_check_worker.stop();
 
             self.apply_worker.stop().unwrap().join().unwrap();
-
-            self.region_worker.stop();
 
             return;
         }

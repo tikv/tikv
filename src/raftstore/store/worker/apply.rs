@@ -38,15 +38,15 @@ pub struct Apply {
 }
 
 pub struct Registration {
-    id: u64,
-    term: u64,
-    apply_state: RaftApplyState,
-    applied_index_term: u64,
-    region: Region,
+    pub id: u64,
+    pub term: u64,
+    pub apply_state: RaftApplyState,
+    pub applied_index_term: u64,
+    pub region: Region,
 }
 
 impl Registration {
-    fn new(peer: &Peer) -> Registration {
+    pub fn new(peer: &Peer) -> Registration {
         Registration {
             id: peer.peer_id(),
             term: peer.term(),
@@ -161,16 +161,8 @@ pub struct Runner {
 impl Runner {
     pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>) -> Runner {
         let mut delegates = HashMap::with_capacity(store.get_peers().len());
-        let engine = store.engine();
         for (&region_id, p) in store.get_peers() {
-            let store = p.get_store();
-            delegates.insert(region_id,
-                             ApplyDelegate::new(p.peer_id(),
-                                                p.region().clone(),
-                                                engine.clone(),
-                                                store.apply_state.clone(),
-                                                store.applied_index_term,
-                                                p.term()));
+            delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }
         Runner {
             db: store.engine(),
@@ -234,7 +226,7 @@ impl Runner {
                 // if it loses leadership before conf change is replicated, there may be
                 // a stale pending conf change before next conf change is applied. If it
                 // becomes leader again with the stale pending conf change, will enter
-                // this block, so we notify leadership may have changed.
+                // this block, so we notify leadership may have been changed.
                 notify_stale_command(&delegate.tag, delegate.term, cmd);
             }
             delegate.pending_cmds.set_conf_change(cmd);
@@ -244,16 +236,13 @@ impl Runner {
     }
 
     fn handle_registration(&mut self, s: Registration) {
+        let peer_id = s.id;
         let region_id = s.region.get_id();
-        let delegate = ApplyDelegate::new(s.id,
-                                          s.region,
-                                          self.db.clone(),
-                                          s.apply_state,
-                                          s.applied_index_term,
-                                          s.term);
+        let term = s.term;
+        let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
         if let Some(mut old_delegate) = self.delegates.insert(region_id, delegate) {
-            assert_eq!(old_delegate.id, s.id);
-            old_delegate.term = s.term;
+            assert_eq!(old_delegate.id, peer_id);
+            old_delegate.term = term;
             old_delegate.clear_all_commands_as_stale();
         }
     }
