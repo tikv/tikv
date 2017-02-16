@@ -11,11 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use util::HashMap;
+
+use super::Result;
 
 pub use raftstore::store::Config as RaftStoreConfig;
 pub use storage::Config as StorageConfig;
-use super::Result;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
@@ -53,7 +54,7 @@ impl Default for Config {
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
-            labels: HashMap::new(),
+            labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,

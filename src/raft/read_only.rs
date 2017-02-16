@@ -25,8 +25,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
+
 use kvproto::eraftpb::Message;
-use std::collections::{VecDeque, HashSet, HashMap};
+
+use super::{HashSet, HashMap};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ReadOnlyOption {
@@ -76,7 +79,7 @@ impl ReadOnly {
     pub fn new(option: ReadOnlyOption) -> ReadOnly {
         ReadOnly {
             option: option,
-            pending_read_index: HashMap::new(),
+            pending_read_index: HashMap::default(),
             read_index_queue: VecDeque::new(),
         }
     }
@@ -93,7 +96,7 @@ impl ReadOnly {
         let status = ReadIndexStatus {
             req: m,
             index: index,
-            acks: HashSet::new(),
+            acks: HashSet::default(),
         };
         self.pending_read_index.insert(ctx.clone(), status);
         self.read_index_queue.push_back(ctx);
