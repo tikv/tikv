@@ -603,8 +603,7 @@ impl<T: Storage> Raft<T> {
         self.maybe_commit();
     }
 
-    /// Return true to indicate that some internal states have been changed that
-    /// handle_raft_ready should be called.
+    /// Returns true to indicate that there will probably be some readiness need to be handled.
     pub fn tick(&mut self) -> bool {
         match self.state {
             StateRole::Follower | StateRole::PreCandidate | StateRole::Candidate => {
@@ -616,7 +615,7 @@ impl<T: Storage> Raft<T> {
 
     // tick_election is run by followers and candidates after self.election_timeout.
     // TODO: revoke pub when there is a better way to test.
-    // Return true to indicate that handle_raft_ready needs to be called.
+    // Returns true to indicate that there will probably be some readiness need to be handled.
     pub fn tick_election(&mut self) -> bool {
         self.election_elapsed += 1;
         if !self.pass_election_timeout() || !self.promotable() {
@@ -630,7 +629,7 @@ impl<T: Storage> Raft<T> {
     }
 
     // tick_heartbeat is run by leaders to send a MsgBeat after self.heartbeat_timeout.
-    // Return true to indicate that handle_raft_ready needs to be called.
+    // Returns true to indicate that there will probably be some readiness need to be handled.
     fn tick_heartbeat(&mut self) -> bool {
         self.heartbeat_elapsed += 1;
         self.election_elapsed += 1;
