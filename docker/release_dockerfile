@@ -7,7 +7,7 @@ RUN yum update -y && \
     yum install -y devtoolset-4-gcc-c++ python27 && \
     yum clean all
 
-RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s -- --date=2016-08-06 --disable-sudo -y --channel=nightly
+RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s -- --date=2017-02-12 --disable-sudo -y --channel=nightly
 
 ADD https://github.com/pingcap/tikv/archive/master.tar.gz /master.tar.gz
 
@@ -25,4 +25,3 @@ RUN chmod a+x ./release.sh
 WORKDIR /tikv
 
 ENTRYPOINT ["/release.sh"]
-

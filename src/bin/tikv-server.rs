@@ -501,6 +501,9 @@ fn build_cfg(matches: &Matches,
     cfg_usize(&mut cfg.raft_store.messages_per_tick,
               config,
               "raftstore.messages-per-tick");
+    cfg_u64(&mut cfg.raft_store.raft_base_tick_interval,
+            config,
+            "raftstore.raft-base-tick-interval");
     cfg_usize(&mut cfg.raft_store.raft_heartbeat_ticks,
               config,
               "raftstore.raft-heartbeat-ticks");
