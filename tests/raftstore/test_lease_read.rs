@@ -272,9 +272,8 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     cluster.cfg.raft_store.raft_store_max_leader_lease = TimeDuration::from_std(election_timeout)
         .unwrap();
 
-    let node_id = 1u64;
     let store_id = 1u64;
-    let peer = new_peer(store_id, node_id);
+    let peer = new_peer(store_id, 1);
     let peer3_store_id = 3u64;
     let peer3 = new_peer(peer3_store_id, 3);
     cluster.run();
