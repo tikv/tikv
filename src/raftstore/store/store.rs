@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::boxed::Box;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
+use std::thread;
 use std::u64;
 
 use rocksdb::DB;
@@ -412,6 +413,33 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn stop(&mut self) {
+        info!("start to stop raftstore.");
+
+        // Applying snapshot may take an unexpected long time.
+        for peer in self.region_peers.values_mut() {
+            peer.mut_store().cancel_applying_snap();
+        }
+
+        // Wait all workers finish.
+        let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
+        handles.push(self.split_check_worker.stop());
+        handles.push(self.region_worker.stop());
+        handles.push(self.raftlog_gc_worker.stop());
+        handles.push(self.compact_worker.stop());
+        handles.push(self.pd_worker.stop());
+        handles.push(self.consistency_check_worker.stop());
+        handles.push(sefl.apply_worker.stop());
+
+        for h in handles {
+            if let Some(h) = h {
+                h.join().unwrap();
+            }
+        }
+
+        info!("stop raftstore finished.");
+    }
+
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
@@ -422,42 +450,47 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_timer();
-        for (&region_id, peer) in &mut self.region_peers {
+        for peer in &mut self.region_peers.values_mut() {
             // When having pending snapshot, if election timeout is met, it can't pass
             // the pending conf change check because first index has been updated to
             // a value that is larger than last index.
-            self.pending_raft_groups.insert(region_id);
-            if !peer.is_applying_snapshot() && !peer.has_pending_snapshot() {
-                peer.raft_group.tick();
+            if peer.is_applying_snapshot() || peer.has_pending_snapshot() {
+                // need to check if snapshot is applied.
+                peer.mark_to_be_checked(&mut self.pending_raft_groups);
+                continue;
+            }
+            
+            if peer.raft_group.tick() {
+                peer.mark_to_be_checked(&mut self.pending_raft_groups);
+            }
 
-                // If this peer detects the leader is missing for a long long time,
-                // it should consider itself as a stale peer which is removed from
-                // the original cluster.
-                // This most likely happens in the following scenario:
-                // At first, there are three peer A, B, C in the cluster, and A is leader.
-                // Peer B gets down. And then A adds D, E, F into the cluster.
-                // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
-                // After all these peer in and out, now the cluster has peer D, E, F.
-                // If peer B goes up at this moment, it still thinks it is one of the cluster
-                // and has peers A, C. However, it could not reach A, C since they are removed
-                // from the cluster or probably destroyed.
-                // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
-                // In this case, peer B would notice that the leader is missing for a long time,
-                // and it would check with pd to confirm whether it's still a member of the cluster.
-                // If not, it destroys itself as a stale peer which is removed out already.
-                let max_missing_duration = self.cfg.max_leader_missing_duration;
-                if let StaleState::ToValidate = peer.check_stale_state(max_missing_duration) {
-                    // for peer B in case 1 above
-                    info!("{} detects leader missing for a long time. To check with pd \
-                            whether it's still valid",
-                          peer.tag);
-                    let task = PdTask::ValidatePeer {
-                        peer: peer.peer.clone(),
-                        region: peer.region().clone(),
-                    };
-                    if let Err(e) = self.pd_worker.schedule(task) {
-                        error!("{} failed to notify pd: {}", peer.tag, e)
-                    }
+            // If this peer detects the leader is missing for a long long time,
+            // it should consider itself as a stale peer which is removed from
+            // the original cluster.
+            // This most likely happens in the following scenario:
+            // At first, there are three peer A, B, C in the cluster, and A is leader.
+            // Peer B gets down. And then A adds D, E, F into the cluster.
+            // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
+            // After all these peer in and out, now the cluster has peer D, E, F.
+            // If peer B goes up at this moment, it still thinks it is one of the cluster
+            // and has peers A, C. However, it could not reach A, C since they are removed
+            // from the cluster or probably destroyed.
+            // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
+            // In this case, peer B would notice that the leader is missing for a long time,
+            // and it would check with pd to confirm whether it's still a member of the cluster.
+            // If not, it destroys itself as a stale peer which is removed out already.
+            let max_missing_duration = self.cfg.max_leader_missing_duration;
+            if let StaleState::ToValidate = peer.check_stale_state(max_missing_duration) {
+                // for peer B in case 1 above
+                info!("{} detects leader missing for a long time. To check with pd \
+                        whether it's still valid",
+                        peer.tag);
+                let task = PdTask::ValidatePeer {
+                    peer: peer.peer.clone(),
+                    region: peer.region().clone(),
+                };
+                if let Err(e) = self.pd_worker.schedule(task) {
+                    error!("{} failed to notify pd: {}", peer.tag, e)
                 }
             }
         }
@@ -622,13 +655,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         self.insert_peer_cache(msg.take_from_peer());
-        self.insert_peer_cache(msg.take_to_peer());
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         try!(peer.step(msg.take_message()));
 
         // Add into pending raft groups for later handling ready.
-        self.pending_raft_groups.insert(region_id);
+        peer.mark_to_be_checked(&mut self.pending_raft_groups);
 
         Ok(())
     }
@@ -1059,7 +1091,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
                     for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
-                        new_peer.raft_group.tick()
+                        new_peer.raft_group.tick();
                     }
                 }
 
@@ -1203,7 +1235,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             renew_lease_time: None,
         };
         if peer.propose(meta, cb, msg, resp, &mut self.raft_metrics.propose) {
-            self.pending_raft_groups.insert(region_id);
+            peer.mark_to_be_checked(&mut self.pending_raft_groups);
         }
 
         // TODO: add timeout, if the command is not applied after timeout,
@@ -1998,15 +2030,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     // This method is invoked very frequently, should avoid time consuming operation.
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            self.split_check_worker.stop();
-            self.region_worker.stop();
-            self.raftlog_gc_worker.stop();
-            self.compact_worker.stop();
-            self.pd_worker.stop();
-            self.consistency_check_worker.stop();
-
-            self.apply_worker.stop().unwrap().join().unwrap();
-
+            self.stop();
             return;
         }
 
