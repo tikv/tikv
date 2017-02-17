@@ -14,16 +14,16 @@
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+use std::collections::hash_map::Values;
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
-use time::Timespec;
 
+use time::Timespec;
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;
-
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
@@ -31,6 +31,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
+
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
@@ -38,9 +39,10 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::PdTask;
 use util::worker::Worker;
-use util::{escape, SlowTimer, rocksdb, clocktime};
+use util::{escape, SlowTimer, rocksdb, clocktime, HashMap, HashSet};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
+
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, ApplySnapResult, write_initial_state,
                           write_peer_state, InvokeContext, compact_raft_log};
@@ -295,6 +297,7 @@ pub struct Peer {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
+    marked_to_be_checked: bool,
 
     leader_missing_time: Option<Instant>,
 
@@ -374,11 +377,12 @@ impl Peer {
             pending_cmds: Default::default(),
             pending_reads: Default::default(),
             peer_cache: store.peer_cache(),
-            peer_heartbeats: HashMap::new(),
+            peer_heartbeats: HashMap::default(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             pending_remove: false,
+            marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
             last_compacted_idx: 0,
@@ -408,6 +412,13 @@ impl Peer {
     #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
+    }
+
+    pub fn mark_to_be_checked(&mut self, pending_raft_groups: &mut HashSet<u64>) {
+        if !self.marked_to_be_checked {
+            self.marked_to_be_checked = true;
+            pending_raft_groups.insert(self.region_id);
+        }
     }
 
     pub fn destroy(&mut self) -> Result<()> {
@@ -649,6 +660,7 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self, ctx: &mut ReadyContext<T>) {
+        self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
@@ -974,9 +986,9 @@ impl Peer {
     /// 2. it's a follower, and it does not lag behind the leader a lot.
     ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node(&self, progress: &HashMap<u64, Progress>) -> usize {
+    fn count_healthy_node(&self, progress: Values<u64, Progress>) -> usize {
         let mut healthy = 0;
-        for pr in progress.values() {
+        for pr in progress {
             if pr.matched >= self.get_store().truncated_index() {
                 healthy += 1;
             }
@@ -1024,7 +1036,7 @@ impl Peer {
                 }
             }
         }
-        let healthy = self.count_healthy_node(&status.progress);
+        let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());
         if healthy >= quorum_after_change {
             return Ok(());

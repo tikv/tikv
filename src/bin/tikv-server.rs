@@ -39,7 +39,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
-use std::collections::HashMap;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -47,7 +46,7 @@ use mio::EventLoop;
 use fs2::FileExt;
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
@@ -57,6 +56,7 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
+use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
@@ -404,7 +404,11 @@ fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false)
+    let mut opt = get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false);
+    opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
+            Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
+        .unwrap();
+    opt
 }
 
 fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
@@ -468,6 +472,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_usize(&mut cfg.raft_store.messages_per_tick,
               config,
               "raftstore.messages-per-tick");
+    cfg_u64(&mut cfg.raft_store.raft_base_tick_interval,
+            config,
+            "raftstore.raft-base-tick-interval");
     cfg_usize(&mut cfg.raft_store.raft_heartbeat_ticks,
               config,
               "raftstore.raft-heartbeat-ticks");
