@@ -58,6 +58,7 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
+use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
@@ -422,7 +423,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
     opt
 }
 
-fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
     let mut default_block_cache_size = (total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64;
     if default_block_cache_size < RAFTCF_MIN_MEM {
         default_block_cache_size = RAFTCF_MIN_MEM;
@@ -430,8 +431,11 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     if default_block_cache_size > RAFTCF_MAX_MEM {
         default_block_cache_size = RAFTCF_MAX_MEM;
     }
-
-    get_rocksdb_cf_option(config, "raftcf", default_block_cache_size, false, false)
+    let mut opt = get_rocksdb_cf_option(config, "raftcf", default_block_cache_size, false, false);
+    opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
+            Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
+        .unwrap();
+    opt
 }
 
 fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
