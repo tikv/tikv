@@ -40,7 +40,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
-use std::collections::HashMap;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -49,7 +48,7 @@ use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;

@@ -25,12 +25,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use kvproto::eraftpb::HardState;
+
 use raft::raft::{Raft, SoftState, StateRole};
 use raft::storage::Storage;
 use raft::progress::Progress;
-use std::collections::HashMap;
+
+use super::HashMap;
 
 #[derive(Default)]
 pub struct Status {
