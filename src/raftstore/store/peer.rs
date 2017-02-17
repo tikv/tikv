@@ -71,6 +71,13 @@ pub struct ProposalMeta {
     pub renew_lease_time: Option<Timespec>,
 }
 
+struct ReadIndexRequest {
+    pub uuid: Uuid,
+    pub req: RaftCmdRequest,
+    pub cb: Callback,
+    pub renew_lease_time: Option<Timespec>,
+}
+
 #[derive(Default)]
 struct ProposalQueue {
     queue: VecDeque<ProposalMeta>,
@@ -228,6 +235,13 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     cmd.call(resp);
 }
 
+/// Call the callback of `cmd` when it can not be processed further.
+pub fn notify_stale_command(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
+    let resp = cmd_resp::err_resp(Error::StaleCommand, uuid, term);
+    info!("{} command {} is stale, skip", tag, uuid);
+    cb(resp);
+}
+
 // TODO: make sure received entries are not corrupted
 // If this happens, TiKV will panic and can't recover without extra effort.
 #[inline]
@@ -244,6 +258,14 @@ pub struct ConsistencyState {
     pub hash: Vec<u8>,
 }
 
+enum HandlePolicy {
+    ReadIndex,
+    ReadLocal,
+    ProposeConfChange,
+    ProposeTransferLeader,
+    ProposeNormal,
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     cfg: Rc<Config>,
@@ -253,6 +275,7 @@ pub struct Peer {
     pub raft_group: RawNode<PeerStorage>,
     proposals: ProposalQueue,
     pending_cmds: PendingCmdQueue,
+    pending_reads: VecDeque<ReadIndexRequest>,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
     coprocessor_host: CoprocessorHost,
@@ -352,6 +375,7 @@ impl Peer {
             raft_group: raft_group,
             proposals: Default::default(),
             pending_cmds: Default::default(),
+            pending_reads: Default::default(),
             peer_cache: store.peer_cache(),
             peer_heartbeats: HashMap::default(),
             coprocessor_host: CoprocessorHost::new(),
@@ -654,6 +678,13 @@ impl Peer {
 
         let mut ready = self.raft_group.ready();
 
+        if ready.ss.as_ref().map_or(false, |s| s.raft_state != StateRole::Leader) {
+            let term = self.term();
+            for req in self.pending_reads.drain(..) {
+                notify_stale_command(&self.tag, term, req.uuid, req.cb);
+            }
+        }
+
         self.update_leader_lease(&ready);
 
         self.add_ready_metric(&ready, &mut ctx.metrics.ready);
@@ -744,6 +775,18 @@ impl Peer {
             }
         };
 
+        for state in &ready.read_states {
+            let req = self.pending_reads.pop_front().unwrap();
+            assert_eq!(state.request_ctx.as_slice(),
+                       req.req.get_header().get_uuid());
+            let uuid = util::get_uuid_from_req(&req.req).unwrap();
+            self.execute_read(uuid, req.req, req.cb);
+            let lease = self.next_lease_expired_time(req.renew_lease_time.unwrap());
+            if self.leader_lease_expired_time.map_or(true, |expired_time| expired_time < lease) {
+                self.leader_lease_expired_time = Some(lease);
+            }
+        }
+
         self.raft_group.advance(ready);
     }
 
@@ -819,56 +862,28 @@ impl Peer {
 
         let mut is_conf_change = false;
 
-        if self.should_read_local(&req) {
-            metrics.local_read += 1;
-
-            // Execute ready-only commands immediately in leader when doing local reads.
-            let mut ctx = ExecContext::new(self, 0, 0, &req);
-            let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-                error!("{} execute raft command err: {:?}", self.tag, e);
-                (cmd_resp::new_error(e), None)
-            });
-
-            cmd_resp::bind_uuid(&mut resp, meta.uuid);
-            cmd_resp::bind_term(&mut resp, self.term());
-            cb(resp);
-            return false;
-        } else if get_transfer_leader_cmd(&req).is_some() {
-            metrics.transfer_leader += 1;
-
-            let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
-            let peer = transfer_leader.get_peer();
-
-            if self.is_tranfer_leader_allowed(peer) {
-                self.transfer_leader(peer);
-            } else {
-                info!("{} transfer leader message {:?} ignored directly",
-                      self.tag,
-                      req);
-            }
-
-            // transfer leader command doesn't need to replicate log and apply, so we
-            // return immediately. Note that this command may fail, we can view it just as an advice
-            cb(make_transfer_leader_response());
-            return false;
-        } else if get_change_peer_cmd(&req).is_some() {
-            if self.raft_group.raft.pending_conf {
-                info!("{} there is a pending conf change, try later", self.tag);
-                cmd_resp::bind_error(&mut err_resp,
-                                     box_err!("{} there is a pending conf change, try later",
-                                              self.tag));
-                cb(err_resp);
+        let err = match self.get_handle_policy(&req) {
+            Ok(HandlePolicy::ReadLocal) => {
+                self.read_local(meta.uuid, req, cb, metrics);
                 return false;
             }
-
-            if let Err(e) = self.propose_conf_change(req, metrics) {
-                cmd_resp::bind_error(&mut err_resp, e);
-                cb(err_resp);
+            Ok(HandlePolicy::ReadIndex) => {
+                self.read_index(meta.uuid, req, cb, metrics);
+                return true;
+            }
+            Ok(HandlePolicy::ProposeNormal) => self.propose_normal(req, metrics).err(),
+            Ok(HandlePolicy::ProposeConfChange) => {
+                is_conf_change = true;
+                self.propose_conf_change(req, metrics).err()
+            }
+            Ok(HandlePolicy::ProposeTransferLeader) => {
+                self.propose_transfer_leader(req, cb, metrics);
                 return false;
             }
+            Err(e) => Some(e),
+        };
 
-            is_conf_change = true;
-        } else if let Err(e) = self.propose_normal(req, metrics) {
+        if let Some(e) = err {
             cmd_resp::bind_error(&mut err_resp, e);
             cb(err_resp);
             return false;
@@ -886,12 +901,13 @@ impl Peer {
         self.proposals.push(meta);
 
         if is_conf_change {
-            if let Some(stale_cmd) = self.pending_cmds.take_conf_change() {
+            if let Some(mut stale_cmd) = self.pending_cmds.take_conf_change() {
                 // if it loses leadership before conf change is replicated, there may be
                 // a stale pending conf change before next conf change is applied. If it
                 // becomes leader again with the stale pending conf change, will enter
                 // this block, so we notify leadership may have changed.
-                self.notify_stale_command(stale_cmd);
+                let cb = stale_cmd.cb.take().unwrap();
+                notify_stale_command(&self.tag, self.term(), stale_cmd.uuid, cb);
             }
             self.pending_cmds.set_conf_change(cmd);
         } else {
@@ -901,49 +917,67 @@ impl Peer {
         true
     }
 
-    fn should_read_local(&mut self, req: &RaftCmdRequest) -> bool {
+    fn get_handle_policy(&mut self, req: &RaftCmdRequest) -> Result<HandlePolicy> {
+        if req.has_admin_request() {
+            if get_change_peer_cmd(req).is_some() {
+                return Ok(HandlePolicy::ProposeConfChange);
+            }
+            if get_transfer_leader_cmd(req).is_some() {
+                return Ok(HandlePolicy::ProposeTransferLeader);
+            }
+            return Ok(HandlePolicy::ProposeNormal);
+        }
+
+        let mut is_read = false;
+        let mut is_write = false;
+        for r in req.get_requests() {
+            match r.get_cmd_type() {
+                CmdType::Get | CmdType::Snap => is_read = true,
+                CmdType::Delete | CmdType::Put => is_write = true,
+                CmdType::Invalid => {
+                    return Err(box_err!("invalid cmd type, message {:?} maybe currupted",
+                                        req.get_header().get_uuid()));
+                }
+            }
+
+            if is_read && is_write {
+                return Err(box_err!("read and write can't be mixed in one batch."));
+            }
+        }
+
+        if is_write {
+            return Ok(HandlePolicy::ProposeNormal);
+        }
+
         if (req.has_header() && req.get_header().get_read_quorum()) ||
-           !self.raft_group.raft.in_lease() || req.get_requests().len() == 0 {
-            return false;
+           !self.raft_group.raft.in_lease() {
+            return Ok(HandlePolicy::ReadIndex);
         }
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
         if self.get_store().applied_index_term != self.raft_group.raft.term {
-            return false;
-        }
-
-        for cmd_req in req.get_requests() {
-            if cmd_req.get_cmd_type() != CmdType::Snap && cmd_req.get_cmd_type() != CmdType::Get {
-                return false;
-            }
+            return Ok(HandlePolicy::ReadIndex);
         }
 
         // If the leader lease has expired, local read should not be performed.
         if self.leader_lease_expired_time.is_none() {
-            return false;
+            return Ok(HandlePolicy::ReadIndex);
         }
 
         let now = clocktime::raw_now();
-        let expired_time = self.leader_lease_expired_time.unwrap();
-        if now > expired_time {
+        let expire_time = self.leader_lease_expired_time.unwrap();
+        if now > expire_time {
             debug!("{} leader lease expired time {:?} is outdated",
                    self.tag,
                    self.leader_lease_expired_time);
             // Reset leader lease expiring time.
             self.leader_lease_expired_time = None;
             // Perform a consistent read to Raft quorum and try to renew the leader lease.
-            return false;
+            return Ok(HandlePolicy::ReadIndex);
         }
 
-        true
-    }
-
-    /// Call the callback of `cmd` when it can not be continue processed.
-    fn notify_stale_command(&self, mut cmd: PendingCmd) {
-        let resp = cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, self.term());
-        info!("{} command {} is stale, skip", self.tag, cmd.uuid);
-        cmd.call(resp);
+        Ok(HandlePolicy::ReadLocal)
     }
 
     /// Count the number of the healthy nodes.
@@ -973,6 +1007,11 @@ impl Peer {
     ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
     ///    need to be up to date for now.
     fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
+        if self.raft_group.raft.pending_conf {
+            info!("{} there is a pending conf change, try later", self.tag);
+            return Err(box_err!("{} there is a pending conf change, try later", self.tag));
+        }
+
         let change_peer = get_change_peer_cmd(cmd).unwrap();
 
         let change_type = change_peer.get_change_type();
@@ -1020,35 +1059,6 @@ impl Peer {
                      quorum_after_change))
     }
 
-    fn propose_normal(&mut self,
-                      mut cmd: RaftCmdRequest,
-                      metrics: &mut RaftProposeMetrics)
-                      -> Result<()> {
-        metrics.normal += 1;
-
-        // TODO: validate request for unexpected changes.
-        try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
-        let data = try!(cmd.write_to_bytes());
-
-        // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
-
-        if data.len() as u64 > self.raft_entry_max_size {
-            error!("entry is too large, entry size {}", data.len());
-            return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
-        }
-
-        let propose_index = self.next_proposal_index();
-        try!(self.raft_group.propose(data));
-        if self.next_proposal_index() == propose_index {
-            // The message is dropped silently, this usually due to leader absence
-            // or transferring leader. Both cases can be considered as NotLeader error.
-            return Err(Error::NotLeader(self.region_id, None));
-        }
-
-        Ok(())
-    }
-
     fn transfer_leader(&mut self, peer: &metapb::Peer) {
         info!("{} transfer leader to {:?}", self.tag, peer);
 
@@ -1071,6 +1081,68 @@ impl Peer {
 
         let last_index = self.get_store().last_index();
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
+    }
+
+    fn read_local(&mut self,
+                  uuid: Uuid,
+                  req: RaftCmdRequest,
+                  cb: Callback,
+                  metrics: &mut RaftProposeMetrics) {
+        metrics.local_read += 1;
+        self.execute_read(uuid, req, cb);
+    }
+
+    fn read_index(&mut self,
+                  uuid: Uuid,
+                  req: RaftCmdRequest,
+                  cb: Callback,
+                  metrics: &mut RaftProposeMetrics) {
+        metrics.read_index += 1;
+
+        // Should we call pre_propose here?
+        let last_pending_read_count = self.raft_group.raft.pending_read_count();
+        let last_ready_read_count = self.raft_group.raft.ready_read_count();
+        // TODO: check if the message is dropped silently instead of assuming it won't.
+
+        self.raft_group.read_index(req.get_header().get_uuid().to_vec());
+
+        let pending_read_count = self.raft_group.raft.pending_read_count();
+        let ready_read_count = self.raft_group.raft.ready_read_count();
+        if pending_read_count == last_pending_read_count &&
+           ready_read_count == last_ready_read_count {
+            // The message is dropped silently, this usually due to leader absence
+            // or transferring leader. Both cases can be considered as NotLeader error.
+            notify_stale_command(&self.tag, self.term(), uuid, cb);
+            return;
+        }
+        self.pending_reads.push_back(ReadIndexRequest {
+            uuid: uuid,
+            req: req,
+            cb: cb,
+            renew_lease_time: Some(clocktime::raw_now()),
+        });
+    }
+
+    fn propose_transfer_leader(&mut self,
+                               req: RaftCmdRequest,
+                               cb: Callback,
+                               metrics: &mut RaftProposeMetrics) {
+        metrics.transfer_leader += 1;
+
+        let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
+        let peer = transfer_leader.get_peer();
+
+        if self.is_tranfer_leader_allowed(peer) {
+            self.transfer_leader(peer);
+        } else {
+            info!("{} transfer leader message {:?} ignored directly",
+                  self.tag,
+                  req);
+        }
+
+        // transfer leader command doesn't need to replicate log and apply, so we
+        // return immediately. Note that this command may fail, we can view it just as an advice
+        cb(make_transfer_leader_response());
     }
 
     fn propose_conf_change(&mut self,
@@ -1107,6 +1179,48 @@ impl Peer {
         }
 
         Ok(())
+    }
+
+    fn propose_normal(&mut self,
+                      mut cmd: RaftCmdRequest,
+                      metrics: &mut RaftProposeMetrics)
+                      -> Result<()> {
+        metrics.normal += 1;
+
+        // TODO: validate request for unexpected changes.
+        try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
+        let data = try!(cmd.write_to_bytes());
+
+        // TODO: use local histogram metrics
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+
+        if data.len() as u64 > self.raft_entry_max_size {
+            error!("entry is too large, entry size {}", data.len());
+            return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
+        }
+
+        let propose_index = self.next_proposal_index();
+        try!(self.raft_group.propose(data));
+        if self.next_proposal_index() == propose_index {
+            // The message is dropped silently, this usually due to leader absence
+            // or transferring leader. Both cases can be considered as NotLeader error.
+            return Err(Error::NotLeader(self.region_id, None));
+        }
+
+        Ok(())
+    }
+
+    fn execute_read(&mut self, uuid: Uuid, req: RaftCmdRequest, cb: Callback) {
+        // Execute ready-only commands immediately in leader when doing local reads.
+        let mut ctx = ExecContext::new(self, 0, 0, &req);
+        let (mut resp, _) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+            error!("{} execute raft command err: {:?}", self.tag, e);
+            (cmd_resp::new_error(e), None)
+        });
+
+        cmd_resp::bind_uuid(&mut resp, uuid);
+        cmd_resp::bind_term(&mut resp, self.term());
+        cb(resp);
     }
 
     pub fn check_epoch(&self, req: &RaftCmdRequest) -> Result<()> {
@@ -1327,9 +1441,10 @@ impl Peer {
         self.mut_store().apply_state = state;
         self.mut_store().applied_index_term = term;
         assert!(term > 0);
-        while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
-            self.notify_stale_command(cmd);
+            let cb = cmd.cb.take().unwrap();
+            notify_stale_command(&self.tag, self.term(), cmd.uuid, cb);
         }
         None
     }
@@ -1362,7 +1477,8 @@ impl Peer {
                 if cmd.uuid == uuid {
                     return Some(cmd.cb.take().unwrap());
                 } else {
-                    self.notify_stale_command(cmd);
+                    let cb = cmd.cb.take().unwrap();
+                    notify_stale_command(&self.tag, self.term(), cmd.uuid, cb);
                 }
             }
             return None;
@@ -1374,7 +1490,8 @@ impl Peer {
             // Because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
             // TODO: call coprocessor with uuid instead.
-            self.notify_stale_command(head);
+            let cb = head.cb.take().unwrap();
+            notify_stale_command(&self.tag, self.term(), head.uuid, cb);
         }
         None
     }

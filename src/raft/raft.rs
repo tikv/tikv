@@ -335,6 +335,16 @@ impl<T: Storage> Raft<T> {
         self.raft_log.get_unstable().snapshot.as_ref()
     }
 
+    #[inline]
+    pub fn pending_read_count(&self) -> usize {
+        self.read_only.pending_read_count()
+    }
+
+    #[inline]
+    pub fn ready_read_count(&self) -> usize {
+        self.read_states.len()
+    }
+
     pub fn soft_state(&self) -> SoftState {
         SoftState {
             leader_id: self.leader_id,
