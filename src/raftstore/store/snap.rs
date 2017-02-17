@@ -15,23 +15,24 @@ use std::error;
 use std::io::{self, Write, ErrorKind, Read};
 use std::fmt::{self, Formatter, Display};
 use std::fs::{self, Metadata};
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::Path;
 use std::result;
 use std::str;
+
 use protobuf::Message;
 use rocksdb::DB;
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
+
 use raft;
 use raftstore::store::Msg;
 use storage::CF_RAFT;
 use util::transport::SendCh;
-use util::HandyRwLock;
+use util::{HandyRwLock, HashMap};
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;

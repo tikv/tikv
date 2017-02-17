@@ -11,12 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{DB, Options, SliceTransform};
-pub use rocksdb::CFHandle;
-use std::collections::HashSet;
-use std::path::Path;
 use std::fs;
+use std::path::Path;
+
 use storage::CF_DEFAULT;
+use rocksdb::{DB, Options, SliceTransform};
+
+use super::HashSet;
+
+pub use rocksdb::CFHandle;
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
     db.cf_handle(cf)
@@ -157,6 +160,30 @@ impl SliceTransform for FixedSuffixSliceTransform {
 
     fn in_domain(&mut self, key: &[u8]) -> bool {
         key.len() >= self.suffix_len
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
+}
+
+pub struct FixedPrefixSliceTransform {
+    pub prefix_len: usize,
+}
+
+impl FixedPrefixSliceTransform {
+    pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
+        FixedPrefixSliceTransform { prefix_len: prefix_len }
+    }
+}
+
+impl SliceTransform for FixedPrefixSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        &key[..self.prefix_len]
+    }
+
+    fn in_domain(&mut self, key: &[u8]) -> bool {
+        key.len() >= self.prefix_len
     }
 
     fn in_range(&mut self, _: &[u8]) -> bool {

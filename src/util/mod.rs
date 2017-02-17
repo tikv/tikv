@@ -43,6 +43,8 @@ pub mod metrics;
 #[cfg(target_os="linux")]
 mod thread_metrics;
 
+pub use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet, FnvBuildHasher as BuildHasherDefault};
+
 pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     if entries.is_empty() {
         return;

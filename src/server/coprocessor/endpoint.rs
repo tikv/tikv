@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::usize;
-use std::collections::{HashMap, HashSet, BinaryHeap};
+use std::collections::BinaryHeap;
 use std::collections::hash_map::Entry;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
@@ -36,7 +36,7 @@ use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
-use util::{escape, duration_to_ms, duration_to_sec, Either};
+use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
@@ -81,7 +81,7 @@ impl Host {
         Host {
             engine: engine,
             sched: scheduler,
-            reqs: HashMap::new(),
+            reqs: HashMap::default(),
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
             pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), concurrency),
@@ -656,9 +656,9 @@ impl SelectContextCore {
             } else {
                 sel.get_index_info().get_columns()
             };
-            let mut cond_col_map = HashMap::new();
+            let mut cond_col_map = HashMap::default();
             try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
-            let mut aggr_cols_map = HashMap::new();
+            let mut aggr_cols_map = HashMap::default();
             for aggr in sel.get_aggregates() {
                 try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, aggr));
             }
@@ -674,7 +674,7 @@ impl SelectContextCore {
             cond_cols = cond_col_map.drain().map(|(_, v)| v).collect();
 
             // get topn cols
-            let mut topn_col_map = HashMap::new();
+            let mut topn_col_map = HashMap::default();
             for item in sel.get_order_by() {
                 try!(collect_col_in_expr(&mut topn_col_map, select_cols, item.get_expr()))
             }
@@ -1146,12 +1146,12 @@ mod tests {
     use util::codec::Datum;
     use util::xeval::EvalContext;
     use util::codec::table::RowColsDict;
+    use util::HashMap;
 
     use std::rc::Rc;
     use std::sync::*;
     use std::thread;
     use std::time::Duration;
-    use std::collections::HashMap;
 
     #[test]
     fn test_get_req_type_str() {
@@ -1250,7 +1250,7 @@ mod tests {
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
-            let row_data = RowColsDict::new(HashMap::new(), data.into_bytes());
+            let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap.try_add_row(handle as i64,
                              order_cols.clone(),
                              ctx.clone(),
@@ -1277,12 +1277,12 @@ mod tests {
         let mut topn_heap = TopNHeap::new(5).unwrap();
 
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
-        let row_data = RowColsDict::new(HashMap::new(), b"name:1".to_vec());
+        let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
         topn_heap.try_add_row(0 as i64, order_cols.clone(), ctx.clone(), row_data, std_key)
             .unwrap();
 
         let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
-        let row_data2 = RowColsDict::new(HashMap::new(), b"name:2".to_vec());
+        let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
         topn_heap.try_add_row(0 as i64,
                          order_cols.clone(),
                          ctx.clone(),
@@ -1291,7 +1291,7 @@ mod tests {
             .unwrap();
 
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
-        let row_data3 = RowColsDict::new(HashMap::new(), b"name:3".to_vec());
+        let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
 
         assert!(topn_heap.try_add_row(0 as i64,
                          order_cols.clone(),
@@ -1329,7 +1329,7 @@ mod tests {
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
-            let row_data = RowColsDict::new(HashMap::new(), data.into_bytes());
+            let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap.try_add_row(handle as i64,
                              order_cols.clone(),
                              ctx.clone(),
