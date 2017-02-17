@@ -307,8 +307,8 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     // Issue a transfer leader request to transfer leader from `peer` to `peer3`.
     cluster.transfer_leader(region_id, peer3);
 
-    // Delay one tick to ensure transfer leader procedure is triggered inside raft module.
-    thread::sleep(base_tick);
+    // Delay a while to ensure transfer leader procedure is triggered inside raft module.
+    thread::sleep(election_timeout / 2);
 
     // Issue a read request and ensure it fails to do lease read or consistent read
     // during leader transfer procedure.
