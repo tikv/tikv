@@ -394,6 +394,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn stop(&mut self) {
+        info!("start to stop raftstore.");
+
         // Applying snapshot may take an unexpected long time.
         for peer in self.region_peers.values_mut() {
             peer.mut_store().cancel_applying_snap();
@@ -416,6 +418,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values_mut() {
             peer.clear_pending_commands();
         }
+
+        info!("stop raftstore finished.");
     }
 
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
