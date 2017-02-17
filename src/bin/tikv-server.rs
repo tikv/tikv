@@ -423,7 +423,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
     opt
 }
 
-fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
     let mut default_block_cache_size = (total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64;
     if default_block_cache_size < RAFTCF_MIN_MEM {
         default_block_cache_size = RAFTCF_MIN_MEM;
