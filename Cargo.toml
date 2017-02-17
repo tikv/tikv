@@ -56,7 +56,7 @@ clap = "2"
 url = "1.2"
 getopts = "0.2"
 regex = "0.1"
-sysinfo = "0.2.5"
+sys-info = "0.4.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"

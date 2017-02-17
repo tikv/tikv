@@ -28,7 +28,7 @@ extern crate signal;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
-extern crate sysinfo;
+extern crate sys_info;
 
 mod signal_handler;
 
@@ -46,7 +46,7 @@ use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
-use sysinfo::System;
+use sys_info::{cpu_num, mem_info};
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
@@ -64,6 +64,19 @@ use tikv::util::time_monitor::TimeMonitor;
 
 const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
 const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
+const KB: u64 = 1024;
+const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
+
+fn sanitize_memory_usage() -> bool {
+    let mut ratio = 0.0;
+    for v in DEFAULT_BLOCK_CACHE_RATIO {
+        ratio = ratio + v;
+    }
+    if ratio > 1.0 {
+        return false;
+    }
+    true
+}
 
 fn print_usage(program: &str, opts: &Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -390,7 +403,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
 
 fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
     // Default column family uses bloom filter.
-    let default_block_cache_size = (total_mem as f64 * 0.4) as u64;
+    let default_block_cache_size = (total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64;
     get_rocksdb_cf_option(config,
                           "defaultcf",
                           default_block_cache_size,
@@ -399,7 +412,7 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let default_block_cache_size = (total_mem as f64 * 0.15) as u64;
+    let default_block_cache_size = (total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64;
     let mut opt = get_rocksdb_cf_option(config, "writecf", default_block_cache_size, true, false);
     // prefix extractor(trim the timestamp at tail) for write cf.
     opt.set_prefix_extractor("FixedSuffixSliceTransform",
@@ -411,7 +424,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let mut default_block_cache_size = (total_mem as f64 * 0.01) as u64;
+    let mut default_block_cache_size = (total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64;
     if default_block_cache_size < RAFTCF_MIN_MEM {
         default_block_cache_size = RAFTCF_MIN_MEM;
     }
@@ -829,12 +842,15 @@ fn main() {
     let pd_client = RpcClient::new(&pd_endpoints).unwrap();
     let cluster_id = pd_client.cluster_id;
 
-    let mut system = System::new();
-    system.refresh_all();
-    let total_cpu_num = system.get_processor_list().len();
-    let total_mem = system.get_total_memory();
+    let total_cpu_num = cpu_num().unwrap();
+    // get_total_memory return total memory in KB.
+    let mem = mem_info().unwrap();
+    let total_mem = mem.total * KB;
+    if !sanitize_memory_usage() {
+        panic!("default block cache size over total memory.");
+    }
 
-    let mut cfg = build_cfg(&matches, &config, cluster_id, addr, total_cpu_num);
+    let mut cfg = build_cfg(&matches, &config, cluster_id, addr, total_cpu_num as usize);
     cfg.labels = get_store_labels(&matches, &config);
     let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
     cfg.storage.path = store_path;
