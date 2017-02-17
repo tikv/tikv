@@ -842,7 +842,7 @@ fn main() {
     let cluster_id = pd_client.cluster_id;
 
     let total_cpu_num = cpu_num().unwrap();
-    // get_total_memory return total memory in KB.
+    // return  memory in KB.
     let mem = mem_info().unwrap();
     let total_mem = mem.total * KB;
     if !sanitize_memory_usage() {
