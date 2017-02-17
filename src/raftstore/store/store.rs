@@ -552,7 +552,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         self.insert_peer_cache(msg.take_from_peer());
-        self.insert_peer_cache(msg.take_to_peer());
 
         let peer = self.region_peers.get_mut(&region_id).unwrap();
         try!(peer.step(msg.take_message()));
