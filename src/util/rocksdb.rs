@@ -11,12 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{DB, Options, SliceTransform};
-pub use rocksdb::CFHandle;
-use std::collections::HashSet;
-use std::path::Path;
 use std::fs;
+use std::path::Path;
+
 use storage::CF_DEFAULT;
+use rocksdb::{DB, Options, SliceTransform};
+
+use super::HashSet;
+
+pub use rocksdb::CFHandle;
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
     db.cf_handle(cf)

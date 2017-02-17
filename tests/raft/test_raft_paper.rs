@@ -199,7 +199,7 @@ fn test_nonleader_start_election(state: StateRole) {
     }
 
     for _ in 1..2 * et {
-        r.tick()
+        r.tick();
     }
 
     assert_eq!(r.term, 2);
