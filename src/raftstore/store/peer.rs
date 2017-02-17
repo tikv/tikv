@@ -14,16 +14,16 @@
 use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+use std::collections::hash_map::Values;
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
-use time::{Timespec, Duration as TimeDuration};
 
+use time::Timespec;
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;
-
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, CmdType,
@@ -31,6 +31,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
                           TransferLeaderRequest, TransferLeaderResponse};
 use kvproto::raft_serverpb::{RaftMessage, RaftApplyState, RaftTruncatedState, PeerState};
 use kvproto::pdpb::PeerStats;
+
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
@@ -38,9 +39,10 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::PdTask;
 use util::worker::Worker;
-use util::{escape, SlowTimer, rocksdb, clocktime};
+use util::{escape, SlowTimer, rocksdb, clocktime, HashMap, HashSet};
 use pd::INVALID_ID;
 use storage::{CF_LOCK, CF_RAFT};
+
 use super::store::Store;
 use super::peer_storage::{self, PeerStorage, ApplySnapResult, write_initial_state,
                           write_peer_state, InvokeContext, compact_raft_log};
@@ -244,6 +246,7 @@ pub struct ConsistencyState {
 
 pub struct Peer {
     engine: Arc<DB>,
+    cfg: Rc<Config>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
     pub peer: metapb::Peer,
     region_id: u64,
@@ -275,7 +278,6 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
 
     leader_lease_expired_time: Option<Timespec>,
-    election_timeout: TimeDuration,
 
     pub written_bytes: u64,
     pub written_keys: u64,
@@ -350,7 +352,7 @@ impl Peer {
             proposals: Default::default(),
             pending_cmds: Default::default(),
             peer_cache: store.peer_cache(),
-            peer_heartbeats: HashMap::new(),
+            peer_heartbeats: HashMap::default(),
             coprocessor_host: CoprocessorHost::new(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -365,9 +367,8 @@ impl Peer {
             },
             raft_log_size_hint: 0,
             raft_entry_max_size: cfg.raft_entry_max_size,
+            cfg: cfg,
             leader_lease_expired_time: None,
-            election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
-                              cfg.raft_election_timeout_ticks as i32,
             written_bytes: 0,
             written_keys: 0,
         };
@@ -591,10 +592,10 @@ impl Peer {
 
     fn next_lease_expired_time(&self, send_to_quorum_ts: Timespec) -> Timespec {
         // The valid leader lease should be
-        // "lease = election_timeout - (quorum_commit_ts - send_to_quorum_ts)"
+        // "lease = max_lease - (quorum_commit_ts - send_to_quorum_ts)"
         // And the expired timestamp for that leader lease is "quorum_commit_ts + lease",
-        // which is "send_to_quorum_ts + election_timeout" in short.
-        send_to_quorum_ts + self.election_timeout
+        // which is "send_to_quorum_ts + max_lease" in short.
+        send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
     }
 
     fn update_leader_lease(&mut self, ready: &Ready) {
@@ -606,7 +607,7 @@ impl Peer {
                     // The local read can only be performed after a new leader has applied
                     // the first empty entry on its term. After that the lease expiring time
                     // should be updated to
-                    //   send_to_quorum_ts + election_timeout
+                    //   send_to_quorum_ts + max_lease
                     // as the comments in `next_lease_expired_time` function explain.
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
@@ -641,9 +642,7 @@ impl Peer {
 
         debug!("{} handle raft ready", self.tag);
 
-        let ready_timer = PEER_GET_READY_HISTOGRAM.start_timer();
         let mut ready = self.raft_group.ready();
-        ready_timer.observe_duration();
 
         self.update_leader_lease(&ready);
 
@@ -943,9 +942,9 @@ impl Peer {
     /// 2. it's a follower, and it does not lag behind the leader a lot.
     ///    If a snapshot is involved between it and the Raft leader, it's not healthy since
     ///    it cannot works as a node in the quorum to receive replicating logs from leader.
-    fn count_healthy_node(&self, progress: &HashMap<u64, Progress>) -> usize {
+    fn count_healthy_node(&self, progress: Values<u64, Progress>) -> usize {
         let mut healthy = 0;
-        for pr in progress.values() {
+        for pr in progress {
             if pr.matched >= self.get_store().truncated_index() {
                 healthy += 1;
             }
@@ -988,7 +987,7 @@ impl Peer {
                 }
             }
         }
-        let healthy = self.count_healthy_node(&status.progress);
+        let healthy = self.count_healthy_node(status.progress.values());
         let quorum_after_change = raft::quorum(status.progress.len());
         if healthy >= quorum_after_change {
             return Ok(());
@@ -1184,14 +1183,7 @@ impl Peer {
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
-        let from_peer = match self.get_peer_from_cache(msg.get_from()) {
-            Some(p) => p,
-            None => {
-                return Err(box_err!("failed to lookup sender peer {} in region {}",
-                                    msg.get_from(),
-                                    self.region_id))
-            }
-        };
+        let from_peer = self.peer.clone();
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
