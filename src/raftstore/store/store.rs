@@ -393,6 +393,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(())
     }
 
+    fn stop(&mut self) {
+        // Applying snapshot may take an unexpected long time.
+        for peer in self.region_peers.values_mut() {
+            peer.mut_store().cancel_applying_snap();
+        }
+
+        // Wait all workers finish.
+        let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
+        handles.push(self.split_check_worker.stop());
+        handles.push(self.region_worker.stop());
+        handles.push(self.raftlog_gc_worker.stop());
+        handles.push(self.compact_worker.stop());
+        handles.push(self.pd_worker.stop());
+        handles.push(self.consistency_check_worker.stop());
+        for h in handles {
+            if let Some(h) = h {
+                h.join().unwrap();
+            }
+        }
+
+        for peer in self.region_peers.values_mut() {
+            peer.clear_pending_commands();
+        }
+    }
+
     fn register_raft_base_tick(&self, event_loop: &mut EventLoop<Self>) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
@@ -1903,29 +1928,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     // This method is invoked very frequently, should avoid time consuming operation.
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
-            // Applying snapshot may take an unexpected long time.
-            for peer in self.region_peers.values_mut() {
-                peer.mut_store().cancel_applying_snap();
-            }
-
-            // Wait all workers finish.
-            let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
-            handles.push(self.split_check_worker.stop());
-            handles.push(self.region_worker.stop());
-            handles.push(self.raftlog_gc_worker.stop());
-            handles.push(self.compact_worker.stop());
-            handles.push(self.pd_worker.stop());
-            handles.push(self.consistency_check_worker.stop());
-            for h in handles {
-                if let Some(h) = h {
-                    h.join().unwrap();
-                }
-            }
-
-            for peer in self.region_peers.values_mut() {
-                peer.clear_pending_commands();
-            }
-
+            self.stop();
             return;
         }
 
