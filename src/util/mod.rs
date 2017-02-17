@@ -45,20 +45,27 @@ mod thread_metrics;
 
 pub use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet, FnvBuildHasher as BuildHasherDefault};
 
-pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
-    if entries.is_empty() {
-        return;
-    }
-
-    let mut size = Message::compute_size(&entries[0]) as u64;
-    let mut limit = 1usize;
-    while limit < entries.len() {
-        size += Message::compute_size(&entries[limit]) as u64;
+pub fn get_limit_at_size<'a, T: Message + Clone, I: IntoIterator<Item = &'a T>>(entries: I,
+                                                                                max: u64)
+                                                                                -> usize {
+    let mut iter = entries.into_iter();
+    let mut size = match iter.next() {
+        None => return 0,
+        Some(e) => Message::compute_size(e) as u64,
+    };
+    let mut limit = 1;
+    for e in iter {
+        size += Message::compute_size(e) as u64;
         if size > max {
             break;
         }
         limit += 1;
     }
+    limit
+}
+
+pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
+    let limit = get_limit_at_size(entries.as_slice(), max);
     entries.truncate(limit);
 }
 
