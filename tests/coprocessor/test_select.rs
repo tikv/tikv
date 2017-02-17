@@ -893,7 +893,7 @@ fn test_order_by_column() {
 }
 
 #[test]
-fn test_order_by_pk() {
+fn test_order_by_pk_with_select_from_index() {
     let mut data = vec![
         (8, Some("name:0"), 2),
         (7, Some("name:3"), 3),
@@ -907,18 +907,15 @@ fn test_order_by_pk() {
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
-    let req = Select::from(&product.table)
+    let req = Select::from_index(&product.table, product.name)
         .order_by(product.id, true)
         .limit(5)
         .build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), 5);
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
-    for (row, (id, name, cnt)) in spliter.zip(data.drain(..5)) {
-        let name_datum = name.map(|s| s.as_bytes()).into();
-        let expected_encoded = datum::encode_value(&[id.into(), name_datum, cnt.into()]).unwrap();
+    for (row, (id, _, _)) in spliter.zip(data.drain(..5)) {
         assert_eq!(id, row.handle);
-        assert_eq!(row.data, &*expected_encoded);
     }
     end_point.stop().unwrap().join().unwrap();
 }
