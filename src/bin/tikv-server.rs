@@ -406,13 +406,9 @@ fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
     let mut opt = get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false);
-    if get_toml_boolean(config,
-                        "rocksdb.raftcf.memtable-insert-with-hint",
-                        Some(true)) {
-        opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
+    opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
             Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
         .unwrap();
-    }
     opt
 }
 
