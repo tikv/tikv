@@ -167,6 +167,30 @@ impl SliceTransform for FixedSuffixSliceTransform {
     }
 }
 
+pub struct FixedPrefixSliceTransform {
+    pub prefix_len: usize,
+}
+
+impl FixedPrefixSliceTransform {
+    pub fn new(prefix_len: usize) -> FixedPrefixSliceTransform {
+        FixedPrefixSliceTransform { prefix_len: prefix_len }
+    }
+}
+
+impl SliceTransform for FixedPrefixSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        &key[..self.prefix_len]
+    }
+
+    fn in_domain(&mut self, key: &[u8]) -> bool {
+        key.len() >= self.prefix_len
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocksdb::{DB, Options};
