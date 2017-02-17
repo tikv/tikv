@@ -1100,9 +1100,21 @@ impl Peer {
         metrics.read_index += 1;
 
         // Should we call pre_propose here?
+        let last_pending_read_count = self.raft_group.raft.pending_read_count();
+        let last_ready_read_count = self.raft_group.raft.ready_read_count();
         // TODO: check if the message is dropped silently instead of assuming it won't.
 
         self.raft_group.read_index(req.get_header().get_uuid().to_vec());
+
+        let pending_read_count = self.raft_group.raft.pending_read_count();
+        let ready_read_count = self.raft_group.raft.ready_read_count();
+        if pending_read_count == last_pending_read_count &&
+           ready_read_count == last_ready_read_count {
+            // The message is dropped silently, this usually due to leader absence
+            // or transferring leader. Both cases can be considered as NotLeader error.
+            notify_stale_command(&self.tag, self.term(), uuid, cb);
+            return;
+        }
         self.pending_reads.push_back(ReadIndexRequest {
             uuid: uuid,
             req: req,
