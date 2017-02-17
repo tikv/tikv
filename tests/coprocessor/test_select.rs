@@ -895,13 +895,13 @@ fn test_order_by_column() {
 #[test]
 fn test_order_by_pk() {
     let mut data = vec![
-    (8, Some("name:0"), 2),
-    (7, Some("name:3"), 3),
-    (6, Some("name:0"), 1),
-    (5, Some("name:6"), 4),
-    (4, Some("name:5"), 4),
-    (3, Some("name:4"), 4),
-    (2, None, 4),
+        (8, Some("name:0"), 2),
+        (7, Some("name:3"), 3),
+        (6, Some("name:0"), 1),
+        (5, Some("name:6"), 4),
+        (4, Some("name:5"), 4),
+        (3, Some("name:4"), 4),
+        (2, None, 4),
     ];
 
 
