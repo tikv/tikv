@@ -90,7 +90,7 @@ const ENGINE_TICKER_TYPES: &'static [TickerType] = &[TickerType::BlockCacheMiss,
 const ENGINE_HIST_TYPES: &'static [HistType] =
     &[HistType::DbGetMicros, HistType::DbWriteMicros, HistType::DbSeekMicros];
 
-fn engine_ticker_metrics_set(t: TickerType, value: u64) {
+fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
     match t {
         TickerType::BlockCacheMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_miss"])
@@ -152,7 +152,7 @@ fn engine_ticker_metrics_set(t: TickerType, value: u64) {
     }
 }
 
-fn engine_hist_metrics_set(t: HistType, value: HistogramData) {
+fn flush_engine_histogram_metrics(t: HistType, value: HistogramData) {
     match t {
         HistType::DbGetMicros => {
             STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_median"]).set(value.median);
@@ -1646,19 +1646,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         self.store_heartbeat_pd();
-        self.engine_statistics_detail();
+        self.flush_engine_statistics();
         self.register_pd_store_heartbeat_tick(event_loop);
     }
 
-    fn engine_statistics_detail(&mut self) {
+    fn flush_engine_statistics(&mut self) {
         for t in ENGINE_TICKER_TYPES {
             let v = self.engine.get_and_reset_statistics_ticker_count(*t);
-            engine_ticker_metrics_set(*t, v);
+            flush_engine_ticker_metrics(*t, v);
         }
 
         for t in ENGINE_HIST_TYPES {
             if let Some(v) = self.engine.get_statistics_histogram(*t) {
-                engine_hist_metrics_set(*t, v);
+                flush_engine_histogram_metrics(*t, v);
             }
         }
     }
