@@ -178,9 +178,9 @@ impl<'a> MvccReader<'a> {
         if let Some(lock) = try!(self.load_lock(key)) {
             if lock.ts <= ts {
                 if ts == u64::MAX && try!(key.raw()) == lock.primary {
-                    // when ts==MAX(which means get latest committed version for primary key),
-                    // and current key is the primary key,
-                    // return latest commit version's value
+                    // when ts==u64::MAX(which means to get latest committed version for
+                    // primary key),and current key is the primary key, returns the latest
+                    // commit version's value
                     ts = lock.ts - 1;
                 } else {
                     // There is a pending lock. Client should wait or clean it.
