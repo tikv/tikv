@@ -1048,7 +1048,9 @@ impl<'a> SelectContext<'a> {
             collected += try!(self.get_idx_row_from_range(r));
             try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
         }
-        if self.core.aggr {
+        if self.core.topn {
+            self.core.collect_topn_rows()
+        } else if self.core.aggr {
             self.core.aggr_rows()
         } else {
             Ok(())
