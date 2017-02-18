@@ -41,7 +41,6 @@ use raftstore::store::worker::PdTask;
 
 use util::worker::{Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyMetrics, Registration};
-use util::{escape, SlowTimer, rocksdb, clocktime, HashMap, HashSet};
 use util::{escape, SlowTimer, rocksdb, clocktime, Either, HashMap, HashSet};
 
 use pd::INVALID_ID;

@@ -429,7 +429,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.compact_worker.stop());
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
-        handles.push(sefl.apply_worker.stop());
+        handles.push(self.apply_worker.stop());
 
         for h in handles {
             if let Some(h) = h {
@@ -459,7 +459,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer.mark_to_be_checked(&mut self.pending_raft_groups);
                 continue;
             }
-            
+
             if peer.raft_group.tick() {
                 peer.mark_to_be_checked(&mut self.pending_raft_groups);
             }
@@ -484,7 +484,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // for peer B in case 1 above
                 info!("{} detects leader missing for a long time. To check with pd \
                         whether it's still valid",
-                        peer.tag);
+                      peer.tag);
                 let task = PdTask::ValidatePeer {
                     peer: peer.peer.clone(),
                     region: peer.region().clone(),
