@@ -16,12 +16,10 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
-#[macro_use]
 extern crate log;
 extern crate test;
 extern crate mio;
 extern crate rand;
-#[macro_use]
 extern crate tikv;
 extern crate time;
 

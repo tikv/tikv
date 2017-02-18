@@ -233,7 +233,11 @@ fn init_last_term(engine: &DB,
     }
     let last_log_key = keys::raft_log_key(region.get_id(), last_idx);
     Ok(match try!(engine.get_msg_cf::<Entry>(CF_RAFT, &last_log_key)) {
-        None => return Err(box_err!("entry at {} doesn't exist, may lose data.", last_idx)),
+        None => {
+            return Err(box_err!("[region {}] entry at {} doesn't exist, may lose data.",
+                                region.get_id(),
+                                last_idx))
+        }
         Some(e) => e.get_term(),
     })
 }
@@ -397,6 +401,11 @@ impl PeerStorage {
     #[inline]
     pub fn applied_index(&self) -> u64 {
         self.apply_state.get_applied_index()
+    }
+
+    #[inline]
+    pub fn committed_index(&self) -> u64 {
+        self.raft_state.get_hard_state().get_commit()
     }
 
     #[inline]
@@ -665,7 +674,7 @@ impl PeerStorage {
 
     /// Check whether the storage has finished applying snapshot.
     #[inline]
-    pub fn is_applying(&self) -> bool {
+    pub fn is_applying_snapshot(&self) -> bool {
         match *self.snap_state.borrow() {
             SnapState::Applying(_) => true,
             _ => false,

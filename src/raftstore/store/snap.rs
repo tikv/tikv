@@ -15,23 +15,24 @@ use std::error;
 use std::io::{self, Write, ErrorKind, Read};
 use std::fmt::{self, Formatter, Display};
 use std::fs::{self, Metadata};
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::Path;
 use std::result;
 use std::str;
+
 use protobuf::Message;
 use rocksdb::DB;
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
+
 use raft;
 use raftstore::store::Msg;
 use storage::CF_RAFT;
 use util::transport::SendCh;
-use util::HandyRwLock;
+use util::{HandyRwLock, HashMap};
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
@@ -509,7 +510,7 @@ mod v1 {
                     let cap = cmp::min(self.left, DEFAULT_READ_BUFFER_SIZE);
                     let mut buf = vec![0; cap];
                     while self.left > 0 {
-                        try!(self.read(&mut buf));
+                        let _ = try!(self.read(&mut buf));
                     }
                 }
                 self.res = Some(try!(self.reader.read_u32::<BigEndian>()));
@@ -601,7 +602,7 @@ mod v1 {
 
             // read partially should not affect validation.
             reader = f1.get_validation_reader().unwrap();
-            reader.read(&mut [0, 0]).unwrap();
+            reader.read_exact(&mut [0, 0]).unwrap();
             reader.validate().unwrap();
 
             // read fully should not affect validation.

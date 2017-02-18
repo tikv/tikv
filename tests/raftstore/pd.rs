@@ -107,12 +107,15 @@ impl Cluster {
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        Ok(self.stores[&store_id].store.clone())
+        match self.stores.get(&store_id) {
+            None => Err(box_err!("store {} not found", store_id)),
+            Some(s) => Ok(s.store.clone()),
+        }
     }
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
         self.regions
-            .range::<Key, Key>(Excluded(&key), Unbounded)
+            .range((Excluded(key), Unbounded))
             .next()
             .map(|(_, region)| region.clone())
     }
