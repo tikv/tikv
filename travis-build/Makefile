@@ -58,7 +58,7 @@ prepare_rust:
 	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=${RUSTC_DATE} --prefix=~/rust --disable-sudo --channel=nightly
 
 prepare-rustfmt: | prepare_rust
-	curl -L http://oifici4co.bkt.gdipper.com/rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -o rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz && \
+	curl -L https://github.com/tennix/rustfmt/releases/download/v0.6/rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -o rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz && \
 	mkdir -p ${HOME}/.cargo/bin && tar xzf rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -C ${HOME}/.cargo/bin --strip-components=1
 	# cargo install --vers =0.6.0 rustfmt || exit 0
 
