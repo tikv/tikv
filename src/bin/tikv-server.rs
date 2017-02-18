@@ -78,6 +78,11 @@ fn sanitize_memory_usage() -> bool {
     true
 }
 
+fn align_to_mb(n: u64) -> u64 {
+    let m = n >> 10;
+    m << 10
+}
+
 fn print_usage(program: &str, opts: &Options) {
     let brief = format!("Usage: {} [options]", program);
     print!("{}", opts.usage(&brief));
@@ -403,7 +408,8 @@ fn get_rocksdb_cf_option(config: &toml::Value,
 
 fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
     // Default column family uses bloom filter.
-    let default_block_cache_size = (total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64;
+    let default_block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64);
     get_rocksdb_cf_option(config,
                           "defaultcf",
                           default_block_cache_size,
@@ -412,7 +418,8 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let default_block_cache_size = (total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64;
+    let default_block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64);
     let mut opt = get_rocksdb_cf_option(config, "writecf", default_block_cache_size, true, false);
     // prefix extractor(trim the timestamp at tail) for write cf.
     opt.set_prefix_extractor("FixedSuffixSliceTransform",
@@ -424,7 +431,8 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let mut default_block_cache_size = (total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64;
+    let mut default_block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
     if default_block_cache_size < RAFTCF_MIN_MEM {
         default_block_cache_size = RAFTCF_MIN_MEM;
     }
