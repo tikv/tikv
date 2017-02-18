@@ -79,8 +79,8 @@ fn sanitize_memory_usage() -> bool {
 }
 
 fn align_to_mb(n: u64) -> u64 {
-    let m = n >> 10;
-    m << 10
+    let m = n >> 20;
+    m << 20
 }
 
 fn print_usage(program: &str, opts: &Options) {
