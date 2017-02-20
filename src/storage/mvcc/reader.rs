@@ -17,6 +17,7 @@ use super::{Error, Result};
 use super::lock::Lock;
 use super::write::{Write, WriteType};
 use raftstore::store::engine::{IterOption, SeekMode};
+use std::u64;
 
 #[derive(Clone, Default, Debug)]
 pub struct ScanMetrics {
@@ -176,13 +177,20 @@ impl<'a> MvccReader<'a> {
         // Check for locks that signal concurrent writes.
         if let Some(lock) = try!(self.load_lock(key)) {
             if lock.ts <= ts {
-                // There is a pending lock. Client should wait or clean it.
-                return Err(Error::KeyIsLocked {
-                    key: try!(key.raw()),
-                    primary: lock.primary,
-                    ts: lock.ts,
-                    ttl: lock.ttl,
-                });
+                if ts == u64::MAX && try!(key.raw()) == lock.primary {
+                    // when ts==u64::MAX(which means to get latest committed version for
+                    // primary key),and current key is the primary key, returns the latest
+                    // commit version's value
+                    ts = lock.ts - 1;
+                } else {
+                    // There is a pending lock. Client should wait or clean it.
+                    return Err(Error::KeyIsLocked {
+                        key: try!(key.raw()),
+                        primary: lock.primary,
+                        ts: lock.ts,
+                        ttl: lock.ttl,
+                    });
+                }
             }
         }
         loop {
