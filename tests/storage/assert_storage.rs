@@ -102,11 +102,11 @@ impl AssertionStorage {
         match err {
             storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
             storage::Error::Engine(engine::Error::Request(ref e)) => {
-                assert!(e.has_not_leader());
+                assert!(e.has_not_leader(), format!("is not_leader {:?}", e));
             }
             _ => {
                 let err_str = format!("{:?}", err);
-                assert!(err_str.contains("not_leader"));
+                assert!(err_str.contains("not_leader"), err);
             }
         }
     }
