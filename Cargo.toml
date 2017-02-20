@@ -45,7 +45,7 @@ crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
-protobuf = "1.1"
+protobuf = "1.2.1"
 bytes  = "0.3.0"
 nix = "0.6.0"
 utime = "0.1"
@@ -56,6 +56,7 @@ clap = "2"
 url = "1.2"
 getopts = "0.2"
 regex = "0.1"
+fnv = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"

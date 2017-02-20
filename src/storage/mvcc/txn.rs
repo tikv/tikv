@@ -185,7 +185,8 @@ impl<'a> MvccTxn<'a> {
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
         match try!(self.reader.load_lock(key)) {
             Some(ref lock) if lock.ts == self.start_ts => {
-                if lock.short_value.is_none() {
+                // If prewrite type is DEL or LOCK, it is no need to delete value.
+                if lock.short_value.is_none() && lock.lock_type == LockType::Put {
                     self.delete_value(key, lock.ts);
                 }
             }
@@ -350,6 +351,38 @@ mod tests {
         must_prewrite_delete(engine.as_ref(), k, k, 13);
         must_rollback(engine.as_ref(), k, 13);
         must_unlocked(engine.as_ref(), k);
+    }
+
+    #[test]
+    fn test_rollback_lock() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        let (k, v) = (b"k1", b"v1");
+        must_prewrite_put(engine.as_ref(), k, v, k, 5);
+        must_commit(engine.as_ref(), k, 5, 10);
+
+        // Lock
+        must_prewrite_lock(engine.as_ref(), k, k, 15);
+        must_locked(engine.as_ref(), k, 15);
+
+        // Rollback lock
+        must_rollback(engine.as_ref(), k, 15);
+    }
+
+    #[test]
+    fn test_rollback_del() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        let (k, v) = (b"k1", b"v1");
+        must_prewrite_put(engine.as_ref(), k, v, k, 5);
+        must_commit(engine.as_ref(), k, 5, 10);
+
+        // Prewrite delete
+        must_prewrite_delete(engine.as_ref(), k, k, 15);
+        must_locked(engine.as_ref(), k, 15);
+
+        // Rollback delete
+        must_rollback(engine.as_ref(), k, 15);
     }
 
     #[test]
@@ -537,7 +570,7 @@ mod tests {
                         15,
                         15,
                         WriteType::Rollback);
-        must_reverse_seek_write_none(engine.as_ref(), k, 15);
+        must_reverse_seek_write(engine.as_ref(), k, 15, 15, 15, WriteType::Rollback);
         must_get_commit_ts(engine.as_ref(), k, 5, 10);
         must_get_commit_ts_none(engine.as_ref(), k, 15);
 

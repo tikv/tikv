@@ -28,15 +28,18 @@
 
 use std::cmp;
 use std::boxed::Box;
-use raft::storage::Storage;
+
 use rand::{self, Rng};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
 use protobuf::repeated::RepeatedField;
+
+use raft::storage::Storage;
 use raft::progress::{Progress, Inflights, ProgressState};
 use raft::errors::{Result, Error, StorageError};
-use std::collections::HashMap;
 use raft::raft_log::{self, RaftLog};
 use raft::read_only::{ReadOnlyOption, ReadState, ReadOnly};
+
+use super::{HashMap, BuildHasherDefault};
 
 // CAMPAIGN_PRE_ELECTION represents the first phase of a normal election when
 // Config.pre_vote is true.
@@ -274,7 +277,7 @@ impl<T: Storage> Raft<T> {
             raft_log: raft_log,
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
-            prs: HashMap::with_capacity(peers.len()),
+            prs: HashMap::with_capacity_and_hasher(peers.len(), BuildHasherDefault::default()),
             state: StateRole::Follower,
             check_quorum: c.check_quorum,
             pre_vote: c.pre_vote,
@@ -575,7 +578,7 @@ impl<T: Storage> Raft<T> {
 
         self.abort_leader_transfer();
 
-        self.votes = HashMap::new();
+        self.votes = HashMap::default();
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
         let self_id = self.id;
         for (id, p) in &mut self.prs {
@@ -600,7 +603,8 @@ impl<T: Storage> Raft<T> {
         self.maybe_commit();
     }
 
-    pub fn tick(&mut self) {
+    /// Returns true to indicate that there will probably be some readiness need to be handled.
+    pub fn tick(&mut self) -> bool {
         match self.state {
             StateRole::Follower | StateRole::PreCandidate | StateRole::Candidate => {
                 self.tick_election()
@@ -611,24 +615,31 @@ impl<T: Storage> Raft<T> {
 
     // tick_election is run by followers and candidates after self.election_timeout.
     // TODO: revoke pub when there is a better way to test.
-    pub fn tick_election(&mut self) {
+    // Returns true to indicate that there will probably be some readiness need to be handled.
+    pub fn tick_election(&mut self) -> bool {
         self.election_elapsed += 1;
-        if self.promotable() && self.pass_election_timeout() {
-            self.election_elapsed = 0;
-            let m = new_message(INVALID_ID, MessageType::MsgHup, Some(self.id));
-            self.step(m).is_ok();
+        if !self.pass_election_timeout() || !self.promotable() {
+            return false;
         }
+
+        self.election_elapsed = 0;
+        let m = new_message(INVALID_ID, MessageType::MsgHup, Some(self.id));
+        self.step(m).is_ok();
+        true
     }
 
     // tick_heartbeat is run by leaders to send a MsgBeat after self.heartbeat_timeout.
-    fn tick_heartbeat(&mut self) {
+    // Returns true to indicate that there will probably be some readiness need to be handled.
+    fn tick_heartbeat(&mut self) -> bool {
         self.heartbeat_elapsed += 1;
         self.election_elapsed += 1;
 
+        let mut has_ready = false;
         if self.election_elapsed >= self.election_timeout {
             self.election_elapsed = 0;
             if self.check_quorum {
                 let m = new_message(INVALID_ID, MessageType::MsgCheckQuorum, Some(self.id));
+                has_ready = true;
                 self.step(m).is_ok();
             }
             if self.state == StateRole::Leader && self.lead_transferee.is_some() {
@@ -637,14 +648,16 @@ impl<T: Storage> Raft<T> {
         }
 
         if self.state != StateRole::Leader {
-            return;
+            return has_ready;
         }
 
         if self.heartbeat_elapsed >= self.heartbeat_timeout {
             self.heartbeat_elapsed = 0;
+            has_ready = true;
             let m = new_message(INVALID_ID, MessageType::MsgBeat, Some(self.id));
             self.step(m).is_ok();
         }
+        has_ready
     }
 
     pub fn become_follower(&mut self, term: u64, leader_id: u64) {
@@ -1534,7 +1547,8 @@ impl<T: Storage> Raft<T> {
               self.raft_log.last_term(),
               meta.get_index(),
               meta.get_term());
-        self.prs = HashMap::with_capacity(meta.get_conf_state().get_nodes().len());
+        self.prs = HashMap::with_capacity_and_hasher(meta.get_conf_state().get_nodes().len(),
+                                                     BuildHasherDefault::default());
         for &n in meta.get_conf_state().get_nodes() {
             let next_idx = self.raft_log.last_index() + 1;
             let matched = if n == self.id { next_idx - 1 } else { 0 };

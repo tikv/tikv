@@ -33,19 +33,20 @@
 
 use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
+
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
+use mio::{self, EventLoop};
+use kvproto::kvrpcpb::{Context, LockInfo};
+
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode};
-use kvproto::kvrpcpb::{Context, LockInfo};
 use storage::mvcc::{MvccTxn, ScanMetrics, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
-use storage::engine::CbContext;
-use std::collections::HashMap;
-use mio::{self, EventLoop};
-use util::transport::SendCh;
-use util::SlowTimer;
-use storage::engine::{Result as EngineResult, Callback as EngineCallback, Modify};
+use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
+use util::transport::{SendCh, Error as TransportError};
+use util::{SlowTimer, HashMap};
+
 use super::Result;
 use super::Error;
 use super::store::SnapshotStore;
@@ -197,15 +198,19 @@ impl Drop for RunningCtx {
 /// Creates a callback to receive async results of write prepare from the storage engine.
 fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
     Box::new(move |(cb_ctx, result)| {
-        if let Err(e) = ch.send(Msg::WriteFinished {
+        match ch.send(Msg::WriteFinished {
             cid: cid,
             pr: pr,
             cb_ctx: cb_ctx,
             result: result,
         }) {
-            panic!("send write finished to scheduler failed cid={}, err:{:?}",
-                   cid,
-                   e);
+            Ok(_) => {}
+            e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+            Err(e) => {
+                panic!("send write finished to scheduler failed cid={}, err:{:?}",
+                       cid,
+                       e);
+            }
         }
     })
 }
@@ -243,7 +248,7 @@ impl Scheduler {
                -> Scheduler {
         Scheduler {
             engine: engine,
-            cmd_ctxs: HashMap::new(),
+            cmd_ctxs: Default::default(),
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
@@ -369,12 +374,18 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
             let mut reader =
                 MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true, None);
+            // scan_key is used as start_key here,and Range start gc with scan_key=none.
+            let is_range_start_key = scan_key.is_none();
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
                     KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
                         .observe(keys.len() as f64);
                     if keys.is_empty() {
+                        // empty range
+                        if is_range_start_key {
+                            KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+                        }
                         Ok(None)
                     } else {
                         Ok(Some(Command::Gc {
@@ -672,12 +683,14 @@ impl Scheduler {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot"]).inc();
         let ch = self.schedch.clone();
         let cb = box move |(cb_ctx, snapshot)| {
-            if let Err(e) = ch.send(Msg::SnapshotFinished {
+            match ch.send(Msg::SnapshotFinished {
                 cid: cid,
                 cb_ctx: cb_ctx,
                 snapshot: snapshot,
             }) {
-                panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
+                Ok(_) => {}
+                e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+                Err(e) => panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e),
             }
         };
 

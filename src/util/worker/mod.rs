@@ -49,6 +49,7 @@ impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
 
 pub trait Runnable<T: Display> {
     fn run(&mut self, t: T);
+    fn shutdown(&mut self) {}
 }
 
 pub trait BatchRunnable<T: Display> {
@@ -56,6 +57,7 @@ pub trait BatchRunnable<T: Display> {
     ///
     /// Please note that ts will be clear after invoking this method.
     fn run_batch(&mut self, ts: &mut Vec<T>);
+    fn shutdown(&mut self) {}
 }
 
 impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
@@ -66,6 +68,10 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
             self.run(t);
             slow_log!(timer, "handle task {}", task_str);
         }
+    }
+
+    fn shutdown(&mut self) {
+        Runnable::shutdown(self)
     }
 }
 
@@ -144,7 +150,7 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
         let t = rx.recv();
         match t {
             Ok(Some(t)) => buffer.push(t),
-            _ => return,
+            _ => break,
         }
         while buffer.len() < batch_size {
             match rx.try_recv() {
@@ -161,6 +167,7 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
         runner.run_batch(&mut buffer);
         buffer.clear();
     }
+    runner.shutdown();
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
@@ -251,6 +258,10 @@ mod test {
             self.ch.send(step).unwrap();
             thread::sleep(Duration::from_millis(step));
         }
+
+        fn shutdown(&mut self) {
+            self.ch.send(0).unwrap();
+        }
     }
 
     struct BatchRunner {
@@ -260,6 +271,10 @@ mod test {
     impl BatchRunnable<u64> for BatchRunner {
         fn run_batch(&mut self, ms: &mut Vec<u64>) {
             self.ch.send(ms.to_vec()).unwrap();
+        }
+
+        fn shutdown(&mut self) {
+            self.ch.send(vec![]).unwrap();
         }
     }
 
@@ -280,6 +295,8 @@ mod test {
         worker.stop().unwrap().join().unwrap();
         // now worker can't handle any task
         assert!(worker.is_busy());
+        // when shutdown, StepRunner should send back a 0.
+        assert_eq!(0, rx.recv().unwrap());
     }
 
     #[test]
@@ -295,6 +312,7 @@ mod test {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 90);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 110);
         worker.stop().unwrap().join().unwrap();
+        assert_eq!(0, rx.recv().unwrap());
     }
 
     #[test]
@@ -308,12 +326,29 @@ mod test {
         worker.stop().unwrap().join().unwrap();
         let mut sum = 0;
         loop {
-            match rx.recv_timeout(Duration::from_secs(3)) {
-                Ok(v) => sum += v.into_iter().fold(0, |a, b| a + b),
-                Err(RecvTimeoutError::Timeout) => panic!("unexpected timeout"),
-                Err(RecvTimeoutError::Disconnected) => break,
+            let v = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            // when runner is shutdown, it will send back an empty vector.
+            if v.is_empty() {
+                break;
             }
+            sum += v.into_iter().fold(0, |a, b| a + b);
         }
         assert_eq!(sum, 50 * 20);
+        assert!(rx.recv().is_err());
+    }
+
+    #[test]
+    fn test_autowired_batch() {
+        let mut worker = Worker::new("test-worker-batch");
+        let (tx, rx) = mpsc::channel();
+        worker.start_batch(StepRunner { ch: tx }, 10).unwrap();
+        for _ in 0..20 {
+            worker.schedule(50).unwrap();
+        }
+        worker.stop().unwrap().join().unwrap();
+        for _ in 0..20 {
+            rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        assert_eq!(rx.recv().unwrap(), 0);
     }
 }

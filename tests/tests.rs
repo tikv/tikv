@@ -37,13 +37,10 @@ extern crate kvproto;
 extern crate tipb;
 extern crate time;
 extern crate rustc_serialize;
+extern crate fnv;
 extern crate test;
 
-mod test_raft;
-mod test_raft_snap;
-mod test_raft_paper;
-mod test_raft_flow_control;
-mod test_raw_node;
+mod raft;
 mod raftstore;
 mod coprocessor;
 mod storage;

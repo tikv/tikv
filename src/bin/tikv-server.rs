@@ -39,7 +39,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
-use std::collections::HashMap;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -47,7 +46,7 @@ use mio::EventLoop;
 use fs2::FileExt;
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
@@ -58,6 +57,7 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
+use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::util::time_monitor::TimeMonitor;
 
 fn print_usage(program: &str, opts: &Options) {
@@ -298,7 +298,8 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
 fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
                          block_cache_default: i64,
-                         use_bloom_filter: bool)
+                         use_bloom_filter: bool,
+                         whole_key_filtering: bool)
                          -> RocksdbOptions {
     let prefix = String::from("rocksdb.") + cf + ".";
     let mut opts = RocksdbOptions::new();
@@ -328,6 +329,8 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                                                       .as_str(),
                                                   Some(false));
         block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
+
+        block_base_opts.set_whole_key_filtering(whole_key_filtering);
     }
     opts.set_block_based_table_factory(&block_base_opts);
 
@@ -385,17 +388,27 @@ fn get_rocksdb_default_cf_option(config: &toml::Value) -> RocksdbOptions {
     get_rocksdb_cf_option(config,
                           "defaultcf",
                           1024 * 1024 * 1024,
-                          true /* bloom filter */)
+                          true, // bloom filter
+                          true /* whole key filtering */)
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
-    // Don't need set bloom filter for write cf, because we use seek to get the correct
-    // version base on provided timestamp.
-    get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, false)
+    let mut opt = get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, true, false);
+    // prefix extractor(trim the timestamp at tail) for write cf.
+    opt.set_prefix_extractor("FixedSuffixSliceTransform",
+                              Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
+        .unwrap();
+    // create prefix bloom for memtable.
+    opt.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+    opt
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false)
+    let mut opt = get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false);
+    opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
+            Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
+        .unwrap();
+    opt
 }
 
 fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
@@ -459,6 +472,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_usize(&mut cfg.raft_store.messages_per_tick,
               config,
               "raftstore.messages-per-tick");
+    cfg_u64(&mut cfg.raft_store.raft_base_tick_interval,
+            config,
+            "raftstore.raft-base-tick-interval");
     cfg_usize(&mut cfg.raft_store.raft_heartbeat_ticks,
               config,
               "raftstore.raft-heartbeat-ticks");
@@ -760,7 +776,15 @@ fn main() {
 
     let pd_endpoints = get_flag_string(&matches, "pd")
         .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
-    for addr in pd_endpoints.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    for addr in pd_endpoints.split(',')
+        .map(|s| s.trim())
+        .filter_map(|s| if s.is_empty() {
+            None
+        } else if s.starts_with("http://") {
+            Some(&s[7..])
+        } else {
+            Some(s)
+        }) {
         if let Err(e) = util::config::check_addr(addr) {
             panic!("{:?}", e);
         }

@@ -29,6 +29,7 @@ use super::util::new_raft_engine;
 use super::assert_storage::AssertionStorage;
 use storage::util;
 use std::collections::HashSet;
+use std::u64;
 
 #[test]
 fn test_txn_store_get() {
@@ -81,6 +82,31 @@ fn test_txn_store_cleanup_commit() {
     store.commit_ok(vec![b"primary"], 5, 10);
     store.cleanup_err(b"primary", 5);
     store.rollback_err(vec![b"primary"], 5);
+}
+
+#[test]
+fn test_txn_store_for_point_get_with_pk() {
+    let store = AssertionStorage::default();
+
+    store.put_ok(b"b", b"v2", 1, 2);
+    store.put_ok(b"primary", b"v1", 2, 3);
+    store.put_ok(b"secondary", b"v3", 3, 4);
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"v3".to_vec())),
+                           Mutation::Put((make_key(b"secondary"), b"s-5".to_vec())),
+                           Mutation::Put((make_key(b"new_key"), b"new_key".to_vec()))],
+                      b"primary",
+                      5);
+    store.get_ok(b"primary", 4, b"v1");
+    store.get_ok(b"primary", u64::MAX, b"v1");
+    store.get_err(b"primary", 6);
+
+    store.get_ok(b"secondary", 4, b"v3");
+    store.get_err(b"secondary", 6);
+    store.get_err(b"secondary", u64::MAX);
+
+    store.get_err(b"new_key", 6);
+    store.get_ok(b"b", 6, b"v2");
+
 }
 
 #[test]
@@ -326,10 +352,9 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     let mut stores: HashSet<u64> = HashSet::new();
     for k in &keys {
-        store.update_with_key(&mut cluster, k);
+        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v1", 5, 10);
+        store.put_ok_for_cluster(&mut cluster, k.as_bytes(), b"v2", 15, 20);
         let store_id = store.ctx.get_peer().get_store_id();
-        store.put_ok(k.as_bytes(), b"v1", 5, 10);
-        store.put_ok(k.as_bytes(), b"v2", 15, 20);
         if !stores.contains(&store_id) {
             stores.insert(store_id);
         }
@@ -347,15 +372,50 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
         store.get_none(k.as_bytes(), 15);
     }
 }
-#[test]
-fn test_txn_store_gc2() {
-    for &i in &[0, 1, GC_BATCH_SIZE - 1, GC_BATCH_SIZE, GC_BATCH_SIZE + 1, GC_BATCH_SIZE * 2] {
-        test_txn_store_gc_multiple_keys(1, i);
-    }
 
-    for &i in &[1, MAX_TXN_WRITE_SIZE / 2, MAX_TXN_WRITE_SIZE + 1] {
-        test_txn_store_gc_multiple_keys(i, 3);
-    }
+#[test]
+fn test_txn_store_gc2_1() {
+    test_txn_store_gc_multiple_keys(1, 0);
+}
+
+#[test]
+fn test_txn_store_gc2_2() {
+    test_txn_store_gc_multiple_keys(1, 1);
+}
+
+#[test]
+fn test_txn_store_gc2_3() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE - 1);
+}
+
+#[test]
+fn test_txn_store_gc2_4() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE);
+}
+
+#[test]
+fn test_txn_store_gc2_5() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE + 1);
+}
+
+#[test]
+fn test_txn_store_gc2_6() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE * 2);
+}
+
+#[test]
+fn test_txn_store_gc2_7() {
+    test_txn_store_gc_multiple_keys(1, 3);
+}
+
+#[test]
+fn test_txn_store_gc2_8() {
+    test_txn_store_gc_multiple_keys(MAX_TXN_WRITE_SIZE / 2, 3);
+}
+
+#[test]
+fn test_txn_store_gc2_9() {
+    test_txn_store_gc_multiple_keys(MAX_TXN_WRITE_SIZE + 1, 3);
 }
 
 #[test]

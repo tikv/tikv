@@ -25,7 +25,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_raft::*;
+use super::test_raft::*;
 use kvproto::eraftpb::*;
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
@@ -199,7 +199,7 @@ fn test_nonleader_start_election(state: StateRole) {
     }
 
     for _ in 1..2 * et {
-        r.tick()
+        r.tick();
     }
 
     assert_eq!(r.term, 2);
