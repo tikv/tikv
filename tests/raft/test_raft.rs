@@ -2022,6 +2022,70 @@ fn test_read_only_option_lease_without_check_quorum() {
     assert_eq!(rs.request_ctx, vec_ctx);
 }
 
+// `test_read_only_for_new_leader` ensures that a leader only accepts MsgReadIndex message
+// when it commits at least one log entry at it term.
+#[test]
+fn test_read_only_for_new_leader() {
+    let heartbeat_ticks = 1;
+    let node_configs = vec![
+        (1, 1, 1, 0),
+        (2, 2, 2, 2),
+        (3, 2, 2, 2),
+    ];
+    let mut peers = vec![];
+    for (id, committed, applied, compact_index) in node_configs {
+        let mut cfg = new_test_config(id, vec![1, 2, 3], 10, heartbeat_ticks);
+        cfg.applied = applied;
+        let storage = new_storage();
+        let entries = vec![empty_entry(1, 1), empty_entry(1, 2)];
+        storage.wl().append(&entries).unwrap();
+        let mut hs = HardState::new();
+        hs.set_term(1);
+        hs.set_commit(committed);
+        storage.wl().set_hardstate(hs);
+        if compact_index != 0 {
+            storage.wl().compact(compact_index).unwrap();
+        }
+        let i = Interface::new(Raft::new(&cfg, storage));
+        peers.push(Some(i));
+    }
+    let mut nt = Network::new(peers);
+
+    // Drop MsgAppend to forbid peer 1 to commit any log entry at its term
+    // after it becomes leader.
+    nt.ignore(MessageType::MsgAppend);
+    // Force peer 1 to become leader
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+    assert_eq!(nt.peers[&1].state, StateRole::Leader);
+
+    // Ensure peer 1 drops read only request.
+    let windex = 4;
+    let wctx = "ctx";
+    nt.send(vec![new_message_with_entries(1, 1, MessageType::MsgReadIndex, vec![
+        new_entry(0, 0, Some(wctx))])]);
+    assert_eq!(nt.peers[&1].read_states.len(), 0);
+
+    nt.recover();
+
+    // Force peer 1 to commit a log entry at its term.
+    for _ in 0..heartbeat_ticks {
+        nt.peers.get_mut(&1).unwrap().tick();
+    }
+    nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
+    assert_eq!(nt.peers[&1].raft_log.committed, 4);
+    assert_eq!(nt.peers[&1].raft_log.term(nt.peers[&1].raft_log.committed).unwrap_or(0), 
+    nt.peers[&1].term);
+
+    // Ensure peer 1 accepts read only request after it commits a entry at its term.
+    nt.send(vec![new_message_with_entries(1, 1, MessageType::MsgReadIndex, vec![
+        new_entry(0, 0, Some(wctx))])]);
+    let read_states: Vec<ReadState> = nt.peers.get_mut(&1).unwrap().read_states.drain(..).collect();
+    assert_eq!(read_states.len(), 1);
+    let rs = &read_states[0];
+    assert_eq!(rs.index, windex);
+    assert_eq!(rs.request_ctx, wctx.as_bytes().to_vec());
+}
+
 #[test]
 fn test_leader_append_response() {
     // initial progress: match = 0; next = 3
