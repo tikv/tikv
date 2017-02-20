@@ -100,13 +100,14 @@ impl AssertionStorage {
 
     fn expect_not_leader_err(&self, err: storage::Error) {
         match err {
+            storage::Error::Txn(
+                txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(ref e)))) |
             storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
             storage::Error::Engine(engine::Error::Request(ref e)) => {
                 assert!(e.has_not_leader(), format!("is not_leader {:?}", e));
             }
             _ => {
-                let err_str = format!("{:?}", err);
-                assert!(err_str.contains("not_leader"), err);
+                panic!("expect not leader error, but got {:?}", err);
             }
         }
     }
