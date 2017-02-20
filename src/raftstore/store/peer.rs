@@ -73,9 +73,8 @@ pub struct ProposalMeta {
 
 struct ReadIndexRequest {
     pub uuid: Uuid,
-    pub req: RaftCmdRequest,
-    pub cb: Callback,
-    pub renew_lease_time: Option<Timespec>,
+    pub cmds: Vec<(RaftCmdRequest, Callback)>,
+    pub renew_lease_time: Timespec,
 }
 
 #[derive(Default)]
@@ -680,8 +679,11 @@ impl Peer {
 
         if ready.ss.as_ref().map_or(false, |s| s.raft_state != StateRole::Leader) {
             let term = self.term();
-            for req in self.pending_reads.drain(..) {
-                notify_stale_command(&self.tag, term, req.uuid, req.cb);
+            for read in self.pending_reads.drain(..) {
+                for (req, cb) in read.cmds {
+                    let uuid = util::get_uuid_from_req(&req).unwrap();
+                    notify_stale_command(&self.tag, term, uuid, cb);
+                }
             }
         }
 
@@ -775,13 +777,18 @@ impl Peer {
             }
         };
 
+        let mut propose_time = None;
         for state in &ready.read_states {
-            let req = self.pending_reads.pop_front().unwrap();
-            assert_eq!(state.request_ctx.as_slice(),
-                       req.req.get_header().get_uuid());
-            let uuid = util::get_uuid_from_req(&req.req).unwrap();
-            self.execute_read(uuid, req.req, req.cb);
-            let lease = self.next_lease_expired_time(req.renew_lease_time.unwrap());
+            let read = self.pending_reads.pop_front().unwrap();
+            assert_eq!(state.request_ctx.as_slice(), read.uuid.as_bytes());
+            for (req, cb) in read.cmds {
+                let uuid = util::get_uuid_from_req(&req).unwrap();
+                self.execute_read(uuid, req, cb);
+            }
+            propose_time = Some(read.renew_lease_time);
+        }
+        if let Some(propose_time) = propose_time {
+            let lease = self.next_lease_expired_time(propose_time);
             if self.leader_lease_expired_time.map_or(true, |expired_time| expired_time < lease) {
                 self.leader_lease_expired_time = Some(lease);
             }
@@ -1099,6 +1106,14 @@ impl Peer {
                   metrics: &mut RaftProposeMetrics) {
         metrics.read_index += 1;
 
+        let renew_lease_time = clocktime::raw_now();
+        if let Some(read) = self.pending_reads.back_mut() {
+            if read.renew_lease_time + self.cfg.raft_store_max_leader_lease > renew_lease_time {
+                read.cmds.push((req, cb));
+                return;
+            }
+        }
+
         // Should we call pre_propose here?
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
@@ -1117,9 +1132,8 @@ impl Peer {
         }
         self.pending_reads.push_back(ReadIndexRequest {
             uuid: uuid,
-            req: req,
-            cb: cb,
-            renew_lease_time: Some(clocktime::raw_now()),
+            cmds: vec![(req, cb)],
+            renew_lease_time: renew_lease_time,
         });
     }
 
