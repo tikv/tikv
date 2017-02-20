@@ -25,7 +25,7 @@ use protobuf::RepeatedField;
 
 use rand::{self, Rng};
 
-use kvproto::{metapb, pdpb};
+use kvproto::{metapb, pdpb, eraftpb};
 use kvproto::pdpb2;
 use kvproto::pdpb2_grpc::{self, PD};
 
@@ -205,6 +205,17 @@ fn check_resp_header(header: &pdpb2::ResponseHeader) -> Result<()> {
     Err(box_err!(err.get_message()))
 }
 
+fn map_eraft_type(t: pdpb2::ConfChangeType) -> eraftpb::ConfChangeType {
+     match t {
+         pdpb2::ConfChangeType::AddNode => {
+             eraftpb::ConfChangeType::AddNode
+         }
+         pdpb2::ConfChangeType::RemoveNode => {
+             eraftpb::ConfChangeType::RemoveNode
+         }
+     }
+}
+
 impl fmt::Debug for RpcClient {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "PD gRPC Client connects to cluster {:?}", self.members)
@@ -335,10 +346,8 @@ impl PdClient for RpcClient {
         if resp.has_change_peer() {
             let mut cp = pdpb::ChangePeer::new();
             let mut cp2 = resp.take_change_peer();
-            if cp2.has_change_type() {
-                let ty = cp2.take_change_type();
-                cp.set_change_type(ty.get_field_type());
-            }
+            let ty = cp2.get_change_type();
+            cp.set_change_type(map_eraft_type(ty));
             if cp2.has_peer() {
                 cp.set_peer(cp2.take_peer());
             }
