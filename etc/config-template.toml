@@ -131,8 +131,9 @@ wal-recovery-mode = 2
 # max-total-wal-size = "4GB"
 
 # Rocksdb Statistics provides cumulative stats over time.
-# Set it ture only when debugging performance, because it will introduce overhead.
-enable-statistics = false
+# Turn statistics on will introduce about 5%-10% overhead for RocksDB,
+# but it is worthy to know the internal status of RocksDB.
+# enable-statistics = true
 
 # Dump statistics periodically in information logs.
 # Same as rocksdb's default value (10 min).
