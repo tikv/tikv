@@ -160,7 +160,7 @@ fn try_connect(members: &pdpb2::GetPDMembersResponse) -> Result<pdpb2_grpc::PDCl
 const MAX_RETRY_COUNT: usize = 100;
 
 #[inline]
-fn do_requst<F, R>(client: &RpcClient, f: F) -> Result<R>
+fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
     where F: Fn(RwLockReadGuard<pdpb2_grpc::PDClient>) -> result::Result<R, grpc::error::GrpcError>
 {
     let mut resp = None;
@@ -175,7 +175,10 @@ fn do_requst<F, R>(client: &RpcClient, f: F) -> Result<R>
         };
 
         match r {
-            Ok(r) => resp = Some(r),
+            Ok(r) => {
+                resp = Some(r);
+                break;
+            }
             Err(e) => {
                 error!("fail to request: {:?}", e);
                 let mut cli = client.inner.write().unwrap();
@@ -234,7 +237,7 @@ impl PdClient for RpcClient {
         req.set_store(stores);
         req.set_region(region);
 
-        let resp = try!(do_requst(self, |client| client.Bootstrap(req.clone())));
+        let resp = try!(do_request(self, |client| client.Bootstrap(req.clone())));
         try!(check_resp_header(resp.get_header()));
         Ok(())
     }
@@ -243,7 +246,7 @@ impl PdClient for RpcClient {
         let mut req = pdpb2::IsBootstrappedRequest::new();
         req.set_header(self.header());
 
-        let resp = try!(do_requst(self, |client| client.IsBootstrapped(req.clone())));
+        let resp = try!(do_request(self, |client| client.IsBootstrapped(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.get_bootstrapped())
@@ -253,7 +256,7 @@ impl PdClient for RpcClient {
         let mut req = pdpb2::AllocIDRequest::new();
         req.set_header(self.header());
 
-        let resp = try!(do_requst(self, |client| client.AllocID(req.clone())));
+        let resp = try!(do_request(self, |client| client.AllocID(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.get_id())
@@ -264,7 +267,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store(store);
 
-        let resp = try!(do_requst(self, |client| client.PutStore(req.clone())));
+        let resp = try!(do_request(self, |client| client.PutStore(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(())
@@ -275,7 +278,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store_id(store_id);
 
-        let mut resp = try!(do_requst(self, |client| client.GetStore(req.clone())));
+        let mut resp = try!(do_request(self, |client| client.GetStore(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_store())
@@ -285,7 +288,7 @@ impl PdClient for RpcClient {
         let mut req = pdpb2::GetClusterConfigRequest::new();
         req.set_header(self.header());
 
-        let mut resp = try!(do_requst(self, |client| client.GetClusterConfig(req.clone())));
+        let mut resp = try!(do_request(self, |client| client.GetClusterConfig(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_cluster())
@@ -296,7 +299,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_key(key.to_vec());
 
-        let mut resp = try!(do_requst(self, |client| client.GetRegion(req.clone())));
+        let mut resp = try!(do_request(self, |client| client.GetRegion(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_region())
@@ -307,7 +310,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let mut resp = try!(do_requst(self, |client| client.GetRegionByID(req.clone())));
+        let mut resp = try!(do_request(self, |client| client.GetRegionByID(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         if resp.has_region() {
@@ -339,7 +342,7 @@ impl PdClient for RpcClient {
             .collect());
         req.set_pending_peers(RepeatedField::from_vec(pending_peers));
 
-        let mut resp = try!(do_requst(self, |client| client.RegionHeartbeat(req.clone())));
+        let mut resp = try!(do_request(self, |client| client.RegionHeartbeat(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         let mut ret = pdpb::RegionHeartbeatResponse::new();
@@ -369,7 +372,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
 
-        let mut resp = try!(do_requst(self, |client| client.AskSplit(req.clone())));
+        let mut resp = try!(do_request(self, |client| client.AskSplit(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         let mut ret = pdpb::AskSplitResponse::new();
@@ -411,7 +414,7 @@ impl PdClient for RpcClient {
         }
         req.set_stats(stats2);
 
-        let resp = try!(do_requst(self, |client| client.StoreHeartbeat(req.clone())));
+        let resp = try!(do_request(self, |client| client.StoreHeartbeat(req.clone())));
 
         try!(check_resp_header(resp.get_header()));
         Ok(())
@@ -423,7 +426,7 @@ impl PdClient for RpcClient {
         req.set_left(left);
         req.set_right(right);
 
-        let resp = try!(do_requst(self, |client| client.ReportSplit(req.clone())));
+        let resp = try!(do_request(self, |client| client.ReportSplit(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(())
