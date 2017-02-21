@@ -555,7 +555,7 @@ mod v1 {
 
         #[test]
         fn test_snap_file() {
-            let dir = TempDir::new("test-snap-mgr").unwrap();
+            let dir = TempDir::new("test-snap-file").unwrap();
             let str = dir.path().to_str().unwrap().to_owned() + "/snap1";
             let path = Path::new(&str);
             assert!(!path.exists());
@@ -620,6 +620,7 @@ mod v1 {
 }
 
 mod v2 {
+    use std::error::Error as StdError;
     use std::io::{self, Read, Write, ErrorKind};
     use std::fs::{self, File, OpenOptions, Metadata};
     use std::path::{Path, PathBuf};
@@ -790,13 +791,19 @@ mod v2 {
     impl Snap {
         fn new<T: Into<PathBuf>>(dir: T,
                                  key: &SnapKey,
-                                 size_track: Arc<RwLock<u64>>)
+                                 size_track: Arc<RwLock<u64>>,
+                                 sending: bool)
                                  -> io::Result<Snap> {
             let dir_path = dir.into();
             if !dir_path.exists() {
                 try!(fs::create_dir_all(dir_path.as_path()));
             }
-            let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
+            let snap_prefix = if sending {
+                SNAP_GEN_PREFIX
+            } else {
+                SNAP_REV_PREFIX
+            };
+            let prefix = format!("{}_{}", snap_prefix, key);
             let display_path = Snap::get_display_path(&dir_path, &prefix);
             let snapshot_cfs = get_snapshot_cfs();
             let mut cf_files = Vec::with_capacity(snapshot_cfs.len());
@@ -834,7 +841,7 @@ mod v2 {
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> io::Result<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track));
+            let mut s = try!(Snap::new(dir, key, size_track, true));
             try!(s.init_for_building());
             Ok(s)
         }
@@ -843,7 +850,7 @@ mod v2 {
                                                  key: &SnapKey,
                                                  size_track: Arc<RwLock<u64>>)
                                                  -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track));
+            let mut s = try!(Snap::new(dir, key, size_track, true));
             try!(s.init_for_sending());
             Ok(s)
         }
@@ -899,7 +906,7 @@ mod v2 {
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track));
+            let mut s = try!(Snap::new(dir, key, size_track, false));
             try!(s.init_for_applying());
             Ok(s)
         }
@@ -991,23 +998,30 @@ mod v2 {
 
         fn try_delete(&self) -> io::Result<()> {
             debug!("deleting {}", self.path());
-            let mut sub_size = false;
+            let mut exists = false;
             let mut total_size = 0;
             if self.exists() {
-                sub_size = true;
+                exists = true;
             }
             for cf_file in &self.cf_files {
                 delete_file(&cf_file.tmp_path);
-                if sub_size {
+                if exists {
                     total_size += try!(get_file_size(&cf_file.path));
                 }
                 delete_file(&cf_file.path);
             }
             delete_file(&self.meta_file.tmp_path);
             delete_file(&self.meta_file.path);
-            if sub_size {
+            let size_to_sub = if exists {
+                total_size
+            } else if self.meta_file.data.has_file_size() {
+                self.meta_file.data.get_file_size()
+            } else {
+                0
+            };
+            if size_to_sub != 0 {
                 let mut size_track = self.size_track.wl();
-                *size_track = size_track.saturating_sub(total_size);
+                *size_track = size_track.saturating_sub(size_to_sub);
             }
             Ok(())
         }
@@ -1072,7 +1086,6 @@ mod v2 {
         }
 
         fn save_cf_files(&mut self) -> io::Result<()> {
-            let mut total_size = 0;
             for cf_file in &mut self.cf_files {
                 if cf_file.kv_count == 0 {
                     try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
@@ -1083,14 +1096,10 @@ mod v2 {
                         return Err(io::Error::new(ErrorKind::Other, e));
                     }
                     try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
-                    let size = try!(get_file_size(&cf_file.path));
-                    cf_file.size = size;
-                    total_size += size;
+                    cf_file.size = try!(get_file_size(&cf_file.path));
                 }
                 cf_file.digest = try!(calc_checksum(&cf_file.path));
             }
-            let mut size_track = self.size_track.wl();
-            *size_track = size_track.saturating_add(total_size);
             Ok(())
         }
 
@@ -1198,6 +1207,9 @@ mod v2 {
             // save snapshot meta file to meta file
             self.meta_file.data = snap_data.clone();
             try!(self.save_meta_file());
+            // add size
+            let mut size_track = self.size_track.wl();
+            *size_track = size_track.saturating_add(total_size);
             Ok(())
         }
 
@@ -1260,6 +1272,12 @@ mod v2 {
             for cf_file in &mut self.cf_files {
                 try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
                 total_size += cf_file.size;
+            }
+            // write meta file
+            let mut v = vec![];
+            try!(self.meta_file.data.write_to_vec(&mut v));
+            if let Err(e) = self.meta_file.file.as_mut().unwrap().write_all(&v[..]) {
+                return Err(io::Error::new(ErrorKind::Other, e.description()));
             }
             try!(fs::rename(&self.meta_file.tmp_path, &self.meta_file.path));
             let mut size_track = self.size_track.wl();
@@ -1360,6 +1378,158 @@ mod v2 {
                 self.delete()
             }
         }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use std::io;
+        use std::sync::{Arc, RwLock};
+        use std::sync::atomic::AtomicUsize;
+        use tempdir::TempDir;
+        use kvproto::metapb::{Peer, Region};
+        use kvproto::raft_serverpb::RaftSnapshotData;
+        use rocksdb::DB;
+
+        use storage::ALL_CFS;
+        use util::{rocksdb, HandyRwLock};
+        use raftstore::Result;
+        use raftstore::store::keys;
+        use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable};
+        use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
+        use super::super::{SNAP_GEN_PREFIX, need_to_pack, SnapKey, Snapshot};
+        use super::{Snap, ApplyContext};
+
+        fn get_test_snapshot(peer: &Peer, path: &TempDir) -> Result<DbSnapshot> {
+            let p = path.path().to_str().unwrap();
+            let db = try!(rocksdb::new_engine(p, ALL_CFS));
+            let key = keys::data_key(b"akey");
+            // write some data into each cf
+            for cf in ALL_CFS {
+                let handle = try!(rocksdb::get_cf_handle(&db, cf));
+                try!(db.put_msg_cf(handle, &key[..], peer));
+            }
+            Ok(DbSnapshot::new(Arc::new(db)))
+        }
+
+        fn verify_db(db: &DB, peer: Peer) {
+            let key = keys::data_key(b"akey");
+            for cf in ALL_CFS {
+                if !need_to_pack(cf) {
+                    continue;
+                }
+                let p: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
+                assert!(p.is_some());
+                let p = p.unwrap();
+                assert_eq!(p, peer.clone());
+            }
+        }
+
+        #[test]
+        fn test_display_path() {
+            let dir = TempDir::new("test-display-path").unwrap();
+            let key = SnapKey::new(1, 1, 1);
+            let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
+            let display_path = Snap::get_display_path(&dir.into_path(), &prefix);
+            assert!(display_path != "");
+        }
+
+        #[test]
+        fn test_snap_file() {
+            let region_id = 1;
+            let store_id = 1;
+            let peer_id = 1;
+            let mut peer = Peer::new();
+            peer.set_store_id(store_id);
+            peer.set_id(peer_id);
+            let mut region = Region::new();
+            region.set_id(region_id);
+            region.set_start_key(b"a".to_vec());
+            region.set_end_key(b"z".to_vec());
+            region.mut_region_epoch().set_version(1);
+            region.mut_region_epoch().set_conf_ver(1);
+            region.mut_peers().push(peer.clone());
+
+            let src_db_dir = TempDir::new("test-snap-file-db-src").unwrap();
+            let snapshot = get_test_snapshot(&peer, &src_db_dir).unwrap();
+
+            let src_dir = TempDir::new("test-snap-file-src").unwrap();
+            let key = SnapKey::new(region_id, 1, 1);
+            let size_track = Arc::new(RwLock::new(0));
+            let mut s1 = Snap::new_for_building(src_dir.path(), &key, size_track.clone()).unwrap();
+            // Ensure that this snapshot file doesn't exist before being built.
+            assert!(!s1.exists());
+            assert_eq!(*size_track.rl(), 0);
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data.set_region(region.clone());
+            s1.build(&snapshot, &region, &mut snap_data).unwrap();
+
+            // Ensure that this snapshot file does exist after being built.
+            assert!(s1.exists());
+            let total_size = s1.total_size().unwrap();
+            // Ensure the `size_track` is modified correctly.
+            let size = *size_track.rl();
+            assert!(size > 0);
+            assert_eq!(size, total_size);
+
+            // Ensure this snapshot could be read for sending.
+            let mut s2 = Snap::new_for_sending(src_dir.path(), &key, size_track.clone()).unwrap();
+            assert!(s2.exists());
+
+            // TODO check meta data correct.
+            let _ = s2.meta().unwrap();
+
+            let dst_dir = TempDir::new("test-snap-file-dst").unwrap();
+
+            let mut s3 =
+                Snap::new_for_receiving(dst_dir.path(), &key, snap_data, size_track.clone())
+                    .unwrap();
+            assert!(!s3.exists());
+
+            // Ensure snapshot data could be read out of `s2`, and write into `s3`.
+            let copy_size = io::copy(&mut s2, &mut s3).unwrap();
+            assert_eq!(copy_size, size);
+            assert!(!s3.exists());
+            s3.save().unwrap();
+            assert!(s3.exists());
+
+            // Ensure the tracked size is handled correctly after receiving a snapshot.
+            assert_eq!(*size_track.rl(), size * 2);
+
+            // Ensure `delete()` works to delete the source snapshot.
+            s2.delete();
+            assert!(!s2.exists());
+            assert!(!s1.exists());
+            assert_eq!(*size_track.rl(), size);
+
+            // Ensure a snapshot could be applied to DB.
+            let mut s4 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).unwrap();
+            assert!(s4.exists());
+
+            let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
+            let dst_db = rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
+
+            let mut context = ApplyContext {
+                db: Arc::new(dst_db),
+                region: region.clone(),
+                abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
+                write_batch_size: 10 * 1024 * 1024,
+                snapshot_size: 0,
+                snapshot_kv_count: 0,
+            };
+            s4.apply(&mut context).unwrap();
+            assert_eq!(context.snapshot_size as u64, size);
+            assert_eq!(context.snapshot_kv_count, 0);
+
+            // Ensure the snapshot is deleted after it's applied to DB.
+            assert!(!s4.exists());
+            assert!(!s3.exists());
+            assert_eq!(*size_track.rl(), 0);
+
+            // Verify the data is correct after applying snapshot.
+            verify_db(&context.db.as_ref(), peer);
+        }
+
     }
 }
 
