@@ -368,8 +368,7 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     }
 
     for k in &keys {
-        store.update_with_key(&mut cluster, k);
-        store.get_none(k.as_bytes(), 15);
+        store.get_none_from_cluster(&mut cluster, k.as_bytes(), 15);
     }
 }
 
