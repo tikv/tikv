@@ -29,6 +29,7 @@ use super::util::new_raft_engine;
 use super::assert_storage::AssertionStorage;
 use storage::util;
 use std::collections::HashSet;
+use std::u64;
 
 #[test]
 fn test_txn_store_get() {
@@ -81,6 +82,31 @@ fn test_txn_store_cleanup_commit() {
     store.commit_ok(vec![b"primary"], 5, 10);
     store.cleanup_err(b"primary", 5);
     store.rollback_err(vec![b"primary"], 5);
+}
+
+#[test]
+fn test_txn_store_for_point_get_with_pk() {
+    let store = AssertionStorage::default();
+
+    store.put_ok(b"b", b"v2", 1, 2);
+    store.put_ok(b"primary", b"v1", 2, 3);
+    store.put_ok(b"secondary", b"v3", 3, 4);
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"v3".to_vec())),
+                           Mutation::Put((make_key(b"secondary"), b"s-5".to_vec())),
+                           Mutation::Put((make_key(b"new_key"), b"new_key".to_vec()))],
+                      b"primary",
+                      5);
+    store.get_ok(b"primary", 4, b"v1");
+    store.get_ok(b"primary", u64::MAX, b"v1");
+    store.get_err(b"primary", 6);
+
+    store.get_ok(b"secondary", 4, b"v3");
+    store.get_err(b"secondary", 6);
+    store.get_err(b"secondary", u64::MAX);
+
+    store.get_err(b"new_key", 6);
+    store.get_ok(b"b", 6, b"v2");
+
 }
 
 #[test]
@@ -342,8 +368,7 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     }
 
     for k in &keys {
-        store.update_with_key(&mut cluster, k);
-        store.get_none(k.as_bytes(), 15);
+        store.get_none_from_cluster(&mut cluster, k.as_bytes(), 15);
     }
 }
 

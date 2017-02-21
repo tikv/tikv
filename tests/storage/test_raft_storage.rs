@@ -168,5 +168,5 @@ fn test_scheduler_leader_change_twice() {
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     engine.unblock_snapshot();
 
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 }
