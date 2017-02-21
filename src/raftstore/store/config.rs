@@ -172,7 +172,7 @@ impl Config {
     /// after the region split, so that the peer of new split region may campaign and become leader
     /// earlier than other follower peers.
     pub fn accelerate_campaign_after_split_ticks(&self) -> usize {
-        self.raft_election_timeout_ticks - 1
+        self.raft_election_timeout_ticks * 2 - 1
     }
 
     pub fn validate(&self) -> Result<()> {
