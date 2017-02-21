@@ -98,16 +98,18 @@ impl AssertionStorage {
         assert_eq!(result, expect);
     }
 
-    fn expect_not_leader_err(&self, err: storage::Error) {
+    fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
             storage::Error::Txn(
                 txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(ref e)))) |
             storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
             storage::Error::Engine(engine::Error::Request(ref e)) => {
-                assert!(e.has_not_leader(), format!("is not_leader {:?}", e));
+                assert!(e.has_not_leader()|e.has_stale_command(),
+                format!("invalid error {:?}", e));
             }
             _ => {
-                panic!("expect not leader error, but got {:?}", err);
+                panic!("expect not leader error or stale command, but got {:?}",
+                       err);
             }
         }
     }
@@ -123,7 +125,7 @@ impl AssertionStorage {
                 assert_eq!(ret.unwrap(), None);
                 return;
             }
-            self.expect_not_leader_err(ret.unwrap_err());
+            self.expect_not_leader_or_stale_command(ret.unwrap_err());
             self.update_with_key_byte(cluster, key);
         }
         panic!("failed with 3 retry!");
@@ -145,7 +147,7 @@ impl AssertionStorage {
                 success = true;
                 break;
             }
-            self.expect_not_leader_err(res.unwrap_err());
+            self.expect_not_leader_or_stale_command(res.unwrap_err());
             self.update_with_key_byte(cluster, key)
         }
         assert!(success);
@@ -157,7 +159,7 @@ impl AssertionStorage {
                 success = true;
                 break;
             }
-            self.expect_not_leader_err(res.unwrap_err());
+            self.expect_not_leader_or_stale_command(res.unwrap_err());
             self.update_with_key_byte(cluster, key)
         }
         assert!(success);
