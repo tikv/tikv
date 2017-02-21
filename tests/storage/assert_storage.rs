@@ -104,8 +104,7 @@ impl AssertionStorage {
                 txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(ref e)))) |
             storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
             storage::Error::Engine(engine::Error::Request(ref e)) => {
-                assert!(e.has_not_leader()|e.has_stale_command(),
-                format!("invalid error {:?}", e));
+                assert!(e.has_not_leader() | e.has_stale_command(), "invalid error {:?}", e);
             }
             _ => {
                 panic!("expect not leader error or stale command, but got {:?}",
