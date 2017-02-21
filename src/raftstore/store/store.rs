@@ -508,33 +508,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
                 Ok(ApplyTaskRes::Apply(res)) => {
-                    let has_split = res.exec_res.iter().any(|e| {
-                        match *e {
-                            ExecResult::SplitRegion { .. } => true,
-                            _ => false,
-                        }
-                    });
                     if let Some(p) = self.region_peers.get_mut(&res.region_id) {
                         debug!("{} async apply finish: {:?}", p.tag, res);
-                        if p.is_applying_snapshot() {
-                            panic!("{} should not applying snapshot.", p.tag);
-                        }
-                        p.raft_group.advance_apply(res.apply_state.get_applied_index());
-                        p.mut_store().apply_state = res.apply_state;
-                        if has_split {
-                            p.delete_keys_hint = res.metrics.delete_keys_hint;
-                            p.size_diff_hint = res.metrics.size_diff_hint as u64;
-                        } else {
-                            p.delete_keys_hint += res.metrics.delete_keys_hint;
-                            p.size_diff_hint =
-                                (p.size_diff_hint as i64 + res.metrics.size_diff_hint) as u64;
-                        }
-                        p.mut_store().applied_index_term = res.applied_index_term;
-                        p.written_keys += res.metrics.written_keys;
-                        p.written_bytes += res.metrics.written_bytes;
-                        if p.has_pending_snapshot() && p.ready_to_handle_pending_snap() {
-                            self.pending_raft_groups.insert(p.region().get_id());
-                        }
+                        p.post_apply(&res, &mut self.pending_raft_groups);
                     }
                     self.on_ready_result(res.region_id, res.exec_res);
                 }

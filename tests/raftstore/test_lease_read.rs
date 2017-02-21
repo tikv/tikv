@@ -39,13 +39,17 @@ fn read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
                               peer: Peer,
                               region: Region,
                               key: &[u8],
-                              timeout: Duration)
+                              timeout: Duration,
+                              quorum_read: bool)
                               -> Result<Vec<u8>> {
     let mut request = new_request(region.get_id(),
                                   region.get_region_epoch().clone(),
                                   vec![new_get_cmd(key)],
                                   false);
     request.mut_header().set_peer(peer);
+    if quorum_read {
+        request.mut_header().set_read_quorum(true);
+    }
     let mut resp = try!(cluster.call_command(request, timeout));
     if resp.get_header().has_error() {
         return Err(Error::Other(box_err!(resp.mut_header().take_error().take_message())));
@@ -61,9 +65,10 @@ fn must_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
                                    peer: Peer,
                                    region: Region,
                                    key: &[u8],
-                                   value: &[u8]) {
+                                   value: &[u8],
+                                   quorum_read: bool) {
     let timeout = Duration::from_secs(1);
-    match read_on_peer(cluster, peer, region, key, timeout) {
+    match read_on_peer(cluster, peer, region, key, timeout, quorum_read) {
         Ok(v) => {
             if v != value {
                 panic!("read key {}, expect value {}, got {}",
@@ -81,7 +86,7 @@ fn must_error_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
                                          region: Region,
                                          key: &[u8],
                                          timeout: Duration) {
-    if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout) {
+    if let Ok(value) = read_on_peer(cluster, peer, region, key, timeout, false) {
         panic!("key {}, expect error but got {}",
                escape(key),
                escape(&value));
@@ -107,21 +112,20 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
     cluster.cfg.raft_store.raft_base_tick_interval = 50;
-    cluster.cfg.raft_store.raft_election_timeout_ticks = 90;
+    // Use large election timeout to make leadership stable.
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10000;
 
-    let election_timeout =
-        Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval *
-                              cluster.cfg.raft_store.raft_election_timeout_ticks as u64);
-    cluster.cfg.raft_store.raft_store_max_leader_lease = TimeDuration::from_std(election_timeout)
-        .unwrap();
+    let max_lease = Duration::from_secs(2);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = TimeDuration::from_std(max_lease).unwrap();
 
     let node_id = 1u64;
     let store_id = 1u64;
     let peer = new_peer(store_id, node_id);
-    cluster.run();
-
-    // Wait for election
-    thread::sleep(election_timeout);
+    cluster.pd_client.disable_default_rule();
+    let region_id = cluster.run_conf_change();
+    for id in 2..cluster.engines.len() as u64 + 1 {
+        cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
+    }
 
     // Write the initial value for a key.
     let key = b"k";
@@ -135,26 +139,37 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
 
-    // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    cluster.add_send_filter(IsolationFilterFactory::new(store_id));
 
-    // Check if the leader does a local read.
+    // Issue a read request and check the value on response.
+    // Because peer is isolated, so if it can read the value successfully, it must be local read.
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1", false);
+
+    if cluster.engines.len() > 1 {
+        let res = read_on_peer(cluster, peer.clone(), region.clone(), key, max_lease, true);
+        assert!(res.is_err(), "quorum read should timeout.");
+
+        let timeout = Duration::from_secs(1);
+        // now lease is expire, local read will fallback to quorum read, so it can't succeed.
+        let res = read_on_peer(cluster, peer.clone(), region.clone(), key, timeout, false);
+        assert!(res.is_err(),
+                "local read should fallback to quorum read then timeout");
+    }
+
+    cluster.clear_send_filters();
+
+    // quorum read should succeed and update the lease.
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1", false);
+    cluster.add_send_filter(IsolationFilterFactory::new(store_id));
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1", false);
+    cluster.clear_send_filters();
+
+    // local read and quorum read won't fallback to propose.
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index);
 
     // Wait for the leader lease to expire.
-    thread::sleep(election_timeout);
-
-    // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-
-    // Check if the leader does a consistent read and renewed its lease.
-    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
-    let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index + 1);
-
-    // Wait for the leader lease to expire.
-    thread::sleep(election_timeout);
+    thread::sleep(max_lease);
 
     // Issue a write request.
     cluster.must_put(key, b"v2");
@@ -162,14 +177,12 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     // Check if the leader has renewed its lease so that it can do lease read.
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index + 2);
+    assert_eq!(state.get_last_index(), last_index + 1);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(store_id));
 
     // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v2");
-
-    // Check if the leader does a local read.
-    let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index + 2);
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v2", false);
 }
 
 #[test]
@@ -287,7 +300,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     cluster.must_transfer_leader(region_id, peer.clone());
 
     // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1", false);
 
     let engine = cluster.get_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
@@ -295,7 +308,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     let last_index = state.get_last_index();
 
     // Check if the leader does a local read.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1", false);
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index);
 
@@ -325,14 +338,14 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     // read/write and renew/reuse the lease as usual.
 
     // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1", false);
 
     // Check if the leader does a consistent read and renew its lease.
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
     // Check if the leader does a local read.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1", false);
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 }
