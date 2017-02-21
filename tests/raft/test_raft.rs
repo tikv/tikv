@@ -2061,8 +2061,10 @@ fn test_read_only_for_new_leader() {
     // Ensure peer 1 drops read only request.
     let windex = 4;
     let wctx = "ctx";
-    nt.send(vec![new_message_with_entries(1, 1, MessageType::MsgReadIndex, vec![
-        new_entry(0, 0, Some(wctx))])]);
+    nt.send(vec![new_message_with_entries(1,
+                                          1,
+                                          MessageType::MsgReadIndex,
+                                          vec![new_entry(0, 0, Some(wctx))])]);
     assert_eq!(nt.peers[&1].read_states.len(), 0);
 
     nt.recover();
@@ -2073,12 +2075,14 @@ fn test_read_only_for_new_leader() {
     }
     nt.send(vec![new_message(1, 1, MessageType::MsgPropose, 1)]);
     assert_eq!(nt.peers[&1].raft_log.committed, 4);
-    assert_eq!(nt.peers[&1].raft_log.term(nt.peers[&1].raft_log.committed).unwrap_or(0), 
-    nt.peers[&1].term);
+    assert_eq!(nt.peers[&1].raft_log.term(nt.peers[&1].raft_log.committed).unwrap_or(0),
+               nt.peers[&1].term);
 
     // Ensure peer 1 accepts read only request after it commits a entry at its term.
-    nt.send(vec![new_message_with_entries(1, 1, MessageType::MsgReadIndex, vec![
-        new_entry(0, 0, Some(wctx))])]);
+    nt.send(vec![new_message_with_entries(1,
+                                          1,
+                                          MessageType::MsgReadIndex,
+                                          vec![new_entry(0, 0, Some(wctx))])]);
     let read_states: Vec<ReadState> = nt.peers.get_mut(&1).unwrap().read_states.drain(..).collect();
     assert_eq!(read_states.len(), 1);
     let rs = &read_states[0];
