@@ -1381,7 +1381,7 @@ mod v2 {
     }
 
     #[cfg(test)]
-    mod test {
+    pub mod test {
         use std::io;
         use std::sync::{Arc, RwLock};
         use std::sync::atomic::AtomicUsize;
@@ -1401,7 +1401,7 @@ mod v2 {
 
         const TEST_STORE_ID: u64 = 1;
 
-        fn get_test_snapshot(path: &TempDir) -> Result<DbSnapshot> {
+        pub fn get_test_snapshot(path: &TempDir) -> Result<DbSnapshot> {
             let p = path.path().to_str().unwrap();
             let db = try!(rocksdb::new_engine(p, ALL_CFS));
             let key = keys::data_key(b"akey");
@@ -1414,6 +1414,20 @@ mod v2 {
                 try!(db.put_msg_cf(handle, &key[..], &p));
             }
             Ok(DbSnapshot::new(Arc::new(db)))
+        }
+
+        pub fn get_test_region(region_id: u64, store_id: u64, peer_id: u64) -> Region {
+            let mut peer = Peer::new();
+            peer.set_store_id(store_id);
+            peer.set_id(peer_id);
+            let mut region = Region::new();
+            region.set_id(region_id);
+            region.set_start_key(b"a".to_vec());
+            region.set_end_key(b"z".to_vec());
+            region.mut_region_epoch().set_version(1);
+            region.mut_region_epoch().set_conf_ver(1);
+            region.mut_peers().push(peer.clone());
+            region
         }
 
         fn verify_db(db: &DB) {
@@ -1444,19 +1458,7 @@ mod v2 {
         #[test]
         fn test_snap_file() {
             let region_id = 1;
-            let store_id = 1;
-            let peer_id = 1;
-            let mut peer = Peer::new();
-            peer.set_store_id(store_id);
-            peer.set_id(peer_id);
-            let mut region = Region::new();
-            region.set_id(region_id);
-            region.set_start_key(b"a".to_vec());
-            region.set_end_key(b"z".to_vec());
-            region.mut_region_epoch().set_version(1);
-            region.mut_region_epoch().set_conf_ver(1);
-            region.mut_peers().push(peer.clone());
-
+            let region = get_test_region(region_id, 1, 1);
             let src_db_dir = TempDir::new("test-snap-file-db-src").unwrap();
             let snapshot = get_test_snapshot(&src_db_dir).unwrap();
 
@@ -1783,56 +1785,107 @@ pub fn new_snap_mgr<T: Into<String>>(path: T,
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
+    use std::io;
     use std::fs::File;
     use std::io::Write;
     use std::sync::*;
-
     use tempdir::TempDir;
+    use kvproto::raft_serverpb::RaftSnapshotData;
 
     use util::HandyRwLock;
     use super::{SnapKey, Snapshot, new_snap_mgr};
-    use super::v1::{Snap, CRC32_BYTES_COUNT};
+    use super::v1::{Snap as SnapV1, CRC32_BYTES_COUNT};
+    use super::v2::{self, Snap as SnapV2};
 
     #[test]
-    fn test_snap_mgr() {
-        let path = TempDir::new("test-snap-mgr").unwrap();
-
-        // `mgr` should create the specified directory when it does not exist.
-        let path1 = path.path().to_str().unwrap().to_owned() + "/snap1";
-        let p = Path::new(&path1);
-        assert!(!p.exists());
-        let mut mgr = new_snap_mgr(path1.clone(), None, false);
+    fn test_snap_mgr_create_dir() {
+        // Ensure `mgr` creates the specified directory when it does not exist.
+        let temp_dir = TempDir::new("test-snap-mgr-create-dir").unwrap();
+        let temp_path = temp_dir.path().join("snap1");
+        let path = temp_path.to_str().unwrap().to_owned();
+        assert!(!temp_path.exists());
+        let mut mgr = new_snap_mgr(path, None, false);
         mgr.wl().init().unwrap();
-        assert!(p.exists());
+        assert!(temp_path.exists());
 
-        // if target is a file, an error should be returned.
-        let path2 = path.path().to_str().unwrap().to_owned() + "/snap2";
-        File::create(&path2).unwrap();
+        // Ensure `init()` will return an error if specified target is a file.
+        let temp_path2 = temp_dir.path().join("snap2");
+        let path2 = temp_path2.to_str().unwrap().to_owned();
+        File::create(temp_path2).unwrap();
         mgr = new_snap_mgr(path2, None, false);
         assert!(mgr.wl().init().is_err());
+    }
 
-        // if temporary files exist, they should be deleted.
-        let path3 = path.path().to_str().unwrap().to_owned() + "/snap3";
+    #[test]
+    fn test_snap_mgr_delete_temp_files_v1() {
+        // Ensure `mgr` would delete all the temporary files on initialization if they exist.
+        let temp_dir = TempDir::new("test-snap-mgr-delete-temp-files-v1").unwrap();
+        let path = temp_dir.path().join("snap").to_str().unwrap().to_owned();
+
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let f1 = Snap::new_for_writing(&path3, size_track.clone(), true, &key1).unwrap();
-        let f2 = Snap::new_for_writing(&path3, size_track.clone(), false, &key1).unwrap();
+        let mut s1 = SnapV1::new_for_writing(&path, size_track.clone(), true, &key1).unwrap();
+        s1.save_with_checksum().unwrap();
+        let mut s2 = SnapV1::new_for_writing(&path, size_track.clone(), false, &key1).unwrap();
+        s2.save_with_checksum().unwrap();
+
         let key2 = SnapKey::new(2, 1, 1);
-        let mut f3 = Snap::new_for_writing(&path3, size_track.clone(), true, &key2).unwrap();
-        f3.save_with_checksum().unwrap();
-        let mut f4 = Snap::new_for_writing(&path3, size_track.clone(), false, &key2).unwrap();
-        f4.save_with_checksum().unwrap();
-        assert!(!f1.exists());
-        assert!(!f2.exists());
-        assert!(f3.exists());
-        assert!(f4.exists());
-        mgr = new_snap_mgr(path3, None, false);
+        let s3 = SnapV1::new_for_writing(&path, size_track.clone(), true, &key2).unwrap();
+        let s4 = SnapV1::new_for_writing(&path, size_track.clone(), false, &key2).unwrap();
+
+        assert!(s1.exists());
+        assert!(s2.exists());
+        assert!(!s3.exists());
+        assert!(!s4.exists());
+
+        // Create a `mgr` and check `init()` deletes all the temporary files.
+        let mgr = new_snap_mgr(path, None, false);
         mgr.wl().init().unwrap();
-        assert!(!f1.exists());
-        assert!(!f2.exists());
-        assert!(f3.exists());
-        assert!(f4.exists());
+
+        assert!(s1.exists());
+        assert!(s2.exists());
+        assert!(!s3.exists());
+        assert!(!s4.exists());
+    }
+
+    #[test]
+    fn test_snap_mgr_delete_temp_files_v2() {
+        let temp_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2").unwrap();
+        let path = temp_dir.path().join("snap").to_str().unwrap().to_owned();
+
+        let key1 = SnapKey::new(1, 1, 1);
+        let size_track = Arc::new(RwLock::new(0));
+        let mut s1 = SnapV2::new_for_building(&path, &key1, size_track.clone()).unwrap();
+        let mut region = v2::test::get_test_region(1, 1, 1);
+        let db_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2-db").unwrap();
+        let snapshot = v2::test::get_test_snapshot(&db_dir).unwrap();
+        let mut snap_data = RaftSnapshotData::new();
+        snap_data.set_region(region.clone());
+        s1.build(&snapshot, &region, &mut snap_data).unwrap();
+        let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone()).unwrap();
+        let mut s2 = SnapV2::new_for_receiving(&path, &key1, snap_data.clone(), size_track.clone())
+            .unwrap();
+        let _ = io::copy(&mut s, &mut s2).unwrap();
+        s2.save().unwrap();
+
+        let key2 = SnapKey::new(2, 1, 1);
+        region.set_id(2);
+        snap_data.set_region(region);
+        let s3 = SnapV2::new_for_building(&path, &key2, size_track.clone()).unwrap();
+        let s4 = SnapV2::new_for_receiving(&path, &key2, snap_data, size_track.clone()).unwrap();
+
+        assert!(s1.exists());
+        assert!(s2.exists());
+        assert!(!s3.exists());
+        assert!(!s4.exists());
+
+        let mgr = new_snap_mgr(path, None, true);
+        mgr.wl().init().unwrap();
+
+        assert!(s1.exists());
+        assert!(s2.exists());
+        assert!(!s3.exists());
+        assert!(!s4.exists());
     }
 
     #[test]
@@ -1847,15 +1900,15 @@ mod test {
         let test_data = b"test_data";
         let exp_len = (test_data.len() + CRC32_BYTES_COUNT) as u64;
         let size_track = Arc::new(RwLock::new(0));
-        let mut f1 = Snap::new_for_writing(path_str, size_track.clone(), true, &key1).unwrap();
-        let mut f2 = Snap::new_for_writing(path_str, size_track.clone(), false, &key1).unwrap();
+        let mut f1 = SnapV1::new_for_writing(path_str, size_track.clone(), true, &key1).unwrap();
+        let mut f2 = SnapV1::new_for_writing(path_str, size_track.clone(), false, &key1).unwrap();
         f1.write_all(test_data).unwrap();
         f2.write_all(test_data).unwrap();
         let key2 = SnapKey::new(2, 1, 1);
-        let mut f3 = Snap::new_for_writing(path_str, size_track.clone(), true, &key2).unwrap();
+        let mut f3 = SnapV1::new_for_writing(path_str, size_track.clone(), true, &key2).unwrap();
         f3.write_all(test_data).unwrap();
         f3.save_with_checksum().unwrap();
-        let mut f4 = Snap::new_for_writing(path_str, size_track.clone(), false, &key2).unwrap();
+        let mut f4 = SnapV1::new_for_writing(path_str, size_track.clone(), false, &key2).unwrap();
         f4.write_all(test_data).unwrap();
         f4.save_with_checksum().unwrap();
 
