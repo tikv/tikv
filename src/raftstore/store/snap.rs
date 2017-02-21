@@ -1399,28 +1399,36 @@ mod v2 {
         use super::super::{SNAP_GEN_PREFIX, need_to_pack, SnapKey, Snapshot};
         use super::{Snap, ApplyContext};
 
-        fn get_test_snapshot(peer: &Peer, path: &TempDir) -> Result<DbSnapshot> {
+        const TEST_STORE_ID: u64 = 1;
+
+        fn get_test_snapshot(path: &TempDir) -> Result<DbSnapshot> {
             let p = path.path().to_str().unwrap();
             let db = try!(rocksdb::new_engine(p, ALL_CFS));
             let key = keys::data_key(b"akey");
             // write some data into each cf
-            for cf in ALL_CFS {
+            for (i, cf) in ALL_CFS.into_iter().enumerate() {
                 let handle = try!(rocksdb::get_cf_handle(&db, cf));
-                try!(db.put_msg_cf(handle, &key[..], peer));
+                let mut p = Peer::new();
+                p.set_store_id(TEST_STORE_ID);
+                p.set_id((i + 1) as u64);
+                try!(db.put_msg_cf(handle, &key[..], &p));
             }
             Ok(DbSnapshot::new(Arc::new(db)))
         }
 
-        fn verify_db(db: &DB, peer: Peer) {
+        fn verify_db(db: &DB) {
             let key = keys::data_key(b"akey");
-            for cf in ALL_CFS {
+            for (i, cf) in ALL_CFS.into_iter().enumerate() {
                 if !need_to_pack(cf) {
                     continue;
                 }
                 let p: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
                 assert!(p.is_some());
                 let p = p.unwrap();
-                assert_eq!(p, peer.clone());
+                let mut expect = Peer::new();
+                expect.set_store_id(TEST_STORE_ID);
+                expect.set_id((i + 1) as u64);
+                assert_eq!(p, expect);
             }
         }
 
@@ -1450,7 +1458,7 @@ mod v2 {
             region.mut_peers().push(peer.clone());
 
             let src_db_dir = TempDir::new("test-snap-file-db-src").unwrap();
-            let snapshot = get_test_snapshot(&peer, &src_db_dir).unwrap();
+            let snapshot = get_test_snapshot(&src_db_dir).unwrap();
 
             let src_dir = TempDir::new("test-snap-file-src").unwrap();
             let key = SnapKey::new(region_id, 1, 1);
@@ -1527,9 +1535,8 @@ mod v2 {
             assert_eq!(*size_track.rl(), 0);
 
             // Verify the data is correct after applying snapshot.
-            verify_db(&context.db.as_ref(), peer);
+            verify_db(&context.db.as_ref());
         }
-
     }
 }
 
