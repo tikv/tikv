@@ -1621,7 +1621,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn flush_engine_statistics(&mut self) {
         for t in ENGINE_TICKER_TYPES {
-            let v = self.engine.get_and_reset_statistics_ticker_count(*t);
+            let v = self.engine.get_statistics_ticker_count(*t);
             flush_engine_ticker_metrics(*t, v);
         }
 

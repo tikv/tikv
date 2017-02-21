@@ -214,7 +214,7 @@ lazy_static!{
 
     pub static ref STORE_ENGINE_READ_SURVED_VEC: GaugeVec =
         register_gauge_vec!(
-            "tikv_engine_get_surved",
+            "tikv_engine_get_served",
             "Get queries served by.",
             &["type"]
         ).unwrap();
@@ -228,34 +228,34 @@ lazy_static!{
 
     pub static ref STORE_ENGINE_FLOW_VEC: GaugeVec =
         register_gauge_vec!(
-            "tikv_engine_flow",
+            "tikv_engine_flow_bytes",
             "Bytes and keys of read/write.",
             &["type"]
         ).unwrap();
 
     pub static ref STORE_ENGINE_STALL_MICROS: Gauge =
         register_gauge!(
-            "tikv_engine_stall_micros",
+            "tikv_engine_stall_micro_seconds",
             "Stall micros."
         ).unwrap();
 
     pub static ref STORE_ENGINE_GET_MICROS_VEC: GaugeVec =
         register_gauge_vec!(
-            "tikv_engine_get_micros",
+            "tikv_engine_get_micro_seconds",
             "Get micros histogram.",
             &["type"]
         ).unwrap();
 
     pub static ref STORE_ENGINE_WRITE_MICROS_VEC: GaugeVec =
         register_gauge_vec!(
-            "tikv_engine_write_micros",
+            "tikv_engine_write_micro_seconds",
             "Write micros histogram.",
             &["type"]
         ).unwrap();
 
     pub static ref STORE_ENGINE_SEEK_MICROS_VEC: GaugeVec =
         register_gauge_vec!(
-            "tikv_engine_seek_micros",
+            "tikv_engine_seek_micro_seconds",
             "Seek micros histogram.",
             &["type"]
         ).unwrap();
