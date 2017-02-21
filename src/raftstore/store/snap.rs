@@ -44,7 +44,7 @@ const SNAP_GEN_PREFIX: &'static str = "gen";
 const SNAP_REV_PREFIX: &'static str = "rev";
 
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
-const SNAP_FILE_SUFFIX: &'static str = "snap";
+const SNAP_FILE_SUFFIX: &'static str = ".snap";
 const SST_FILE_SUFFIX: &'static str = ".sst";
 
 quick_error! {
@@ -1431,7 +1431,7 @@ mod v2 {
             region
         }
 
-        fn verify_db(db: &DB) {
+        pub fn verify_db(db: &DB) {
             let key = keys::data_key(b"akey");
             for (i, cf) in ALL_CFS.into_iter().enumerate() {
                 if !need_to_pack(cf) {
@@ -1519,7 +1519,6 @@ mod v2 {
 
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
             let dst_db = rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
-
             let mut context = ApplyContext {
                 db: Arc::new(dst_db),
                 region: region.clone(),
@@ -1538,7 +1537,7 @@ mod v2 {
             assert_eq!(*size_track.rl(), 0);
 
             // Verify the data is correct after applying snapshot.
-            verify_db(&context.db.as_ref());
+            verify_db(context.db.as_ref());
         }
     }
 }
@@ -1787,14 +1786,18 @@ pub fn new_snap_mgr<T: Into<String>>(path: T,
 #[cfg(test)]
 mod test {
     use std::io;
+    use std::sync::atomic::AtomicUsize;
     use std::fs::File;
     use std::io::Write;
     use std::sync::*;
     use tempdir::TempDir;
+    use protobuf::Message;
     use kvproto::raft_serverpb::RaftSnapshotData;
 
-    use util::HandyRwLock;
-    use super::{SnapKey, Snapshot, new_snap_mgr};
+    use storage::ALL_CFS;
+    use util::{rocksdb, HandyRwLock};
+    use super::super::peer_storage::JOB_STATUS_RUNNING;
+    use super::{SnapKey, ApplyContext, Snapshot, new_snap_mgr};
     use super::v1::{Snap as SnapV1, CRC32_BYTES_COUNT};
     use super::v2::{self, Snap as SnapV2};
 
@@ -1912,5 +1915,54 @@ mod test {
         assert_eq!(mgr.rl().get_total_snap_size(), expected_size);
         mgr.rl().get_snapshot_for_applying(&key1).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
+    }
+
+    #[test]
+    fn test_snap_v1_v2_compatible() {
+        // Ensure that it's compatible between v1 impl and v2 impl, which means a receiver
+        // running v2 code could receive and apply the snapshot sent from a sender running v1 code.
+        let src_temp_dir = TempDir::new("test-snap-v1-v2-compatible-src").unwrap();
+        let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
+        let src_mgr = new_snap_mgr(src_path, None, false);
+        src_mgr.wl().init().unwrap();
+
+        let key = SnapKey::new(1, 1, 1);
+        let mut s1 = src_mgr.rl().get_snapshot_for_building(&key).unwrap();
+        let region = v2::test::get_test_region(1, 1, 1);
+        let src_db_dir = TempDir::new("test-snap-v1-v2-compatible-src-db").unwrap();
+        let snapshot = v2::test::get_test_snapshot(&src_db_dir).unwrap();
+        let mut snap_data = RaftSnapshotData::new();
+        snap_data.set_region(region.clone());
+        s1.build(&snapshot, &region, &mut snap_data).unwrap();
+        let mut v = vec![];
+        snap_data.write_to_vec(&mut v).unwrap();
+
+        let mut s2 = src_mgr.rl().get_snapshot_for_sending(&key).unwrap();
+        let expected_size = s2.total_size().unwrap();
+
+        let dst_temp_dir = TempDir::new("test-snap-v1-v2-compatible-dst").unwrap();
+        let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
+        let dst_mgr = new_snap_mgr(dst_path, None, true);
+        dst_mgr.wl().init().unwrap();
+
+        let mut s3 = dst_mgr.rl().get_snapshot_for_receiving(&key, &v[..]).unwrap();
+        let n = io::copy(&mut s2, &mut s3).unwrap();
+        assert_eq!(n, expected_size);
+        s3.save().unwrap();
+
+        let dst_db_dir = TempDir::new("test-snap-v1-v2-compatible-dst-db").unwrap();
+        let dst_db = rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
+        let mut context = ApplyContext {
+            db: Arc::new(dst_db),
+            region: region.clone(),
+            abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
+            write_batch_size: 10 * 1024 * 1024,
+            snapshot_size: 0,
+            snapshot_kv_count: 0,
+        };
+        let mut s4 = dst_mgr.rl().get_snapshot_for_applying(&key).unwrap();
+        s4.apply(&mut context).unwrap();
+
+        v2::test::verify_db(context.db.as_ref());
     }
 }
