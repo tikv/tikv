@@ -44,6 +44,8 @@ const SNAP_GEN_PREFIX: &'static str = "gen";
 const SNAP_REV_PREFIX: &'static str = "rev";
 
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
+const SNAP_FILE_SUFFIX: &'static str = "snap";
+const SST_FILE_SUFFIX: &'static str = ".sst";
 
 quick_error! {
     #[derive(Debug)]
@@ -178,8 +180,8 @@ mod v1 {
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Result, SnapKey, Snapshot,
-                ApplyContext, check_abort, need_to_pack};
+    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX, Result,
+                SnapKey, Snapshot, ApplyContext, check_abort, need_to_pack};
 
     pub const CRC32_BYTES_COUNT: usize = 4;
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
@@ -246,7 +248,7 @@ mod v1 {
             } else {
                 SNAP_REV_PREFIX
             };
-            let file_name = format!("{}_{}.snap", prefix, key);
+            let file_name = format!("{}_{}{}", prefix, key, SNAP_FILE_SUFFIX);
             path.push(&file_name);
             Ok(())
         }
@@ -640,10 +642,9 @@ mod v2 {
     use util::codec::bytes::{BytesEncoder, BytesDecoder};
     use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, Error, Result, SnapKey,
-                Snapshot, ApplyContext, check_abort, need_to_pack};
+    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Error, Result,
+                SnapKey, Snapshot, ApplyContext, check_abort, need_to_pack};
 
-    const SST_FILE_SUFFIX: &'static str = ".sst";
     const META_FILE_SUFFIX: &'static str = ".meta";
     const SNAPSHOT_META_PREFIX_SIZE: &'static str = "size";
     const SNAPSHOT_META_PREFIX_CHECKSUM: &'static str = "checksum";
@@ -1597,7 +1598,7 @@ impl SnapManagerCore {
                 if let Some(s) = p.file_name().to_str() {
                     if s.ends_with(TMP_FILE_SUFFIX) {
                         try!(fs::remove_file(p.path()));
-                    } else {
+                    } else if s.ends_with(SNAP_FILE_SUFFIX) || s.ends_with(SST_FILE_SUFFIX) {
                         *size += try!(p.metadata()).len();
                     }
                 }
@@ -1817,16 +1818,23 @@ mod test {
     }
 
     #[test]
-    fn test_snap_mgr_delete_temp_files_v1() {
-        // Ensure `mgr` would delete all the temporary files on initialization if they exist.
-        let temp_dir = TempDir::new("test-snap-mgr-delete-temp-files-v1").unwrap();
-        let path = temp_dir.path().join("snap").to_str().unwrap().to_owned();
+    fn test_snap_mgr_v1() {
+        // Ensure `mgr` is of size 0 when it's initialized.
+        let temp_dir = TempDir::new("test-snap-mgr-v1").unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_owned();
+        let mgr = new_snap_mgr(path.clone(), None, false);
+        mgr.wl().init().unwrap();
+        assert_eq!(mgr.rl().get_total_snap_size(), 0);
 
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
         let mut s1 = SnapV1::new_for_writing(&path, size_track.clone(), true, &key1).unwrap();
+        let test_data = b"test_data";
+        let expected_size = (test_data.len() + CRC32_BYTES_COUNT) as u64;
+        s1.write_all(test_data).unwrap();
         s1.save_with_checksum().unwrap();
         let mut s2 = SnapV1::new_for_writing(&path, size_track.clone(), false, &key1).unwrap();
+        s2.write_all(test_data).unwrap();
         s2.save_with_checksum().unwrap();
 
         let key2 = SnapKey::new(2, 1, 1);
@@ -1838,20 +1846,30 @@ mod test {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        // Create a `mgr` and check `init()` deletes all the temporary files.
+        // Ensure `mgr` would delete all the temporary files on initialization if they exist.
         let mgr = new_snap_mgr(path, None, false);
         mgr.wl().init().unwrap();
+        assert_eq!(mgr.rl().get_total_snap_size(), expected_size * 2);
 
         assert!(s1.exists());
         assert!(s2.exists());
         assert!(!s3.exists());
         assert!(!s4.exists());
+
+        // Ensure `mgr` tracks the size of all snapshots correctly when deleting snapshots.
+        mgr.rl().get_snapshot_for_sending(&key1).unwrap().delete();
+        assert_eq!(mgr.rl().get_total_snap_size(), expected_size);
+        mgr.rl().get_snapshot_for_applying(&key1).unwrap().delete();
+        assert_eq!(mgr.rl().get_total_snap_size(), 0);
     }
 
     #[test]
-    fn test_snap_mgr_delete_temp_files_v2() {
-        let temp_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2").unwrap();
-        let path = temp_dir.path().join("snap").to_str().unwrap().to_owned();
+    fn test_snap_mgr_v2() {
+        let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_owned();
+        let mgr = new_snap_mgr(path.clone(), None, true);
+        mgr.wl().init().unwrap();
+        assert_eq!(mgr.rl().get_total_snap_size(), 0);
 
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
@@ -1863,9 +1881,11 @@ mod test {
         snap_data.set_region(region.clone());
         s1.build(&snapshot, &region, &mut snap_data).unwrap();
         let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone()).unwrap();
+        let expected_size = s.total_size().unwrap();
         let mut s2 = SnapV2::new_for_receiving(&path, &key1, snap_data.clone(), size_track.clone())
             .unwrap();
-        let _ = io::copy(&mut s, &mut s2).unwrap();
+        let n = io::copy(&mut s, &mut s2).unwrap();
+        assert_eq!(n, expected_size);
         s2.save().unwrap();
 
         let key2 = SnapKey::new(2, 1, 1);
@@ -1881,45 +1901,16 @@ mod test {
 
         let mgr = new_snap_mgr(path, None, true);
         mgr.wl().init().unwrap();
+        assert_eq!(mgr.rl().get_total_snap_size(), expected_size * 2);
 
         assert!(s1.exists());
         assert!(s2.exists());
         assert!(!s3.exists());
         assert!(!s4.exists());
-    }
 
-    #[test]
-    fn test_snap_size() {
-        let path = TempDir::new("test-snap-mgr").unwrap();
-        let path_str = path.path().to_str().unwrap();
-        let mut mgr = new_snap_mgr(path_str, None, false);
-        mgr.wl().init().unwrap();
-        assert_eq!(mgr.rl().get_total_snap_size(), 0);
-
-        let key1 = SnapKey::new(1, 1, 1);
-        let test_data = b"test_data";
-        let exp_len = (test_data.len() + CRC32_BYTES_COUNT) as u64;
-        let size_track = Arc::new(RwLock::new(0));
-        let mut f1 = SnapV1::new_for_writing(path_str, size_track.clone(), true, &key1).unwrap();
-        let mut f2 = SnapV1::new_for_writing(path_str, size_track.clone(), false, &key1).unwrap();
-        f1.write_all(test_data).unwrap();
-        f2.write_all(test_data).unwrap();
-        let key2 = SnapKey::new(2, 1, 1);
-        let mut f3 = SnapV1::new_for_writing(path_str, size_track.clone(), true, &key2).unwrap();
-        f3.write_all(test_data).unwrap();
-        f3.save_with_checksum().unwrap();
-        let mut f4 = SnapV1::new_for_writing(path_str, size_track.clone(), false, &key2).unwrap();
-        f4.write_all(test_data).unwrap();
-        f4.save_with_checksum().unwrap();
-
-        mgr = new_snap_mgr(path_str, None, false);
-        mgr.wl().init().unwrap();
-        // temporary file should not be count in snap size.
-        assert_eq!(mgr.rl().get_total_snap_size(), exp_len * 2);
-
-        mgr.rl().get_snapshot_for_sending(&key2).unwrap().delete();
-        assert_eq!(mgr.rl().get_total_snap_size(), exp_len);
-        mgr.rl().get_snapshot_for_applying(&key2).unwrap().delete();
+        mgr.rl().get_snapshot_for_sending(&key1).unwrap().delete();
+        assert_eq!(mgr.rl().get_total_snap_size(), expected_size);
+        mgr.rl().get_snapshot_for_applying(&key1).unwrap().delete();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
     }
 }
