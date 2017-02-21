@@ -982,7 +982,7 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     let resp = rx.recv().unwrap().take_cop_resp();
-    assert!(resp.has_data(), format!("{:?}", resp));
+    assert!(resp.has_data(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp
