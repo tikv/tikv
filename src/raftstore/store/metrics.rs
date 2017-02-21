@@ -92,13 +92,6 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref STORE_ENGINE_SIZE_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
-            "tikv_engine_size_bytes",
-            "Sizes of each column families.",
-            &["type"]
-        ).unwrap();
-
     pub static ref PEER_PROPOSE_LOG_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_propose_log_size",
@@ -122,19 +115,7 @@ lazy_static! {
                     512.0, 1024.0, 5120.0, 10240.0]
         ).unwrap();
 
-    pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
-            "tikv_engine_memory_bytes",
-            "Sizes of each column families.",
-            &["cf", "type"]
-        ).unwrap();
 
-    pub static ref STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC: GaugeVec =
-        register_gauge_vec!(
-            "tikv_engine_estimate_num_keys",
-            "Estimate num keys of each column families.",
-            &["cf"]
-        ).unwrap();
 
     pub static ref REGION_WRITTEN_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
