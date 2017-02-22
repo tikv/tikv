@@ -958,7 +958,7 @@ impl Peer {
     ///
     /// Return true means the request has been proposed successfully.
     pub fn propose(&mut self,
-                   mut meta: ProposalMeta,
+                   meta: ProposalMeta,
                    cb: Callback,
                    req: RaftCmdRequest,
                    mut err_resp: RaftCmdResponse,
@@ -981,24 +981,30 @@ impl Peer {
                 return false;
             }
             Ok(RequestPolicy::ReadIndex) => return self.read_index(meta.uuid, req, cb, metrics),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics).err(),
+            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 self.propose_transfer_leader(req, cb, metrics);
                 return false;
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 is_conf_change = true;
-                self.propose_conf_change(req, metrics).err()
+                self.propose_conf_change(req, metrics)
             }
-            Err(e) => Some(e),
+            Err(e) => Err(e),
         };
 
-        if let Some(e) = res {
+        if let Err(e) = res {
             cmd_resp::bind_error(&mut err_resp, e);
             cb(err_resp);
             return false;
         }
 
+        self.post_propose(meta, is_conf_change, cb);
+
+        true
+    }
+
+    fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(clocktime::raw_now());
 
@@ -1011,8 +1017,6 @@ impl Peer {
         self.apply_scheduler.schedule(t).unwrap();
 
         self.proposals.push(meta);
-
-        true
     }
 
     fn get_handle_policy(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
@@ -1047,12 +1051,6 @@ impl Peer {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
-        if let Some(Either::Right(_)) = self.leader_lease_expired_time {
-            // TimeoutNow has been sent out, so we need to propose explicitly to
-            // update leader lease.
-            return Ok(RequestPolicy::ProposeNormal);
-        }
-
         if (req.has_header() && req.get_header().get_read_quorum()) ||
            !self.raft_group.raft.in_lease() {
             return Ok(RequestPolicy::ReadIndex);
@@ -1070,21 +1068,20 @@ impl Peer {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        if let Some(Either::Left(safe_expired_time)) = self.leader_lease_expired_time {
-            if clocktime::raw_now() > safe_expired_time {
+        match self.leader_lease_expired_time {
+            Some(Either::Left(safe_expired_time)) if clocktime::raw_now() <= safe_expired_time => {
+                Ok(RequestPolicy::ReadLocal)
+            }
+            _ => {
                 debug!("{} leader lease expired time {:?} is outdated",
                        self.tag,
                        self.leader_lease_expired_time);
                 // Reset leader lease expiring time.
                 self.leader_lease_expired_time = None;
                 // Perform a consistent read to Raft quorum and try to renew the leader lease.
-                return Ok(RequestPolicy::ReadIndex);
+                Ok(RequestPolicy::ReadIndex)
             }
-        } else {
-            unreachable!()
         }
-
-        Ok(RequestPolicy::ReadLocal)
     }
 
     /// Count the number of the healthy nodes.
@@ -1227,6 +1224,29 @@ impl Peer {
             cmds: vec![(req, cb)],
             renew_lease_time: renew_lease_time,
         });
+
+        match self.leader_lease_expired_time {
+            Some(Either::Right(_)) => {}
+            _ => return true,
+        };
+
+        // TimeoutNow has been sent out, so we need to propose explicitly to
+        // update leader lease.
+
+        let uuid = Uuid::new_v4();
+        if self.proposals.contains(&uuid) {
+            return true;
+        }
+        let meta = ProposalMeta {
+            uuid: uuid,
+            term: self.term(),
+            renew_lease_time: Some(renew_lease_time),
+        };
+        let mut req = RaftCmdRequest::new();
+        req.mut_header().set_uuid(uuid.as_bytes().to_vec());
+        if self.propose_normal(req, metrics).is_ok() {
+            self.post_propose(meta, false, box |_| {});
+        }
 
         true
     }
