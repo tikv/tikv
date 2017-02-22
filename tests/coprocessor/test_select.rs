@@ -893,6 +893,34 @@ fn test_order_by_column() {
 }
 
 #[test]
+fn test_order_by_pk_with_select_from_index() {
+    let mut data = vec![
+        (8, Some("name:0"), 2),
+        (7, Some("name:3"), 3),
+        (6, Some("name:0"), 1),
+        (5, Some("name:6"), 4),
+        (4, Some("name:5"), 4),
+        (3, Some("name:4"), 4),
+        (2, None, 4),
+    ];
+
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+    let req = Select::from_index(&product.table, product.name)
+        .order_by(product.id, true)
+        .limit(5)
+        .build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 5);
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, _, _)) in spliter.zip(data.drain(..5)) {
+        assert_eq!(id, row.handle);
+    }
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
 fn test_limit() {
     let mut data = vec![
         (1, Some("name:0"), 2),
@@ -954,7 +982,7 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     let resp = rx.recv().unwrap().take_cop_resp();
-    assert!(resp.has_data(), format!("{:?}", resp));
+    assert!(resp.has_data(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp

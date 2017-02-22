@@ -70,9 +70,10 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
                                     false);
         debug!("requesting {:?}", get);
         let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
-        assert!(resp.get_header().has_error(), format!("{:?}", resp));
+        assert!(resp.get_header().has_error(), "{:?}", resp);
         assert!(resp.get_header().get_error().has_key_not_in_region(),
-                format!("{:?}", resp));
+                "{:?}",
+                resp);
 
     }
 }
