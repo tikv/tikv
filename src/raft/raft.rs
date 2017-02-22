@@ -207,7 +207,7 @@ pub struct Raft<T: Storage> {
     pub check_quorum: bool,
     pre_vote: bool,
 
-    heartbeat_timeout: usize,
+    pub heartbeat_timeout: usize,
     election_timeout: usize,
 
     // randomized_election_timeout is a random number between
