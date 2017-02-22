@@ -89,13 +89,13 @@ struct Column {
     col_type: i32,
     // negative means not a index key, 0 means primary key, positive means normal index key.
     index: i64,
-    default_val: Option<Vec<u8>>,
+    default_val: Option<i64>,
 }
 
 struct ColumnBuilder {
     col_type: i32,
     index: i64,
-    default_val: Option<Vec<u8>>,
+    default_val: Option<i64>,
 }
 
 impl ColumnBuilder {
@@ -126,7 +126,7 @@ impl ColumnBuilder {
         self
     }
 
-    fn default(mut self, val: &[u8]) -> ColumnBuilder {
+    fn default(mut self, val: i64) -> ColumnBuilder {
         self.default_val = Some(val);
         self
     }
@@ -158,7 +158,7 @@ impl Table {
             c_info.set_tp(col.col_type);
             c_info.set_pk_handle(col.index == 0);
             if let Some(dv) = col.default_val {
-                c_info.set_default_val(dv)
+                c_info.set_default_val(datum::encode_value(&[Datum::I64(dv)]).unwrap())
             }
             tb_info.mut_columns().push(c_info);
         }
@@ -1478,11 +1478,16 @@ fn test_default_val() {
     ];
 
     let product = ProductTable::new();
-    let (_, mut end_point) = init_with_data(&product, &data);
+    let added = ColumnBuilder::new().col_type(TYPE_LONG).default(3).build();
+    let mut tbl = TableBuilder::new()
+        .add_col(product.id)
+        .add_col(product.name)
+        .add_col(product.count)
+        .add_col(added)
+        .build();
+    tbl.id = product.table.id;
 
-    let default_encoded = datum::encode_value(&[Datum::from(3)]).unwrap();
-    let added = ColumnBuilder::new().col_type(TYPE_LONG).default(default_encoded).build();
-    let tbl = TableBuilder::new().add_col(id).add_col(name).add_col(count).add_col(added).build();
+    let (_, mut end_point) = init_with_data(&product, &data);
 
     let req = Select::from(&tbl).limit(5).build();
     let mut resp = handle_select(&end_point, req);
@@ -1491,7 +1496,7 @@ fn test_default_val() {
     for (row, (id, name, cnt)) in spliter.zip(data.drain(..5)) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
-            datum::encode_value(&[id.into(), name_datum, cnt.into(), Datum::from(3)]).unwrap();
+            datum::encode_value(&[id.into(), name_datum, cnt.into(), Datum::I64(3)]).unwrap();
         assert_eq!(id, row.handle);
         assert_eq!(row.data, &*expected_encoded);
     }
