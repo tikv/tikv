@@ -362,7 +362,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     put.mut_header().set_peer(new_peer(2, 2));
     cluster.clear_send_filters();
     let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
-    assert!(!resp.get_header().has_error(), format!("{:?}", resp));
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     for i in 1..4 {
         must_get_equal(&cluster.get_engine(i), b"k2", b"v2");
@@ -593,7 +593,8 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     let resp = cluster.call_command(put, Duration::from_secs(5)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_region_not_found(),
-            format!("{:?} should have region not found", resp));
+            "{:?} should have region not found",
+            resp);
 }
 
 #[test]
