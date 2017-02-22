@@ -85,8 +85,14 @@ impl<T: Storage> RaftLog<T> {
     }
 
     pub fn last_term(&self) -> u64 {
-        self.term(self.last_index())
-            .expect(&format!("{} unexpected error when getting the last term", self.tag))
+        match self.term(self.last_index()) {
+            Ok(t) => t,
+            Err(e) => {
+                panic!("{} unexpected error when getting the last term: {:?}",
+                       self.tag,
+                       e)
+            }
+        }
     }
 
     #[inline]
