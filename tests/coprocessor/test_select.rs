@@ -89,11 +89,13 @@ struct Column {
     col_type: i32,
     // negative means not a index key, 0 means primary key, positive means normal index key.
     index: i64,
+    default_val: Option<Vec<u8>>,
 }
 
 struct ColumnBuilder {
     col_type: i32,
     index: i64,
+    default_val: Option<Vec<u8>>,
 }
 
 impl ColumnBuilder {
@@ -101,6 +103,7 @@ impl ColumnBuilder {
         ColumnBuilder {
             col_type: TYPE_LONG,
             index: -1,
+            default_val: None,
         }
     }
 
@@ -123,11 +126,17 @@ impl ColumnBuilder {
         self
     }
 
+    fn default(mut self, val: &[u8]) -> ColumnBuilder {
+        self.default_val = Some(val);
+        self
+    }
+
     fn build(self) -> Column {
         Column {
             id: next_id(),
             col_type: self.col_type,
             index: self.index,
+            default_val: self.default_val,
         }
     }
 }
@@ -148,6 +157,9 @@ impl Table {
             c_info.set_column_id(col.id);
             c_info.set_tp(col.col_type);
             c_info.set_pk_handle(col.index == 0);
+            if let Some(dv) = col.default_val {
+                c_info.set_default_val(dv)
+            }
             tb_info.mut_columns().push(c_info);
         }
         tb_info
@@ -1123,8 +1135,10 @@ fn test_index_aggr_count() {
         (Datum::Bytes(b"name:3".to_vec()), 1),
         (Datum::Bytes(b"name:5".to_vec()), 2),
     ];
-    let req =
-        Select::from_index(&product.table, product.name).count().group_by(&[product.name]).build();
+    let req = Select::from_index(&product.table, product.name)
+        .count()
+        .group_by(&[product.name])
+        .build();
     resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), exp.len());
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
@@ -1447,6 +1461,39 @@ fn test_handle_truncate() {
         end_point.schedule(EndPointTask::Request(req)).unwrap();
         let resp = rx.recv().unwrap().take_cop_resp();
         assert!(resp.has_other_error());
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_default_val() {
+    let mut data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let default_encoded = datum::encode_value(&[Datum::from(3)]).unwrap();
+    let added = ColumnBuilder::new().col_type(TYPE_LONG).default(default_encoded).build();
+    let tbl = TableBuilder::new().add_col(id).add_col(name).add_col(count).add_col(added).build();
+
+    let req = Select::from(&tbl).limit(5).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 5);
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, name, cnt)) in spliter.zip(data.drain(..5)) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded =
+            datum::encode_value(&[id.into(), name_datum, cnt.into(), Datum::from(3)]).unwrap();
+        assert_eq!(id, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
     }
 
     end_point.stop().unwrap().join().unwrap();

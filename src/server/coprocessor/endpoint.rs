@@ -457,6 +457,9 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                 e.insert(v);
             } else {
                 let value = match values.get(col_id) {
+                    None if col.has_default_val() => {
+                        box_try!(col.get_default_val().decode_col_value(ctx, col))
+                    }
                     None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                         return Err(box_err!("column {} of {} is missing", col_id, h));
                     }
@@ -803,6 +806,8 @@ impl SelectContextCore {
             }
             if col.get_pk_handle() {
                 box_try!(datum::encode_to(chunk.mut_rows_data(), &[get_pk(col, h)], false));
+            } else if col.has_default_val() {
+                chunk.mut_rows_data().extend_from_slice(col.get_default_val());
             } else if mysql::has_not_null_flag(col.get_flag() as u64) {
                 return Err(box_err!("column {} of {} is missing", col_id, h));
             } else {
