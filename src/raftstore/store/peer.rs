@@ -464,6 +464,14 @@ impl Peer {
         self.raft_group.raft.state == StateRole::Leader
     }
 
+    // When this peer is the leader of the region before split,
+    // `accelerate_campaign_ticks` specifies the tick number to be accelerated
+    // after the region split. So this peer of new split region may campaign and become leader
+    // earlier than other follower peers.
+    pub fn accelerate_campaign_ticks(&self) -> usize {
+        self.raft_group.raft.randomized_election_timeout - 1
+    }
+
     #[inline]
     pub fn get_store(&self) -> &PeerStorage {
         self.raft_group.get_store()
