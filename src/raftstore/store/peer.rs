@@ -1068,20 +1068,19 @@ impl Peer {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        match self.leader_lease_expired_time {
-            Some(Either::Left(safe_expired_time)) if clocktime::raw_now() <= safe_expired_time => {
-                Ok(RequestPolicy::ReadLocal)
+        if let Some(Either::Left(safe_expired_time)) = self.leader_lease_expired_time {
+            if clocktime::raw_now() <= safe_expired_time {
+                return Ok(RequestPolicy::ReadLocal);
             }
-            _ => {
-                debug!("{} leader lease expired time {:?} is outdated",
-                       self.tag,
-                       self.leader_lease_expired_time);
-                // Reset leader lease expiring time.
-                self.leader_lease_expired_time = None;
-                // Perform a consistent read to Raft quorum and try to renew the leader lease.
-                Ok(RequestPolicy::ReadIndex)
-            }
+            // Reset leader lease expiring time.
+            self.leader_lease_expired_time = None;
         }
+
+        debug!("{} leader lease expired time {:?} is outdated",
+               self.tag,
+               self.leader_lease_expired_time);
+        // Perform a consistent read to Raft quorum and try to renew the leader lease.
+        Ok(RequestPolicy::ReadIndex)
     }
 
     /// Count the number of the healthy nodes.

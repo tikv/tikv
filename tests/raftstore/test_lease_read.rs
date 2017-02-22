@@ -340,6 +340,10 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
     assert_eq!(detector.ctx.rl().len(), 1);
 
+    // And read index should not update lease.
+    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    assert_eq!(detector.ctx.rl().len(), 2);
+
     // Make sure the leader transfer procedure timeouts.
     thread::sleep(election_timeout * 2);
 
@@ -348,17 +352,17 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
 
     // Issue a read request and check the value on response.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-    assert_eq!(detector.ctx.rl().len(), 2);
+    assert_eq!(detector.ctx.rl().len(), 3);
 
-    // Check if the leader does a read index and renew its lease.
+    // Check if the leader also propose an entry renew its lease.
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index);
+    assert_eq!(state.get_last_index(), last_index + 1);
 
     // Check if the leader does a local read.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index);
-    assert_eq!(detector.ctx.rl().len(), 2);
+    assert_eq!(state.get_last_index(), last_index + 1);
+    assert_eq!(detector.ctx.rl().len(), 3);
 }
 
 #[test]
