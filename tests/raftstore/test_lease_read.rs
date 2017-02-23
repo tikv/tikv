@@ -358,6 +358,9 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
+    // wait some time to make the proposal to be applied.
+    thread::sleep(election_timeout / 2);
+
     // Check if the leader does a local read.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
