@@ -1303,7 +1303,6 @@ mod v2 {
                 }
                 context.snapshot_size += size as usize;
             }
-            self.delete();
             Ok(())
         }
     }
