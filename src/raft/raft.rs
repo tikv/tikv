@@ -207,13 +207,13 @@ pub struct Raft<T: Storage> {
     pub check_quorum: bool,
     pre_vote: bool,
 
-    pub heartbeat_timeout: usize,
+    heartbeat_timeout: usize,
     election_timeout: usize,
 
     // randomized_election_timeout is a random number between
     // [election_timeout, 2 * election_timeout - 1]. It gets reset
     // when raft changes its state to follower or candidate.
-    pub randomized_election_timeout: usize,
+    randomized_election_timeout: usize,
 
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
@@ -369,6 +369,10 @@ impl<T: Storage> Raft<T> {
 
     pub fn get_heartbeat_timeout(&self) -> usize {
         self.heartbeat_timeout
+    }
+
+    pub fn get_randomized_election_timeout(&self) -> usize {
+        self.randomized_election_timeout
     }
 
     pub fn nodes(&self) -> Vec<u64> {
