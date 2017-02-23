@@ -393,13 +393,13 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let level_zero_slowdown_writes_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-slowdown-writes-trigger").as_str(),
-                     Some(12));
+                     Some(20));
     opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
 
     let level_zero_stop_writes_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-stop-writes-trigger").as_str(),
-                     Some(16));
+                     Some(36));
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
     opts
