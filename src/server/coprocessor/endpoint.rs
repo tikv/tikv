@@ -458,6 +458,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
             } else {
                 let value = match values.get(col_id) {
                     None if col.has_default_val() => {
+                        // TODO: optimize it to decode default value only once.
                         box_try!(col.get_default_val().decode_col_value(ctx, col))
                     }
                     None if mysql::has_not_null_flag(col.get_flag() as u64) => {
