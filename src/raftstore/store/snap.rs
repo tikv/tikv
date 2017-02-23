@@ -1288,6 +1288,11 @@ mod v2 {
 
         fn apply(&mut self, context: &mut ApplyContext) -> Result<()> {
             for (cf, path, size) in box_try!(self.list_cf_path_sizes()) {
+                if size == 0 {
+                    // Skip ingesting empty sst file since that would cause an error
+                    // "Corruption: file is too short to be an sstable"
+                    continue;
+                }
                 try!(check_abort(&context.abort));
 
                 let cf_handle = box_try!(rocksdb::get_cf_handle(&context.db, &cf));
