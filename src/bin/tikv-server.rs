@@ -585,7 +585,7 @@ fn build_cfg(matches: &Matches,
             config,
             "raftstore.consistency-check-interval");
     cfg.raft_store.use_sst_file_snapshot =
-        get_toml_boolean(config, "raftstore.use_sst_file_snapshot", Some(false));
+        get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(false));
     cfg_usize(&mut cfg.storage.sched_notify_capacity,
               config,
               "storage.scheduler-notify-capacity");
