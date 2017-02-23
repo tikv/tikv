@@ -868,6 +868,9 @@ mod v2 {
             }
             let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
             let display_path = Snap::get_display_path(&dir_path, &prefix);
+            debug!("receive a snapshot {}, with cf files sizes and checksums: {:?}",
+                   display_path,
+                   cf_size_checksums);
             let mut cf_files = Vec::with_capacity(cf_size_checksums.len());
             for (cf, size, checksum) in cf_size_checksums {
                 let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
