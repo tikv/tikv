@@ -650,6 +650,7 @@ mod v2 {
     const SNAPSHOT_META_PREFIX_CHECKSUM: &'static str = "checksum";
     const ENCODE_DECODE_DESC: bool = false;
     const DIGEST_BUFFER_SIZE: usize = 10240;
+    const MAX_SNAPSHOT_CF_FILE_SIZE: u64 = 1024 * 1024 * 1024; // 1G
 
     fn get_snapshot_cfs() -> Vec<String> {
         let size = ALL_CFS.len();
@@ -694,6 +695,16 @@ mod v2 {
         }
     }
 
+    fn parse_cf_file_size(mut v: &[u8]) -> RaftStoreResult<u64> {
+        let size = try!(v.decode_u64());
+        if size > MAX_SNAPSHOT_CF_FILE_SIZE {
+            return Err(box_err!("invalid snapshot cf file size {} over max size {}",
+                                size,
+                                MAX_SNAPSHOT_CF_FILE_SIZE));
+        }
+        Ok(size)
+    }
+
     fn parse_cf_size_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(String, u64, u32)>> {
         let snapshot_cfs = get_snapshot_cfs();
         let mut cf_sizes: Vec<(String, u64)> = vec![];
@@ -719,13 +730,11 @@ mod v2 {
             }
             match strs[0] {
                 SNAPSHOT_META_PREFIX_SIZE => {
-                    let mut value_bytes = kv.get_value();
-                    let size = box_try!(value_bytes.decode_u64());
+                    let size = try!(parse_cf_file_size(kv.get_value()));
                     cf_sizes.push((cf, size));
                 }
                 SNAPSHOT_META_PREFIX_CHECKSUM => {
-                    let mut value_bytes = kv.get_value();
-                    let value = box_try!(value_bytes.decode_u64());
+                    let value = try!(parse_cf_file_size(kv.get_value()));
                     if value > u32::max_value() as u64 {
                         return Err(box_err!("invalid snapshot checksum {} for cf {}", value, cf));
                     }
