@@ -89,7 +89,7 @@ struct Column {
     col_type: i32,
     // negative means not a index key, 0 means primary key, positive means normal index key.
     index: i64,
-    default_val: Option<i64>,
+    default_val: Option<i64>, // TODO: change it to Vec<u8> if other type value is needed for test.
 }
 
 struct ColumnBuilder {
