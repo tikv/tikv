@@ -548,3 +548,46 @@ fn test_node_split_stale_epoch() {
     let mut cluster = new_node_cluster(0, 3);
     test_split_stale_epoch(&mut cluster);
 }
+
+
+// For the peer which is the leader of the region before split,
+// it would accelerate ticks for the peer of new region after split, so that the peer of new region
+// could start campaign faster. and then this peer may take the leadership earlier.
+// `test_tick_acceleration_after_split` is a helper function for testing this feature.
+fn test_tick_acceleration_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Calculate the reserved time before a new campaign after split.
+    let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
+                        cluster.cfg.raft_store.accelerate_campaign_reserved_ticks as u32;
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let region = cluster.get_region(b"k1");
+    let old_leader = cluster.leader_of_region(region.get_id()).unwrap();
+
+    cluster.must_split(&region, b"k2");
+
+    // Wait for the peer of new region to start campaign.
+    thread::sleep(reserved_time);
+
+    // The campaign should always succeeds in the ideal test environment.
+    let new_region = cluster.get_region(b"k3");
+    let store_id = old_leader.get_store_id();
+    // Ensure the new leader is established for the newly split region, and it shares the
+    // same store with the leader of old region.
+    let new_leader = cluster.query_leader(store_id, new_region.get_id());
+    assert!(new_leader.is_some());
+    assert_eq!(new_leader.unwrap().get_store_id(), store_id);
+}
+
+#[test]
+fn test_node_tick_acceleration_after_split() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_tick_acceleration_after_split(&mut cluster);
+}
+
+#[test]
+fn test_server_tick_acceleration_after_split() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_tick_acceleration_after_split(&mut cluster);
+}
