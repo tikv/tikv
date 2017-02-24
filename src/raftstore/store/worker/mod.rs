@@ -52,7 +52,7 @@ mod raftlog_gc;
 mod pd;
 mod metrics;
 mod consistency_check;
-mod apply;
+pub mod apply;
 
 pub use self::region::{Task as RegionTask, Runner as RegionRunner};
 pub use self::split_check::{Task as SplitCheckTask, Runner as SplitCheckRunner};

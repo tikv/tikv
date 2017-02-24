@@ -26,6 +26,7 @@ mod peer_storage;
 mod snap;
 mod worker;
 mod metrics;
+mod engine_metrics;
 mod local_metrics;
 mod local_read;
 
