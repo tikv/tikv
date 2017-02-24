@@ -491,8 +491,12 @@ impl Peer {
         // To make the best case happen at high degree of possibility, a time gap of
         // `accelerate_campaign_reserved_ticks * raft_base_tick_interval` is reserved for
         // the followers to receive AppendEntries request and to apply them.
-        self.raft_group.raft.get_randomized_election_timeout() -
-        self.cfg.accelerate_campaign_reserved_ticks
+        let ticks = self.raft_group.raft.get_randomized_election_timeout() -
+                    self.cfg.accelerate_campaign_reserved_ticks;
+        debug!("{} about to accelerate {} ticks for fast campaign after split",
+               self.tag,
+               ticks);
+        ticks
     }
 
     #[inline]
