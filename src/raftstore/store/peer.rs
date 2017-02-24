@@ -21,7 +21,7 @@ use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration as StdDuration};
 
-use time::Timespec;
+use time::{Timespec, Duration};
 use rocksdb::{DB, WriteBatch};
 use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;

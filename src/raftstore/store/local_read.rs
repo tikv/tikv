@@ -5,6 +5,7 @@ use std::sync::mpsc::Receiver;
 use uuid::Uuid;
 use protobuf;
 use raftstore::{Result, Error};
+use raftstore::store::worker::apply;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, CmdType};
 use util::{Either, clocktime, HandyRwLock, HashMap};
@@ -12,7 +13,7 @@ use util::transport::SendCh;
 use rocksdb::DB;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use super::peer::{check_epoch, do_get, do_snap};
+use super::peer::check_epoch;
 use super::msg::{Msg, Callback};
 use super::cmd_resp::{bind_uuid, bind_term, bind_error, new_error};
 use super::util;
@@ -396,8 +397,10 @@ impl LocalReadHandler {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => try!(do_get(&peer_status.tag, &peer_status.region, &snap, req)),
-                CmdType::Snap => try!(do_snap(peer_status.region.clone())),
+                CmdType::Get => {
+                    try!(apply::do_get(&peer_status.tag, &peer_status.region, &snap, req))
+                }
+                CmdType::Snap => try!(apply::do_snap(peer_status.region.clone())),
                 CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
             };
 
