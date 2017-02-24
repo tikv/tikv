@@ -201,7 +201,13 @@ impl<'a> MvccTxn<'a> {
                         Err(Error::Committed { commit_ts: ts })
                     }
                     // Rollbacked by concurrent transaction.
-                    None => Ok(()),
+                    None => {
+                        // insert a Rollback to WriteCF when receives Rollback before Prewrite
+                        let write = Write::new(WriteType::Rollback, self.start_ts, None);
+                        let ts = self.start_ts;
+                        self.put_write(key, ts, write.to_bytes());
+                        Ok(())
+                    }
                 };
             }
         }
@@ -480,6 +486,14 @@ mod tests {
 
         let long_value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
         test_mvcc_txn_rollback_err_imp(b"k2", &long_value);
+    }
+
+    #[test]
+    fn test_mvcc_txn_rollback_before_prewrite() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let key = b"key";
+        must_rollback(engine.as_ref(), key, 5);
+        must_prewrite_lock_err(engine.as_ref(), key, key, 5);
     }
 
     fn test_gc_imp(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8]) {
