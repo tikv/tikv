@@ -1094,7 +1094,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         new_peer.raft_group.raft.become_leader();
                     }
                 } else if is_leader && right.get_peers().len() > 1 {
-                    for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
+                    for _ in 0..new_peer.accelerate_campaign_ticks() {
                         new_peer.raft_group.tick();
                     }
                 }
