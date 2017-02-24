@@ -358,6 +358,8 @@ impl ApplyDelegate {
 
         let mut ctx = self.new_ctx(index, term, req);
         let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+            // clear dirty values.
+            ctx.wb.clear();
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
