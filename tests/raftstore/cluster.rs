@@ -242,7 +242,7 @@ impl<T: Simulator> Cluster<T> {
             .map(|region| region.get_peers().into_iter().map(|p| p.get_store_id()).collect())
     }
 
-    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
+    pub fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
         // To get region leader, we don't care real peer id, so use 0 instead.
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());

@@ -127,9 +127,9 @@ pub struct Config {
     pub raft_store_max_leader_lease: TimeDuration,
 
     // For the peer which is the leader of the region before split,
-    // it would accelerate ticks to make peer of new region start to campaign faster after split.
-    // Then it may take the leadership earlier and shorten the leading missing time, to gain
-    // higher availability.
+    // it would accelerate ticks for the peer of new region after split, so that
+    // the peer of new region could start campaign faster. And then this peer may take
+    // the leadership earlier and shorten the leading missing time to gain higher availability.
     // To make sure followers are replicated up-to-date and be ready to vote this peer's campaign,
     // The time interval specified by `accelerate_campaign_reserved_ticks * raft_base_tick_interval`
     // would be reserved before the peer of new region starts to campaign.
