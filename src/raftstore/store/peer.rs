@@ -12,15 +12,16 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::collections::hash_map::Values;
 use std::vec::Vec;
 use std::default::Default;
-use std::time::{Instant, Duration};
+use std::time::{Instant, Duration as StdDuration};
 
-use time::Timespec;
+use time::{Timespec, Duration};
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;
@@ -57,6 +58,8 @@ use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
 use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
+use super::msg::Msg;
+use super::local_read::PeerStatusChange;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -555,7 +558,7 @@ impl Peer {
         }
     }
 
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+    pub fn collect_down_peers(&self, max_duration: StdDuration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer.get_id() {
@@ -590,7 +593,7 @@ impl Peer {
         pending_peers
     }
 
-    pub fn check_stale_state(&mut self, d: Duration) -> StaleState {
+    pub fn check_stale_state(&mut self, d: StdDuration) -> StaleState {
         // Updates the `leader_missing_time` according to the current state.
         if self.leader_id() == raft::INVALID_ID {
             if self.leader_missing_time.is_none() {
@@ -609,7 +612,7 @@ impl Peer {
         // Checks whether the current peer is stale.
         let duration = match self.leader_missing_time {
             Some(t) => t.elapsed(),
-            None => Duration::new(0, 0),
+            None => StdDuration::new(0, 0),
         };
         if duration >= d {
             // Resets the `leader_missing_time` to avoid sending the same tasks to
@@ -628,7 +631,7 @@ impl Peer {
         send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
     }
 
-    fn update_leader_lease(&mut self, ready: &Ready) {
+    fn update_leader_lease(&mut self, ready: &Ready, local_read_tx: &Sender<Msg>) {
         // Update leader lease when the Raft state changes.
         if ready.ss.is_some() {
             let ss = ready.ss.as_ref().unwrap();
@@ -642,14 +645,30 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    self.leader_lease_expired_time =
+                    let leader_lease_expired_time =
                         Some(Either::Left(self.next_lease_expired_time(clocktime::raw_now())));
+                    self.leader_lease_expired_time = leader_lease_expired_time.clone();
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
                            self.leader_lease_expired_time);
+                    local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
+                            region_id: self.region().get_id(),
+                            leader_id: Some(ss.leader_id),
+                            leader_lease_expired_time: Some(leader_lease_expired_time.clone()),
+                            ..Default::default()
+                        }))
+                        .unwrap();
                 }
                 StateRole::Follower => {
                     self.leader_lease_expired_time = None;
+
+                    local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
+                            region_id: self.region().get_id(),
+                            leader_id: Some(ss.leader_id),
+                            leader_lease_expired_time: Some(None),
+                            ..Default::default()
+                        }))
+                        .unwrap();
                 }
                 _ => {}
             }
@@ -663,7 +682,9 @@ impl Peer {
         self.get_store().committed_index() == self.get_store().applied_index()
     }
 
-    pub fn handle_raft_ready_append<T: Transport>(&mut self, ctx: &mut ReadyContext<T>) {
+    pub fn handle_raft_ready_append<T: Transport>(&mut self,
+                                                  ctx: &mut ReadyContext<T>,
+                                                  local_read_tx: &Sender<Msg>) {
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -690,7 +711,7 @@ impl Peer {
 
         let mut ready = self.raft_group.ready_since(self.last_ready_idx);
 
-        self.update_leader_lease(&ready);
+        self.update_leader_lease(&ready, local_read_tx);
 
         self.add_ready_metric(&ready, &mut ctx.metrics.ready);
 
@@ -743,7 +764,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready) {
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, local_read_tx: &Sender<Msg>) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -769,7 +790,8 @@ impl Peer {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
                 if to_be_updated {
-                    to_be_updated = !self.maybe_update_lease(entry.get_term(), entry.get_data());
+                    to_be_updated =
+                        !self.maybe_update_lease(entry.get_term(), entry.get_data(), local_read_tx);
                 }
             }
             if !committed_entries.is_empty() {
@@ -790,7 +812,7 @@ impl Peer {
     /// Try to update lease.
     ///
     /// If the it can make sure that its lease is the latest lease, returns true.
-    fn maybe_update_lease(&mut self, term: u64, data: &[u8]) -> bool {
+    fn maybe_update_lease(&mut self, term: u64, data: &[u8], local_read_tx: &Sender<Msg>) -> bool {
         let mut req = RaftCmdRequest::new();
         let propose_time = match req.merge_from_bytes(data)
             .ok()
@@ -819,6 +841,18 @@ impl Peer {
                        current_expired_time,
                        next_expired_time);
                 self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
+
+                // Notify local read thread to update lease lazily.
+                let notify_gap = Duration::seconds(1);
+                if next_expired_time - current_expired_time > notify_gap {
+                    local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
+                            region_id: self.region().get_id(),
+                            leader_lease_expired_time: Some(self.leader_lease_expired_time
+                                .clone()),
+                            ..Default::default()
+                        }))
+                        .unwrap();
+                }
             }
         } else if self.is_leader() {
             // This peer is leader but its leader lease has expired.
@@ -829,6 +863,14 @@ impl Peer {
                    self.tag,
                    self.leader_lease_expired_time);
             self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
+
+            // Notify local read thread to update lease.
+            local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
+                    region_id: self.region().get_id(),
+                    leader_lease_expired_time: Some(self.leader_lease_expired_time.clone()),
+                    ..Default::default()
+                }))
+                .unwrap();
         }
 
         true
@@ -1327,7 +1369,11 @@ fn check_data_key(key: &[u8], region: &metapb::Region) -> Result<()> {
     Ok(())
 }
 
-fn do_get(tag: &str, region: &metapb::Region, snap: &Snapshot, req: &Request) -> Result<Response> {
+pub fn do_get(tag: &str,
+              region: &metapb::Region,
+              snap: &Snapshot,
+              req: &Request)
+              -> Result<Response> {
     // TODO: the get_get looks wried, maybe we should figure out a better name later.
     let key = req.get_get().get_key();
     try!(check_data_key(key, &region));
@@ -1354,7 +1400,7 @@ fn do_get(tag: &str, region: &metapb::Region, snap: &Snapshot, req: &Request) ->
     Ok(resp)
 }
 
-fn do_snap(region: metapb::Region) -> Result<Response> {
+pub fn do_snap(region: metapb::Region) -> Result<Response> {
     let mut resp = Response::new();
     resp.mut_snap().set_region(region);
     Ok(resp)

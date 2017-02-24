@@ -14,13 +14,14 @@
 use std::time::Instant;
 use std::boxed::{Box, FnBox};
 use std::fmt;
+use uuid::Uuid;
 
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use kvproto::metapb::RegionEpoch;
+use kvproto::metapb::{self, RegionEpoch};
 use raft::SnapshotStatus;
-
 use util::escape;
+use super::local_read::PeerStatusChange;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 
@@ -74,6 +75,22 @@ pub enum Msg {
         index: u64,
         hash: Vec<u8>,
     },
+
+    RedirectRaftCmd { uuid: Uuid, request: RaftCmdRequest },
+
+    RedirectRaftCmdResp { uuid: Uuid, resp: RaftCmdResponse },
+
+    NewPeerStatus {
+        region: metapb::Region,
+        peer: metapb::Peer,
+        leader_id: u64,
+        term: u64,
+        applied_index_term: u64,
+    },
+
+    RemovePeerStatus { region_id: u64 },
+
+    UpdatePeerStatus(PeerStatusChange),
 }
 
 impl fmt::Debug for Msg {
@@ -96,6 +113,19 @@ impl fmt::Debug for Msg {
                        region_id,
                        index,
                        escape(&hash))
+            }
+            Msg::RedirectRaftCmd { uuid, .. } => write!(fmt, "RedirectRaftCmd [uuid: {}]", uuid),
+            Msg::RedirectRaftCmdResp { uuid, .. } => {
+                write!(fmt, "RedirectRaftCmdResp [uuid: {}]", uuid)
+            }
+            Msg::NewPeerStatus { ref region, .. } => {
+                write!(fmt, "NewPeerStatus [region_id: {}]", region.get_id())
+            }
+            Msg::RemovePeerStatus { region_id } => {
+                write!(fmt, "RemovePeerStatus [region_id: {}]", region_id)
+            }
+            Msg::UpdatePeerStatus(PeerStatusChange { region_id, .. }) => {
+                write!(fmt, "UpdatePeerStatus [region_id: {}]", region_id)
             }
         }
     }

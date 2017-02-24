@@ -39,6 +39,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
+use std::sync::mpsc;
 
 use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -52,7 +53,7 @@ use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
                    Config, bind, create_event_loop, create_raft_storage, Msg};
-use tikv::server::{ServerTransport, ServerRaftStoreRouter};
+use tikv::server::{ServerTransport, ServerRaftStoreRouter, LocalReadRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
@@ -574,11 +575,19 @@ fn build_raftkv(config: &toml::Value,
     let snap_path = snap_path.to_str().unwrap().to_owned();
     let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
 
-    node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
+    let (tx, rx) = mpsc::channel();
+    node.start(event_loop,
+               engine.clone(),
+               trans,
+               snap_mgr.clone(),
+               tx.clone(),
+               rx)
+        .unwrap();
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
+    let local_read_router = LocalReadRaftStoreRouter::new(tx, node.id());
 
     (node,
-     create_raft_storage(router.clone(), engine.clone(), cfg).unwrap(),
+     create_raft_storage(router.clone(), local_read_router, engine.clone(), cfg).unwrap(),
      router,
      snap_mgr,
      engine)

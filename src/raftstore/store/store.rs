@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
+use std::sync::{Arc, RwLock};
+use std::sync::mpsc::{self, Receiver as StdReceiver, Sender as StdSender, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -62,6 +62,7 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::local_metrics::RaftMetrics;
+use super::local_read::{PeerStatus, PeerStatusChange, LocalReadHandler};
 use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
@@ -91,7 +92,7 @@ pub struct Store<T, C: 'static> {
     region_peers: HashMap<u64, Peer>,
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
-    region_ranges: BTreeMap<Key, u64>,
+    region_ranges: Arc<RwLock<BTreeMap<Key, u64>>>,
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
@@ -119,6 +120,10 @@ pub struct Store<T, C: 'static> {
 
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
+
+    local_read_handler: Option<thread::JoinHandle<()>>,
+    local_read_tx: StdSender<Msg>,
+    local_read_rx: Option<StdReceiver<Msg>>,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -148,13 +153,16 @@ pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result
 }
 
 impl<T, C> Store<T, C> {
+    #[allow(too_many_arguments)]
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
                cfg: Config,
                engine: Arc<DB>,
                trans: T,
                pd_client: Arc<C>,
-               mgr: SnapManager)
+               mgr: SnapManager,
+               local_read_tx: StdSender<Msg>,
+               local_read_rx: StdReceiver<Msg>)
                -> Result<Store<T, C>> {
         // TODO: we can get cluster meta regularly too later.
         try!(cfg.validate());
@@ -180,7 +188,7 @@ impl<T, C> Store<T, C> {
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
-            region_ranges: BTreeMap::new(),
+            region_ranges: Arc::new(RwLock::new(BTreeMap::new())),
             pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
@@ -192,6 +200,9 @@ impl<T, C> Store<T, C> {
             is_busy: false,
             region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
+            local_read_handler: None,
+            local_read_tx: local_read_tx,
+            local_read_rx: Some(local_read_rx),
         };
         try!(s.init());
         Ok(s)
@@ -240,7 +251,7 @@ impl<T, C> Store<T, C> {
                 peer.mut_store().schedule_applying_snapshot();
             }
 
-            self.region_ranges.insert(enc_end_key(region), region_id);
+            self.region_ranges.wl().insert(enc_end_key(region), region_id);
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             self.region_peers.insert(region_id, peer);
@@ -264,7 +275,7 @@ impl<T, C> Store<T, C> {
     fn clean_up(&mut self) -> Result<()> {
         let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
-        for region_id in self.region_ranges.values() {
+        for region_id in self.region_ranges.rl().values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
             // TODO: use delete_range once #1250 is resolved.
@@ -409,8 +420,46 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
+        try!(self.run_local_read_handler());
+
         try!(event_loop.run(self));
         Ok(())
+    }
+
+    fn gen_peers_status(&self) -> HashMap<u64, PeerStatus> {
+        let mut peers_status: HashMap<u64, PeerStatus> = HashMap::default();
+        for (region_id, peer) in &self.region_peers {
+            peers_status.insert(*region_id,
+                                PeerStatus::new(peer.region().clone(),
+                                                peer.peer.clone(),
+                                                peer.raft_group.raft.leader_id,
+                                                peer.raft_group.raft.term,
+                                                peer.get_store().applied_index_term));
+        }
+        peers_status
+    }
+
+    fn run_local_read_handler(&mut self) -> Result<()> {
+        let rx = self.local_read_rx.take().unwrap();
+        let peers_status = self.gen_peers_status();
+        let store_id = self.store_id();
+        let engine = self.engine.clone();
+        let sendch = self.get_sendch();
+        let region_ranges = self.region_ranges.clone();
+        let builder = thread::Builder::new().name(thd_name!("local-read"));
+        let h = try!(builder.spawn(move || {
+            let mut handler =
+                LocalReadHandler::new(rx, peers_status, store_id, engine, sendch, region_ranges);
+            info!("start local read thread.");
+            handler.run();
+            info!("stop local read thread.");
+        }));
+        self.local_read_handler = Some(h);
+        Ok(())
+    }
+
+    fn stop_local_read_handler(&mut self) {
+        self.local_read_tx.send(Msg::Quit).unwrap();
     }
 
     fn stop(&mut self) {
@@ -430,6 +479,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
+        self.stop_local_read_handler();
+        if self.local_read_handler.is_some() {
+            handles.push(self.local_read_handler.take());
+        }
 
         for h in handles {
             if let Some(h) = h {
@@ -529,6 +582,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             p.size_diff_hint =
                                 (p.size_diff_hint as i64 + res.metrics.size_diff_hint) as u64;
                         }
+                        if p.get_store().applied_index_term != res.applied_index_term {
+                            self.local_read_tx
+                                .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                                    region_id: p.region().get_id(),
+                                    applied_index_term: Some(res.applied_index_term),
+                                    ..Default::default()
+                                }))
+                                .unwrap();
+                        }
+
                         p.mut_store().applied_index_term = res.applied_index_term;
                         p.written_keys += res.metrics.written_keys;
                         p.written_bytes += res.metrics.written_bytes;
@@ -609,6 +672,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let start_key = data_key(msg.get_start_key());
         if let Some((_, &exist_region_id)) = self.region_ranges
+            .rl()
             .range((Excluded(start_key), Unbounded::<Key>))
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
@@ -621,9 +685,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let peer = try!(Peer::replicate(self, region_id, target.get_id()));
+
+        // Notify local read thread new region has been created.
+        self.local_read_tx
+            .send(Msg::NewPeerStatus {
+                region: peer.region().clone(),
+                peer: peer.peer.clone(),
+                leader_id: peer.leader_id(),
+                term: peer.raft_group.raft.term,
+                applied_index_term: peer.get_store().applied_index_term,
+            })
+            .unwrap();
+
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
         self.region_peers.insert(region_id, peer);
+
         Ok(true)
     }
 
@@ -846,6 +923,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(false);
         }
         if let Some((_, &exist_region_id)) = self.region_ranges
+            .rl()
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
@@ -882,7 +960,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                    peer.handle_raft_ready_append(&mut ctx);
+                    peer.handle_raft_ready_append(&mut ctx, &self.local_read_tx);
                 }
             }
             (ctx.wb, ctx.ready_res)
@@ -926,7 +1004,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(ready);
+                .handle_raft_ready_apply(ready, &self.local_read_tx);
             if let Some(apply_result) = res {
                 self.on_ready_apply_snapshot(apply_result);
             }
@@ -949,6 +1027,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn destroy_peer(&mut self, region_id: u64, peer: metapb::Peer) {
         info!("[region {}] destroy peer {:?}", region_id, peer);
+
+        // Notify local read thread peer has removed.
+        self.local_read_tx.send(Msg::RemovePeerStatus { region_id: region_id }).unwrap();
+
         // TODO: should we check None here?
         // Can we destroy it in another thread later?
         let mut p = self.region_peers.remove(&region_id).unwrap();
@@ -968,7 +1050,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                    e);
         }
 
-        if is_initialized && self.region_ranges.remove(&enc_end_key(p.region())).is_none() {
+        if is_initialized && self.region_ranges.wl().remove(&enc_end_key(p.region())).is_none() {
             panic!("[region {}] remove peer {:?} in store {}",
                    region_id,
                    peer,
@@ -986,6 +1068,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Apply failed, skip.
                 return;
             }
+
+            // Notify local read thread peer has changed.
+            self.local_read_tx
+                .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                    region_id: region_id,
+                    region: Some(cp.region.clone()),
+                    ..Default::default()
+                }))
+                .unwrap();
+
             p.mut_store().region = cp.region;
             if p.is_leader() {
                 // Notify pd immediately.
@@ -1054,6 +1146,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              left: metapb::Region,
                              right: metapb::Region) {
         self.region_peers.get_mut(&region_id).unwrap().mut_store().region = left.clone();
+
+        // Notify local read to update region.
+        self.local_read_tx
+            .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                region_id: region_id,
+                region: Some(left.clone()),
+                ..Default::default()
+            }))
+            .unwrap();
+
         for peer in right.get_peers() {
             // Add this peer to cache.
             self.peer_cache.borrow_mut().insert(peer.get_id(), peer.clone());
@@ -1104,17 +1206,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Insert new regions and validation
                 info!("insert new regions left: {:?}, right:{:?}", left, right);
                 if self.region_ranges
+                    .wl()
                     .insert(enc_end_key(&left), left.get_id())
                     .is_some() {
                     panic!("region should not exist, {:?}", left);
                 }
                 if self.region_ranges
+                    .wl()
                     .insert(enc_end_key(&right), new_region_id)
                     .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
                 new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
+
+                // Notify local read thread.
+                self.local_read_tx
+                    .send(Msg::NewPeerStatus {
+                        region: new_peer.region().clone(),
+                        peer: new_peer.peer.clone(),
+                        leader_id: new_peer.raft_group.raft.leader_id,
+                        term: new_peer.raft_group.raft.term,
+                        applied_index_term: new_peer.get_store().applied_index_term,
+                    })
+                    .unwrap();
+
                 self.region_peers.insert(new_region_id, new_peer);
             }
         }
@@ -1157,14 +1273,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   prev_region,
                   region);
             // we have already initialized the peer, so it must exist in region_ranges.
-            if self.region_ranges.remove(&enc_end_key(&prev_region)).is_none() {
+            if self.region_ranges.wl().remove(&enc_end_key(&prev_region)).is_none() {
                 panic!("[region {}] region should exist {:?}",
                        region_id,
                        prev_region);
             }
         }
 
-        self.region_ranges.insert(enc_end_key(&region), region.get_id());
+        self.region_ranges.wl().insert(enc_end_key(&region), region.get_id());
     }
 
     fn on_ready_result(&mut self, region_id: u64, exec_results: Vec<ExecResult>) {
@@ -1278,6 +1394,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
             if let Some((_, &next_region_id)) = self.region_ranges
+                .rl()
                 .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
                 .next() {
                 let next_region = self.region_peers[&next_region_id].region();
@@ -2006,6 +2123,23 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::SnapshotStats => self.store_heartbeat_pd(),
             Msg::ComputeHashResult { region_id, index, hash } => {
                 self.on_hash_computed(region_id, index, hash);
+            }
+            Msg::RedirectRaftCmd { uuid, request } => {
+                let local_read_tx = self.local_read_tx.clone();
+                self.propose_raft_command(request,
+                                          box move |resp| {
+                    local_read_tx.send(Msg::RedirectRaftCmdResp {
+                            uuid: uuid,
+                            resp: resp,
+                        })
+                        .expect("send RedirectRaftCmdResp to local read thread")
+                });
+            }
+            Msg::RedirectRaftCmdResp { .. } |
+            Msg::NewPeerStatus { .. } |
+            Msg::RemovePeerStatus { .. } |
+            Msg::UpdatePeerStatus(PeerStatusChange { .. }) => {
+                panic!("raftstore receive unexpected msg");
             }
         }
     }

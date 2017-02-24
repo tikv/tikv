@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::thread::{self, Builder};
 use std::net::{SocketAddr, TcpStream};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
 use std::io::ErrorKind;
@@ -25,7 +25,7 @@ use tempdir::TempDir;
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
-use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::transport::{ServerRaftStoreRouter, LocalReadRaftStoreRouter};
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::Msg as StoreMsg;
 use tikv::util::codec::{Error as CodecError, rpc};
@@ -156,10 +156,13 @@ impl Simulator for ServerCluster {
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
         let snap_mgr = store::new_snap_mgr(tmp_str, Some(node.get_sendch()));
 
+        let (tx, rx) = mpsc::channel();
         node.start(store_event_loop,
                    engine.clone(),
                    simulate_trans.clone(),
-                   snap_mgr.clone())
+                   snap_mgr.clone(),
+                   tx.clone(),
+                   rx)
             .unwrap();
         let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
         let sim_router = SimulateTransport::new(router);
@@ -173,7 +176,9 @@ impl Simulator for ServerCluster {
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
 
-        let mut store = create_raft_storage(sim_router.clone(), engine, &cfg).unwrap();
+        let local_read_router = LocalReadRaftStoreRouter::new(tx, node.id());
+        let mut store = create_raft_storage(sim_router.clone(), local_read_router, engine, &cfg)
+            .unwrap();
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 

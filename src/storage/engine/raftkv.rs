@@ -112,9 +112,10 @@ impl From<RaftServerError> for engine::Error {
 
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
-pub struct RaftKv<S: RaftStoreRouter + 'static> {
+pub struct RaftKv<S: RaftStoreRouter + 'static, T: RaftStoreRouter + 'static> {
     db: Arc<DB>,
     router: S,
+    local_read_router: T,
 }
 
 enum CmdRes {
@@ -150,24 +151,38 @@ fn on_result(mut resp: RaftCmdResponse,
     (cb_ctx, Ok(CmdRes::Snap(snap)))
 }
 
-impl<S: RaftStoreRouter> RaftKv<S> {
+impl<S: RaftStoreRouter, T: RaftStoreRouter> RaftKv<S, T> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(db: Arc<DB>, router: S) -> RaftKv<S> {
+    pub fn new(db: Arc<DB>, router: S, local_read_router: T) -> RaftKv<S, T> {
         RaftKv {
             db: db,
             router: router,
+            local_read_router: local_read_router,
         }
     }
 
-    fn call_command(&self, req: RaftCmdRequest, cb: Callback<CmdRes>) -> Result<()> {
+    fn call_command(&self,
+                    req: RaftCmdRequest,
+                    cb: Callback<CmdRes>,
+                    local_read: bool)
+                    -> Result<()> {
         let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
         let db = self.db.clone();
-        try!(self.router.send_command(req,
-                                      box move |resp| {
-                                          let (cb_ctx, res) = on_result(resp, l, &uuid, db);
-                                          cb((cb_ctx, res.map_err(Error::into)));
-                                      }));
+        if local_read {
+            try!(self.local_read_router.send_command(req,
+                                                     box move |resp| {
+                                                         let (cb_ctx, res) =
+                                                             on_result(resp, l, &uuid, db);
+                                                         cb((cb_ctx, res.map_err(Error::into)));
+                                                     }));
+        } else {
+            try!(self.router.send_command(req,
+                                          box move |resp| {
+                                              let (cb_ctx, res) = on_result(resp, l, &uuid, db);
+                                              cb((cb_ctx, res.map_err(Error::into)));
+                                          }));
+        }
         Ok(())
     }
 
@@ -184,12 +199,17 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         header
     }
 
-    fn exec_requests(&self, ctx: &Context, reqs: Vec<Request>, cb: Callback<CmdRes>) -> Result<()> {
+    fn exec_requests(&self,
+                     ctx: &Context,
+                     reqs: Vec<Request>,
+                     cb: Callback<CmdRes>,
+                     local_read: bool)
+                     -> Result<()> {
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::new();
         cmd.set_header(header);
         cmd.set_requests(RepeatedField::from_vec(reqs));
-        self.call_command(cmd, cb)
+        self.call_command(cmd, cb, local_read)
     }
 }
 
@@ -197,13 +217,13 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     Error::InvalidResponse(format!("cmd type not match, want {:?}, got {:?}!", exp, act))
 }
 
-impl<S: RaftStoreRouter> Debug for RaftKv<S> {
+impl<S: RaftStoreRouter, T: RaftStoreRouter> Debug for RaftKv<S, T> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S: RaftStoreRouter> Engine for RaftKv<S> {
+impl<S: RaftStoreRouter, T: RaftStoreRouter> Engine for RaftKv<S, T> {
     fn async_write(&self,
                    ctx: &Context,
                    mut modifies: Vec<Modify>,
@@ -259,7 +279,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                         cb((cb_ctx, Err(e)))
                     }
                 }
-            })
+            },
+                           false)
             .map_err(|e| {
                 let tag = get_tag_from_error(&e);
                 ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", tag]).inc();
@@ -294,7 +315,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                         cb((cb_ctx, Err(e)))
                     }
                 }
-            })
+            },
+                           true)
             .map_err(|e| {
                 let tag = get_tag_from_error(&e);
                 ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
@@ -303,7 +325,9 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 
     fn clone(&self) -> Box<Engine> {
-        box RaftKv::new(self.db.clone(), self.router.clone())
+        box RaftKv::new(self.db.clone(),
+                        self.router.clone(),
+                        self.local_read_router.clone())
     }
 }
 

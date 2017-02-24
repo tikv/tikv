@@ -13,7 +13,7 @@
 
 use std::thread;
 use std::sync::{Arc, mpsc};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, Receiver};
 use std::time::Duration;
 use std::process;
 
@@ -35,10 +35,15 @@ use super::transport::RaftStoreRouter;
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
-    where S: RaftStoreRouter + 'static
+pub fn create_raft_storage<S, T>(router: S,
+                                 local_read_router: T,
+                                 db: Arc<DB>,
+                                 cfg: &Config)
+                                 -> Result<Storage>
+    where S: RaftStoreRouter + 'static,
+          T: RaftStoreRouter + 'static
 {
-    let engine = box RaftKv::new(db, router);
+    let engine = box RaftKv::new(db, router, local_read_router);
     let store = try!(Storage::from_engine(engine, &cfg.storage));
     Ok(store)
 }
@@ -98,7 +103,9 @@ impl<C> Node<C>
                     event_loop: EventLoop<Store<T, C>>,
                     engine: Arc<DB>,
                     trans: T,
-                    snap_mgr: SnapManager)
+                    snap_mgr: SnapManager,
+                    tx: Sender<Msg>,
+                    rx: Receiver<Msg>)
                     -> Result<()>
         where T: Transport + 'static
     {
@@ -125,7 +132,7 @@ impl<C> Node<C>
         }
 
         // inform pd.
-        try!(self.start_store(event_loop, store_id, engine, trans, snap_mgr));
+        try!(self.start_store(event_loop, store_id, engine, trans, snap_mgr, tx, rx));
         try!(self.pd_client
             .put_store(self.store.clone()));
         Ok(())
@@ -226,12 +233,15 @@ impl<C> Node<C>
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
+    #[allow(too_many_arguments)]
     fn start_store<T>(&mut self,
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
                       db: Arc<DB>,
                       trans: T,
-                      snap_mgr: SnapManager)
+                      snap_mgr: SnapManager,
+                      local_read_tx: Sender<Msg>,
+                      local_read_rx: Receiver<Msg>)
                       -> Result<()>
         where T: Transport + 'static
     {
@@ -255,7 +265,15 @@ impl<C> Node<C>
                 sender: sender,
                 snapshot_status_receiver: snapshot_rx,
             };
-            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
+            let mut store = match Store::new(ch,
+                                             store,
+                                             cfg,
+                                             db,
+                                             trans,
+                                             pd_client,
+                                             snap_mgr,
+                                             local_read_tx,
+                                             local_read_rx) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };
