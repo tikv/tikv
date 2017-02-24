@@ -569,7 +569,7 @@ impl<T: Simulator> Cluster<T> {
         let peer = new_peer(peer_id, peer_id);
         let req = new_status_request(region_id, peer, status_cmd);
         let resp = self.call_command(req, Duration::from_secs(5));
-        assert!(resp.is_ok(), format!("{:?}", resp));
+        assert!(resp.is_ok(), "{:?}", resp);
 
         let mut resp = resp.unwrap();
         assert!(resp.has_status_response());
@@ -594,7 +594,8 @@ impl<T: Simulator> Cluster<T> {
         let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
-                format!("{:?}", resp));
+                "{:?}",
+                resp);
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {

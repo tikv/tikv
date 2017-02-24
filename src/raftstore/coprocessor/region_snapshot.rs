@@ -540,8 +540,7 @@ mod tests {
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
-            assert!(iter.reverse_seek(&seek_key).unwrap(),
-                    format!("{}", seek_key));
+            assert!(iter.reverse_seek(&seek_key).unwrap(), "{}", seek_key);
             let pair = (iter.key().to_vec(), iter.value().to_vec());
             assert_eq!(pair, kv_pairs[0]);
         }
