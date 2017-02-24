@@ -1266,19 +1266,24 @@ mod v2 {
                 let size = try!(get_file_size(&cf_file.tmp_path));
                 if size != cf_file.size {
                     return Err(io::Error::new(ErrorKind::Other,
-                                              format!("snapshot file {} for cf {} not fully \
-                                                       written, diff {}",
+                                              format!("snapshot file {} for cf {} size \
+                                                       mismatches, real size {}, expected size \
+                                                       {}",
                                                       cf_file.path,
                                                       cf_file.cf,
-                                                      cf_file.size - size)));
+                                                      size,
+                                                      cf_file.size)));
                 }
                 let digest = try!(calc_checksum(&cf_file.tmp_path));
                 if digest != cf_file.digest {
                     return Err(io::Error::new(ErrorKind::Other,
                                               format!("snapshot file {} for cf {} checksum \
-                                                       mismatches",
+                                                       mismatches, real checksum {}, expected \
+                                                       checksum {}",
                                                       cf_file.path,
-                                                      cf_file.cf)));
+                                                      cf_file.cf,
+                                                      digest,
+                                                      cf_file.digest)));
                 }
             }
             let mut total_size = 0;
@@ -1362,7 +1367,7 @@ mod v2 {
                     next_buf = &next_buf[left..];
                 } else {
                     try!(file.write_all(next_buf));
-                    cf_file.written_size = next_buf.len() as u64;
+                    cf_file.written_size += next_buf.len() as u64;
                     return Ok(buf.len());
                 }
             }
