@@ -192,10 +192,10 @@ impl RunningCtx {
 impl Drop for RunningCtx {
     fn drop(&mut self) {
         slow_log!(self.slow_timer,
-                  "scheduler handle command: {}, ts: {}, region: {}",
+                  "[region {}] scheduler handle command: {}, ts: {}",
+                  self.region_id,
                   self.tag,
-                  self.ts,
-                  self.region_id);
+                  self.ts);
     }
 }
 
