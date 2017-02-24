@@ -1086,12 +1086,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // In this worst case scenario, the new split raft group will not be available
                 // since there is no leader established during one election timeout after the split.
                 let is_leader = self.region_peers[&region_id].is_leader();
-                if is_leader && right.get_peers().len() > 1 {
+                let my_id = new_peer.peer_id();
+                if right.get_peers().into_iter().all(|p| p.get_id() >= my_id) {
+                    if right.get_peers().len() > 1 {
+                        new_peer.raft_group.raft.term -= 1;
+                        new_peer.raft_group.raft.become_candidate();
+                        new_peer.raft_group.raft.become_leader();
+                    }
+                } else if is_leader && right.get_peers().len() > 1 {
                     for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
                         new_peer.raft_group.tick();
                     }
                 }
-
                 if is_leader {
                     // Notify pd immediately to let it update the region meta.
                     let left = &self.region_peers[&region_id];
