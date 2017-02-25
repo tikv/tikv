@@ -650,7 +650,6 @@ mod v2 {
     const SNAPSHOT_META_PREFIX_CHECKSUM: &'static str = "checksum";
     const ENCODE_DECODE_DESC: bool = false;
     const DIGEST_BUFFER_SIZE: usize = 10240;
-    const MAX_SNAPSHOT_CF_FILE_SIZE: u64 = 1024 * 1024 * 1024 * 1024; // 1T
 
     fn get_snapshot_cfs() -> Vec<String> {
         let size = ALL_CFS.len();
@@ -695,17 +694,37 @@ mod v2 {
         }
     }
 
-    fn parse_cf_file_size(mut v: &[u8]) -> RaftStoreResult<u64> {
-        let size = try!(v.decode_u64());
-        if size > MAX_SNAPSHOT_CF_FILE_SIZE {
-            return Err(box_err!("invalid snapshot cf file size {} over max size {}",
-                                size,
-                                MAX_SNAPSHOT_CF_FILE_SIZE));
+    fn encode_cf_size_checksums(cf_files: &Vec<CfFile>) -> raft::Result<(u64, Vec<KeyValue>)> {
+        let mut total_size = 0;
+        let mut kvs = Vec::with_capacity(cf_files.len());
+        for cf_file in cf_files {
+            total_size += cf_file.size;
+            // add size meta for this cf file
+            let size_key = format!("{}_{}", SNAPSHOT_META_PREFIX_SIZE, cf_file.cf);
+            let mut size_key_buf = vec![];
+            box_try!(size_key_buf.encode_bytes(size_key.as_bytes(), ENCODE_DECODE_DESC));
+            let mut size_value = Vec::with_capacity(number::U64_SIZE);
+            size_value.encode_u64(cf_file.size).unwrap();
+            let mut kv = KeyValue::new();
+            kv.set_key(size_key_buf);
+            kv.set_value(size_value);
+            kvs.push(kv);
+            // add checksum meta for this cf file
+            let checksum_key = format!("{}_{}", SNAPSHOT_META_PREFIX_CHECKSUM, cf_file.cf);
+            let mut checksum_key_buf = vec![];
+            box_try!(checksum_key_buf.encode_bytes(checksum_key.as_bytes(), ENCODE_DECODE_DESC));
+            let mut checksum_value = Vec::with_capacity(number::U64_SIZE);
+            checksum_value.encode_u64(cf_file.digest as u64).unwrap();
+            let mut kv = KeyValue::new();
+            kv.set_key(checksum_key_buf);
+            kv.set_value(checksum_value);
+            kvs.push(kv);
         }
-        Ok(size)
+        Ok((total_size, kvs))
     }
 
-    fn parse_cf_size_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(String, u64, u32)>> {
+
+    fn decode_cf_size_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(String, u64, u32)>> {
         let snapshot_cfs = get_snapshot_cfs();
         let mut cf_sizes: Vec<(String, u64)> = vec![];
         let mut cf_checksums: Vec<(String, u32)> = vec![];
@@ -730,11 +749,11 @@ mod v2 {
             }
             match strs[0] {
                 SNAPSHOT_META_PREFIX_SIZE => {
-                    let size = try!(parse_cf_file_size(kv.get_value()));
+                    let size = try!(kv.get_value().decode_u64());
                     cf_sizes.push((cf, size));
                 }
                 SNAPSHOT_META_PREFIX_CHECKSUM => {
-                    let value = try!(parse_cf_file_size(kv.get_value()));
+                    let value = try!(kv.get_value().decode_u64());
                     if value > u32::max_value() as u64 {
                         return Err(box_err!("invalid snapshot checksum {} for cf {}", value, cf));
                     }
@@ -870,7 +889,7 @@ mod v2 {
                                                    snapshot_data: RaftSnapshotData,
                                                    size_track: Arc<RwLock<u64>>)
                                                    -> RaftStoreResult<Snap> {
-            let cf_size_checksums = try!(parse_cf_size_checksums(snapshot_data.get_data()));
+            let cf_size_checksums = try!(decode_cf_size_checksums(snapshot_data.get_data()));
             let dir_path = dir.into();
             if !dir_path.exists() {
                 try!(fs::create_dir_all(dir_path.as_path()));
@@ -1041,7 +1060,7 @@ mod v2 {
 
         fn validate(&self) -> raft::Result<()> {
             let cf_size_checksums =
-                box_try!(parse_cf_size_checksums(self.meta_file.data.get_data()));
+                box_try!(decode_cf_size_checksums(self.meta_file.data.get_data()));
             for (cf, expected_size, expected_checksum) in cf_size_checksums {
                 let mut checked = false;
                 for cf_file in &self.cf_files {
@@ -1189,32 +1208,7 @@ mod v2 {
                  -> raft::Result<()> {
             try!(self.do_build(snap, region));
             // set snapshot meta data
-            let mut total_size = 0;
-            let mut kvs = vec![];
-            for cf_file in &self.cf_files {
-                total_size += cf_file.size;
-                // add size meta for this cf file
-                let size_key = format!("{}_{}", SNAPSHOT_META_PREFIX_SIZE, cf_file.cf);
-                let mut size_key_buf = vec![];
-                box_try!(size_key_buf.encode_bytes(size_key.as_bytes(), ENCODE_DECODE_DESC));
-                let mut size_value = Vec::with_capacity(number::U64_SIZE);
-                size_value.encode_u64(cf_file.size).unwrap();
-                let mut kv = KeyValue::new();
-                kv.set_key(size_key_buf);
-                kv.set_value(size_value);
-                kvs.push(kv);
-                // add checksum meta for this cf file
-                let checksum_key = format!("{}_{}", SNAPSHOT_META_PREFIX_CHECKSUM, cf_file.cf);
-                let mut checksum_key_buf = vec![];
-                box_try!(checksum_key_buf.encode_bytes(checksum_key.as_bytes(),
-                    ENCODE_DECODE_DESC));
-                let mut checksum_value = Vec::with_capacity(number::U64_SIZE);
-                checksum_value.encode_u64(cf_file.digest as u64).unwrap();
-                let mut kv = KeyValue::new();
-                kv.set_key(checksum_key_buf);
-                kv.set_value(checksum_value);
-                kvs.push(kv);
-            }
+            let (total_size, kvs) = try!(encode_cf_size_checksums(&self.cf_files));
             snap_data.set_file_size(total_size);
             snap_data.set_data(RepeatedField::from_vec(kvs));
             // save snapshot meta file to meta file
@@ -1465,6 +1459,37 @@ mod v2 {
                 expect.set_store_id(TEST_STORE_ID);
                 expect.set_id((i + 1) as u64);
                 assert_eq!(p, expect);
+            }
+        }
+
+        #[test]
+        fn test_encode_decode_cf_size_checksums() {
+            let mut cfs = super::get_snapshot_cfs();
+            let mut cf_file = Vec::with_capacity(cfs.len());
+            for (i, cf) in cfs.drain(..).enumerate() {
+                let f = super::CfFile {
+                    cf: cf,
+                    size: 100 * (i + 1) as u64,
+                    digest: 1000 * (i + 1) as u32,
+                    ..Default::default()
+                };
+                cf_file.push(f);
+            }
+            let (_, kvs) = super::encode_cf_size_checksums(&cf_file).unwrap();
+            let mut cf_size_checksums = super::decode_cf_size_checksums(&kvs[..]).unwrap();
+            for (i, x) in cf_size_checksums.drain(..).enumerate() {
+                if x.0 != cf_file[i].cf {
+                    panic!("{}: expect cf {}, got {}", i, cf_file[i].cf, x.0);
+                }
+                if x.1 != cf_file[i].size {
+                    panic!("{}: expect cf size {}, got {}", i, cf_file[i].size, x.1);
+                }
+                if x.2 != cf_file[i].digest {
+                    panic!("{}: expect cf checksum {}, got {}",
+                           i,
+                           cf_file[i].digest,
+                           x.2);
+                }
             }
         }
 
