@@ -694,7 +694,7 @@ mod v2 {
         }
     }
 
-    fn encode_cf_size_checksums(cf_files: &Vec<CfFile>) -> raft::Result<(u64, Vec<KeyValue>)> {
+    fn encode_cf_size_checksums(cf_files: &[CfFile]) -> raft::Result<(u64, Vec<KeyValue>)> {
         let mut total_size = 0;
         let mut kvs = Vec::with_capacity(cf_files.len());
         for cf_file in cf_files {
@@ -1208,7 +1208,7 @@ mod v2 {
                  -> raft::Result<()> {
             try!(self.do_build(snap, region));
             // set snapshot meta data
-            let (total_size, kvs) = try!(encode_cf_size_checksums(&self.cf_files));
+            let (total_size, kvs) = try!(encode_cf_size_checksums(&self.cf_files[..]));
             snap_data.set_file_size(total_size);
             snap_data.set_data(RepeatedField::from_vec(kvs));
             // save snapshot meta file to meta file
@@ -1577,7 +1577,8 @@ mod v2 {
             assert_eq!(context.snapshot_size as u64, size);
             assert_eq!(context.snapshot_kv_count, 0);
 
-            // Ensure the snapshot is deleted after it's applied to DB.
+            // Ensure `delete()` works to delete the dest snapshot.
+            s4.delete();
             assert!(!s4.exists());
             assert!(!s3.exists());
             assert_eq!(*size_track.rl(), 0);
