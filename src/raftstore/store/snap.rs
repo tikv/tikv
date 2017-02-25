@@ -650,7 +650,7 @@ mod v2 {
     const SNAPSHOT_META_PREFIX_CHECKSUM: &'static str = "checksum";
     const ENCODE_DECODE_DESC: bool = false;
     const DIGEST_BUFFER_SIZE: usize = 10240;
-    const MAX_SNAPSHOT_CF_FILE_SIZE: u64 = 1024 * 1024 * 1024; // 1G
+    const MAX_SNAPSHOT_CF_FILE_SIZE: u64 = 1024 * 1024 * 1024 * 1024; // 1T
 
     fn get_snapshot_cfs() -> Vec<String> {
         let size = ALL_CFS.len();
