@@ -371,6 +371,10 @@ impl<T: Storage> Raft<T> {
         self.heartbeat_timeout
     }
 
+    pub fn get_randomized_election_timeout(&self) -> usize {
+        self.randomized_election_timeout
+    }
+
     pub fn nodes(&self) -> Vec<u64> {
         let mut nodes = Vec::with_capacity(self.prs.len());
         nodes.extend(self.prs.keys());
