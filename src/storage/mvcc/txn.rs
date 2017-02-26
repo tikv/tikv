@@ -162,15 +162,17 @@ impl<'a> MvccTxn<'a> {
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
                     // Committed by concurrent transaction.
-                    Some(_) => Ok(()),
-                    // Rollbacked by concurrent transaction.
+                    Some((_, WriteType::Rollback)) |
                     None => {
+                        // Rollbacked by concurrent transaction.
                         info!("txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
                               key,
                               self.start_ts,
                               commit_ts);
                         Err(Error::TxnLockNotFound)
                     }
+
+                    _ => Ok(()),
                 };
             }
         };
@@ -193,18 +195,23 @@ impl<'a> MvccTxn<'a> {
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
                     // Already committed by concurrent transaction.
-                    Some(ts) => {
-                        info!("txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
-                              key,
-                              self.start_ts,
-                              ts);
-                        Err(Error::Committed { commit_ts: ts })
+                    Some((ts, write_type)) => {
+                        if write_type == WriteType::Rollback {
+                            // return Ok on Rollback already exist
+                            Ok(())
+                        } else {
+                            info!("txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
+                                  key,
+                                  self.start_ts,
+                                  ts);
+                            Err(Error::Committed { commit_ts: ts })
+                        }
                     }
                     // Rollbacked by concurrent transaction.
                     None => {
-                        // insert a Rollback to WriteCF when receives Rollback before Prewrite
-                        let write = Write::new(WriteType::Rollback, self.start_ts, None);
                         let ts = self.start_ts;
+                        // insert a Rollback to WriteCF when receives Rollback before Prewrite
+                        let write = Write::new(WriteType::Rollback, ts, None);
                         self.put_write(key, ts, write.to_bytes());
                         Ok(())
                     }
@@ -867,14 +874,19 @@ mod tests {
     fn must_get_commit_ts(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
-        assert_eq!(reader.get_txn_commit_ts(&make_key(key), start_ts).unwrap().unwrap(),
-                   commit_ts);
+        let (ts, write_type) = reader.get_txn_commit_ts(&make_key(key), start_ts).unwrap().unwrap();
+        assert!(write_type != WriteType::Rollback);
+        assert_eq!(ts, commit_ts);
     }
 
     fn must_get_commit_ts_none(engine: &Engine, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
-        assert!(reader.get_txn_commit_ts(&make_key(key), start_ts).unwrap().is_none());
+        let ret = reader.get_txn_commit_ts(&make_key(key), start_ts);
+        if ret.is_ok() {
+            let (_, write_type) = ret.unwrap().unwrap();
+            assert_eq!(write_type, WriteType::Rollback);
+        }
     }
 
     fn must_scan_keys(engine: &Engine,
