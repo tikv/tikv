@@ -161,7 +161,6 @@ impl<'a> MvccTxn<'a> {
             }
             _ => {
                 return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
-                    // Committed by concurrent transaction.
                     Some((_, WriteType::Rollback)) |
                     None => {
                         // Rollbacked by concurrent transaction.
@@ -171,7 +170,7 @@ impl<'a> MvccTxn<'a> {
                               commit_ts);
                         Err(Error::TxnLockNotFound)
                     }
-
+                    // Committed by concurrent transaction.
                     _ => Ok(()),
                 };
             }
