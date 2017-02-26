@@ -179,10 +179,10 @@ bloom-filter-bits-per-key = 10
 block-based-bloom-filter = false
 
 # Soft limit on number of level-0 files. We start slowing down writes at this point.
-level0-slowdown-writes-trigger = 12
+#level0-slowdown-writes-trigger = 20
 
 # Maximum number of level-0 files.  We stop writes at this point.
-level0-stop-writes-trigger = 16
+#level0-stop-writes-trigger = 36
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.

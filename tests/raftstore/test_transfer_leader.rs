@@ -95,7 +95,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         req.mut_header().set_peer(new_peer(id, id));
         debug!("requesting {:?}", req);
         let resp = cluster.call_command(req.clone(), Duration::from_secs(5)).unwrap();
-        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
     }
 }
@@ -148,7 +148,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     cluster.transfer_leader(r1, new_peer(2, 2));
     let resp = cluster.call_command_on_leader(put, Duration::from_secs(5));
     // if it's transfering leader, resp will timeout.
-    assert!(resp.is_ok(), format!("{:?}", resp));
+    assert!(resp.is_ok(), "{:?}", resp);
 }
 
 #[test]

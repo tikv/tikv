@@ -371,6 +371,10 @@ impl<T: Storage> Raft<T> {
         self.heartbeat_timeout
     }
 
+    pub fn get_randomized_election_timeout(&self) -> usize {
+        self.randomized_election_timeout
+    }
+
     pub fn nodes(&self) -> Vec<u64> {
         let mut nodes = Vec::with_capacity(self.prs.len());
         nodes.extend(self.prs.keys());
@@ -1232,6 +1236,12 @@ impl<T: Storage> Raft<T> {
                 return;
             }
             MessageType::MsgReadIndex => {
+                if self.raft_log.term(self.raft_log.committed).unwrap_or(0) != self.term {
+                    // Reject read only request when this leader has not committed any log entry
+                    // it its term.
+                    return;
+                }
+
                 if self.quorum() > 1 {
                     // thinking: use an interally defined context instead of the user given context.
                     // We can express this in terms of the term and index instead of
