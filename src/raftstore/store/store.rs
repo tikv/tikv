@@ -50,12 +50,12 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, 
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
+use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{self, Peer, ProposalMeta, ExecResult, StaleState, ConsistencyState,
-                  ReadyContext, ChangePeer};
+use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -513,7 +513,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
-                    self.destroy_peer(p.region.get_id(), util::new_peer(store_id, p.id));
+                    self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -1063,7 +1063,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // since there is no leader established during one election timeout after the split.
                 let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
-                    for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
+                    for _ in 0..new_peer.accelerate_campaign_ticks() {
                         new_peer.raft_group.tick();
                     }
                 }
