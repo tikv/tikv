@@ -160,7 +160,7 @@ impl<'a> MvccTxn<'a> {
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
-                return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
+                return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
                     Some((_, WriteType::Rollback)) |
                     None => {
                         // Rollbacked by concurrent transaction.
@@ -192,7 +192,7 @@ impl<'a> MvccTxn<'a> {
                 }
             }
             _ => {
-                return match try!(self.reader.get_txn_commit_ts(key, self.start_ts)) {
+                return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
                     // Already committed by concurrent transaction.
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
@@ -872,7 +872,8 @@ mod tests {
     fn must_get_commit_ts(engine: &Engine, key: &[u8], start_ts: u64, commit_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
-        let (ts, write_type) = reader.get_txn_commit_ts(&make_key(key), start_ts).unwrap().unwrap();
+        let (ts, write_type) =
+            reader.get_txn_commit_info(&make_key(key), start_ts).unwrap().unwrap();
         assert!(write_type != WriteType::Rollback);
         assert_eq!(ts, commit_ts);
     }
@@ -880,7 +881,7 @@ mod tests {
     fn must_get_commit_ts_none(engine: &Engine, key: &[u8], start_ts: u64) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
-        let ret = reader.get_txn_commit_ts(&make_key(key), start_ts);
+        let ret = reader.get_txn_commit_info(&make_key(key), start_ts);
         if ret.is_ok() {
             let (_, write_type) = ret.unwrap().unwrap();
             assert_eq!(write_type, WriteType::Rollback);
