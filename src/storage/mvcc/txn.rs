@@ -206,7 +206,6 @@ impl<'a> MvccTxn<'a> {
                             Err(Error::Committed { commit_ts: ts })
                         }
                     }
-                    // Rollbacked by concurrent transaction.
                     None => {
                         let ts = self.start_ts;
                         // insert a Rollback to WriteCF when receives Rollback before Prewrite
