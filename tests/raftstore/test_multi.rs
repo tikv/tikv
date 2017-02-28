@@ -43,6 +43,9 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.must_get(key), Some(value.to_vec()));
 
+    // sleep 200ms in case the commit packet is dropped by simulated transport.
+    thread::sleep(Duration::from_millis(200));
+
     cluster.assert_quorum(|engine| {
         match engine.get_value(&keys::data_key(key)).unwrap() {
             None => false,
