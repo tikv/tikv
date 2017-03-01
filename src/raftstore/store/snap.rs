@@ -1090,7 +1090,7 @@ mod v2 {
             Ok(())
         }
 
-        fn next_file(&mut self, cf: String) -> io::Result<()> {
+        fn switch_to_cf_file(&mut self, cf: String) -> io::Result<()> {
             let mut cf_found = false;
             let mut index = 0;
             for (i, f) in self.cf_files.iter().enumerate() {
@@ -1168,7 +1168,7 @@ mod v2 {
                 if !need_to_pack(cf) {
                     continue;
                 }
-                try!(self.next_file(cf.to_owned()));
+                try!(self.switch_to_cf_file(cf.to_owned()));
                 try!(snap.scan_cf(cf,
                                   &begin_key,
                                   &end_key,
