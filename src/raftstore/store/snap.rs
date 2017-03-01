@@ -1036,7 +1036,9 @@ mod v2 {
                 exists = true;
             }
             for cf_file in &self.cf_files {
-                delete_file(&cf_file.tmp_path);
+                if file_exists(&cf_file.tmp_path) {
+                    delete_file(&cf_file.tmp_path);
+                }
                 if exists {
                     total_size += try!(get_file_size(&cf_file.path));
                 }
