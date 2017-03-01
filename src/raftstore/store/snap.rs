@@ -687,10 +687,10 @@ mod v2 {
         let mut buf = vec![0; DIGEST_BUFFER_SIZE];
         loop {
             let n = try!(f.read(&mut buf[..]));
-            if n == 0 {
+            digest.write(&buf[..n]);
+            if n < DIGEST_BUFFER_SIZE {
                 return Ok(digest.sum32());
             }
-            digest.write(&buf[..n]);
         }
     }
 
@@ -714,7 +714,7 @@ mod v2 {
             let mut checksum_key_buf = vec![];
             box_try!(checksum_key_buf.encode_bytes(checksum_key.as_bytes(), ENCODE_DECODE_DESC));
             let mut checksum_value = Vec::with_capacity(number::U64_SIZE);
-            checksum_value.encode_u64(cf_file.digest as u64).unwrap();
+            checksum_value.encode_u64(cf_file.checksum as u64).unwrap();
             let mut kv = KeyValue::new();
             kv.set_key(checksum_key_buf);
             kv.set_value(checksum_value);
@@ -796,7 +796,7 @@ mod v2 {
         pub tmp_path: String,
         pub written_size: u64,
 
-        pub digest: u32,
+        pub checksum: u32,
     }
 
     #[derive(Default)]
@@ -909,7 +909,7 @@ mod v2 {
                     path: path,
                     size: size,
                     tmp_path: tmp_path,
-                    digest: checksum,
+                    checksum: checksum,
                     ..Default::default()
                 };
                 cf_files.push(cf_file);
@@ -1130,7 +1130,7 @@ mod v2 {
                     try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
                     cf_file.size = try!(get_file_size(&cf_file.path));
                 }
-                cf_file.digest = try!(calc_checksum(&cf_file.path));
+                cf_file.checksum = try!(calc_checksum(&cf_file.path));
             }
             Ok(())
         }
@@ -1268,16 +1268,16 @@ mod v2 {
                                                       size,
                                                       cf_file.size)));
                 }
-                let digest = try!(calc_checksum(&cf_file.tmp_path));
-                if digest != cf_file.digest {
+                let checksum = try!(calc_checksum(&cf_file.tmp_path));
+                if checksum != cf_file.checksum {
                     return Err(io::Error::new(ErrorKind::Other,
                                               format!("snapshot file {} for cf {} checksum \
                                                        mismatches, real checksum {}, expected \
                                                        checksum {}",
                                                       cf_file.path,
                                                       cf_file.cf,
-                                                      digest,
-                                                      cf_file.digest)));
+                                                      checksum,
+                                                      cf_file.checksum)));
                 }
             }
             let mut total_size = 0;
@@ -1470,7 +1470,7 @@ mod v2 {
                 let f = super::CfFile {
                     cf: cf,
                     size: 100 * (i + 1) as u64,
-                    digest: 1000 * (i + 1) as u32,
+                    checksum: 1000 * (i + 1) as u32,
                     ..Default::default()
                 };
                 cf_file.push(f);
@@ -1484,10 +1484,10 @@ mod v2 {
                 if x.1 != cf_file[i].size {
                     panic!("{}: expect cf size {}, got {}", i, cf_file[i].size, x.1);
                 }
-                if x.2 != cf_file[i].digest {
+                if x.2 != cf_file[i].checksum {
                     panic!("{}: expect cf checksum {}, got {}",
                            i,
-                           cf_file[i].digest,
+                           cf_file[i].checksum,
                            x.2);
                 }
             }
