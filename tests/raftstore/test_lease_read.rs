@@ -114,11 +114,10 @@ fn must_error_read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
 // If the leader lease has not expired, when the leader receives a read request
 //   1. with `read_quorum == false`, the leader will serve it by reading local data.
 //      This way of handling request is called "lease read".
-//   2. with `read_quorum == true`, the leader will serve it by writing a Raft log to
-//      the Raft quorum.
-//      This way of handling request is called "consistent read".
-// If the leader lease has expired, leader will serve both kinds of requests by writing a Raft log
-// to the Raft quorum, which is also a "consistent read".
+//   2. with `read_quorum == true`, the leader will serve it by doing index read (see raft's doc).
+//      This way of handling request is called "index read".
+// If the leader lease has expired, leader will serve both kinds of requests by index read, and
+// propose an no-op entry to raft quorum to renew the lease.
 // No matter what status the leader lease is, a write request is always served by writing a Raft
 // log to the Raft quorum. It is called "consistent write". All writes are consistent writes.
 // Every time the leader performs a consistent read/write, it will try to renew its lease.
@@ -170,7 +169,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         // Issue a read request and check the value on response.
         must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
 
-        // Check if the leader does a consistent read and renewed its lease.
+        // Check if the leader does a index read and renewed its lease.
         assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
         expect_lease_read += 1;
         assert_eq!(detector.ctx.rl().len(), expect_lease_read);
@@ -354,11 +353,11 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
     assert_eq!(detector.ctx.rl().len(), 3);
 
-    // Check if the leader also propose an entry renew its lease.
+    // Check if the leader also propose an entry to renew its lease.
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
-    // wait some time to make the proposal to be applied.
+    // wait some time for the proposal to be applied.
     thread::sleep(election_timeout / 2);
 
     // Check if the leader does a local read.

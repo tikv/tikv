@@ -635,15 +635,15 @@ impl Peer {
 
     #[inline]
     pub fn ready_to_handle_pending_snap(&self) -> bool {
-        // If committed_index doesn't equal to applied_index, written apply state may be overwritten
+        // If committed_index isn't equal to applied_index, written apply state may be overwritten
         // by apply worker. So we have to wait here.
         self.get_store().committed_index() == self.get_store().applied_index()
     }
 
     #[inline]
     pub fn ready_to_handle_read(&self) -> bool {
-        // If committed_index doesn't equal to applied_index, written apply state may be overwritten
-        // by apply worker. So we have to wait here.
+        // If applied_index_term isn't equal to current term, there may be some values that are not
+        // applied by this leader yet but the old leader.
         self.get_store().applied_index_term == self.term()
     }
 
