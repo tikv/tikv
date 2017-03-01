@@ -164,7 +164,9 @@ pub struct ConsistencyState {
 }
 
 enum RequestPolicy {
+    // Handle the read request directly without dispatch.
     ReadLocal,
+    // Handle the read request via raft's SafeReadIndex mechanism.
     ReadIndex,
     ProposeNormal,
     ProposeTransferLeader,
@@ -599,7 +601,6 @@ impl Peer {
     }
 
     fn on_role_changed(&mut self, ready: &Ready) {
-        // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
             match ss.raft_state {
                 StateRole::Leader => {
@@ -620,10 +621,12 @@ impl Peer {
                 StateRole::Follower => {
                     self.leader_lease_expired_time = None;
                     let term = self.term();
+                    // all uncommitted reads will be dropped silently in raft.
                     self.pending_reads.clear_uncommitted(&self.tag, term);
                 }
                 _ => {
                     let term = self.term();
+                    // all uncommitted reads will be dropped silently in raft.
                     self.pending_reads.clear_uncommitted(&self.tag, term);
                 }
             }
