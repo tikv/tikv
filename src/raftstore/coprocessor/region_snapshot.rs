@@ -298,7 +298,7 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
-    use storage::{Cursor, Key, ALL_CFS, ScanMode};
+    use storage::{Cursor, Key, ALL_CFS, ScanMode, Statistics};
     use util::{worker, rocksdb, escape};
 
     use super::*;
@@ -504,23 +504,24 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
+        let mut statistics = Statistics::default();
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())).unwrap());
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics).unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec())).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics).unwrap());
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec())).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).is_err());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a8".to_vec())).is_err());
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics).is_err());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics).is_err());
 
-        assert!(iter.seek_to_last());
+        assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev() {
+            if !iter.prev(&mut statistics) {
                 break;
             }
         }
@@ -534,22 +535,24 @@ mod tests {
         let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
-            assert!(iter.reverse_seek(&seek_key).unwrap(), "{}", seek_key);
+            assert!(iter.reverse_seek(&seek_key, &mut statistics).unwrap(),
+                    "{}",
+                    seek_key);
             let pair = (iter.key().to_vec(), iter.value().to_vec());
             assert_eq!(pair, kv_pairs[0]);
         }
 
-        assert!(iter.seek_to_last());
+        assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev() {
+            if !iter.prev(&mut statistics) {
                 break;
             }
         }
