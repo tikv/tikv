@@ -55,6 +55,7 @@ use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+const LATEST_DURATION: usize = 10;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug)]
@@ -192,6 +193,7 @@ pub struct Peer {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub latestn_written_bytes: LatestN,
 }
 
 impl Peer {
@@ -283,6 +285,7 @@ impl Peer {
             leader_lease_expired_time: None,
             written_bytes: 0,
             written_keys: 0,
+            latestn_written_bytes: LatestN::new(LATEST_DURATION),
         };
 
         peer.load_all_coprocessors();
@@ -1160,6 +1163,7 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(cfg.max_peer_down_duration),
             pending_peers: self.collect_pending_peers(),
+            written_bytes: self.latestn_written_bytes.sum(),
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);
@@ -1275,4 +1279,50 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::new();
     resp.set_admin_response(response);
     resp
+}
+
+pub struct LatestN {
+    data: VecDeque<u64>,
+    limit: usize,
+}
+
+impl LatestN {
+    pub fn new(limit: usize) -> LatestN {
+        assert!(limit > 0);
+        LatestN {
+            data: VecDeque::with_capacity(limit),
+            limit: limit,
+        }
+    }
+
+    pub fn sum(&self) -> u64 {
+        self.data.iter().fold(0, |acc, &x| acc + x)
+    }
+
+    pub fn push(&mut self, v: u64) {
+        let len = self.data.len();
+        if len >= self.limit {
+            self.data.pop_front().unwrap();
+        }
+        self.data.push_back(v);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LatestN;
+
+    #[test]
+    fn test_latest_n() {
+        let mut latest5score = LatestN::new(5);
+        latest5score.push(1);
+        latest5score.push(2);
+        latest5score.push(3);
+        latest5score.push(4);
+        latest5score.push(5);
+        assert_eq!(latest5score.sum(), 15);
+
+        latest5score.push(6);
+        assert_eq!(latest5score.sum(), 20);
+    }
 }

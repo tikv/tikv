@@ -1312,8 +1312,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
-            self.region_written_bytes.observe(peer.written_bytes as f64);
-            self.region_written_keys.observe(peer.written_keys as f64);
+            let written_bytes = peer.written_bytes;
+            let written_keys = peer.written_keys;
+            self.region_written_bytes.observe(written_bytes as f64);
+            self.region_written_keys.observe(written_keys as f64);
+            peer.latestn_written_bytes.push(written_bytes);
             peer.written_bytes = 0;
             peer.written_keys = 0;
         }
