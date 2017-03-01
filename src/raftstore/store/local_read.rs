@@ -1,6 +1,6 @@
 
 use time::Timespec;
-use std::sync::{RwLock, Arc};
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use uuid::Uuid;
 use protobuf;
@@ -8,7 +8,7 @@ use raftstore::{Result, Error};
 use raftstore::store::worker::apply;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, CmdType};
-use util::{Either, clocktime, HandyRwLock, HashMap};
+use util::{Either, clocktime, HashMap};
 use util::transport::SendCh;
 use rocksdb::DB;
 use std::collections::BTreeMap;
@@ -19,6 +19,12 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error, new_error};
 use super::util;
 use super::keys::enc_end_key;
 use super::engine::Snapshot;
+
+pub enum RangeChangeType {
+    Add,
+    Remove,
+    Override,
+}
 
 #[derive(Default, Debug)]
 pub struct PeerStatusChange {
@@ -140,7 +146,7 @@ pub struct LocalReadHandler {
     redirect_cmds: HashMap<Uuid, Callback>,
 
     // region end key -> region id
-    region_ranges: Arc<RwLock<BTreeMap<Key, u64>>>,
+    region_ranges: BTreeMap<Key, u64>,
 }
 
 impl LocalReadHandler {
@@ -149,7 +155,7 @@ impl LocalReadHandler {
                store_id: u64,
                engine: Arc<DB>,
                sendch: SendCh<Msg>,
-               region_ranges: Arc<RwLock<BTreeMap<Key, u64>>>)
+               region_ranges: BTreeMap<Key, u64>)
                -> LocalReadHandler {
         LocalReadHandler {
             rx: rx,
@@ -183,6 +189,9 @@ impl LocalReadHandler {
                     } else {
                         panic!("peer status for region {} not found", region_id);
                     }
+                }
+                Ok(Msg::RegionRangeChange { change_type, region_id, end_key }) => {
+                    self.update_region_range(change_type, region_id, end_key);
                 }
                 Ok(Msg::Quit) => {
                     info!("receive quit command, read only query handler exit.");
@@ -249,6 +258,29 @@ impl LocalReadHandler {
                    region_id,
                    self.store_id,
                    change);
+        }
+    }
+
+    fn update_region_range(&mut self,
+                           change_type: RangeChangeType,
+                           region_id: u64,
+                           end_key: Vec<u8>) {
+        match change_type {
+            RangeChangeType::Add => {
+                if self.region_ranges.insert(end_key, region_id).is_some() {
+                    panic!("[Add] range for region [{}] is existed.", region_id);
+                }
+            }
+            RangeChangeType::Remove => {
+                if self.region_ranges.remove(&end_key).is_none() {
+                    panic!("[Remove] range for region [{}] is not exist.", region_id);
+                }
+            }
+            RangeChangeType::Override => {
+                if self.region_ranges.insert(end_key, region_id).is_none() {
+                    panic!("[Override] range for region [{}] is not exist.", region_id);
+                }
+            }
         }
     }
 
@@ -374,7 +406,6 @@ impl LocalReadHandler {
                 // than the meta cached in the driver, the meta is
                 // updated.
                 if let Some((_, &next_region_id)) = self.region_ranges
-                    .rl()
                     .range((Excluded(enc_end_key(&peer_status.region)), Unbounded::<Key>))
                     .next() {
                     if let Some(next_peer_status) = self.peers_status.get(&next_region_id) {

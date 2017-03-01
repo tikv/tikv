@@ -21,7 +21,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::{self, RegionEpoch};
 use raft::SnapshotStatus;
 use util::escape;
-use super::local_read::PeerStatusChange;
+use super::local_read::{PeerStatusChange, RangeChangeType};
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 
@@ -91,6 +91,12 @@ pub enum Msg {
     RemovePeerStatus { region_id: u64 },
 
     UpdatePeerStatus(PeerStatusChange),
+
+    RegionRangeChange {
+        change_type: RangeChangeType,
+        region_id: u64,
+        end_key: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for Msg {
@@ -126,6 +132,9 @@ impl fmt::Debug for Msg {
             }
             Msg::UpdatePeerStatus(PeerStatusChange { region_id, .. }) => {
                 write!(fmt, "UpdatePeerStatus [region_id: {}]", region_id)
+            }
+            Msg::RegionRangeChange { region_id, .. } => {
+                write!(fmt, "RegionRangeChange [region_id: {}]", region_id)
             }
         }
     }

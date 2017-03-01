@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, Sender as StdSender, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -63,7 +63,7 @@ use super::transport::Transport;
 use super::metrics::*;
 use super::engine_metrics::*;
 use super::local_metrics::RaftMetrics;
-use super::local_read::{PeerStatus, PeerStatusChange, LocalReadHandler};
+use super::local_read::{PeerStatus, PeerStatusChange, RangeChangeType, LocalReadHandler};
 use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
@@ -89,7 +89,7 @@ pub struct Store<T, C: 'static> {
     region_peers: HashMap<u64, Peer>,
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
-    region_ranges: Arc<RwLock<BTreeMap<Key, u64>>>,
+    region_ranges: BTreeMap<Key, u64>,
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
@@ -185,7 +185,7 @@ impl<T, C> Store<T, C> {
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
-            region_ranges: Arc::new(RwLock::new(BTreeMap::new())),
+            region_ranges: BTreeMap::new(),
             pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
@@ -248,7 +248,8 @@ impl<T, C> Store<T, C> {
                 peer.mut_store().schedule_applying_snapshot();
             }
 
-            self.region_ranges.wl().insert(enc_end_key(region), region_id);
+            let end_key = enc_end_key(region);
+            self.region_ranges.insert(end_key.clone(), region_id);
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             self.region_peers.insert(region_id, peer);
@@ -272,7 +273,7 @@ impl<T, C> Store<T, C> {
     fn clean_up(&mut self) -> Result<()> {
         let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
-        for region_id in self.region_ranges.rl().values() {
+        for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
             // TODO: use delete_range once #1250 is resolved.
@@ -669,7 +670,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let start_key = data_key(msg.get_start_key());
         if let Some((_, &exist_region_id)) = self.region_ranges
-            .rl()
             .range((Excluded(start_key), Unbounded::<Key>))
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
@@ -920,7 +920,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(false);
         }
         if let Some((_, &exist_region_id)) = self.region_ranges
-            .rl()
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
@@ -1047,12 +1046,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                    e);
         }
 
-        if is_initialized && self.region_ranges.wl().remove(&enc_end_key(p.region())).is_none() {
-            panic!("[region {}] remove peer {:?} in store {}",
-                   region_id,
-                   peer,
-                   self.store_id());
+        if is_initialized {
+            let end_key = enc_end_key(p.region());
+            if self.region_ranges.remove(&end_key).is_none() {
+                panic!("[region {}] remove peer {:?} in store {}",
+                       region_id,
+                       peer,
+                       self.store_id());
+            }
 
+            self.local_read_tx
+                .send(Msg::RegionRangeChange {
+                    change_type: RangeChangeType::Remove,
+                    region_id: region_id,
+                    end_key: end_key,
+                })
+                .unwrap();
         }
     }
 
@@ -1202,18 +1211,34 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 // Insert new regions and validation
                 info!("insert new regions left: {:?}, right:{:?}", left, right);
+                let left_end_key = enc_end_key(&left);
                 if self.region_ranges
-                    .wl()
-                    .insert(enc_end_key(&left), left.get_id())
+                    .insert(left_end_key.clone(), left.get_id())
                     .is_some() {
                     panic!("region should not exist, {:?}", left);
                 }
+                self.local_read_tx
+                    .send(Msg::RegionRangeChange {
+                        change_type: RangeChangeType::Add,
+                        region_id: left.get_id(),
+                        end_key: left_end_key,
+                    })
+                    .unwrap();
+
+                let right_end_key = enc_end_key(&right);
                 if self.region_ranges
-                    .wl()
-                    .insert(enc_end_key(&right), new_region_id)
+                    .insert(right_end_key.clone(), new_region_id)
                     .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
+                self.local_read_tx
+                    .send(Msg::RegionRangeChange {
+                        change_type: RangeChangeType::Override,
+                        region_id: right.get_id(),
+                        end_key: right_end_key,
+                    })
+                    .unwrap();
+
                 new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
 
@@ -1270,14 +1295,34 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   prev_region,
                   region);
             // we have already initialized the peer, so it must exist in region_ranges.
-            if self.region_ranges.wl().remove(&enc_end_key(&prev_region)).is_none() {
+            let prev_region_end_key = enc_end_key(&prev_region);
+            if self.region_ranges.remove(&prev_region_end_key).is_none() {
                 panic!("[region {}] region should exist {:?}",
                        region_id,
                        prev_region);
             }
+            self.local_read_tx
+                .send(Msg::RegionRangeChange {
+                    change_type: RangeChangeType::Remove,
+                    region_id: prev_region.get_id(),
+                    end_key: prev_region_end_key,
+                })
+                .unwrap();
         }
 
-        self.region_ranges.wl().insert(enc_end_key(&region), region.get_id());
+        let end_key = enc_end_key(&region);
+        if self.region_ranges.insert(end_key.clone(), region.get_id()).is_some() {
+            panic!("[region {}] region should not exist {:?}",
+                   region.get_id(),
+                   region);
+        }
+        self.local_read_tx
+            .send(Msg::RegionRangeChange {
+                change_type: RangeChangeType::Add,
+                region_id: region.get_id(),
+                end_key: end_key,
+            })
+            .unwrap();
     }
 
     fn on_ready_result(&mut self, region_id: u64, exec_results: Vec<ExecResult>) {
@@ -1391,7 +1436,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
             if let Some((_, &next_region_id)) = self.region_ranges
-                .rl()
                 .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
                 .next() {
                 let next_region = self.region_peers[&next_region_id].region();
@@ -2111,7 +2155,8 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Msg::RedirectRaftCmdResp { .. } |
             Msg::NewPeerStatus { .. } |
             Msg::RemovePeerStatus { .. } |
-            Msg::UpdatePeerStatus(PeerStatusChange { .. }) => {
+            Msg::UpdatePeerStatus(PeerStatusChange { .. }) |
+            Msg::RegionRangeChange { .. } => {
                 panic!("raftstore receive unexpected msg");
             }
         }
