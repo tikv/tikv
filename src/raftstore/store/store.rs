@@ -44,32 +44,29 @@ use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
 use util::{rocksdb, HashMap, HashSet};
-use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
+use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{self, Peer, ProposalMeta, ExecResult, StaleState, ConsistencyState,
-                  ReadyContext, ChangePeer};
+use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
+use super::engine_metrics::*;
 use super::local_metrics::RaftMetrics;
 use prometheus::local::LocalHistogram;
 
 type Key = Vec<u8>;
 
-const ROCKSDB_TOTAL_SST_FILES_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
-const ROCKSDB_TABLE_READERS_MEM_PROPERTY: &'static str = "rocksdb.estimate-table-readers-mem";
-const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES_PROPERTY: &'static str = "rocksdb.cur-size-all-mem-tables";
-const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
 const MIO_TICK_RATIO: u64 = 10;
 
 // A helper structure to bundle all channels for messages to `Store`.
@@ -540,7 +537,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
-                    self.destroy_peer(p.region.get_id(), util::new_peer(store_id, p.id));
+                    self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -1090,7 +1087,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // since there is no leader established during one election timeout after the split.
                 let is_leader = self.region_peers[&region_id].is_leader();
                 if is_leader && right.get_peers().len() > 1 {
-                    for _ in 0..self.cfg.accelerate_campaign_after_split_ticks() {
+                    for _ in 0..new_peer.accelerate_campaign_ticks() {
                         new_peer.raft_group.tick();
                     }
                 }
@@ -1563,45 +1560,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
-        // Must get the total SST file size here.
-        let mut used_size: u64 = 0;
-        for cf in ALL_CFS {
-            let handle = rocksdb::get_cf_handle(&self.engine, cf).unwrap();
-            let cf_used_size = self.engine
-                .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE_PROPERTY)
-                .expect("rocksdb is too old, missing total-sst-files-size property");
-
-            // It is important to monitor each cf's size, especially the "raft" and "lock" column
-            // families.
-            STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
-
-            used_size += cf_used_size;
-
-            // TODO: find a better place to record these metrics.
-            // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
-            // For index and filter blocks memory
-            if let Some(readers_mem) = self.engine
-                .get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM_PROPERTY) {
-                STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[cf, "readers-mem"])
-                    .set(readers_mem as f64);
-            }
-
-            // For memtable
-            if let Some(mem_table) = self.engine
-                .get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES_PROPERTY) {
-                STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[cf, "mem-tables"])
-                    .set(mem_table as f64);
-            }
-
-            // TODO: add cache usage and pinned usage.
-
-            if let Some(num_keys) = self.engine
-                .get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
-                STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC.with_label_values(&[cf])
-                    .set(num_keys as f64);
-            }
-        }
-
+        let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
         used_size += self.snap_mgr.rl().get_total_snap_size();
 
         let mut available = if capacity > used_size {
@@ -1656,7 +1615,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_pd_store_heartbeat_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         self.store_heartbeat_pd();
+        self.flush_engine_statistics();
         self.register_pd_store_heartbeat_tick(event_loop);
+    }
+
+    fn flush_engine_statistics(&mut self) {
+        for t in ENGINE_TICKER_TYPES {
+            let v = self.engine.get_statistics_ticker_count(*t);
+            flush_engine_ticker_metrics(*t, v);
+        }
+
+        for t in ENGINE_HIST_TYPES {
+            if let Some(v) = self.engine.get_statistics_histogram(*t) {
+                flush_engine_histogram_metrics(*t, v);
+            }
+        }
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {

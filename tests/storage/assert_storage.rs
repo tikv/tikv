@@ -98,46 +98,36 @@ impl AssertionStorage {
         assert_eq!(result, expect);
     }
 
-    fn prewrite_ok_or_not_leader(&self,
-                                 ctx: Context,
-                                 mutations: Vec<Mutation>,
-                                 primary: Vec<u8>,
-                                 start_ts: u64)
-                                 -> Option<()> {
-        let res = self.store.prewrite(ctx, mutations, primary, start_ts);
-        if res.is_err() {
-            if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
-                   *res.as_ref()
-                .err()
-                .unwrap() {
-                assert!(e.has_not_leader());
-                return Some(());
-            } else {
-                panic!("expect not leader error, but got {:?}", res);
+    fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
+        match err {
+            storage::Error::Txn(
+                txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(ref e)))) |
+            storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) |
+            storage::Error::Engine(engine::Error::Request(ref e)) => {
+                assert!(e.has_not_leader() | e.has_stale_command(), "invalid error {:?}", e);
+            }
+            _ => {
+                panic!("expect not leader error or stale command, but got {:?}",
+                       err);
             }
         }
-        None
     }
 
-    fn commit_ok_or_not_leader(&self,
-                               ctx: Context,
-                               keys: Vec<Key>,
-                               start_ts: u64,
-                               commit_ts: u64)
-                               -> Option<()> {
-        let res = self.store.commit(ctx, keys, start_ts, commit_ts);
-        if res.is_err() {
-            if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
-                   *res.as_ref()
-                .err()
-                .unwrap() {
-                assert!(e.has_not_leader());
-                return Some(());
-            } else {
-                panic!("expect not leader error, but got {:?}", res);
+    pub fn get_none_from_cluster(&mut self,
+                                 cluster: &mut Cluster<ServerCluster>,
+                                 key: &[u8],
+                                 ts: u64) {
+        let item = make_key(key);
+        for _ in 0..3 {
+            let ret = self.store.get(self.ctx.clone(), &item, ts);
+            if ret.is_ok() {
+                assert_eq!(ret.unwrap(), None);
+                return;
             }
+            self.expect_not_leader_or_stale_command(ret.unwrap_err());
+            self.update_with_key_byte(cluster, key);
         }
-        None
+        panic!("failed with 3 retry!");
     }
 
     pub fn put_ok_for_cluster(&mut self,
@@ -148,28 +138,27 @@ impl AssertionStorage {
                               commit_ts: u64) {
         let mut success = false;
         for _ in 0..3 {
-            if self.prewrite_ok_or_not_leader(self.ctx.clone(),
-                                           vec![Mutation::Put((make_key(key), value.to_vec()))],
-                                           key.to_vec(),
-                                           start_ts)
-                .is_none() {
+            let res = self.store.prewrite(self.ctx.clone(),
+                                          vec![Mutation::Put((make_key(key), value.to_vec()))],
+                                          key.to_vec(),
+                                          start_ts);
+            if res.is_ok() {
                 success = true;
                 break;
             }
+            self.expect_not_leader_or_stale_command(res.unwrap_err());
             self.update_with_key_byte(cluster, key)
         }
         assert!(success);
 
         success = false;
         for _ in 0..3 {
-            if self.commit_ok_or_not_leader(self.ctx.clone(),
-                                         vec![make_key(key)],
-                                         start_ts,
-                                         commit_ts)
-                .is_none() {
+            let res = self.store.commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts);
+            if res.is_ok() {
                 success = true;
                 break;
             }
+            self.expect_not_leader_or_stale_command(res.unwrap_err());
             self.update_with_key_byte(cluster, key)
         }
         assert!(success);
