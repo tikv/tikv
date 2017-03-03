@@ -1258,7 +1258,7 @@ mod v2 {
             debug!("saving to {}", self.path());
             // check that all cf files have been fully written, and the checksums of them match
             for cf_file in &mut self.cf_files {
-                let mut file = cf_file.file.as_mut().unwrap();
+                let mut file = cf_file.file.take().unwrap();
                 try!(file.flush());
                 let size = try!(get_file_size(&cf_file.tmp_path));
                 if size != cf_file.size {
@@ -1291,7 +1291,7 @@ mod v2 {
             // write meta file
             let mut v = vec![];
             try!(self.meta_file.data.write_to_vec(&mut v));
-            if let Err(e) = self.meta_file.file.as_mut().unwrap().write_all(&v[..]) {
+            if let Err(e) = self.meta_file.file.take().unwrap().write_all(&v[..]) {
                 return Err(io::Error::new(ErrorKind::Other, e.description()));
             }
             try!(fs::rename(&self.meta_file.tmp_path, &self.meta_file.path));
