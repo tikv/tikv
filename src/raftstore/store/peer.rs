@@ -622,15 +622,8 @@ impl Peer {
                 }
                 StateRole::Follower => {
                     self.leader_lease_expired_time = None;
-                    let term = self.term();
-                    // all uncommitted reads will be dropped silently in raft.
-                    self.pending_reads.clear_uncommitted(&self.tag, term);
                 }
-                _ => {
-                    let term = self.term();
-                    // all uncommitted reads will be dropped silently in raft.
-                    self.pending_reads.clear_uncommitted(&self.tag, term);
-                }
+                _ => {}
             }
         }
     }
@@ -794,6 +787,16 @@ impl Peer {
                 assert_eq!(state.request_ctx.as_slice(), read.uuid.as_bytes());
                 self.pending_reads.ready_cnt += 1;
                 propose_time = Some(read.renew_lease_time);
+            }
+        }
+
+        // Note that only after handle read_states can we identify what requests are
+        // actually stale.
+        if let Some(ref ss) = ready.ss {
+            if ss.raft_state != StateRole::Leader {
+                let term = self.term();
+                // all uncommitted reads will be dropped silently in raft.
+                self.pending_reads.clear_uncommitted(&self.tag, term);
             }
         }
 
