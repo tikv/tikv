@@ -1122,16 +1122,15 @@ mod v2 {
         fn save_cf_files(&mut self) -> io::Result<()> {
             for cf_file in &mut self.cf_files {
                 if cf_file.kv_count == 0 {
-                    try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
-                    cf_file.size = 0;
+                    let _ = cf_file.sst_writer.take().unwrap();
                 } else {
-                    let writer = cf_file.sst_writer.as_mut().unwrap();
+                    let mut writer = cf_file.sst_writer.take().unwrap();
                     if let Err(e) = writer.finish() {
                         return Err(io::Error::new(ErrorKind::Other, e));
                     }
-                    try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
-                    cf_file.size = try!(get_file_size(&cf_file.path));
                 }
+                try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
+                cf_file.size = try!(get_file_size(&cf_file.path));
                 cf_file.checksum = try!(calc_checksum(&cf_file.path));
             }
             Ok(())
@@ -1140,9 +1139,11 @@ mod v2 {
         fn save_meta_file(&mut self) -> raft::Result<()> {
             let mut v = vec![];
             box_try!(self.meta_file.data.write_to_vec(&mut v));
-            let mut f = self.meta_file.file.as_mut().unwrap();
-            try!(f.write_all(&v[..]));
-            try!(f.flush());
+            {
+                let mut f = self.meta_file.file.take().unwrap();
+                try!(f.write_all(&v[..]));
+                try!(f.flush());
+            }
             try!(fs::rename(&self.meta_file.tmp_path, &self.meta_file.path));
             Ok(())
         }
@@ -1418,11 +1419,18 @@ mod v2 {
         use super::{Snap, ApplyContext};
 
         const TEST_STORE_ID: u64 = 1;
+        const TEST_KEY: &[u8] = b"akey";
 
-        pub fn get_test_snapshot(path: &TempDir) -> Result<DbSnapshot> {
+        pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
             let p = path.path().to_str().unwrap();
             let db = try!(rocksdb::new_engine(p, ALL_CFS));
-            let key = keys::data_key(b"akey");
+            Ok(Arc::new(db))
+        }
+
+        pub fn get_test_db(path: &TempDir) -> Result<Arc<DB>> {
+            let p = path.path().to_str().unwrap();
+            let db = try!(rocksdb::new_engine(p, ALL_CFS));
+            let key = keys::data_key(TEST_KEY);
             // write some data into each cf
             for (i, cf) in ALL_CFS.into_iter().enumerate() {
                 let handle = try!(rocksdb::get_cf_handle(&db, cf));
@@ -1431,7 +1439,7 @@ mod v2 {
                 p.set_id((i + 1) as u64);
                 try!(db.put_msg_cf(handle, &key[..], &p));
             }
-            Ok(DbSnapshot::new(Arc::new(db)))
+            Ok(Arc::new(db))
         }
 
         pub fn get_test_region(region_id: u64, store_id: u64, peer_id: u64) -> Region {
@@ -1448,19 +1456,28 @@ mod v2 {
             region
         }
 
-        pub fn verify_db(db: &DB) {
-            let key = keys::data_key(b"akey");
-            for (i, cf) in ALL_CFS.into_iter().enumerate() {
+        pub fn assert_eq_db(expected_db: Arc<DB>, db: &DB) {
+            let key = keys::data_key(TEST_KEY);
+            for cf in ALL_CFS {
                 if !need_to_pack(cf) {
                     continue;
                 }
-                let p: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
-                assert!(p.is_some());
-                let p = p.unwrap();
-                let mut expect = Peer::new();
-                expect.set_store_id(TEST_STORE_ID);
-                expect.set_id((i + 1) as u64);
-                assert_eq!(p, expect);
+                let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
+                if p1.is_some() {
+                    let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
+                    if !p2.is_some() {
+                        panic!("cf {}: expect key {:?} has value", cf, key);
+                    }
+                    let p1 = p1.unwrap();
+                    let p2 = p2.unwrap();
+                    if p2 != p1 {
+                        panic!("cf {}: key {:?}, value {:?}, expected {:?}",
+                               cf,
+                               key,
+                               p2,
+                               p1);
+                    }
+                }
             }
         }
 
@@ -1505,11 +1522,21 @@ mod v2 {
         }
 
         #[test]
-        fn test_snap_file() {
+        fn test_empty_snap_file() {
+            test_snap_file(get_test_empty_db);
+        }
+
+        #[test]
+        fn test_non_empty_snap_file() {
+            test_snap_file(get_test_db);
+        }
+
+        fn test_snap_file(get_db: fn(p: &TempDir) -> Result<Arc<DB>>) {
             let region_id = 1;
             let region = get_test_region(region_id, 1, 1);
             let src_db_dir = TempDir::new("test-snap-file-db-src").unwrap();
-            let snapshot = get_test_snapshot(&src_db_dir).unwrap();
+            let db = get_db(&src_db_dir).unwrap();
+            let snapshot = DbSnapshot::new(db.clone());
 
             let src_dir = TempDir::new("test-snap-file-src").unwrap();
             let key = SnapKey::new(region_id, 1, 1);
@@ -1528,7 +1555,6 @@ mod v2 {
             let total_size = s1.total_size().unwrap();
             // Ensure the `size_track` is modified correctly.
             let size = *size_track.rl();
-            assert!(size > 0);
             assert_eq!(size, total_size);
 
             // Ensure this snapshot could be read for sending.
@@ -1586,7 +1612,7 @@ mod v2 {
             assert_eq!(*size_track.rl(), 0);
 
             // Verify the data is correct after applying snapshot.
-            verify_db(context.db.as_ref());
+            assert_eq_db(db, context.db.as_ref());
         }
     }
 }
@@ -1846,6 +1872,7 @@ mod test {
     use storage::ALL_CFS;
     use util::{rocksdb, HandyRwLock};
     use super::super::peer_storage::JOB_STATUS_RUNNING;
+    use super::super::engine::Snapshot as DbSnapshot;
     use super::{SnapKey, ApplyContext, Snapshot, new_snap_mgr};
     use super::v1::{Snap as SnapV1, CRC32_BYTES_COUNT};
     use super::v2::{self, Snap as SnapV2};
@@ -1928,7 +1955,7 @@ mod test {
         let mut s1 = SnapV2::new_for_building(&path, &key1, size_track.clone()).unwrap();
         let mut region = v2::test::get_test_region(1, 1, 1);
         let db_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2-db").unwrap();
-        let snapshot = v2::test::get_test_snapshot(&db_dir).unwrap();
+        let snapshot = DbSnapshot::new(v2::test::get_test_db(&db_dir).unwrap());
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         s1.build(&snapshot, &region, &mut snap_data).unwrap();
@@ -1979,7 +2006,8 @@ mod test {
         let mut s1 = src_mgr.rl().get_snapshot_for_building(&key).unwrap();
         let region = v2::test::get_test_region(1, 1, 1);
         let src_db_dir = TempDir::new("test-snap-v1-v2-compatible-src-db").unwrap();
-        let snapshot = v2::test::get_test_snapshot(&src_db_dir).unwrap();
+        let db = v2::test::get_test_db(&src_db_dir).unwrap();
+        let snapshot = DbSnapshot::new(db.clone());
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         s1.build(&snapshot, &region, &mut snap_data).unwrap();
@@ -2012,6 +2040,6 @@ mod test {
         let mut s4 = dst_mgr.rl().get_snapshot_for_applying(&key).unwrap();
         s4.apply(&mut context).unwrap();
 
-        v2::test::verify_db(context.db.as_ref());
+        v2::test::assert_eq_db(db, context.db.as_ref());
     }
 }
