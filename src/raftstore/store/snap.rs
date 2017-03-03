@@ -699,6 +699,7 @@ mod v2 {
         let mut kvs = Vec::with_capacity(cf_files.len());
         for cf_file in cf_files {
             total_size += cf_file.size;
+
             // add size meta for this cf file
             let size_key = format!("{}_{}", SNAPSHOT_META_PREFIX_SIZE, cf_file.cf);
             let mut size_key_buf = vec![];
@@ -709,6 +710,7 @@ mod v2 {
             kv.set_key(size_key_buf);
             kv.set_value(size_value);
             kvs.push(kv);
+
             // add checksum meta for this cf file
             let checksum_key = format!("{}_{}", SNAPSHOT_META_PREFIX_CHECKSUM, cf_file.cf);
             let mut checksum_key_buf = vec![];
