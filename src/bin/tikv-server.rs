@@ -569,6 +569,9 @@ fn build_cfg(matches: &Matches,
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
+    cfg_u64(&mut cfg.raft_store.lock_cf_compact_threshold,
+            config,
+            "raftstore.lock-cf-compact-threshold");
     cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
             config,
             "raftstore.raft-entry-max-size");
