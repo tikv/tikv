@@ -530,7 +530,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         p.written_keys += res.metrics.written_keys;
                         p.written_bytes += res.metrics.written_bytes;
                         if p.has_pending_snapshot() && p.ready_to_handle_pending_snap() {
-                            self.pending_raft_groups.insert(p.region().get_id());
+                            p.mark_to_be_checked(&mut self.pending_raft_groups);
                         }
                     }
                     self.on_ready_result(res.region_id, res.exec_res);
@@ -879,7 +879,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                    peer.handle_raft_ready_append(&mut ctx);
+                    peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
             (ctx.wb, ctx.ready_res)
@@ -989,7 +989,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("{} notify pd with change peer region {:?}",
                       p.tag,
                       p.region());
-                p.heartbeat_pd(&self.cfg, &self.pd_worker);
+                p.heartbeat_pd(&self.pd_worker);
             }
 
             match change_type {
@@ -1124,8 +1124,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("notify pd with split left {:?}, right {:?}",
               left_region,
               right_region);
-        left.heartbeat_pd(&self.cfg, &self.pd_worker);
-        right.heartbeat_pd(&self.cfg, &self.pd_worker);
+        left.heartbeat_pd(&self.pd_worker);
+        right.heartbeat_pd(&self.pd_worker);
 
         // Now pd only uses ReportSplit for history operation show,
         // so we send it independently here.
@@ -1519,7 +1519,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values() {
             if peer.is_leader() {
                 leader_count += 1;
-                peer.heartbeat_pd(&self.cfg, &self.pd_worker);
+                peer.heartbeat_pd(&self.pd_worker);
             }
         }
 
