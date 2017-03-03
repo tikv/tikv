@@ -600,7 +600,8 @@ impl Peer {
         send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
     }
 
-    fn on_role_changed(&mut self, ready: &Ready) {
+    fn on_role_changed(&mut self, ready: &Ready, worker: &Worker<PdTask>) {
+        // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
             match ss.raft_state {
                 StateRole::Leader => {
@@ -617,6 +618,7 @@ impl Peer {
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
                            self.leader_lease_expired_time);
+                    self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
                     self.leader_lease_expired_time = None;
@@ -647,7 +649,9 @@ impl Peer {
         self.get_store().applied_index_term == self.term()
     }
 
-    pub fn handle_raft_ready_append<T: Transport>(&mut self, ctx: &mut ReadyContext<T>) {
+    pub fn handle_raft_ready_append<T: Transport>(&mut self,
+                                                  ctx: &mut ReadyContext<T>,
+                                                  worker: &Worker<PdTask>) {
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -674,7 +678,7 @@ impl Peer {
 
         let mut ready = self.raft_group.ready_since(self.last_ready_idx);
 
-        self.on_role_changed(&ready);
+        self.on_role_changed(&ready, worker);
 
         self.add_ready_metric(&ready, &mut ctx.metrics.ready);
 
@@ -1377,11 +1381,11 @@ impl Peer {
         None
     }
 
-    pub fn heartbeat_pd(&self, cfg: &Config, worker: &Worker<PdTask>) {
+    pub fn heartbeat_pd(&self, worker: &Worker<PdTask>) {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
-            down_peers: self.collect_down_peers(cfg.max_peer_down_duration),
+            down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration),
             pending_peers: self.collect_pending_peers(),
         };
         if let Err(e) = worker.schedule(task) {
