@@ -22,8 +22,8 @@ pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-
 pub const ROCKSDB_TABLE_READERS_MEM: &'static str = "rocksdb.estimate-table-readers-mem";
 pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &'static str = "rocksdb.cur-size-all-mem-tables";
 pub const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
-pub const ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES: &'static str
-                                            = "rocksdb.estimate-pending-compaction-bytes";
+pub const ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES: &'static str = "rocksdb.\
+                                                         estimate-pending-compaction-bytes";
 pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[TickerType::BlockCacheMiss,
                                                          TickerType::BlockCacheHit,
                                                          TickerType::MemtableHit,
