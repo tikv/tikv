@@ -141,17 +141,11 @@ pub struct RegionIterator<'a> {
     end_key: Vec<u8>,
 }
 
-fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
-    if let Some(k) = upper_bound {
-        if k.is_empty() { None } else { Some(k) }
-    } else {
-        None
-    }
-}
-
-fn adjust_iter_opt(iter_opt: IterOption, region: &Region) -> IterOption {
-    let upper_bound = adjust_upper_bound(iter_opt.upper_bound())
-        .map_or_else(|| keys::enc_end_key(region), keys::data_key);
+fn set_upper_bound(iter_opt: IterOption, region: &Region) -> IterOption {
+    let upper_bound = match iter_opt.upper_bound() {
+        Some(k) if !k.is_empty() => keys::data_key(k),
+        _ => keys::enc_end_key(region),
+    };
     iter_opt.set_upper_bound(upper_bound)
 }
 
@@ -161,7 +155,7 @@ impl<'a> RegionIterator<'a> {
                region: Arc<Region>,
                mut iter_opt: IterOption)
                -> RegionIterator<'a> {
-        iter_opt = adjust_iter_opt(iter_opt, &region);
+        iter_opt = set_upper_bound(iter_opt, &region);
         let iter = snap.new_iterator(iter_opt);
         RegionIterator {
             iter: iter,
@@ -177,7 +171,7 @@ impl<'a> RegionIterator<'a> {
                   mut iter_opt: IterOption,
                   cf: &str)
                   -> RegionIterator<'a> {
-        iter_opt = adjust_iter_opt(iter_opt, &region);
+        iter_opt = set_upper_bound(iter_opt, &region);
         let iter = snap.new_iterator_cf(cf, iter_opt).unwrap();
         RegionIterator {
             iter: iter,
