@@ -1005,7 +1005,7 @@ mod tests {
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"z"), b"102".to_vec()))],
                             b"y".to_vec(),
-                            101,
+                            102,
                             Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
