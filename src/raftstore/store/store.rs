@@ -1066,6 +1066,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if right.get_peers().into_iter().all(|p| p.get_id() >= my_id) {
                     if right.get_peers().len() > 1 {
                         new_peer.raft_group.raft.term -= 1;
+                        // Use a smaller term so the assigned leader won't have lease.
+                        new_peer.mut_store().applied_index_term -= 1;
                         new_peer.raft_group.raft.become_candidate();
                         new_peer.raft_group.raft.become_leader();
                     }
