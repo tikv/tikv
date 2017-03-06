@@ -57,14 +57,17 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // Isolate peer 2 from other part of the cluster.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
+    // In case 2 is leader, it will fail to pass the healthy nodes check,
+    // so remove isolated node first. Because 2 is isolated, so it can't remove itself.
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+
     // Add peer [(4, 4), (5, 5), (6, 6)].
     pd_client.must_add_peer(r1, new_peer(4, 4));
     pd_client.must_add_peer(r1, new_peer(5, 5));
     pd_client.must_add_peer(r1, new_peer(6, 6));
 
-    // Remove peer [(1, 1), (2, 2), (3, 3)].
+    // Remove peer [(1, 1), (3, 3)].
     pd_client.must_remove_peer(r1, new_peer(1, 1));
-    pd_client.must_remove_peer(r1, new_peer(2, 2));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
     // Keep peer 2 isolated. Otherwise whether peer 3 is destroyed or not,
