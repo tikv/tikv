@@ -61,6 +61,10 @@ impl Lock {
     pub fn acquired(&self) -> bool {
         self.required_slots.len() == self.owned_count
     }
+
+    pub fn is_write_lock(&self) -> bool {
+        !self.required_slots.is_empty()
+    }
 }
 
 /// Latches which are used for concurrency control in the scheduler.
