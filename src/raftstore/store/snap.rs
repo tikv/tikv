@@ -635,7 +635,7 @@ mod v2 {
     use kvproto::raft_serverpb::{KeyValue, RaftSnapshotData};
     use rocksdb::{EnvOptions, Options, SstFileWriter, IngestExternalFileOptions};
     use raft;
-    use storage::ALL_CFS;
+    use storage::{CfName, ALL_CFS};
     use raftstore::Result as RaftStoreResult;
     use util::{HandyRwLock, rocksdb};
     use util::codec::number::{self, NumberEncoder, NumberDecoder};
@@ -651,14 +651,14 @@ mod v2 {
     const ENCODE_DECODE_DESC: bool = false;
     const DIGEST_BUFFER_SIZE: usize = 10240;
 
-    fn get_snapshot_cfs() -> Vec<String> {
+    fn get_snapshot_cfs() -> Vec<CfName> {
         let size = ALL_CFS.len();
         let mut cfs = Vec::with_capacity(size);
         for cf in ALL_CFS {
             if !need_to_pack(cf) {
                 continue;
             }
-            cfs.push(cf.to_string());
+            cfs.push(*cf);
         }
         cfs
     }
@@ -726,10 +726,10 @@ mod v2 {
     }
 
 
-    fn decode_cf_size_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(String, u64, u32)>> {
+    fn decode_cf_size_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(CfName, u64, u32)>> {
         let snapshot_cfs = get_snapshot_cfs();
-        let mut cf_sizes: Vec<(String, u64)> = vec![];
-        let mut cf_checksums: Vec<(String, u32)> = vec![];
+        let mut cf_sizes: Vec<(CfName, u64)> = vec![];
+        let mut cf_checksums: Vec<(CfName, u32)> = vec![];
         for kv in kvs {
             let mut key_bytes = kv.get_key();
             let decoded = try!(key_bytes.decode_bytes(ENCODE_DECODE_DESC));
@@ -745,10 +745,12 @@ mod v2 {
             if strs.len() != 2 {
                 return Err(box_err!("invalid snapshot meta key {}", key));
             }
-            let cf = strs[1].to_owned();
-            if snapshot_cfs.iter().find(|&s| *s == cf).is_none() {
-                return Err(box_err!("invalid snapshot cf {}", cf));
+            let cf_name = strs[1];
+            let res = snapshot_cfs.iter().find(|&s| *s == cf_name);
+            if res.is_none() {
+                return Err(box_err!("invalid snapshot cf {}", cf_name));
             }
+            let cf = res.unwrap();
             match strs[0] {
                 SNAPSHOT_META_PREFIX_SIZE => {
                     let size = try!(kv.get_value().decode_u64());
@@ -784,7 +786,7 @@ mod v2 {
 
     #[derive(Default)]
     struct CfFile {
-        pub cf: String,
+        pub cf: CfName,
         pub path: String,
         pub size: u64,
 
@@ -1195,11 +1197,11 @@ mod v2 {
             Ok(())
         }
 
-        fn list_cf_path_sizes(&self) -> io::Result<Vec<(String, String, u64)>> {
+        fn list_cf_path_sizes(&self) -> io::Result<Vec<(CfName, String, u64)>> {
             let mut res = Vec::with_capacity(self.cf_files.len());
             for cf_file in &self.cf_files {
                 let size = try!(get_file_size(&cf_file.path));
-                res.push((cf_file.cf.clone(), cf_file.path.clone(), size));
+                res.push((cf_file.cf, cf_file.path.clone(), size));
             }
             Ok(res)
         }
