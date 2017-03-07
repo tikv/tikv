@@ -28,7 +28,6 @@ use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 
-use raft;
 use raftstore::Result as RaftStoreResult;
 use raftstore::store::Msg;
 use storage::CF_RAFT;
@@ -133,7 +132,7 @@ pub trait Snapshot: Read + Write + Send {
              snap: &DbSnapshot,
              region: &Region,
              snap_data: &mut RaftSnapshotData)
-             -> raft::Result<()>;
+             -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
     fn delete(&self);
@@ -173,9 +172,9 @@ mod v1 {
     use rocksdb::{Writable, WriteBatch};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use raft;
     use util::{HandyRwLock, rocksdb};
     use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
+    use raftstore::Result as RaftStoreResult;
 
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::super::keys::{self, enc_start_key, enc_end_key};
@@ -302,7 +301,7 @@ mod v1 {
             Ok(())
         }
 
-        fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
+        fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> RaftStoreResult<()> {
             if self.exists() {
                 match self.get_validation_reader().and_then(|r| r.validate()) {
                     Ok(()) => return Ok(()),
@@ -358,7 +357,7 @@ mod v1 {
                  snap: &DbSnapshot,
                  region: &Region,
                  snap_data: &mut RaftSnapshotData)
-                 -> raft::Result<()> {
+                 -> RaftStoreResult<()> {
             try!(self.do_build(snap, region));
             let size = try!(self.total_size());
             snap_data.set_file_size(size);
@@ -634,12 +633,12 @@ mod v2 {
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{KeyValue, RaftSnapshotData};
     use rocksdb::{EnvOptions, Options, SstFileWriter, IngestExternalFileOptions};
-    use raft;
     use storage::{CfName, ALL_CFS};
-    use raftstore::Result as RaftStoreResult;
     use util::{HandyRwLock, rocksdb};
     use util::codec::number::{self, NumberEncoder, NumberDecoder};
     use util::codec::bytes::{BytesEncoder, BytesDecoder};
+    use raftstore::Result as RaftStoreResult;
+
     use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Error, Result,
@@ -694,7 +693,7 @@ mod v2 {
         }
     }
 
-    fn encode_cf_size_checksums(cf_files: &[CfFile]) -> raft::Result<(u64, Vec<KeyValue>)> {
+    fn encode_cf_size_checksums(cf_files: &[CfFile]) -> RaftStoreResult<(u64, Vec<KeyValue>)> {
         let mut total_size = 0;
         let mut kvs = Vec::with_capacity(cf_files.len());
         for cf_file in cf_files {
@@ -1064,7 +1063,7 @@ mod v2 {
             Ok(())
         }
 
-        fn validate(&self) -> raft::Result<()> {
+        fn validate(&self) -> RaftStoreResult<()> {
             let cf_size_checksums =
                 box_try!(decode_cf_size_checksums(self.meta_file.data.get_data()));
             for (cf, expected_size, expected_checksum) in cf_size_checksums {
@@ -1140,7 +1139,7 @@ mod v2 {
             Ok(())
         }
 
-        fn save_meta_file(&mut self) -> raft::Result<()> {
+        fn save_meta_file(&mut self) -> RaftStoreResult<()> {
             let mut v = vec![];
             box_try!(self.meta_file.data.write_to_vec(&mut v));
             {
@@ -1152,7 +1151,7 @@ mod v2 {
             Ok(())
         }
 
-        fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> raft::Result<()> {
+        fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> RaftStoreResult<()> {
             if self.exists() {
                 match self.validate() {
                     Ok(()) => return Ok(()),
@@ -1212,7 +1211,7 @@ mod v2 {
                  snap: &DbSnapshot,
                  region: &Region,
                  snap_data: &mut RaftSnapshotData)
-                 -> raft::Result<()> {
+                 -> RaftStoreResult<()> {
             try!(self.do_build(snap, region));
             // set snapshot meta data
             let (total_size, kvs) = try!(encode_cf_size_checksums(&self.cf_files[..]));
