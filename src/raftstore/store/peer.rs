@@ -901,6 +901,47 @@ impl Peer {
         true
     }
 
+    pub fn maybe_campaign(&mut self, last_peer: &Peer) {
+        if self.region().get_peers().len() <= 1 {
+            // The peer campaigned when it was created, no need to do it again.
+            return;
+        }
+
+        if last_peer.is_leader() {
+            // If leader campaigns, follower may not apply yet.
+            return;
+        }
+
+        let smallest_peer =
+            self.region().get_peers().iter().min_by_key(|p| p.get_id()).unwrap().to_owned();
+        if smallest_peer.get_id() == self.peer_id() {
+            // I'm the smallest peer, let's campaign.
+            let _ = self.raft_group.campaign();
+            return;
+        }
+
+        let largest_peer =
+            self.region().get_peers().iter().max_by_key(|p| p.get_id()).unwrap().to_owned();
+        if largest_peer.get_id() != self.peer_id() {
+            // I'm not a special peer, skip campaign.
+            return;
+        }
+
+        let last_leader_id = last_peer.leader_id();
+        let last_leader = last_peer.region()
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == last_leader_id)
+            .unwrap()
+            .to_owned();
+        if last_leader.get_store_id() != smallest_peer.get_store_id() {
+            // Smallest peer campaigns already, skip.
+            return;
+        }
+
+        let _ = self.raft_group.campaign();
+    }
+
     fn find_propose_time(&mut self, uuid: Uuid, term: u64) -> Option<Timespec> {
         while let Some(meta) = self.proposals.pop(term) {
             if meta.uuid == uuid {
