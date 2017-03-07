@@ -55,6 +55,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_scheduler_too_busy_total",
+            "Total count of scheduler too busy",
+            &["type"]
+        ).unwrap();
+
     pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_scheduler_kv_command_key_read",

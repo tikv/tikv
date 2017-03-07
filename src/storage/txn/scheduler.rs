@@ -665,12 +665,14 @@ impl Scheduler {
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
         if !cmd.readonly() && self.too_busy() {
+            SCHED_TOO_BUSY_COUNTER_VEC.with_label_values(&[cmd.tag()]).inc();
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
             return;
         }
         // Allow 1 GC command at the same time.
         if cmd.tag() == CMD_TAG_GC && self.has_gc_command {
+            SCHED_TOO_BUSY_COUNTER_VEC.with_label_values(&[cmd.tag()]).inc();
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
             return;
