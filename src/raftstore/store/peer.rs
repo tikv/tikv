@@ -901,7 +901,7 @@ impl Peer {
         true
     }
 
-    pub fn maybe_campaign(&mut self, last_peer: &Peer) {
+    pub fn maybe_campaign(&mut self, last_peer: &Peer, pending_raft_groups: &mut HashSet<u64>) {
         if self.region().get_peers().len() <= 1 {
             // The peer campaigned when it was created, no need to do it again.
             return;
@@ -915,6 +915,7 @@ impl Peer {
         if self.region().get_peers().len() == 3 {
             // All followers of a region with only 3 peers can start campaign immediately.
             let _ = self.raft_group.campaign();
+            self.mark_to_be_checked(pending_raft_groups);
             return;
         }
 
@@ -923,6 +924,7 @@ impl Peer {
         if smallest_peer.get_id() == self.peer_id() {
             // I'm the smallest peer, let's campaign.
             let _ = self.raft_group.campaign();
+            self.mark_to_be_checked(pending_raft_groups);
             return;
         }
 
@@ -946,6 +948,7 @@ impl Peer {
         }
 
         let _ = self.raft_group.campaign();
+        self.mark_to_be_checked(pending_raft_groups);
     }
 
     fn find_propose_time(&mut self, uuid: Uuid, term: u64) -> Option<Timespec> {
