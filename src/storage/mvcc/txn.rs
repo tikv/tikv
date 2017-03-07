@@ -163,6 +163,7 @@ impl<'a> MvccTxn<'a> {
                 return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
                     Some((_, WriteType::Rollback)) |
                     None => {
+                        // TODO:None should not appear
                         // Rollbacked by concurrent transaction.
                         info!("txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
                               key,
@@ -882,9 +883,12 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot.as_ref(), None, true, None);
         let ret = reader.get_txn_commit_info(&make_key(key), start_ts);
-        if ret.is_ok() {
-            let (_, write_type) = ret.unwrap().unwrap();
-            assert_eq!(write_type, WriteType::Rollback);
+        assert!(ret.is_ok());
+        match ret.unwrap() {
+            None => {}
+            Some((_, write_type)) => {
+                assert_eq!(write_type, WriteType::Rollback);
+            }
         }
     }
 
