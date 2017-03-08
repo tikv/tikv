@@ -21,7 +21,7 @@ use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration as StdDuration};
 
-use time::{Timespec, Duration};
+use time::Timespec;
 use rocksdb::{DB, WriteBatch};
 use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;
@@ -230,6 +230,8 @@ pub struct Peer {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+
+    local_read_tx: Sender<Msg>,
 }
 
 impl Peer {
@@ -322,6 +324,7 @@ impl Peer {
             leader_lease_expired_time: None,
             written_bytes: 0,
             written_keys: 0,
+            local_read_tx: store.get_local_read_tx(),
         };
 
         peer.load_all_coprocessors();
@@ -497,6 +500,15 @@ impl Peer {
                     // to be unsafe until next_lease_expired_time from now
                     self.leader_lease_expired_time =
                         Some(Either::Right(self.next_lease_expired_time(clocktime::raw_now())));
+                    self.local_read_tx
+                        .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                            region_id: self.region().get_id(),
+                            leader_lease_expired_time: Some(self.leader_lease_expired_time.clone()),
+                            applied_index_term: Some(self.get_store().applied_index_term),
+                            term: Some(self.term()),
+                            ..Default::default()
+                        }))
+                        .unwrap();
 
                     metrics.timeout_now += 1;
                 }
@@ -603,10 +615,7 @@ impl Peer {
         send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
     }
 
-    fn on_role_changed(&mut self,
-                       ready: &Ready,
-                       worker: &Worker<PdTask>,
-                       local_read_tx: &Sender<Msg>) {
+    fn on_role_changed(&mut self, ready: &Ready, worker: &Worker<PdTask>) {
         // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
             match ss.raft_state {
@@ -625,7 +634,8 @@ impl Peer {
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
                            self.leader_lease_expired_time);
-                    local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
+                    self.local_read_tx
+                        .send(Msg::UpdatePeerStatus(PeerStatusChange {
                             region_id: self.region().get_id(),
                             leader_id: Some(ss.leader_id),
                             leader_lease_expired_time: Some(leader_lease_expired_time.clone()),
@@ -639,7 +649,8 @@ impl Peer {
                 StateRole::Follower => {
                     self.leader_lease_expired_time = None;
 
-                    local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
+                    self.local_read_tx
+                        .send(Msg::UpdatePeerStatus(PeerStatusChange {
                             region_id: self.region().get_id(),
                             leader_id: Some(ss.leader_id),
                             leader_lease_expired_time: Some(None),
@@ -670,8 +681,7 @@ impl Peer {
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   ctx: &mut ReadyContext<T>,
-                                                  worker: &Worker<PdTask>,
-                                                  local_read_tx: &Sender<Msg>) {
+                                                  worker: &Worker<PdTask>) {
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -698,7 +708,7 @@ impl Peer {
 
         let mut ready = self.raft_group.ready_since(self.last_ready_idx);
 
-        self.on_role_changed(&ready, worker, local_read_tx);
+        self.on_role_changed(&ready, worker);
 
         self.add_ready_metric(&ready, &mut ctx.metrics.ready);
 
@@ -751,7 +761,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, local_read_tx: &Sender<Msg>) {
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -777,8 +787,7 @@ impl Peer {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
                 if to_be_updated {
-                    to_be_updated =
-                        !self.maybe_update_lease(entry.get_term(), entry.get_data(), local_read_tx);
+                    to_be_updated = !self.maybe_update_lease(entry.get_term(), entry.get_data());
                 }
             }
             if !committed_entries.is_empty() {
@@ -788,7 +797,7 @@ impl Peer {
             }
         }
 
-        self.apply_reads(&ready, local_read_tx);
+        self.apply_reads(&ready);
 
         self.raft_group.advance_append(ready);
         if self.is_applying_snapshot() {
@@ -798,7 +807,7 @@ impl Peer {
         }
     }
 
-    fn apply_reads(&mut self, ready: &Ready, local_read_tx: &Sender<Msg>) {
+    fn apply_reads(&mut self, ready: &Ready) {
         let mut propose_time = None;
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
@@ -833,7 +842,7 @@ impl Peer {
         }
 
         if let Some(propose_time) = propose_time {
-            self.update_lease_with(propose_time, local_read_tx);
+            self.update_lease_with(propose_time);
         }
     }
 
@@ -878,7 +887,7 @@ impl Peer {
         }
     }
 
-    fn update_lease_with(&mut self, propose_time: Timespec, local_read_tx: &Sender<Msg>) {
+    fn update_lease_with(&mut self, propose_time: Timespec) {
         // Try to renew the leader lease as this command asks to.
         if self.leader_lease_expired_time.is_some() {
             let current_expired_time =
@@ -899,19 +908,17 @@ impl Peer {
                        next_expired_time);
                 self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
 
-                // Notify local read thread to update lease lazily.
-                let notify_gap = Duration::seconds(1);
-                if next_expired_time - current_expired_time > notify_gap {
-                    local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
-                            region_id: self.region().get_id(),
-                            leader_lease_expired_time: Some(self.leader_lease_expired_time
-                                .clone()),
-                            applied_index_term: Some(self.get_store().applied_index_term),
-                            term: Some(self.term()),
-                            ..Default::default()
-                        }))
-                        .unwrap();
-                }
+                // Notify local read thread to update lease.
+                self.local_read_tx
+                    .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                        region_id: self.region().get_id(),
+                        leader_lease_expired_time: Some(self.leader_lease_expired_time
+                            .clone()),
+                        applied_index_term: Some(self.get_store().applied_index_term),
+                        term: Some(self.term()),
+                        ..Default::default()
+                    }))
+                    .unwrap();
             }
         } else if self.is_leader() {
             // This peer is leader but its leader lease has expired.
@@ -924,7 +931,8 @@ impl Peer {
             self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
 
             // Notify local read thread to update lease.
-            local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
+            self.local_read_tx
+                .send(Msg::UpdatePeerStatus(PeerStatusChange {
                     region_id: self.region().get_id(),
                     leader_lease_expired_time: Some(self.leader_lease_expired_time.clone()),
                     applied_index_term: Some(self.get_store().applied_index_term),
@@ -938,7 +946,7 @@ impl Peer {
     /// Try to update lease.
     ///
     /// If the it can make sure that its lease is the latest lease, returns true.
-    fn maybe_update_lease(&mut self, term: u64, data: &[u8], local_read_tx: &Sender<Msg>) -> bool {
+    fn maybe_update_lease(&mut self, term: u64, data: &[u8]) -> bool {
         let mut req = RaftCmdRequest::new();
         let propose_time = match req.merge_from_bytes(data)
             .ok()
@@ -948,7 +956,7 @@ impl Peer {
             _ => return false,
         };
 
-        self.update_lease_with(propose_time, local_read_tx);
+        self.update_lease_with(propose_time);
 
         true
     }
@@ -1086,6 +1094,15 @@ impl Peer {
                    self.leader_lease_expired_time);
             // Reset leader lease expiring time.
             self.leader_lease_expired_time = None;
+            self.local_read_tx
+                .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                    region_id: self.region().get_id(),
+                    leader_lease_expired_time: None,
+                    applied_index_term: Some(self.get_store().applied_index_term),
+                    term: Some(self.term()),
+                    ..Default::default()
+                }))
+                .unwrap();
         }
 
         // Perform a consistent read to Raft quorum and try to renew the leader lease.

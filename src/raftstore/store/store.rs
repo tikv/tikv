@@ -294,6 +294,10 @@ impl<T, C> Store<T, C> {
         self.sendch.clone()
     }
 
+    pub fn get_local_read_tx(&self) -> StdSender<Msg> {
+        self.local_read_tx.clone()
+    }
+
     #[inline]
     pub fn get_snap_mgr(&self) -> SnapManager {
         self.snap_mgr.clone()
@@ -934,7 +938,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                    peer.handle_raft_ready_append(&mut ctx, &self.pd_worker, &self.local_read_tx);
+                    peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
             (ctx.wb, ctx.ready_res)
@@ -978,7 +982,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(ready, &self.local_read_tx);
+                .handle_raft_ready_apply(ready);
             if let Some(apply_result) = res {
                 self.on_ready_apply_snapshot(apply_result);
             }
