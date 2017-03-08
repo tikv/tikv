@@ -912,13 +912,6 @@ impl Peer {
             return;
         }
 
-        if self.region().get_peers().len() == 3 {
-            // All followers of a region with only 3 peers can start campaign immediately.
-            let _ = self.raft_group.campaign();
-            self.mark_to_be_checked(pending_raft_groups);
-            return;
-        }
-
         let smallest_peer =
             self.region().get_peers().iter().min_by_key(|p| p.get_id()).unwrap().to_owned();
         if smallest_peer.get_id() == self.peer_id() {
