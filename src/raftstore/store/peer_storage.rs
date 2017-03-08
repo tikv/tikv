@@ -1118,12 +1118,12 @@ mod test {
     }
 
     #[test]
-    fn test_storage_create_snapshot_with_old_format() {
+    fn test_storage_create_snapshot_with_plain_format() {
         test_storage_create_snapshot(false);
     }
 
     #[test]
-    fn test_storage_create_snapshot_with_sst_file_format() {
+    fn test_storage_create_snapshot_with_sst_format() {
         test_storage_create_snapshot(true);
     }
 
