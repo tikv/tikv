@@ -25,7 +25,7 @@ use kvproto::eraftpb::Snapshot as RaftSnapshot;
 
 use util::worker::Runnable;
 use util::{escape, HandyRwLock, rocksdb};
-use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption, SeekMode};
+use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
 use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyContext, keys,
@@ -136,11 +136,8 @@ impl Runner {
             try!(check_abort(&abort));
             let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
 
-            let mut it = box_try!(self.db
-                .new_iterator_cf(cf,
-                                 IterOption::new(Some(end_key.to_vec()),
-                                                 false,
-                                                 SeekMode::TotalOrderSeek)));
+            let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+            let mut it = box_try!(self.db.new_iterator_cf(cf, iter_opt));
 
             try!(check_abort(&abort));
             it.seek(start_key.into());
