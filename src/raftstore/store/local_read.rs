@@ -141,7 +141,7 @@ impl PeerStatus {
         }
         if lost_lease {
             // Perform a consistent read to Raft quorum and try to renew the leader lease.
-            LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["lostß_lease"]).inc();
+            LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["lost_lease"]).inc();
             return false;
         }
 
