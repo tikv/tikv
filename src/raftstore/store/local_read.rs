@@ -105,6 +105,7 @@ impl PeerStatus {
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
         if self.applied_index_term != self.term {
+            LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["term_not_eq"]).inc();
             return false;
         }
 
@@ -116,6 +117,7 @@ impl PeerStatus {
 
         // If the leader lease has expired, local read should not be performed.
         if self.leader_lease_expired_time.is_none() {
+            LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["no_lease"]).inc();
             return false;
         }
 
@@ -139,6 +141,7 @@ impl PeerStatus {
         }
         if lost_lease {
             // Perform a consistent read to Raft quorum and try to renew the leader lease.
+            LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["lostß_lease"]).inc();
             return false;
         }
 
