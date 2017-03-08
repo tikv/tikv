@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use std::collections::vec_deque::{Iter, VecDeque};
+
 use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
@@ -418,6 +420,36 @@ pub use self::thread_metrics::monitor_threads;
 #[cfg(not(target_os="linux"))]
 pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
     Ok(())
+}
+
+/// A simple ring queue with fixed capacity.
+pub struct FixRingQueue<T> {
+    buf: VecDeque<T>,
+    cap: usize,
+}
+
+impl<T> FixRingQueue<T> {
+    pub fn with_capacity(cap: usize) -> FixRingQueue<T> {
+        FixRingQueue {
+            buf: VecDeque::with_capacity(cap),
+            cap: cap,
+        }
+    }
+
+    pub fn push(&mut self, t: T) {
+        if self.buf.len() == self.cap {
+            self.buf.pop_front();
+        }
+        self.buf.push_back(t);
+    }
+
+    pub fn iter(&self) -> Iter<T> {
+        self.buf.iter()
+    }
+
+    pub fn swap_remove_front(&mut self, pos: usize) -> Option<T> {
+        self.buf.swap_remove_front(pos)
+    }
 }
 
 #[cfg(test)]
