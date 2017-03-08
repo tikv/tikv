@@ -1,3 +1,15 @@
+// Copyright 2017 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use time::Timespec;
 use std::sync::Arc;
@@ -19,6 +31,7 @@ use super::cmd_resp::{bind_uuid, bind_term, bind_error, new_error};
 use super::util;
 use super::keys::enc_end_key;
 use super::engine::Snapshot;
+use super::metrics::*;
 
 pub enum RangeChangeType {
     Add,
@@ -172,6 +185,7 @@ impl LocalReadHandler {
         loop {
             match self.rx.recv() {
                 Ok(Msg::RaftCmd { request, callback, .. }) => {
+                    LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["received"]).inc();
                     self.handle_raft_cmd(request, callback);
                 }
                 Ok(Msg::RedirectRaftCmdResp { uuid, resp }) => {
@@ -328,6 +342,7 @@ impl LocalReadHandler {
 
         // redirect command to raftstore
         if req.has_admin_request() || req.has_status_request() {
+            LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["redirect"]).inc();
             return self.redirect_cmd_to_raftstore(uuid, req, cb);
         }
 
@@ -349,10 +364,12 @@ impl LocalReadHandler {
 
         // redirect command to raftstore
         if need_redirect {
+            LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["redirect"]).inc();
             return self.redirect_cmd_to_raftstore(uuid, req, cb);
         }
 
         // handle read
+        LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["handled"]).inc();
         if let Some(peer_status) = self.peers_status.get(&region_id) {
             let mut resp = self.exec_read(peer_status, &req).unwrap_or_else(|e| {
                 error!("execute raft command err: {:?}", e);

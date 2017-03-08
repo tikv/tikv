@@ -143,4 +143,11 @@ lazy_static! {
             "tikv_raftstore_gc_raft_log_total",
             "Total number of GC raft log."
         ).unwrap();
+
+    pub static ref LOCAL_READ_THREAD_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_local_read_thread_cmd_total",
+            "Total number of command in local read thread.",
+            &["type"]
+        ).unwrap();
 }
