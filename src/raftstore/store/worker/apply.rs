@@ -131,10 +131,14 @@ pub fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) 
 }
 
 /// Call the callback of `cmd` when it can not be processed further.
-pub fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
-    let resp = cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, term);
-    info!("{} command {} is stale, skip", tag, cmd.uuid);
-    cmd.call(resp);
+fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
+    notify_stale_req(tag, term, cmd.uuid, cmd.cb.take().unwrap())
+}
+
+pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
+    let resp = cmd_resp::err_resp(Error::StaleCommand, uuid, term);
+    info!("{} command {} is stale, skip", tag, uuid);
+    cb(resp);
 }
 
 pub struct ApplyDelegate {

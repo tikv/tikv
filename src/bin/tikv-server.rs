@@ -604,6 +604,9 @@ fn build_cfg(matches: &Matches,
                   "storage.scheduler-worker-pool-size") {
         cfg.storage.sched_worker_pool_size = adjust_sched_workers_by_cpu_num(total_cpu_num);
     }
+    cfg_usize(&mut cfg.storage.sched_too_busy_threshold,
+              config,
+              "storage.scheduler-too-busy-threshold");
 
     cfg
 }

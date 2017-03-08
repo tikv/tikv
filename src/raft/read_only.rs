@@ -141,4 +141,9 @@ impl ReadOnly {
     pub fn last_pending_request_ctx(&self) -> Option<Vec<u8>> {
         self.read_index_queue.back().cloned()
     }
+
+    #[inline]
+    pub fn pending_read_count(&self) -> usize {
+        self.read_index_queue.len()
+    }
 }
