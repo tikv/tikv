@@ -629,6 +629,8 @@ impl Peer {
                             region_id: self.region().get_id(),
                             leader_id: Some(ss.leader_id),
                             leader_lease_expired_time: Some(leader_lease_expired_time.clone()),
+                            applied_index_term: Some(self.get_store().applied_index_term),
+                            term: Some(self.term()),
                             ..Default::default()
                         }))
                         .unwrap();
@@ -641,6 +643,8 @@ impl Peer {
                             region_id: self.region().get_id(),
                             leader_id: Some(ss.leader_id),
                             leader_lease_expired_time: Some(None),
+                            applied_index_term: Some(self.get_store().applied_index_term),
+                            term: Some(self.term()),
                             ..Default::default()
                         }))
                         .unwrap();
@@ -902,6 +906,8 @@ impl Peer {
                             region_id: self.region().get_id(),
                             leader_lease_expired_time: Some(self.leader_lease_expired_time
                                 .clone()),
+                            applied_index_term: Some(self.get_store().applied_index_term),
+                            term: Some(self.term()),
                             ..Default::default()
                         }))
                         .unwrap();
@@ -921,6 +927,8 @@ impl Peer {
             local_read_tx.send(Msg::UpdatePeerStatus(PeerStatusChange {
                     region_id: self.region().get_id(),
                     leader_lease_expired_time: Some(self.leader_lease_expired_time.clone()),
+                    applied_index_term: Some(self.get_store().applied_index_term),
+                    term: Some(self.term()),
                     ..Default::default()
                 }))
                 .unwrap();

@@ -561,7 +561,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Ok(ApplyTaskRes::Apply(res)) => {
                     if let Some(p) = self.region_peers.get_mut(&res.region_id) {
                         debug!("{} async apply finish: {:?}", p.tag, res);
-                        if p.get_store().applied_index_term != res.applied_index_term {
+                        let need_notify_update_term = p.get_store().applied_index_term !=
+                                                      res.applied_index_term;
+                        p.post_apply(&res, &mut self.pending_raft_groups);
+                        if need_notify_update_term {
                             self.local_read_tx
                                 .send(Msg::UpdatePeerStatus(PeerStatusChange {
                                     region_id: p.region().get_id(),
@@ -571,7 +574,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                 }))
                                 .unwrap();
                         }
-                        p.post_apply(&res, &mut self.pending_raft_groups);
                     }
                     self.on_ready_result(res.region_id, res.exec_res);
                 }
