@@ -14,7 +14,7 @@
 use tikv::raftstore::store::*;
 use tikv::util::HandyRwLock;
 use tikv::server::transport::RaftStoreRouter;
-use tikv::raftstore::{Error, Result};
+use tikv::raftstore::Result;
 use kvproto::eraftpb::MessageType;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 
@@ -43,6 +43,9 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.must_get(key), Some(value.to_vec()));
 
+    // sleep 200ms in case the commit packet is dropped by simulated transport.
+    thread::sleep(Duration::from_millis(200));
+
     cluster.assert_quorum(|engine| {
         match engine.get_value(&keys::data_key(key)).unwrap() {
             None => false,
@@ -52,6 +55,9 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_delete(key);
     assert_eq!(cluster.must_get(key), None);
+
+    // sleep 200ms in case the commit packet is dropped by simulated transport.
+    thread::sleep(Duration::from_millis(200));
 
     cluster.assert_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
 
@@ -516,11 +522,10 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // internal read will use raft read no matter read_quorum is false or true, cause applied
     // index's term not equal leader's term, and will failed with timeout
-    if let Err(Error::Timeout(_)) = get_with_timeout(cluster, k, false, Duration::from_secs(10)) {
-        debug!("raft read failed with timeout");
-    } else {
-        panic!("read didn't use raft, beyond exceptions");
-    }
+    let req = get_with_timeout(cluster, k, false, Duration::from_secs(10)).unwrap();
+    assert!(req.get_header().get_error().has_stale_command(),
+            "read should be dropped immediately, but got {:?}",
+            req);
 
     // recover network
     cluster.clear_send_filters();
