@@ -511,6 +511,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         debug!("{} async apply finish: {:?}", p.tag, res);
                         p.post_apply(&res, &mut self.pending_raft_groups);
                     }
+                    self.lock_cf_written_bytes += res.metrics.lock_cf_written_bytes;
                     self.on_ready_result(res.region_id, res.exec_res);
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
