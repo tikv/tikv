@@ -19,6 +19,7 @@ use std::thread;
 use rocksdb::DB;
 use uuid::Uuid;
 use protobuf;
+use time::Duration as TimeDuration;
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_cmdpb::{Request, StatusRequest, AdminRequest, RaftCmdRequest, RaftCmdResponse};
@@ -86,6 +87,8 @@ pub fn new_store_cfg() -> Config {
         // In production environment, the value of max_leader_missing_duration
         // should be configured far beyond the election timeout.
         max_leader_missing_duration: Duration::from_secs(3),
+        report_region_flow_interval: 100, // 100ms
+        raft_store_max_leader_lease: TimeDuration::milliseconds(25 * 10),
         ..Config::default()
     }
 }
@@ -187,17 +190,18 @@ pub fn new_admin_request(region_id: u64,
     req
 }
 
+pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+    let mut req = AdminRequest::new();
+    req.set_cmd_type(AdminCmdType::ChangePeer);
+    req.mut_change_peer().set_change_type(change_type);
+    req.mut_change_peer().set_peer(peer);
+    req
+}
+
 pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     let mut cmd = AdminRequest::new();
     cmd.set_cmd_type(AdminCmdType::TransferLeader);
     cmd.mut_transfer_leader().set_peer(peer);
-    cmd
-}
-
-pub fn new_compact_log_cmd(index: u64) -> AdminRequest {
-    let mut cmd = AdminRequest::new();
-    cmd.set_cmd_type(AdminCmdType::CompactLog);
-    cmd.mut_compact_log().set_compact_index(index);
     cmd
 }
 

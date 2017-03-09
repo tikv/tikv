@@ -11,6 +11,7 @@ use tipb::select::{ByItem, SelectRequest, SelectResponse, Chunk};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType};
 use storage::sync_storage::SyncStorage;
+use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
 
 use std::collections::{HashMap, BTreeMap};
 use std::sync::mpsc;
@@ -88,11 +89,13 @@ struct Column {
     col_type: i32,
     // negative means not a index key, 0 means primary key, positive means normal index key.
     index: i64,
+    default_val: Option<i64>, // TODO: change it to Vec<u8> if other type value is needed for test.
 }
 
 struct ColumnBuilder {
     col_type: i32,
     index: i64,
+    default_val: Option<i64>,
 }
 
 impl ColumnBuilder {
@@ -100,6 +103,7 @@ impl ColumnBuilder {
         ColumnBuilder {
             col_type: TYPE_LONG,
             index: -1,
+            default_val: None,
         }
     }
 
@@ -122,11 +126,17 @@ impl ColumnBuilder {
         self
     }
 
+    fn default(mut self, val: i64) -> ColumnBuilder {
+        self.default_val = Some(val);
+        self
+    }
+
     fn build(self) -> Column {
         Column {
             id: next_id(),
             col_type: self.col_type,
             index: self.index,
+            default_val: self.default_val,
         }
     }
 }
@@ -147,6 +157,9 @@ impl Table {
             c_info.set_column_id(col.id);
             c_info.set_tp(col.col_type);
             c_info.set_pk_handle(col.index == 0);
+            if let Some(dv) = col.default_val {
+                c_info.set_default_val(datum::encode_value(&[Datum::I64(dv)]).unwrap())
+            }
             tb_info.mut_columns().push(c_info);
         }
         tb_info
@@ -311,6 +324,18 @@ impl<'a> Select<'a> {
         self
     }
 
+    fn order_by(mut self, col: Column, desc: bool) -> Select<'a> {
+        let mut item = ByItem::new();
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ColumnRef);
+        expr.mut_val().encode_i64(col.id).unwrap();
+        item.set_expr(expr);
+        item.set_desc(desc);
+        self.sel.mut_order_by().push(item);
+        self
+    }
+
+
     fn count(mut self) -> Select<'a> {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::Count);
@@ -361,7 +386,16 @@ impl<'a> Select<'a> {
         self
     }
 
-    fn build(mut self) -> Request {
+    fn where_expr(mut self, expr: Expr) -> Select<'a> {
+        self.sel.set_field_where(expr);
+        self
+    }
+
+    fn build(self) -> Request {
+        self.build_with(&[0])
+    }
+
+    fn build_with(mut self, flags: &[u64]) -> Request {
         let mut req = Request::new();
 
         if self.idx < 0 {
@@ -371,6 +405,7 @@ impl<'a> Select<'a> {
             self.sel.set_index_info(self.table.get_index_info(self.idx));
             req.set_tp(REQ_TYPE_INDEX);
         }
+        self.sel.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
 
         req.set_data(self.sel.write_to_bytes().unwrap());
 
@@ -830,6 +865,74 @@ fn test_aggr_extre() {
 }
 
 #[test]
+fn test_order_by_column() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:6"), 4),
+        (6, Some("name:5"), 4),
+        (7, Some("name:4"), 4),
+        (8, None, 4),
+    ];
+
+    let exp = vec![
+        (8, None, 4),
+        (7, Some("name:4"), 4),
+        (6, Some("name:5"), 4),
+        (5, Some("name:6"), 4),
+        (2, Some("name:3"), 3),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+    let req = Select::from(&product.table)
+        .order_by(product.count, true)
+        .order_by(product.name, false)
+        .limit(5)
+        .build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 5);
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, name, cnt)) in spliter.zip(exp) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded =
+            datum::encode_value(&[(id as i64).into(), name_datum, (cnt as i64).into()]).unwrap();
+        assert_eq!(id as i64, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+    }
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_order_by_pk_with_select_from_index() {
+    let mut data = vec![
+        (8, Some("name:0"), 2),
+        (7, Some("name:3"), 3),
+        (6, Some("name:0"), 1),
+        (5, Some("name:6"), 4),
+        (4, Some("name:5"), 4),
+        (3, Some("name:4"), 4),
+        (2, None, 4),
+    ];
+
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+    let req = Select::from_index(&product.table, product.name)
+        .order_by(product.id, true)
+        .limit(5)
+        .build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 5);
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, _, _)) in spliter.zip(data.drain(..5)) {
+        assert_eq!(id, row.handle);
+    }
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
 fn test_limit() {
     let mut data = vec![
         (1, Some("name:0"), 2),
@@ -891,7 +994,7 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
     end_point.schedule(EndPointTask::Request(req)).unwrap();
     let resp = rx.recv().unwrap().take_cop_resp();
-    assert!(resp.has_data(), format!("{:?}", resp));
+    assert!(resp.has_data(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp
@@ -1032,8 +1135,10 @@ fn test_index_aggr_count() {
         (Datum::Bytes(b"name:3".to_vec()), 1),
         (Datum::Bytes(b"name:5".to_vec()), 2),
     ];
-    let req =
-        Select::from_index(&product.table, product.name).count().group_by(&[product.name]).build();
+    let req = Select::from_index(&product.table, product.name)
+        .count()
+        .group_by(&[product.name])
+        .build();
     resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), exp.len());
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
@@ -1230,4 +1335,171 @@ fn test_index_aggr_extre() {
         assert_eq!(row.data, &*expected_encoded);
     }
     end_point.stop().unwrap();
+}
+
+#[test]
+fn test_where() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let cond = {
+        let mut col = Expr::new();
+        col.set_tp(ExprType::ColumnRef);
+        col.mut_val().encode_i64(product.count.id).unwrap();
+
+        let mut value = Expr::new();
+        value.set_tp(ExprType::String);
+        value.set_val(String::from("2").into_bytes());
+
+        let mut cond = Expr::new();
+        cond.set_tp(ExprType::LT);
+        cond.mut_children().push(col);
+        cond.mut_children().push(value);
+        cond
+    };
+
+    let req = Select::from(&product.table).where_expr(cond).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 1);
+    let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let row = spliter.next().unwrap();
+    let (id, name, cnt) = data[2];
+    let name_datum = name.map(|s| s.as_bytes()).into();
+    let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()]).unwrap();
+    assert_eq!(id, row.handle);
+    assert_eq!(row.data, &*expected_encoded);
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_handle_truncate() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let cases = vec![{
+                         // count > "2x"
+                         let mut col = Expr::new();
+                         col.set_tp(ExprType::ColumnRef);
+                         col.mut_val().encode_i64(product.count.id).unwrap();
+
+                         // "2x" will be truncated.
+                         let mut value = Expr::new();
+                         value.set_tp(ExprType::String);
+                         value.set_val(String::from("2x").into_bytes());
+
+                         let mut cond = Expr::new();
+                         cond.set_tp(ExprType::LT);
+                         cond.mut_children().push(col);
+                         cond.mut_children().push(value);
+                         cond
+                     },
+                     {
+                         // id
+                         let mut col_id = Expr::new();
+                         col_id.set_tp(ExprType::ColumnRef);
+                         col_id.mut_val().encode_i64(product.id.id).unwrap();
+
+                         // "3x" will be truncated.
+                         let mut value = Expr::new();
+                         value.set_tp(ExprType::String);
+                         value.set_val(String::from("3x").into_bytes());
+
+                         // count
+                         let mut col_count = Expr::new();
+                         col_count.set_tp(ExprType::ColumnRef);
+                         col_count.mut_val().encode_i64(product.count.id).unwrap();
+
+                         // "3x" + count
+                         let mut plus = Expr::new();
+                         plus.set_tp(ExprType::Plus);
+                         plus.mut_children().push(value);
+                         plus.mut_children().push(col_count);
+
+                         // id = "3x" + count
+                         let mut cond = Expr::new();
+                         cond.set_tp(ExprType::EQ);
+                         cond.mut_children().push(col_id);
+                         cond.mut_children().push(plus);
+                         cond
+                     }];
+
+    for cond in cases {
+        // Ignore truncate error.
+        let req = Select::from(&product.table)
+            .where_expr(cond.clone())
+            .build_with(&[FLAG_IGNORE_TRUNCATE]);
+        let mut resp = handle_select(&end_point, req);
+        assert_eq!(row_cnt(resp.get_chunks()), 1);
+        let mut spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+        let row = spliter.next().unwrap();
+        let (id, name, cnt) = data[2];
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(&[Datum::I64(id), name_datum, cnt.into()])
+            .unwrap();
+        assert_eq!(id, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+
+        // Do NOT ignore truncate error.
+        let req = Select::from(&product.table).where_expr(cond.clone()).build();
+        let (tx, rx) = mpsc::channel();
+        let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
+        end_point.schedule(EndPointTask::Request(req)).unwrap();
+        let resp = rx.recv().unwrap().take_cop_resp();
+        assert!(resp.has_other_error());
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_default_val() {
+    let mut data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let added = ColumnBuilder::new().col_type(TYPE_LONG).default(3).build();
+    let mut tbl = TableBuilder::new()
+        .add_col(product.id)
+        .add_col(product.name)
+        .add_col(product.count)
+        .add_col(added)
+        .build();
+    tbl.id = product.table.id;
+
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let req = Select::from(&tbl).limit(5).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), 5);
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    for (row, (id, name, cnt)) in spliter.zip(data.drain(..5)) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded =
+            datum::encode_value(&[id.into(), name_datum, cnt.into(), Datum::I64(3)]).unwrap();
+        assert_eq!(id, row.handle);
+        assert_eq!(row.data, &*expected_encoded);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
 }

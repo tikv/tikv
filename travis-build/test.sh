@@ -19,29 +19,42 @@ panic() {
     exit 1
 }
 
-make format
-git diff-index --quiet HEAD -- || panic "\e[35mplease make format before creating a pr!!!\e[0m" 
+if [[ "$SKIP_FORMAT_CHECK" != "true" ]]; then
+    make format
+    git diff-index --quiet HEAD -- || panic "\e[35mplease make format before creating a pr!!!\e[0m" 
+fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
-
-# start pd
-which pd-server
-if [ $? -eq 0 ]; then
-    pd-server &
-    sleep 3s
-    export PD_ENDPOINTS=127.0.0.1:2379
-fi
 
 if [[ "$ENABLE_FEATURES" = "" ]]; then
     export ENABLE_FEATURES=dev
 fi
 export LOG_FILE=tests.log
-export RUST_TEST_THREADS=1
+if [[ "$TRAVIS" = "true" ]]; then
+    export RUST_TEST_THREADS=1
+fi
 export RUSTFLAGS=-Dwarnings
-if [[ "$SKIP_TESTS" = "" ]]; then
+
+if [[ "$SKIP_TESTS" != "true" ]]; then
+    # start pd
+    which pd-server
+    if [ $? -eq 0 ] && [[ "$TRAVIS" != "true" ]]; then
+        # Separate PD clusters.
+        pd-server --name="pd1" \
+            --data-dir="default.pd1" \
+            --client-urls="http://:12379" \
+            --peer-urls="http://:12380" &
+        pd-server --name="pd2" \
+            --data-dir="default.pd2" \
+            --client-urls="http://:22379" \
+            --peer-urls="http://:22380" &
+        sleep 3s
+        export PD_ENDPOINTS=127.0.0.1:12379
+        export PD_ENDPOINTS_SEP=127.0.0.1:22379
+    fi
     make test 2>&1 | tee tests.out
 else
-    make build
+    NO_RUN="--no-run" make test
     exit $?
 fi
 status=$?
@@ -54,7 +67,7 @@ for l in sys.stdin:
     m = p.search(l)
     if m:
         cases.add(m.group(1).split(':')[-1])
-print '\n'.join(cases)
+print ('\n'.join(cases))
 "`; do
     echo find fail cases: $case
     grep $case $LOG_FILE | cut -d ' ' -f 2-
@@ -63,7 +76,10 @@ print '\n'.join(cases)
     echo
 done
 
-# don't remove the tests.out, coverage counts on it.
 rm $LOG_FILE || true
+# don't remove the tests.out, coverage counts on it.
+if [[ "$TRAVIS" != "true" ]]; then
+    rm tests.out || true
+fi
 
 exit $status

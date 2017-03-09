@@ -45,21 +45,25 @@ crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
-protobuf = "1.0"
+protobuf = "1.2.1"
 bytes  = "0.3.0"
 nix = "0.6.0"
 utime = "0.1"
 chrono = "0.2"
 lazy_static = "0.2.1"
-signal = "0.2"
 backtrace = "0.2.3"
 clap = "2"
 url = "1.2"
 getopts = "0.2"
 regex = "0.1"
+fnv = "1.0"
+sys-info = "0.4.1"
+
+[target.'cfg(unix)'.dependencies]
+signal = "0.2"
 
 [dependencies.rocksdb]
-git = "https://github.com/ngaut/rust-rocksdb.git"
+git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"
@@ -78,6 +82,7 @@ features = ["nightly", "push"]
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
+codegen-units = 4
 
 # The release profile, used for `cargo build --release`
 [profile.release]

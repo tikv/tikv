@@ -85,8 +85,14 @@ impl<T: Storage> RaftLog<T> {
     }
 
     pub fn last_term(&self) -> u64 {
-        self.term(self.last_index())
-            .expect(&format!("{} unexpected error when getting the last term", self.tag))
+        match self.term(self.last_index()) {
+            Ok(t) => t,
+            Err(e) => {
+                panic!("{} unexpected error when getting the last term: {:?}",
+                       self.tag,
+                       e)
+            }
+        }
     }
 
     #[inline]
@@ -293,11 +299,8 @@ impl<T: Storage> RaftLog<T> {
         term > self.last_term() || (term == self.last_term() && last_index >= self.last_index())
     }
 
-    // next_entries returns all the available entries for execution.
-    // If applied is smaller than the index of snapshot, it returns all committed
-    // entries after the index of snapshot.
-    pub fn next_entries(&self) -> Option<Vec<Entry>> {
-        let offset = cmp::max(self.applied + 1, self.first_index());
+    pub fn next_entries_since(&self, since_idx: u64) -> Option<Vec<Entry>> {
+        let offset = cmp::max(since_idx + 1, self.first_index());
         let committed = self.committed;
         if committed + 1 > offset {
             match self.slice(offset, committed + 1, NO_LIMIT) {
@@ -308,9 +311,20 @@ impl<T: Storage> RaftLog<T> {
         None
     }
 
-    pub fn has_next_entries(&self) -> bool {
-        let offset = cmp::max(self.applied + 1, self.first_index());
+    // next_entries returns all the available entries for execution.
+    // If applied is smaller than the index of snapshot, it returns all committed
+    // entries after the index of snapshot.
+    pub fn next_entries(&self) -> Option<Vec<Entry>> {
+        self.next_entries_since(self.applied)
+    }
+
+    pub fn has_next_entries_since(&self, since_idx: u64) -> bool {
+        let offset = cmp::max(since_idx + 1, self.first_index());
         self.committed + 1 > offset
+    }
+
+    pub fn has_next_entries(&self) -> bool {
+        self.has_next_entries_since(self.applied)
     }
 
     pub fn snapshot(&self) -> Result<Snapshot> {

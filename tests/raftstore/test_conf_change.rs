@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::thread;
 
 use tikv::raftstore::store::*;
-use tikv::storage::CF_RAFT;
+use kvproto::eraftpb::ConfChangeType;
 use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use kvproto::metapb;
@@ -55,11 +55,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"k1", b"v1");
     must_get_equal(&engine_2, b"k2", b"v2");
 
-    let epoch = cluster.pd_client
-        .get_region_by_id(1)
-        .unwrap()
-        .unwrap()
-        .take_region_epoch();
+    let epoch = cluster.pd_client.get_region_epoch(r1);
 
     // Conf version must change.
     assert!(epoch.get_conf_ver() > 1);
@@ -107,6 +103,15 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.get(b"k4"), Some(b"v4".to_vec()));
     must_get_equal(&engine_2, b"k4", b"v4");
+
+    let conf_change = new_change_peer_request(ConfChangeType::AddNode, new_peer(2, 2));
+    let epoch = cluster.pd_client.get_region_epoch(r1);
+    let admin_req = new_admin_request(r1, &epoch, conf_change);
+    let resp = cluster.call_command_on_leader(admin_req, Duration::from_secs(3)).unwrap();
+    let exec_res = resp.get_header().get_error().get_message().contains("duplicated");
+    assert!(exec_res,
+            "add duplicated peer should failed, but got {:?}",
+            resp);
 
     // Remove peer (2, 2) from region 1.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
@@ -362,17 +367,14 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         .unwrap()
         .take_region_epoch();
 
-    let engine1 = cluster.get_engine(1);
-    let state =
-        engine1.get_msg_cf::<RaftApplyState>(CF_RAFT, &keys::apply_state_key(r1)).unwrap().unwrap();
-    let index = state.get_applied_index();
-    let mut compact_log = new_admin_request(r1, &epoch, new_compact_log_cmd(index));
-    compact_log.mut_header().set_peer(new_peer(1, 1));
+    let put = new_put_cmd(b"test_key", b"test_val");
+    let mut req = new_request(1, epoch, vec![put], true);
+    req.mut_header().set_peer(new_peer(1, 1));
     // ignore error, we just want to send this command to peer (1, 1),
 
     // and the command can't be executed because we have only one peer,
     // so here will return timeout error, we should ignore it.
-    let _ = cluster.call_command(compact_log, Duration::from_millis(1));
+    let _ = cluster.call_command(req, Duration::from_millis(1));
 
     cluster.run_node(2);
     cluster.run_node(3);
@@ -416,7 +418,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     // leader isolation
-    cluster.must_transfer_leader(r1, new_peer(1, 1));
+    cluster.must_transfer_leader(r1, new_peer(2, 2));
     cluster.add_send_filter(IsolationFilterFactory::new(1));
 
     // refresh region info, maybe no need
@@ -486,4 +488,79 @@ fn test_node_split_brain() {
     let count = 6;
     let mut cluster = new_node_cluster(0, count);
     test_split_brain(&mut cluster);
+}
+
+/// A helper function for testing the conf change is safe.
+fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_rule();
+
+    let region_id = cluster.run_conf_change();
+
+    // Test adding nodes.
+
+    // Ensure it works to add one node to a cluster that has only one node.
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Isolate the leader.
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+
+    // Ensure new leader is elected and it works.
+    cluster.must_put(b"k1", b"v1");
+
+    // Ensure the conf change is safe:
+    // The "AddNode" request will be rejected
+    // if there are only 2 healthy nodes in a cluster of 3 nodes.
+    pd_client.add_peer(region_id, new_peer(4, 4));
+    // Put a new kv to ensure the previous "AddNode" is handled.
+    cluster.must_put(b"k2", b"v2");
+    pd_client.must_none_peer(region_id, new_peer(4, 4));
+
+    // Recover the isolated peer.
+    cluster.clear_send_filters();
+
+    // Then new node could be added.
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+
+    // Test removing nodes.
+
+    // Ensure nodes could be removed.
+    pd_client.must_remove_peer(region_id, new_peer(4, 4));
+
+    // Isolate the leader.
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+
+    // Ensure new leader is elected and it works.
+    cluster.must_put(b"k3", b"v3");
+
+    // Ensure the conf change is safe:
+    // The "RemoveNode" request which asks to remove one healthy node will be rejected
+    // if there are only 2 healthy nodes in a cluster of 3 nodes.
+    pd_client.remove_peer(region_id, new_peer(2, 2));
+    cluster.must_put(b"k4", b"v4");
+    pd_client.must_have_peer(region_id, new_peer(2, 2));
+
+    // In this case, it's fine to remove one unhealthy node.
+    pd_client.must_remove_peer(region_id, new_peer(1, 1));
+
+    // Ensure it works to remove one node from the cluster that has only two healthy nodes.
+    pd_client.must_remove_peer(region_id, new_peer(2, 2));
+}
+
+#[test]
+fn test_node_conf_change_safe() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_conf_change_safe(&mut cluster);
+}
+
+#[test]
+fn test_server_safe_conf_change() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_conf_change_safe(&mut cluster);
 }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, GaugeVec, Histogram};
+use prometheus::{Counter, CounterVec, GaugeVec, Histogram, HistogramVec, exponential_buckets};
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: CounterVec =
@@ -28,10 +28,18 @@ lazy_static! {
             &["type", "status"]
         ).unwrap();
 
+    pub static ref PEER_APPEND_LOG_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_append_log_duration_seconds",
+            "Bucketed histogram of peer appending log duration",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
     pub static ref PEER_APPLY_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_log_duration_seconds",
-            "Bucketed histogram of peer applying log duration"
+            "Bucketed histogram of peer applying log duration",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: CounterVec =
@@ -69,18 +77,19 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref PEER_RAFT_PROCESS_NANOS_COUNTER_VEC: CounterVec =
+    pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: CounterVec =
         register_counter_vec!(
-            "tikv_raftstore_raft_process_nanos_total",
-            "Total nanoseconds spent in raft processing.",
+            "tikv_raftstore_snapshot_validation_failure_total",
+            "Total number of raftstore snapshot validation failure.",
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_ENGINE_SIZE_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
-            "tikv_engine_size_bytes",
-            "Sizes of each column families.",
-            &["type"]
+    pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_raft_process_duration_secs",
+            "Bucketed histogram of peer processing raft duration",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref PEER_PROPOSE_LOG_SIZE_HISTOGRAM: Histogram =
@@ -96,5 +105,42 @@ lazy_static! {
             "tikv_raftstore_hash_total",
             "Total number of hash has been computed.",
             &["type", "result"]
+        ).unwrap();
+
+    pub static ref REGION_MAX_LOG_LAG: Histogram =
+        register_histogram!(
+            "tikv_raftstore_log_lag",
+            "Bucketed histogram of log lag in a region",
+            vec![2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0,
+                    512.0, 1024.0, 5120.0, 10240.0]
+        ).unwrap();
+
+
+
+    pub static ref REGION_WRITTEN_BYTES_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_region_written_bytes",
+            "Histogram of bytes written for regions",
+             exponential_buckets(256.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref REGION_WRITTEN_KEYS_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_region_written_keys",
+            "Histogram of keys written for regions",
+             exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref REQUEST_WAIT_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_request_wait_time_duration_secs",
+            "Bucketed histogram of request wait time duration",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref PEER_GC_RAFT_LOG_COUNTER: Counter =
+        register_counter!(
+            "tikv_raftstore_gc_raft_log_total",
+            "Total number of GC raft log."
         ).unwrap();
 }

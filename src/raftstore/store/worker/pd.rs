@@ -42,6 +42,7 @@ pub enum Task {
         region: metapb::Region,
         peer: metapb::Peer,
         down_peers: Vec<pdpb::PeerStats>,
+        pending_peers: Vec<metapb::Peer>,
     },
     StoreHeartbeat { stats: pdpb::StoreStats },
     ReportSplit {
@@ -109,10 +110,7 @@ impl<T: PdClient> Runner<T> {
 
         req.set_admin_request(request);
 
-        if let Err(e) = self.ch.try_send(Msg::RaftCmd {
-            request: req,
-            callback: Box::new(|_| {}),
-        }) {
+        if let Err(e) = self.ch.try_send(Msg::new_raft_cmd(req, Box::new(|_| {}))) {
             error!("[region {}] send {:?} request err {:?}",
                    region_id,
                    cmd_type,
@@ -143,11 +141,13 @@ impl<T: PdClient> Runner<T> {
     fn handle_heartbeat(&self,
                         region: metapb::Region,
                         peer: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>) {
+                        down_peers: Vec<pdpb::PeerStats>,
+                        pending_peers: Vec<metapb::Peer>) {
         PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
 
         // Now we use put region protocol for heartbeat.
-        match self.pd_client.region_heartbeat(region.clone(), peer.clone(), down_peers) {
+        match self.pd_client
+            .region_heartbeat(region.clone(), peer.clone(), down_peers, pending_peers) {
             Ok(mut resp) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
 
@@ -272,8 +272,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::AskSplit { region, split_key, peer } => {
                 self.handle_ask_split(region, split_key, peer)
             }
-            Task::Heartbeat { region, peer, down_peers } => {
-                self.handle_heartbeat(region, peer, down_peers)
+            Task::Heartbeat { region, peer, down_peers, pending_peers } => {
+                self.handle_heartbeat(region, peer, down_peers, pending_peers)
             }
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
             Task::ReportSplit { left, right } => self.handle_report_split(left, right),

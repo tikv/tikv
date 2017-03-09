@@ -12,22 +12,20 @@
 // limitations under the License.
 
 #![crate_type = "lib"]
-#![allow(stable_features)]
-#![feature(mpsc_recv_timeout)]
 #![feature(test)]
-#![feature(optin_builtin_traits)]
 #![feature(btree_range, collections_bound)]
 #![feature(fnbox)]
 #![feature(alloc)]
-#![feature(plugin)]
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
-#![feature(const_fn)]
+#![cfg_attr(feature = "dev", feature(plugin))]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![recursion_limit="100"]
 
 #![allow(module_inception)]
+#![allow(should_implement_trait)]
+#![allow(large_enum_variant)]
 
 #[macro_use]
 extern crate log;
@@ -62,6 +60,7 @@ extern crate backtrace;
 extern crate url;
 extern crate fs2;
 extern crate regex;
+extern crate fnv;
 
 #[macro_use]
 pub mod util;

@@ -14,13 +14,16 @@
 use std::u64;
 use std::time::Duration;
 
+use time::Duration as TimeDuration;
+
 use raftstore::Result;
 
-const RAFT_BASE_TICK_INTERVAL: u64 = 100;
-const RAFT_HEARTBEAT_TICKS: usize = 10;
-const RAFT_ELECTION_TIMEOUT_TICKS: usize = 50;
+const RAFT_BASE_TICK_INTERVAL: u64 = 1000;
+const RAFT_HEARTBEAT_TICKS: usize = 2;
+const RAFT_ELECTION_TIMEOUT_TICKS: usize = 10;
 const RAFT_MAX_SIZE_PER_MSG: u64 = 1024 * 1024;
 const RAFT_MAX_INFLIGHT_MSGS: usize = 256;
+const RAFT_ENTRY_MAX_SIZE: u64 = 8 * 1024 * 1024;
 const RAFT_LOG_GC_INTERVAL: u64 = 10000;
 const RAFT_LOG_GC_THRESHOLD: u64 = 50;
 // Assume the average size of entries is 1k.
@@ -30,24 +33,31 @@ const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
 const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
-const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 300;
+const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 0; // disable manual compaction by default.
 const REGION_COMPACT_DELETE_KEYS_COUNT: u64 = 1_000_000;
-const PD_HEARTBEAT_TICK_INTERVAL_MS: u64 = 5000;
-const PD_STORE_HEARTBEAT_TICK_INTERVAL_MS: u64 = 10000;
+const PD_HEARTBEAT_TICK_INTERVAL: u64 = 60000;
+const PD_STORE_HEARTBEAT_TICK_INTERVAL: u64 = 10000;
 const STORE_CAPACITY: u64 = u64::MAX;
-const DEFAULT_NOTIFY_CAPACITY: usize = 4096;
-const DEFAULT_MGR_GC_TICK_INTERVAL_MS: u64 = 60000;
-const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 60 * 10;
-const DEFAULT_MESSAGES_PER_TICK: usize = 256;
+const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
+const DEFAULT_MGR_GC_TICK_INTERVAL: u64 = 60000;
+const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 4 * 60 * 60; // 4 hours
+const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
-const DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS: u64 = 60 * 10; // 10 min
+const DEFAULT_LOCK_CF_COMPACT_INTERVAL: u64 = 10 * 60 * 1000; // 10 min
+const DEFAULT_LOCK_CF_COMPACT_THRESHOLD: u64 = 256 * 1024 * 1024; // 256 MB
 // If the leader missing for over 2 hours,
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
 const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // Disable consistency check by default as it will hurt performance.
 // We should turn on this only in our tests.
-const DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS: u64 = 0;
+const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
+
+const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
+
+const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 9 seconds
+
+const DEFAULT_ACCELERATE_CAMPAIGN_RESERVED_TICKS: usize = 1;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -62,6 +72,8 @@ pub struct Config {
     pub raft_election_timeout_ticks: usize,
     pub raft_max_size_per_msg: u64,
     pub raft_max_inflight_msgs: usize,
+    // When the entry exceed the max size, reject to propose it.
+    pub raft_entry_max_size: u64,
 
     // Interval to gc unnecessary raft log (ms).
     pub raft_log_gc_tick_interval: u64,
@@ -83,8 +95,8 @@ pub struct Config {
     /// When size change of region exceed the diff since last check, it
     /// will be checked again whether it should be split.
     pub region_check_size_diff: u64,
-    /// Interval to check whether start compaction for a region.
-    pub region_compact_check_interval_secs: u64,
+    /// Interval (ms) to check whether start compaction for a region.
+    pub region_compact_check_interval: u64,
     /// When delete keys of a region exceeds the size, a compaction will
     /// be started.
     pub region_compact_delete_keys_count: u64,
@@ -92,7 +104,8 @@ pub struct Config {
     pub pd_store_heartbeat_tick_interval: u64,
     pub snap_mgr_gc_tick_interval: u64,
     pub snap_gc_timeout: u64,
-    pub lock_cf_compact_interval_secs: u64,
+    pub lock_cf_compact_interval: u64,
+    pub lock_cf_compact_threshold: u64,
 
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
@@ -108,8 +121,21 @@ pub struct Config {
 
     pub snap_apply_batch_size: usize,
 
-    // Interval (s) to check region whether the data is consistent.
+    // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_tick_interval: u64,
+
+    pub report_region_flow_interval: u64,
+    // The lease provided by a successfully proposed and applied entry.
+    pub raft_store_max_leader_lease: TimeDuration,
+
+    // For the peer which is the leader of the region before split,
+    // it would accelerate ticks for the peer of new region after split, so that
+    // the peer of new region could start campaign faster. And then this peer may take
+    // the leadership earlier and shorten the leading missing time to gain higher availability.
+    // To make sure followers are replicated up-to-date and be ready to vote this peer's campaign,
+    // The time interval specified by `accelerate_campaign_reserved_ticks * raft_base_tick_interval`
+    // would be reserved before the peer of new region starts to campaign.
+    pub accelerate_campaign_reserved_ticks: usize,
 }
 
 impl Default for Config {
@@ -121,6 +147,7 @@ impl Default for Config {
             raft_election_timeout_ticks: RAFT_ELECTION_TIMEOUT_TICKS,
             raft_max_size_per_msg: RAFT_MAX_SIZE_PER_MSG,
             raft_max_inflight_msgs: RAFT_MAX_INFLIGHT_MSGS,
+            raft_entry_max_size: RAFT_ENTRY_MAX_SIZE,
             raft_log_gc_tick_interval: RAFT_LOG_GC_INTERVAL,
             raft_log_gc_threshold: RAFT_LOG_GC_THRESHOLD,
             raft_log_gc_count_limit: RAFT_LOG_GC_COUNT_LIMIT,
@@ -129,19 +156,23 @@ impl Default for Config {
             region_max_size: REGION_MAX_SIZE,
             region_split_size: REGION_SPLIT_SIZE,
             region_check_size_diff: REGION_CHECK_DIFF,
-            region_compact_check_interval_secs: REGION_COMPACT_CHECK_TICK_INTERVAL,
+            region_compact_check_interval: REGION_COMPACT_CHECK_TICK_INTERVAL,
             region_compact_delete_keys_count: REGION_COMPACT_DELETE_KEYS_COUNT,
-            pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL_MS,
-            pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL_MS,
+            pd_heartbeat_tick_interval: PD_HEARTBEAT_TICK_INTERVAL,
+            pd_store_heartbeat_tick_interval: PD_STORE_HEARTBEAT_TICK_INTERVAL,
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
-            snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL_MS,
+            snap_mgr_gc_tick_interval: DEFAULT_MGR_GC_TICK_INTERVAL,
             snap_gc_timeout: DEFAULT_SNAP_GC_TIMEOUT_SECS,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             max_peer_down_duration: Duration::from_secs(DEFAULT_MAX_PEER_DOWN_SECS),
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
-            lock_cf_compact_interval_secs: DEFAULT_LOCK_CF_COMPACT_INTERVAL_SECS,
-            consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL_SECS,
+            lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
+            lock_cf_compact_threshold: DEFAULT_LOCK_CF_COMPACT_THRESHOLD,
+            consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
+            report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
+            raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),
+            accelerate_campaign_reserved_ticks: DEFAULT_ACCELERATE_CAMPAIGN_RESERVED_TICKS,
         }
     }
 }
@@ -152,6 +183,14 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.raft_heartbeat_ticks == 0 {
+            return Err(box_err!("heartbeat tick must greater than 0"));
+        }
+
+        if self.raft_election_timeout_ticks <= self.raft_heartbeat_ticks {
+            return Err(box_err!("election tick must be greater than heartbeat tick"));
+        }
+
         if self.raft_log_gc_threshold < 1 {
             return Err(box_err!("raft log gc threshold must >= 1, not {}",
                                 self.raft_log_gc_threshold));
@@ -165,6 +204,22 @@ impl Config {
             return Err(box_err!("region max size {} must >= split size {}",
                                 self.region_max_size,
                                 self.region_split_size));
+        }
+
+        let election_timeout = self.raft_base_tick_interval *
+                               self.raft_election_timeout_ticks as u64;
+        let lease = self.raft_store_max_leader_lease.num_milliseconds() as u64;
+        if election_timeout < lease {
+            return Err(box_err!("election timeout {} ms is less than lease {} ms",
+                                election_timeout,
+                                lease));
+        }
+
+        if self.accelerate_campaign_reserved_ticks >= self.raft_election_timeout_ticks {
+            return Err(box_err!("accelerate campaign reserved ticks {} must < election timeout \
+                                 ticks {}",
+                                self.accelerate_campaign_reserved_ticks,
+                                self.raft_election_timeout_ticks));
         }
 
         Ok(())

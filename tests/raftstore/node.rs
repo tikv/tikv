@@ -13,11 +13,11 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
-use std::fs;
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -41,6 +41,7 @@ use super::transport_simulate::*;
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
+    snapshot_status_senders: HashMap<u64, Mutex<Sender<SnapshotStatusMsg>>>,
 }
 
 #[derive(Clone)]
@@ -54,6 +55,7 @@ impl ChannelTransport {
             core: Arc::new(RwLock::new(ChannelTransportCore {
                 snap_paths: HashMap::new(),
                 routers: HashMap::new(),
+                snapshot_status_senders: HashMap::new(),
             })),
         }
     }
@@ -72,24 +74,24 @@ impl Channel<RaftMessage> for ChannelTransport {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
-        let to_store_id = msg.get_to_peer().get_store_id();
         let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
         if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
-            let source_file = match self.rl().snap_paths.get(&from_store) {
+            let from = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_snap_file(&key, true).unwrap()
+                    p.0.rl().get_snapshot_for_sending(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
-            let dst_file = match self.rl().snap_paths.get(&to_store) {
+            let to = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
                     p.0.wl().register(key.clone(), SnapEntry::Receiving);
-                    p.0.rl().get_snap_file(&key, false).unwrap()
+                    let data = msg.get_message().get_snapshot().get_data();
+                    p.0.rl().get_snapshot_for_receiving(&key, data).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -100,9 +102,7 @@ impl Channel<RaftMessage> for ChannelTransport {
                 core.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
             });
 
-            if !dst_file.exists() {
-                try!(fs::copy(source_file.path(), dst_file.path()));
-            }
+            try!(copy_snapshot(from, to));
         }
 
         match self.core.rl().routers.get(&to_store) {
@@ -110,14 +110,15 @@ impl Channel<RaftMessage> for ChannelTransport {
                 try!(h.send_raft_msg(msg));
                 if is_snapshot {
                     // should report snapshot finish.
-                    self.rl()
-                        .routers
-                        .get(&from_store)
+                    let core = self.rl();
+                    core.snapshot_status_senders[&from_store]
+                        .lock()
                         .unwrap()
-                        .report_snapshot(region_id,
-                                         to_peer_id,
-                                         to_store_id,
-                                         SnapshotStatus::Finish)
+                        .send(SnapshotStatusMsg {
+                            region_id: region_id,
+                            to_peer_id: to_peer_id,
+                            status: SnapshotStatus::Finish,
+                        })
                         .unwrap();
                 }
                 Ok(())
@@ -171,7 +172,7 @@ impl Simulator for NodeCluster {
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.rl();
-            let &(ref snap_mgr, _) = trans.snap_paths.get(&node_id).unwrap();
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
 
@@ -187,6 +188,10 @@ impl Simulator for NodeCluster {
         let node_id = node.id();
         let router = ServerRaftStoreRouter::new(node.get_sendch(), node_id);
         self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
+        self.trans
+            .wl()
+            .snapshot_status_senders
+            .insert(node_id, Mutex::new(node.get_snapshot_status_sender()));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 
@@ -194,7 +199,7 @@ impl Simulator for NodeCluster {
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
-        self.trans.wl().snap_paths.get(&node_id).unwrap().1.path().to_str().unwrap().to_owned()
+        self.trans.wl().snap_paths[&node_id].1.path().to_str().unwrap().to_owned()
     }
 
     fn stop_node(&mut self, node_id: u64) {

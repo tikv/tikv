@@ -15,33 +15,38 @@ use std::sync::Arc;
 use rocksdb::{DB, SeekKey, DBVector, DBIterator};
 use kvproto::metapb::Region;
 
-use raftstore::store::engine::{Snapshot, Peekable, Iterable};
+use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
 
-
-type Kv<'a> = (&'a [u8], &'a [u8]);
 
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
 pub struct RegionSnapshot {
-    snap: Snapshot,
-    region: Region,
+    snap: SyncSnapshot,
+    region: Arc<Region>,
 }
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
         RegionSnapshot {
-            snap: ps.raw_snapshot(),
-            region: ps.get_region().clone(),
+            snap: ps.raw_snapshot().into_sync(),
+            region: Arc::new(ps.get_region().clone()),
         }
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
         RegionSnapshot {
-            snap: Snapshot::new(db),
-            region: region,
+            snap: Snapshot::new(db).into_sync(),
+            region: Arc::new(region),
+        }
+    }
+
+    pub fn clone(&self) -> RegionSnapshot {
+        RegionSnapshot {
+            snap: self.snap.clone(),
+            region: self.region.clone(),
         }
     }
 
@@ -49,16 +54,12 @@ impl RegionSnapshot {
         &self.region
     }
 
-    pub fn iter(&self, upper_bound: Option<&[u8]>, fill_cache: bool) -> RegionIterator {
-        RegionIterator::new(&self.snap, self.region.clone(), upper_bound, fill_cache)
+    pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
+        RegionIterator::new(&self.snap, self.region.clone(), iter_opt)
     }
 
-    pub fn iter_cf(&self,
-                   cf: &str,
-                   upper_bound: Option<&[u8]>,
-                   fill_cache: bool)
-                   -> Result<RegionIterator> {
-        Ok(RegionIterator::new_cf(&self.snap, self.region.clone(), upper_bound, fill_cache, cf))
+    pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator> {
+        Ok(RegionIterator::new_cf(&self.snap, self.region.clone(), iter_opt, cf))
     }
 
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
@@ -71,7 +72,8 @@ impl RegionSnapshot {
                    -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(self.iter(Some(end_key), fill_cache), start_key, f)
+        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
@@ -84,9 +86,8 @@ impl RegionSnapshot {
                       -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        self.scan_impl(try!(self.iter_cf(cf, Some(end_key), fill_cache)),
-                       start_key,
-                       f)
+        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        self.scan_impl(try!(self.iter_cf(cf, iter_opt)), start_key, f)
     }
 
     fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], f: &mut F) -> Result<()>
@@ -135,30 +136,27 @@ impl Peekable for RegionSnapshot {
 pub struct RegionIterator<'a> {
     iter: DBIterator<'a>,
     valid: bool,
-    region: Region,
+    region: Arc<Region>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 }
 
-fn adjust_upper_bound(upper_bound: Option<&[u8]>) -> Option<&[u8]> {
-    if let Some(k) = upper_bound {
-        if k.is_empty() { None } else { Some(k) }
-    } else {
-        None
-    }
+fn set_upper_bound(iter_opt: IterOption, region: &Region) -> IterOption {
+    let upper_bound = match iter_opt.upper_bound() {
+        Some(k) if !k.is_empty() => keys::data_key(k),
+        _ => keys::enc_end_key(region),
+    };
+    iter_opt.set_upper_bound(upper_bound)
 }
 
-// we use rocksdb's style iterator, so omit the warning.
-#[allow(should_implement_trait)]
+// we use rocksdb's style iterator, doesn't need to impl std iterator.
 impl<'a> RegionIterator<'a> {
     pub fn new(snap: &'a Snapshot,
-               region: Region,
-               upper_bound: Option<&[u8]>,
-               fill_cache: bool)
+               region: Arc<Region>,
+               mut iter_opt: IterOption)
                -> RegionIterator<'a> {
-        let upper_bound = adjust_upper_bound(upper_bound);
-        let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
-        let iter = snap.new_iterator(Some(encoded_upper.as_slice()), fill_cache);
+        iter_opt = set_upper_bound(iter_opt, &region);
+        let iter = snap.new_iterator(iter_opt);
         RegionIterator {
             iter: iter,
             valid: false,
@@ -169,14 +167,12 @@ impl<'a> RegionIterator<'a> {
     }
 
     pub fn new_cf(snap: &'a Snapshot,
-                  region: Region,
-                  upper_bound: Option<&[u8]>,
-                  fill_cache: bool,
+                  region: Arc<Region>,
+                  mut iter_opt: IterOption,
                   cf: &str)
                   -> RegionIterator<'a> {
-        let upper_bound = adjust_upper_bound(upper_bound);
-        let encoded_upper = upper_bound.map_or_else(|| keys::enc_end_key(&region), keys::data_key);
-        let iter = snap.new_iterator_cf(cf, Some(encoded_upper.as_slice()), fill_cache).unwrap();
+        iter_opt = set_upper_bound(iter_opt, &region);
+        let iter = snap.new_iterator_cf(cf, iter_opt).unwrap();
         RegionIterator {
             iter: iter,
             valid: false,
@@ -230,6 +226,16 @@ impl<'a> RegionIterator<'a> {
         Ok(self.update_valid(true))
     }
 
+    pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        try!(self.should_seekable(key));
+        let key = keys::data_key(key);
+        self.valid = self.iter.seek_for_prev(key.as_slice().into());
+        if self.valid && self.iter.key() == self.end_key.as_slice() {
+            self.valid = self.iter.prev();
+        }
+        Ok(self.update_valid(false))
+    }
+
     pub fn prev(&mut self) -> bool {
         if !self.valid {
             return false;
@@ -275,11 +281,12 @@ impl<'a> RegionIterator<'a> {
 mod tests {
     use tempdir::TempDir;
     use rocksdb::{Writable, DB};
+    use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::PeerStorage;
-    use storage::{Cursor, Key, ALL_CFS, ScanMode};
-    use util::{worker, rocksdb};
+    use storage::{Cursor, Key, ALL_CFS, ScanMode, Statistics};
+    use util::{worker, rocksdb, escape};
 
     use super::*;
     use std::sync::Arc;
@@ -348,6 +355,7 @@ mod tests {
         assert!(v4.is_err());
     }
 
+    #[allow(type_complexity)]
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
@@ -368,14 +376,42 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let mut iter = snap.iter(None, true);
-        assert!(iter.seek(b"a1").is_err());
-        assert!(iter.seek(b"a2").unwrap());
-        assert_eq!(iter.key(), b"a3");
-        assert_eq!(iter.value(), b"v3");
-        assert!(!iter.seek(b"a6").unwrap());
-        assert!(!iter.seek(b"a7").unwrap());
-        assert!(iter.seek(b"a8").is_err());
+        let seek_table: Vec<(_, _, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> = vec![
+            (b"a1", false, None, None),
+            (b"a2", true, Some((b"a3", b"v3")), None),
+            (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
+            (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
+            (b"a6", true, None, Some((b"a5", b"v5"))),
+            (b"a7", true, None, Some((b"a5", b"v5"))),
+            (b"a8", false, None, None),
+        ];
+        let upper_bounds: Vec<Option<&[u8]>> = vec![None, Some(b"a7")];
+        for upper_bound in upper_bounds {
+            let iter_opt = IterOption::new(upper_bound.map(|v| v.to_vec()), true);
+            let mut iter = snap.iter(iter_opt);
+            for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
+                let check_res =
+                    |iter: &RegionIterator, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
+                        if !in_range {
+                            assert!(res.is_err(), "exp failed at {}", escape(seek_key));
+                            return;
+                        }
+                        if exp.is_none() {
+                            assert!(!res.unwrap(), "exp none at {}", escape(seek_key));
+                            return;
+                        }
+
+                        assert!(res.unwrap(), "should succeed at {}", escape(seek_key));
+                        let (exp_key, exp_val) = exp.unwrap();
+                        assert_eq!(iter.key(), exp_key);
+                        assert_eq!(iter.value(), exp_val);
+                    };
+                let seek_res = iter.seek(seek_key);
+                check_res(&iter, seek_res, seek_exp);
+                let prev_res = iter.seek_for_prev(seek_key);
+                check_res(&iter, prev_res, prev_exp);
+            }
+        }
 
         data.clear();
         snap.scan(b"a2",
@@ -389,6 +425,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
+        let mut iter = snap.iter(IterOption::default());
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
@@ -417,7 +454,7 @@ mod tests {
         assert_eq!(data.len(), 4);
         assert_eq!(data, base_data);
 
-        let mut iter = snap.iter(None, true);
+        let mut iter = snap.iter(IterOption::default());
         assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first());
@@ -433,7 +470,7 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(Some(b"a5"), true);
+        let mut iter = snap.iter(IterOption::new(Some(b"a5".to_vec()), true));
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
@@ -452,23 +489,24 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(None, true), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec())).unwrap());
+        let mut statistics = Statistics::default();
+        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics).unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec())).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics).unwrap());
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec())).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).is_err());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a8".to_vec())).is_err());
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics).is_err());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics).is_err());
 
-        assert!(iter.seek_to_last());
+        assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev() {
+            if !iter.prev(&mut statistics) {
                 break;
             }
         }
@@ -481,24 +519,25 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = Cursor::new(snap.iter(None, true), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec())).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec())).unwrap());
+        let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {
             let seek_key = Key::from_encoded(kv_pairs[1].0.clone());
-            assert!(iter.reverse_seek(&seek_key).unwrap(),
-                    format!("{}", seek_key));
+            assert!(iter.reverse_seek(&seek_key, &mut statistics).unwrap(),
+                    "{}",
+                    seek_key);
             let pair = (iter.key().to_vec(), iter.value().to_vec());
             assert_eq!(pair, kv_pairs[0]);
         }
 
-        assert!(iter.seek_to_last());
+        assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev() {
+            if !iter.prev(&mut statistics) {
                 break;
             }
         }

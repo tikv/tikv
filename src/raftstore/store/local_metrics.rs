@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+use prometheus::local::LocalHistogram;
+
 use super::metrics::*;
 
 /// The buffered metrics counters for raft ready handling.
@@ -129,13 +132,29 @@ impl RaftMessageMetrics {
 }
 
 /// The buffered metrics counters for raft propose.
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct RaftProposeMetrics {
     pub all: u64,
     pub local_read: u64,
+    pub read_index: u64,
     pub normal: u64,
     pub transfer_leader: u64,
     pub conf_change: u64,
+    pub request_wait_time: LocalHistogram,
+}
+
+impl Default for RaftProposeMetrics {
+    fn default() -> RaftProposeMetrics {
+        RaftProposeMetrics {
+            all: 0,
+            local_read: 0,
+            read_index: 0,
+            normal: 0,
+            transfer_leader: 0,
+            conf_change: 0,
+            request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
+        }
+    }
 }
 
 impl RaftProposeMetrics {
@@ -153,6 +172,12 @@ impl RaftProposeMetrics {
                 .inc_by(self.local_read as f64)
                 .unwrap();
             self.local_read = 0;
+        }
+        if self.read_index > 0 {
+            PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["read_index"])
+                .inc_by(self.read_index as f64)
+                .unwrap();
+            self.read_index = 0;
         }
         if self.normal > 0 {
             PEER_PROPOSAL_COUNTER_VEC.with_label_values(&["normal"])
@@ -172,16 +197,33 @@ impl RaftProposeMetrics {
                 .unwrap();
             self.conf_change = 0;
         }
+        self.request_wait_time.flush();
     }
 }
 
 
 /// The buffered metrics counters for raft.
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct RaftMetrics {
     pub ready: RaftReadyMetrics,
     pub message: RaftMessageMetrics,
     pub propose: RaftProposeMetrics,
+    pub process_tick: LocalHistogram,
+    pub process_ready: LocalHistogram,
+    pub append_log: LocalHistogram,
+}
+
+impl Default for RaftMetrics {
+    fn default() -> RaftMetrics {
+        RaftMetrics {
+            ready: Default::default(),
+            message: Default::default(),
+            propose: Default::default(),
+            process_tick: PEER_RAFT_PROCESS_DURATION.with_label_values(&["tick"]).local(),
+            process_ready: PEER_RAFT_PROCESS_DURATION.with_label_values(&["ready"]).local(),
+            append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
+        }
+    }
 }
 
 impl RaftMetrics {
@@ -190,5 +232,8 @@ impl RaftMetrics {
         self.ready.flush();
         self.message.flush();
         self.propose.flush();
+        self.process_tick.flush();
+        self.process_ready.flush();
+        self.append_log.flush();
     }
 }

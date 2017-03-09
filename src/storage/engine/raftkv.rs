@@ -16,6 +16,7 @@ use server::transport::RaftStoreRouter;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
+use storage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
@@ -31,9 +32,11 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{Engine, Modify, Cursor, Snapshot, ScanMode, Callback, Iterator as EngineIterator};
+use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback,
+            Iterator as EngineIterator};
 use storage::{Key, Value, CfName, CF_DEFAULT};
 use super::metrics::*;
+use raftstore::store::engine::IterOption;
 
 quick_error! {
     #[derive(Debug)]
@@ -65,6 +68,27 @@ quick_error! {
             description("request timeout")
             display("timeout after {:?}", d)
         }
+    }
+}
+
+fn get_tag_from_error(e: &Error) -> &'static str {
+    match *e {
+        Error::RequestFailed(ref header) => storage::get_tag_from_header(header),
+        Error::Io(_) => "io",
+        Error::RocksDb(_) => "rocksdb",
+        Error::Server(_) => "server",
+        Error::InvalidResponse(_) => "invalid_resp",
+        Error::InvalidRequest(_) => "invalid_req",
+        Error::Timeout(_) => "timeout",
+    }
+}
+
+fn get_tag_from_engine_error(e: &engine::Error) -> &'static str {
+    match *e {
+        engine::Error::Request(ref header) => storage::get_tag_from_header(header),
+        engine::Error::RocksDb(_) => "rocksdb",
+        engine::Error::Timeout(_) => "timeout",
+        engine::Error::Other(_) => "other",
     }
 }
 
@@ -102,24 +126,28 @@ fn on_result(mut resp: RaftCmdResponse,
              resp_cnt: usize,
              uuid: &[u8],
              db: Arc<DB>)
-             -> Result<CmdRes> {
+             -> (CbContext, Result<CmdRes>) {
+    let mut cb_ctx = CbContext::new();
+    cb_ctx.term = Some(resp.get_header().get_current_term());
+
     if resp.get_header().get_uuid() != uuid {
-        return Err(Error::InvalidResponse("response is not correct!!!".to_owned()));
+        return (cb_ctx, Err(Error::InvalidResponse("response is not correct!!!".to_owned())));
     }
     if resp.get_header().has_error() {
-        return Err(Error::RequestFailed(resp.take_header().take_error()));
+        return (cb_ctx, Err(Error::RequestFailed(resp.take_header().take_error())));
     }
     if resp_cnt != resp.get_responses().len() {
-        return Err(Error::InvalidResponse("response count is not equal to requests, \
-                                            something must go wrong."
-            .to_owned()));
+        return (cb_ctx,
+                Err(Error::InvalidResponse("response count is not equal to requests, something \
+                                            must go wrong."
+            .to_owned())));
     }
     let mut resps = resp.take_responses();
     if resps.len() != 1 || resps[0].get_cmd_type() != CmdType::Snap {
-        return Ok(CmdRes::Resp(resps.into_vec()));
+        return (cb_ctx, Ok(CmdRes::Resp(resps.into_vec())));
     }
     let snap = RegionSnapshot::from_raw(db, resps[0].take_snap().take_region());
-    Ok(CmdRes::Snap(snap))
+    (cb_ctx, Ok(CmdRes::Snap(snap)))
 }
 
 impl<S: RaftStoreRouter> RaftKv<S> {
@@ -137,7 +165,8 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         let db = self.db.clone();
         try!(self.router.send_command(req,
                                       box move |resp| {
-                                          cb(on_result(resp, l, &uuid, db).map_err(Error::into));
+                                          let (cb_ctx, res) = on_result(resp, l, &uuid, db);
+                                          cb((cb_ctx, res.map_err(Error::into)));
                                       }));
         Ok(())
     }
@@ -149,6 +178,9 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         header.set_region_epoch(ctx.get_region_epoch().clone());
         header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
         header.set_read_quorum(ctx.get_read_quorum());
+        if ctx.get_term() != 0 {
+            header.set_term(ctx.get_term());
+        }
         header
     }
 
@@ -208,26 +240,31 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "all"]).inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["write"]).start_timer();
 
-        try!(self.exec_requests(ctx,
-                                reqs,
-                                box move |res| {
-            match res {
-                Ok(CmdRes::Resp(_)) => {
-                    req_timer.observe_duration();
-                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "success"]).inc();
+        self.exec_requests(ctx,
+                           reqs,
+                           box move |(cb_ctx, res)| {
+                match res {
+                    Ok(CmdRes::Resp(_)) => {
+                        req_timer.observe_duration();
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "success"]).inc();
 
-                    cb(Ok(()))
+                        cb((cb_ctx, Ok(())))
+                    }
+                    Ok(CmdRes::Snap(_)) => {
+                        cb((cb_ctx, Err(box_err!("unexpect snapshot, should mutate instead."))))
+                    }
+                    Err(e) => {
+                        let tag = get_tag_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", tag]).inc();
+                        cb((cb_ctx, Err(e)))
+                    }
                 }
-                Ok(CmdRes::Snap(_)) => {
-                    cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
-                }
-                Err(e) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", "failed"]).inc();
-                    cb(Err(e))
-                }
-            }
-        }));
-        Ok(())
+            })
+            .map_err(|e| {
+                let tag = get_tag_from_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["write", tag]).inc();
+                e.into()
+            })
     }
 
     fn async_snapshot(&self, ctx: &Context, cb: Callback<Box<Snapshot>>) -> engine::Result<()> {
@@ -237,25 +274,32 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "all"]).inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.with_label_values(&["snapshot"]).start_timer();
 
-        try!(self.exec_requests(ctx,
-                                vec![req],
-                                box move |res| {
-            match res {
-                Ok(CmdRes::Resp(r)) => {
-                    cb(Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()))
+        self.exec_requests(ctx,
+                           vec![req],
+                           box move |(cb_ctx, res)| {
+                match res {
+                    Ok(CmdRes::Resp(r)) => {
+                        cb((cb_ctx,
+                            Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into())))
+                    }
+                    Ok(CmdRes::Snap(s)) => {
+                        req_timer.observe_duration();
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"])
+                            .inc();
+                        cb((cb_ctx, Ok(box s)))
+                    }
+                    Err(e) => {
+                        let tag = get_tag_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
+                        cb((cb_ctx, Err(e)))
+                    }
                 }
-                Ok(CmdRes::Snap(s)) => {
-                    req_timer.observe_duration();
-                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"]).inc();
-                    cb(Ok(box s))
-                }
-                Err(e) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "failed"]).inc();
-                    cb(Err(e))
-                }
-            }
-        }));
-        Ok(())
+            })
+            .map_err(|e| {
+                let tag = get_tag_from_error(&e);
+                ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
+                e.into()
+            })
     }
 
     fn clone(&self) -> Box<Engine> {
@@ -275,23 +319,21 @@ impl Snapshot for RegionSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self,
-                upper_bound: Option<&[u8]>,
-                fill_cache: bool,
-                mode: ScanMode)
-                -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(RegionSnapshot::iter(self, upper_bound, fill_cache), mode))
+    fn iter<'b>(&'b self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor<'b>> {
+        Ok(Cursor::new(RegionSnapshot::iter(self, iter_opt), mode))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self,
                    cf: CfName,
-                   upper_bound: Option<&[u8]>,
-                   fill_cache: bool,
+                   iter_opt: IterOption,
                    mode: ScanMode)
                    -> engine::Result<Cursor<'b>> {
-        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, upper_bound, fill_cache)),
-                       mode))
+        Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, iter_opt)), mode))
+    }
+
+    fn clone(&self) -> Box<Snapshot> {
+        Box::new(RegionSnapshot::clone(self))
     }
 }
 
@@ -306,6 +348,10 @@ impl<'a> EngineIterator for RegionIterator<'a> {
 
     fn seek(&mut self, key: &Key) -> engine::Result<bool> {
         RegionIterator::seek(self, key.encoded()).map_err(From::from)
+    }
+
+    fn seek_for_prev(&mut self, key: &Key) -> engine::Result<bool> {
+        RegionIterator::seek_for_prev(self, key.encoded()).map_err(From::from)
     }
 
     fn seek_to_first(&mut self) -> bool {

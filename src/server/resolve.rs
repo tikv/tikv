@@ -15,14 +15,15 @@ use std::sync::Arc;
 use std::boxed::{Box, FnBox};
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
-use std::collections::HashMap;
 use std::time::Instant;
 
-use super::Result;
-use util;
+use kvproto::metapb;
+
+use util::{self, HashMap};
 use util::worker::{Runnable, Worker};
 use pd::PdClient;
-use kvproto::metapb;
+
+use super::Result;
 use super::metrics::*;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -117,7 +118,7 @@ impl PdStoreAddrResolver {
 
         let runner = Runner {
             pd_client: pd_client,
-            store_addrs: HashMap::new(),
+            store_addrs: HashMap::default(),
         };
         box_try!(r.worker.start(runner));
         Ok(r)
@@ -147,7 +148,6 @@ impl Drop for PdStoreAddrResolver {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::collections::HashMap;
     use std::time::{Instant, Duration};
     use std::ops::Sub;
     use std::net::SocketAddr;
@@ -157,7 +157,7 @@ mod tests {
     use kvproto::pdpb;
     use kvproto::metapb;
     use pd::{PdClient, Result};
-    use util;
+    use util::{self, HashMap};
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
@@ -202,7 +202,8 @@ mod tests {
         fn region_heartbeat(&self,
                             _: metapb::Region,
                             _: metapb::Peer,
-                            _: Vec<pdpb::PeerStats>)
+                            _: Vec<pdpb::PeerStats>,
+                            _: Vec<metapb::Peer>)
                             -> Result<pdpb::RegionHeartbeatResponse> {
             unimplemented!();
         }
@@ -232,7 +233,7 @@ mod tests {
         };
         Runner {
             pd_client: Arc::new(client),
-            store_addrs: HashMap::new(),
+            store_addrs: HashMap::default(),
         }
     }
 

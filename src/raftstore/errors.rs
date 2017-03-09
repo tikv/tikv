@@ -31,6 +31,10 @@ use util::{escape, transport};
 quick_error!{
     #[derive(Debug)]
     pub enum Error {
+        RaftEntryTooLarge(region_id: u64, entry_size: u64) {
+            description("raft entry is too large")
+            display("raft entry is too large, region {}, entry size {}", region_id, entry_size)
+        }
         StoreNotMatch(to_store_id: u64, my_store_id: u64) {
             description("store is not match")
             display("to store id {}, mine {}", to_store_id, my_store_id)
@@ -114,6 +118,9 @@ quick_error!{
             description("region is stale")
             display("StaleEpoch {}", msg)
         }
+        StaleCommand {
+            description("stale command")
+        }
         Coprocessor(err: CopError) {
             from()
             cause(err)
@@ -147,6 +154,11 @@ impl Into<errorpb::Error> for Error {
                 }
                 errorpb.mut_not_leader().set_region_id(region_id);
             }
+            Error::RaftEntryTooLarge(region_id, entry_size) => {
+                errorpb.mut_raft_entry_too_large().set_region_id(region_id);
+                errorpb.mut_raft_entry_too_large().set_entry_size(entry_size);
+            }
+            Error::StoreNotMatch(..) => errorpb.set_store_not_match(errorpb::StoreNotMatch::new()),
             Error::KeyNotInRegion(key, region) => {
                 errorpb.mut_key_not_in_region().set_key(key);
                 errorpb.mut_key_not_in_region().set_region_id(region.get_id());
@@ -157,6 +169,9 @@ impl Into<errorpb::Error> for Error {
                 let mut e = errorpb::StaleEpoch::new();
                 e.set_new_regions(RepeatedField::from_vec(new_regions));
                 errorpb.set_stale_epoch(e);
+            }
+            Error::StaleCommand => {
+                errorpb.set_stale_command(errorpb::StaleCommand::new());
             }
             Error::Transport(transport::Error::Discard(_)) => {
                 errorpb.set_server_is_busy(errorpb::ServerIsBusy::new());

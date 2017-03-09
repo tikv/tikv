@@ -12,13 +12,13 @@
 // limitations under the License.
 
 use std::str::FromStr;
-use std::mem;
 use std::net::{SocketAddrV4, SocketAddrV6};
-use std::collections::HashMap;
 
 use url;
-use rocksdb::{DBCompressionType, DBRecoveryMode};
 use regex::Regex;
+
+use util::HashMap;
+use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {
     #[derive(Debug)]
@@ -137,7 +137,7 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
 }
 
 pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, ConfigError> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
 
     let re = Regex::new(r"^[a-z0-9]([a-z0-9-._]*[a-z0-9])?$").unwrap();
     for label in labels.split(',') {
@@ -166,6 +166,7 @@ pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, Confi
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    use std::mem;
     use libc;
 
     unsafe {
@@ -196,7 +197,7 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
 }
 
 #[cfg(not(unix))]
-pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+pub fn check_max_open_fds(_: u64) -> Result<(), ConfigError> {
     Ok(())
 }
 

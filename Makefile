@@ -8,9 +8,12 @@ ifeq ($(ROCKSDB_SYS_PORTABLE),1)
 ENABLE_FEATURES += portable
 endif
 
+PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+
 DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
+CARGO_TARGET_DIR ?= $(CURDIR)/target
 
 default: release
 
@@ -29,11 +32,17 @@ run:
 
 release:
 	cargo build --release --features "${ENABLE_FEATURES}"
-	@mkdir -p bin 
-	cp -f ./target/release/tikv-ctl ./target/release/tikv-server ./bin
+	@mkdir -p ${BIN_PATH}
+	cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 
 static_release:
 	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 make release
+
+# unlike test, this target will trace tests and output logs when fail test is detected.
+trace_test:
+	export CI=true && \
+	export SKIP_FORMAT_CHECK=true && \
+	${PROJECT_DIR}/travis-build/test.sh
 
 test:
 	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
@@ -41,8 +50,8 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --features "${ENABLE_FEATURES}" -- --nocapture && \
-	cargo test --features "${ENABLE_FEATURES}" --bench benches -- --nocapture 
+	cargo test --features "${ENABLE_FEATURES}" ${NO_RUN} -- --nocapture && \
+	cargo test --features "${ENABLE_FEATURES}" --bench benches ${NO_RUN} -- --nocapture 
 	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
 bench:

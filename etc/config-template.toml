@@ -23,11 +23,14 @@ messages-per-tick = 4096
 # socket send/recv buffer size.
 send-buffer-size = "128KB"
 recv-buffer-size = "128KB"
-# size of thread pool for endpoint task
-end-point-concurrency = 8
+# size of thread pool for endpoint task, should less than total cpu cores.
+# end-point-concurrency = 8
 
-# set store capacity, if no set, use unlimited or disk size later.
-# capacity = 0 # 0 is unlimited.
+# set store capacity, if no set, use disk capacity.
+# capacity = 0
+
+# set backup path, if not set, use "backup" under store path.
+# backup = "/tmp/tikv/store/backup"
 
 [metric]
 # the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
@@ -57,6 +60,11 @@ region-split-size = "64MB"
 # When region size changes exceeds region-split-check-diff, we should check 
 # whether the region should be split or not. 
 region-split-check-diff = "8MB"
+# Interval to check region whether need to be split or not.
+split-region-check-tick-interval = "5s"
+
+# When raft entry exceed the max size, reject to propose the entry.
+# raft-entry-max-size = "8MB"
 
 # Interval to gc unnecessary raft log.
 # raft-log-gc-tick-interval = "10s"
@@ -72,15 +80,19 @@ region-split-check-diff = "8MB"
 # we will consider this peer to be down and report it to pd.
 max-peer-down-duration = "5m"
 
-# Interval to check whether start compaction for a region.
-# region-compact-check-interval-secs = 300
+# Interval to check whether start manual compaction for a region,
+# 0 is the default value, means disable manual compaction.
+# region-compact-check-interval = "5m"
 # When delete keys of a region exceeds the size, a compaction will be started.
-# region-compact-delete-keys-count = 200000
-# Interval to check whether start lock compaction for a region.
-# lock-cf-compact-interval-secs = 600
+# region-compact-delete-keys-count = 1000000
+# Interval to check whether should start a manual compaction for lock column family,
+# if written bytes reach lock-cf-compact-threshold for lock column family, will fire
+# a manual compaction for lock column family.
+# lock-cf-compact-interval = "10m"
+# lock-cf-compact-threshold = "256MB"
 
 # Interval (s) to check region whether the data are consistent.
-# consistency-check-interval-secs = 0
+# consistency-check-interval = 0
 
 [pd]
 # pd endpoints 
@@ -102,7 +114,7 @@ max-background-flushes = 2
 # If max-open-files = -1, RocksDB will prefetch index and filter blocks into
 # block cache at startup, so if your database has a large working set, it will
 # take several minutes to open the db.
-max-open-files = 40960
+# max-open-files = 40960
 
 # Max size of rocksdb's MANIFEST file.
 # For detailed explanation please refer to https://github.com/facebook/rocksdb/wiki/MANIFEST
@@ -118,16 +130,30 @@ create-if-missing = true
 # 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 wal-recovery-mode = 2
 
+# rocksdb max total wal size
+# max-total-wal-size = "4GB"
+
 # Rocksdb Statistics provides cumulative stats over time.
-# Set it ture only when debugging performance, because it will introduce overhead.
-enable-statistics = false
+# Turn statistics on will introduce about 5%-10% overhead for RocksDB,
+# but it is worthy to know the internal status of RocksDB.
+# enable-statistics = true
 
 # Dump statistics periodically in information logs.
 # Same as rocksdb's default value (10 min).
 stats-dump-period-sec = 600
 
-# Limit the disk IO of compaction and flush.
-# rate-bytes-per-sec = "100MB"
+# If true, then the contents of manifest and data files are not synced
+# to stable storage. Their contents remain in the OS buffers till the
+# OS decides to flush them. This option is good for bulk-loading
+# of data. Once the bulk-loading is complete, please issue a
+# sync to the OS to flush all dirty buffers to stable storage.
+# Default false.
+# disable-data-sync = false
+
+# Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
+# If you want to use rocksdb on multi disks or spinning disks, you should set value at
+# least 2MB;
+# compaction_readahead_size = 0
 
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
@@ -156,14 +182,14 @@ bloom-filter-bits-per-key = 10
 block-based-bloom-filter = false
 
 # Soft limit on number of level-0 files. We start slowing down writes at this point.
-level0-slowdown-writes-trigger = 12
+#level0-slowdown-writes-trigger = 20
 
 # Maximum number of level-0 files.  We stop writes at this point.
-level0-stop-writes-trigger = 16
+#level0-stop-writes-trigger = 36
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.
-write-buffer-size = "64MB"
+write-buffer-size = "128MB"
 
 # The maximum number of write buffers that are built up in memory.
 max-write-buffer-number = 5
@@ -173,46 +199,59 @@ max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
 
 # Control maximum total data size for base level (level 1).
-max-bytes-for-level-base = "64MB"
+max-bytes-for-level-base = "128MB"
 
 # Target file size for compaction.
-target-file-size-base = "16MB"
+target-file-size-base = "32MB"
 
-# block-cache used to cache uncompressed blocks, big block-cache can speed up read
-block-cache-size = "1GB"
+# block-cache used to cache uncompressed blocks, big block-cache can speed up read.
+# in normal cases should tune to 30%-50% system's total memory.
+# block-cache-size = "1GB"
+
+# Indicating if we'd put index/filter blocks to the block cache.
+# If not specified, each "table reader" object will pre-load index/filter block
+# during table initialization.
+# cache-index-and-filter-blocks = true
 
 # options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
-block-size = "16KB"
-write-buffer-size = "64MB"
+block-size = "64KB"
+write-buffer-size = "128MB"
 max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
-max-bytes-for-level-base = "64MB"
-target-file-size-base = "16MB"
-block-cache-size = "256MB"
+max-bytes-for-level-base = "128MB"
+target-file-size-base = "32MB"
+
+# in normal cases should tune to 10%-30% system's total memory.
+# block-cache-size = "256MB"
+
+# cache-index-and-filter-blocks = true
 
 # options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.
 [rocksdb.raftcf]
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
-block-size = "16KB"
-write-buffer-size = "64MB"
+block-size = "64KB"
+write-buffer-size = "128MB"
 max-write-buffer-number = 5
 min-write-buffer-number-to-merge = 1
-max-bytes-for-level-base = "64MB"
-target-file-size-base = "16MB"
-block-cache-size = "256MB"
+max-bytes-for-level-base = "128MB"
+target-file-size-base = "32MB"
+# should tune to 256MB~2GB.
+# block-cache-size = "256MB"
 
 [storage]
 # notify capacity of scheduler's channel
-scheduler-notify-capacity = 10240
+# scheduler-notify-capacity = 10240
 
 # maximum number of messages can be processed in one tick
-scheduler-messages-per-tick = 1024
+# scheduler-messages-per-tick = 1024
 
-scheduler-concurrency = 102400
+# the number of slots in scheduler latches, concurrency control for write.
+# scheduler-concurrency = 102400
 
-# scheduler's worker pool size
-scheduler-worker-pool-size = 4
+# scheduler's worker pool size, should increase it in heavy write cases,
+# also should less than total cpu cores.
+# scheduler-worker-pool-size = 4

@@ -14,7 +14,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::*;
+use std::{result, thread};
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -26,6 +27,7 @@ use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::errorpb::Error as PbError;
 use tikv::pd::PdClient;
 use tikv::util::{HandyRwLock, escape, rocksdb};
 use tikv::util::transport::SendCh;
@@ -152,8 +154,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn run_node(&mut self, node_id: u64) {
         debug!("starting node {}", node_id);
-        let engine = self.engines.get(&node_id).unwrap();
-        self.sim.wl().run_node(node_id, self.cfg.clone(), engine.clone());
+        let engine = self.engines[&node_id].clone();
+        self.sim.wl().run_node(node_id, self.cfg.clone(), engine);
         debug!("node {} started", node_id);
     }
 
@@ -164,7 +166,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        self.engines.get(&node_id).unwrap().clone()
+        self.engines[&node_id].clone()
     }
 
     pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
@@ -240,7 +242,7 @@ impl<T: Simulator> Cluster<T> {
             .map(|region| region.get_peers().into_iter().map(|p| p.get_store_id()).collect())
     }
 
-    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
+    pub fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
         // To get region leader, we don't care real peer id, so use 0 instead.
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
@@ -346,7 +348,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        let region = bootstrap_region(self.engines.get(&node_id).unwrap(), 1, 1, 1).unwrap();
+        let region = bootstrap_region(&self.engines[&node_id], 1, 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
@@ -368,11 +370,27 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.remove(&region_id);
     }
 
-    pub fn check_quorum<F: FnMut(&&Arc<DB>) -> bool>(&self, condition: F) -> bool {
+    pub fn assert_quorum<F: FnMut(&DB) -> bool>(&self, mut condition: F) {
         if self.engines.is_empty() {
-            return true;
+            return;
         }
-        self.engines.values().filter(condition).count() > self.engines.len() / 2
+        let half = self.engines.len() / 2;
+        let mut qualified_cnt = 0;
+        for (id, engine) in &self.engines {
+            if !condition(engine) {
+                debug!("store {} is not qualified yet.", id);
+                continue;
+            }
+            debug!("store {} is qualified", id);
+            qualified_cnt += 1;
+            if half < qualified_cnt {
+                return;
+            }
+        }
+
+        panic!("need at lease {} qualified stores, but only got {}",
+               half + 1,
+               qualified_cnt);
     }
 
     pub fn shutdown(&mut self) {
@@ -394,6 +412,11 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let err = resp.get_header().get_error();
+        if err.has_stale_command() {
+            // command got truncated, leadership may have changed.
+            self.reset_leader_of_region(region_id);
+            return true;
+        }
         if !err.has_not_leader() {
             return false;
         }
@@ -505,6 +528,18 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
     }
 
+    pub fn put(&mut self, key: &[u8], value: &[u8]) -> result::Result<(), PbError> {
+        let resp = self.request(key,
+                                vec![new_put_cf_cmd("default", key, value)],
+                                false,
+                                Duration::from_secs(5));
+        if resp.get_header().has_error() {
+            Err(resp.get_header().get_error().clone())
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn must_delete(&mut self, key: &[u8]) {
         self.must_delete_cf("default", key)
     }
@@ -534,7 +569,7 @@ impl<T: Simulator> Cluster<T> {
         let peer = new_peer(peer_id, peer_id);
         let req = new_status_request(region_id, peer, status_cmd);
         let resp = self.call_command(req, Duration::from_secs(5));
-        assert!(resp.is_ok(), format!("{:?}", resp));
+        assert!(resp.is_ok(), "{:?}", resp);
 
         let mut resp = resp.unwrap();
         assert!(resp.has_status_response());
@@ -559,7 +594,8 @@ impl<T: Simulator> Cluster<T> {
         let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
         assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
-                format!("{:?}", resp));
+                "{:?}",
+                resp);
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
@@ -650,6 +686,26 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
+    }
+
+    pub fn must_remove_region(&mut self, store_id: u64, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            let peer = new_peer(store_id, 0);
+            let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
+            let resp = self.call_command(find_leader, Duration::from_secs(5)).unwrap();
+
+            if is_error_response(&resp) {
+                assert!(resp.get_header().get_error().has_region_not_found(),
+                        "unexpected error resp: {:?}",
+                        resp);
+                break;
+            }
+            if timer.elapsed() > Duration::from_secs(60) {
+                panic!("region {} is not removed after 60s.", region_id);
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     // it's so common that we provide an API for it

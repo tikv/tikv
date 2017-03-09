@@ -16,12 +16,12 @@ use std::sync::{Arc, Mutex};
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use kvproto::kvrpcpb::Context;
 use storage::{Key, Value, CfName, CF_DEFAULT};
-use raftstore::store::engine::{Snapshot as RocksSnapshot, Peekable, Iterable};
+use raftstore::store::engine::{SyncSnapshot as RocksSnapshot, Peekable, Iterable, IterOption};
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
 use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, TEMP_DIR,
-            ScanMode, Result, Error};
+            ScanMode, Result, Error, CbContext};
 use tempdir::TempDir;
 
 enum Task {
@@ -43,8 +43,10 @@ struct Runner(Arc<DB>);
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
         match t {
-            Task::Write(modifies, cb) => cb(write_modifies(&self.0, modifies)),
-            Task::Snapshot(cb) => cb(Ok(box RocksSnapshot::new(self.0.clone()))),
+            Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
+            Task::Snapshot(cb) => {
+                cb((CbContext::new(), Ok(box RocksSnapshot::new(self.0.clone()))))
+            }
         }
     }
 }
@@ -167,25 +169,23 @@ impl Snapshot for RocksSnapshot {
     }
 
     #[allow(needless_lifetimes)]
-    fn iter<'b>(&'b self,
-                upper_bound: Option<&[u8]>,
-                fill_cache: bool,
-                mode: ScanMode)
-                -> Result<Cursor<'b>> {
+    fn iter<'b>(&'b self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create iterator");
-        Ok(Cursor::new(self.new_iterator(upper_bound, fill_cache), mode))
+        Ok(Cursor::new(self.new_iterator(iter_opt), mode))
     }
 
     #[allow(needless_lifetimes)]
     fn iter_cf<'b>(&'b self,
                    cf: CfName,
-                   upper_bound: Option<&[u8]>,
-                   fill_cache: bool,
+                   iter_opt: IterOption,
                    mode: ScanMode)
                    -> Result<Cursor<'b>> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(Cursor::new(try!(self.new_iterator_cf(cf, upper_bound, fill_cache)),
-                       mode))
+        Ok(Cursor::new(try!(self.new_iterator_cf(cf, iter_opt)), mode))
+    }
+
+    fn clone(&self) -> Box<Snapshot> {
+        Box::new(RocksSnapshot::clone(self))
     }
 }
 
@@ -200,6 +200,10 @@ impl<'a> EngineIterator for DBIterator<'a> {
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
         Ok(DBIterator::seek(self, key.encoded().as_slice().into()))
+    }
+
+    fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
+        Ok(DBIterator::seek_for_prev(self, key.encoded().as_slice().into()))
     }
 
     fn seek_to_first(&mut self) -> bool {

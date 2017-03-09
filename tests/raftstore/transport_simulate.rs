@@ -16,11 +16,11 @@ use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::{Msg as StoreMsg, Transport};
 use tikv::server::transport::*;
-use tikv::raft::SnapshotStatus;
 use tikv::util::HandyRwLock;
 use tikv::util::transport;
 
 use rand;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Mutex};
 use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
@@ -354,24 +354,29 @@ impl Filter<RaftMessage> for SnapshotFilter {
     }
 }
 
-/// Pause Snap
-pub struct PauseFirstSnapshotFilter {
+/// `CollectSnapshotFilter` is a simulation transport filter to simulate the simultaneous delivery
+/// of multiple snapshots from different peers. It collects the snapshots from different
+/// peers and drop the subsequent snapshots from the same peers. Currently, if there are
+/// more than 1 snapshots in this filter, all the snapshots will be dilivered at once.
+pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
-    pending_msg: Mutex<Vec<StoreMsg>>,
+    pending_msg: Mutex<HashMap<u64, StoreMsg>>,
+    pending_count_sender: Mutex<Sender<usize>>,
 }
 
-impl PauseFirstSnapshotFilter {
-    pub fn new() -> PauseFirstSnapshotFilter {
-        PauseFirstSnapshotFilter {
+impl CollectSnapshotFilter {
+    pub fn new(sender: Sender<usize>) -> CollectSnapshotFilter {
+        CollectSnapshotFilter {
             dropped: AtomicBool::new(false),
             stale: AtomicBool::new(false),
-            pending_msg: Mutex::new(vec![]),
+            pending_msg: Mutex::new(HashMap::new()),
+            pending_count_sender: Mutex::new(sender),
         }
     }
 }
 
-impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
+impl Filter<StoreMsg> for CollectSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
             return Ok(());
@@ -379,23 +384,38 @@ impl Filter<StoreMsg> for PauseFirstSnapshotFilter {
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
         for m in msgs.drain(..) {
-            let paused = match m {
-                StoreMsg::ReportSnapshot { ref status, .. } => *status == SnapshotStatus::Finish,
+            let (is_pending, from_peer_id) = match m {
                 StoreMsg::RaftMessage(ref msg) => {
-                    msg.get_message().get_msg_type() == MessageType::MsgSnapshot
+                    if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                        let from_peer_id = msg.get_from_peer().get_id();
+                        if pending_msg.contains_key(&from_peer_id) {
+                            // Drop this snapshot message directly since it's from a seen peer
+                            continue;
+                        } else {
+                            // Pile the snapshot from unseen peer
+                            (true, from_peer_id)
+                        }
+                    } else {
+                        (false, 0)
+                    }
                 }
-                _ => false,
+                _ => (false, 0),
             };
-            if paused {
+            if is_pending {
                 self.dropped.compare_and_swap(false, true, Ordering::Relaxed);
-                pending_msg.push(m);
+                pending_msg.insert(from_peer_id, m);
+                let sender = self.pending_count_sender
+                    .lock()
+                    .unwrap();
+                sender.send(pending_msg.len()).unwrap();
             } else {
                 to_send.push(m);
             }
         }
+        // Deliver those pending snapshots if there are more than 1.
         if pending_msg.len() > 1 {
             self.dropped.compare_and_swap(true, false, Ordering::Relaxed);
-            msgs.extend(pending_msg.drain(..));
+            msgs.extend(pending_msg.drain().map(|(_, v)| v));
             self.stale.compare_and_swap(false, true, Ordering::Relaxed);
         }
         msgs.extend(to_send);
@@ -431,8 +451,10 @@ impl Filter<StoreMsg> for DropSnapshotFilter {
                     if msg.get_message().get_msg_type() != MessageType::MsgSnapshot {
                         true
                     } else {
-                        notifier.send(msg.get_message().get_snapshot().get_metadata().get_index())
-                            .unwrap();
+                        let idx = msg.get_message().get_snapshot().get_metadata().get_index();
+                        if let Err(e) = notifier.send(idx) {
+                            error!("failed to notify snapshot {:?}: {:?}", msg, e);
+                        }
                         false
                     }
                 }

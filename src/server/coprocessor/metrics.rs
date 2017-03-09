@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{HistogramVec, CounterVec, GaugeVec};
+use prometheus::{HistogramVec, CounterVec, GaugeVec, exponential_buckets};
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_request_duration_seconds",
-            "Bucketed histogram of coprocessor handle request duration",
+            "Bucketed histogram of coprocessor request duration",
             &["type", "req"]
         ).unwrap();
 
@@ -25,6 +25,20 @@ lazy_static! {
         register_histogram_vec!(
             "tikv_coprocessor_outdated_request_wait_seconds",
             "Bucketed histogram of outdated coprocessor request wait duration",
+            &["type", "req"]
+        ).unwrap();
+
+    pub static ref COPR_REQ_HANDLE_TIME: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_request_handle_seconds",
+            "Bucketed histogram of coprocessor handle request duration",
+            &["type", "req"]
+        ).unwrap();
+
+    pub static ref COPR_REQ_WAIT_TIME: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_request_wait_seconds",
+            "Bucketed histogram of coprocessor request wait duration",
             &["type", "req"]
         ).unwrap();
 
@@ -40,5 +54,21 @@ lazy_static! {
             "tikv_coprocessor_pending_request",
             "Total number of pending push down request.",
             &["type"]
+        ).unwrap();
+
+    pub static ref COPR_SCAN_KEYS: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_scan_keys",
+            "Bucketed histogram of coprocessor per request scan keys",
+            &["type", "req"],
+            exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref COPR_SCAN_INEFFICIENCY: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_scan_inefficiency",
+            "Bucketed histogram of coprocessor scan inefficiency",
+            &["type", "req"],
+            vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         ).unwrap();
 }

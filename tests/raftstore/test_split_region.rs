@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::time::Duration;
-use std::{thread, cmp, fs};
+use std::{thread, fs};
 use rand::{self, Rng};
 
 use kvproto::eraftpb::MessageType;
@@ -22,6 +22,7 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use super::util;
 use tikv::pd::PdClient;
+use tikv::storage::{CF_DEFAULT, CF_WRITE};
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::engine::Iterable;
 use super::transport_simulate::*;
@@ -69,9 +70,10 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
                                     false);
         debug!("requesting {:?}", get);
         let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
-        assert!(resp.get_header().has_error(), format!("{:?}", resp));
+        assert!(resp.get_header().has_error(), "{:?}", resp);
         assert!(resp.get_header().get_error().has_key_not_in_region(),
-                format!("{:?}", resp));
+                "{:?}",
+                resp);
 
     }
 }
@@ -95,24 +97,30 @@ fn put_till_size<T: Simulator>(cluster: &mut Cluster<T>,
                                limit: u64,
                                range: &mut Iterator<Item = u64>)
                                -> Vec<u8> {
+    put_cf_till_size(cluster, CF_DEFAULT, limit, range)
+}
+
+fn put_cf_till_size<T: Simulator>(cluster: &mut Cluster<T>,
+                                  cf: &'static str,
+                                  limit: u64,
+                                  range: &mut Iterator<Item = u64>)
+                                  -> Vec<u8> {
+    assert!(limit > 0);
     let mut len = 0;
     let mut rng = rand::thread_rng();
-    let mut max_key = vec![];
+    let mut key = vec![];
     while len < limit {
         let key_id = range.next().unwrap();
         let key_str = format!("{:09}", key_id);
-        let key = key_str.into_bytes();
+        key = key_str.into_bytes();
         let mut value = vec![0; 64];
         rng.fill_bytes(&mut value);
-        cluster.must_put(&key, &value);
+        cluster.must_put_cf(cf, &key, &value);
         // plus 1 for the extra encoding prefix
         len += key.len() as u64 + 1;
         len += value.len() as u64;
-        if max_key < key {
-            max_key = key;
-        }
     }
-    max_key
+    key
 }
 
 fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -138,10 +146,10 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     assert_eq!(region, target);
 
-    let final_key = put_till_size(cluster,
-                                  REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
-                                  &mut range);
-    let max_key = cmp::max(last_key, final_key);
+    let max_key = put_cf_till_size(cluster,
+                                   CF_WRITE,
+                                   REGION_MAX_SIZE - REGION_SPLIT_SIZE + check_size_diff,
+                                   &mut range);
 
     thread::sleep(Duration::from_secs(1));
 
@@ -539,4 +547,47 @@ fn test_server_split_stale_epoch() {
 fn test_node_split_stale_epoch() {
     let mut cluster = new_node_cluster(0, 3);
     test_split_stale_epoch(&mut cluster);
+}
+
+
+// For the peer which is the leader of the region before split,
+// it would accelerate ticks for the peer of new region after split, so that the peer of new region
+// could start campaign faster. and then this peer may take the leadership earlier.
+// `test_tick_acceleration_after_split` is a helper function for testing this feature.
+fn test_tick_acceleration_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Calculate the reserved time before a new campaign after split.
+    let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
+                        cluster.cfg.raft_store.accelerate_campaign_reserved_ticks as u32;
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let region = cluster.get_region(b"k1");
+    let old_leader = cluster.leader_of_region(region.get_id()).unwrap();
+
+    cluster.must_split(&region, b"k2");
+
+    // Wait for the peer of new region to start campaign.
+    thread::sleep(reserved_time);
+
+    // The campaign should always succeeds in the ideal test environment.
+    let new_region = cluster.get_region(b"k3");
+    let store_id = old_leader.get_store_id();
+    // Ensure the new leader is established for the newly split region, and it shares the
+    // same store with the leader of old region.
+    let new_leader = cluster.query_leader(store_id, new_region.get_id());
+    assert!(new_leader.is_some());
+    assert_eq!(new_leader.unwrap().get_store_id(), store_id);
+}
+
+#[test]
+fn test_node_tick_acceleration_after_split() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_tick_acceleration_after_split(&mut cluster);
+}
+
+#[test]
+fn test_server_tick_acceleration_after_split() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_tick_acceleration_after_split(&mut cluster);
 }

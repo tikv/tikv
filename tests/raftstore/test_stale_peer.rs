@@ -13,9 +13,6 @@
 
 //! A module contains test cases of stale peers gc.
 
-use std::time::Duration;
-use std::thread;
-
 use kvproto::eraftpb::MessageType;
 use kvproto::raft_serverpb::{RegionLocalState, PeerState};
 use tikv::raftstore::store::{keys, Peekable};
@@ -60,14 +57,17 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     // Isolate peer 2 from other part of the cluster.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
+    // In case 2 is leader, it will fail to pass the healthy nodes check,
+    // so remove isolated node first. Because 2 is isolated, so it can't remove itself.
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+
     // Add peer [(4, 4), (5, 5), (6, 6)].
     pd_client.must_add_peer(r1, new_peer(4, 4));
     pd_client.must_add_peer(r1, new_peer(5, 5));
     pd_client.must_add_peer(r1, new_peer(6, 6));
 
-    // Remove peer [(1, 1), (2, 2), (3, 3)].
+    // Remove peer [(1, 1), (3, 3)].
     pd_client.must_remove_peer(r1, new_peer(1, 1));
-    pd_client.must_remove_peer(r1, new_peer(2, 2));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
     // Keep peer 2 isolated. Otherwise whether peer 3 is destroyed or not,
@@ -76,9 +76,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Wait for max_leader_missing_duration to time out.
 
-    thread::sleep(cluster.cfg.raft_store.max_leader_missing_duration);
-    // Sleep one more second to make sure there is enough time for the peer to be destroyed.
-    thread::sleep(Duration::from_secs(1));
+    cluster.must_remove_region(2, r1);
 
     // Check whether this region is still functional properly.
     let (key2, value2) = (b"k2", b"v2");
@@ -152,10 +150,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     pd_client.must_remove_peer(new_region_id, new_peer(3, 4));
 
-    // Wait for max_leader_missing_duration to time out.
-    thread::sleep(cluster.cfg.raft_store.max_leader_missing_duration);
-    // Sleep one more second to make sure there is enough time for the peer to be destroyed.
-    thread::sleep(Duration::from_secs(1));
+    cluster.must_remove_region(3, new_region_id);
 
     // There must be no data on store 3 belongs to new region
     must_get_none(&engine3, b"k3");

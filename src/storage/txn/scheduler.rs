@@ -33,17 +33,20 @@
 
 use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
+
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
-use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
-              Error as StorageError, ScanMode};
-use kvproto::kvrpcpb::{Context, LockInfo};
-use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
-use storage::{Key, Value, KvPair};
-use std::collections::HashMap;
 use mio::{self, EventLoop};
-use util::transport::SendCh;
-use storage::engine::{Result as EngineResult, Callback as EngineCallback, Modify};
+use kvproto::kvrpcpb::{Context, LockInfo};
+
+use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
+              Error as StorageError, ScanMode, Statistics};
+use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
+use storage::{Key, Value, KvPair, CMD_TAG_GC};
+use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
+use util::transport::{SendCh, Error as TransportError};
+use util::{SlowTimer, HashMap};
+
 use super::Result;
 use super::Error;
 use super::store::SnapshotStore;
@@ -72,6 +75,7 @@ pub enum Msg {
     RawCmd { cmd: Command, cb: StorageCb },
     SnapshotFinished {
         cid: u64,
+        cb_ctx: CbContext,
         snapshot: EngineResult<Box<Snapshot>>,
     },
     ReadFinished { cid: u64, pr: ProcessResult },
@@ -85,6 +89,7 @@ pub enum Msg {
     WriteFinished {
         cid: u64,
         pr: ProcessResult,
+        cb_ctx: CbContext,
         result: EngineResult<()>,
     },
 }
@@ -156,37 +161,60 @@ pub struct RunningCtx {
     lock: Lock,
     callback: Option<StorageCb>,
     tag: &'static str,
+    ts: u64,
+    region_id: u64,
     latch_timer: Option<HistogramTimer>,
     _timer: HistogramTimer,
+    slow_timer: SlowTimer,
 }
 
 impl RunningCtx {
     /// Creates a context for a running command.
     pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> RunningCtx {
         let tag = cmd.tag();
+        let ts = cmd.ts();
+        let region_id = cmd.get_context().get_region_id();
         RunningCtx {
             cid: cid,
             cmd: Some(cmd),
             lock: lock,
             callback: Some(cb),
             tag: tag,
+            ts: ts,
+            region_id: region_id,
             latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer()),
             _timer: SCHED_HISTOGRAM_VEC.with_label_values(&[tag]).start_timer(),
+            slow_timer: SlowTimer::new(),
         }
+    }
+}
+
+impl Drop for RunningCtx {
+    fn drop(&mut self) {
+        slow_log!(self.slow_timer,
+                  "[region {}] scheduler handle command: {}, ts: {}",
+                  self.region_id,
+                  self.tag,
+                  self.ts);
     }
 }
 
 /// Creates a callback to receive async results of write prepare from the storage engine.
 fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SendCh<Msg>) -> EngineCallback<()> {
-    Box::new(move |result: EngineResult<()>| {
-        if let Err(e) = ch.send(Msg::WriteFinished {
+    Box::new(move |(cb_ctx, result)| {
+        match ch.send(Msg::WriteFinished {
             cid: cid,
             pr: pr,
+            cb_ctx: cb_ctx,
             result: result,
         }) {
-            panic!("send write finished to scheduler failed cid={}, err:{:?}",
-                   cid,
-                   e);
+            Ok(_) => {}
+            e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+            Err(e) => {
+                panic!("send write finished to scheduler failed cid={}, err:{:?}",
+                       cid,
+                       e);
+            }
         }
     })
 }
@@ -210,6 +238,11 @@ pub struct Scheduler {
 
     // worker pool
     worker_pool: ThreadPool,
+
+    has_gc_command: bool,
+
+    // used to control write flow
+    running_write_count: usize,
 }
 
 impl Scheduler {
@@ -222,13 +255,15 @@ impl Scheduler {
                -> Scheduler {
         Scheduler {
             engine: engine,
-            cmd_ctxs: HashMap::new(),
+            cmd_ctxs: Default::default(),
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_too_busy_threshold: sched_too_busy_threshold,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
+            has_gc_command: false,
+            running_write_count: 0,
         }
     }
 }
@@ -238,12 +273,16 @@ impl Scheduler {
 fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snapshot>) {
     debug!("process read cmd(cid={}) in worker pool.", cid);
     SCHED_WORKER_COUNTER_VEC.with_label_values(&[cmd.tag(), "read"]).inc();
+    let tag = cmd.tag();
+
+    let mut statistics = Statistics::default();
 
     let pr = match cmd {
         // Gets from the snapshot.
         Command::Get { ref key, start_ts, .. } => {
+            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag]).observe(1f64);
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
-            let res = snap_store.get(key);
+            let res = snap_store.get(key, &mut statistics);
             match res {
                 Ok(val) => ProcessResult::Value { value: val },
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
@@ -251,8 +290,10 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Batch gets from the snapshot.
         Command::BatchGet { ref keys, start_ts, .. } => {
+            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                .observe(keys.len() as f64);
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
-            match snap_store.batch_get(keys) {
+            match snap_store.batch_get(keys, &mut statistics) {
                 Ok(results) => {
                     let mut res = vec![];
                     for (k, v) in keys.into_iter().zip(results) {
@@ -268,13 +309,16 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
             }
         }
         // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
-        Command::Scan { ref start_key, limit, key_only, start_ts, .. } => {
+        Command::Scan { ref start_key, limit, start_ts, ref options, .. } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
-            let res = snap_store.scanner(ScanMode::Forward, key_only)
+            let res = snap_store.scanner(ScanMode::Forward, options.key_only, None, &mut statistics)
                 .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
                 .and_then(|mut results| {
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                        .observe(results.len() as f64);
                     Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
                 });
+            KV_COMMAND_SCAN_INEFFICIENCY.observe(statistics.inefficiency());
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -282,7 +326,11 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Scans locks with timestamp <= `max_ts`
         Command::ScanLock { max_ts, .. } => {
-            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true);
+            let mut reader = MvccReader::new(snapshot.as_ref(),
+                                             &mut statistics,
+                                             Some(ScanMode::Forward),
+                                             true,
+                                             None);
             let res = reader.scan_lock(None, |lock| lock.ts <= max_ts, None)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
@@ -294,6 +342,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                         lock_info.set_key(try!(key.raw()));
                         locks.push(lock_info);
                     }
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                        .observe(locks.len() as f64);
                     Ok(locks)
                 });
             match res {
@@ -304,13 +354,19 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         // Scan the locks with timestamp `start_ts`, then either commit them if the command has
         // commit timestamp populated or rollback otherwise.
         Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, .. } => {
-            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true);
+            let mut reader = MvccReader::new(snapshot.as_ref(),
+                                             &mut statistics,
+                                             Some(ScanMode::Forward),
+                                             true,
+                                             None);
             let res = reader.scan_lock(scan_key.take(),
                            |lock| lock.ts == start_ts,
                            Some(RESOLVE_LOCK_BATCH_SIZE))
                 .map_err(Error::from)
                 .and_then(|(v, next_scan_key)| {
                     let keys: Vec<Key> = v.into_iter().map(|x| x.0).collect();
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                        .observe(keys.len() as f64);
                     if keys.is_empty() {
                         Ok(None)
                     } else {
@@ -331,11 +387,23 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
         }
         // Collects garbage.
         Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
-            let mut reader = MvccReader::new(snapshot.as_ref(), Some(ScanMode::Forward), true);
+            let mut reader = MvccReader::new(snapshot.as_ref(),
+                                             &mut statistics,
+                                             Some(ScanMode::Forward),
+                                             true,
+                                             None);
+            // scan_key is used as start_key here,and Range start gc with scan_key=none.
+            let is_range_start_key = scan_key.is_none();
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                        .observe(keys.len() as f64);
                     if keys.is_empty() {
+                        // empty range
+                        if is_range_start_key {
+                            KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+                        }
                         Ok(None)
                     } else {
                         Ok(Some(Command::Gc {
@@ -350,6 +418,13 @@ fn process_read(cid: u64, mut cmd: Command, ch: SendCh<Msg>, snapshot: Box<Snaps
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
                 Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
+        Command::RawGet { ref key, .. } => {
+            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag]).observe(1f64);
+            match snapshot.get(key) {
+                Ok(val) => ProcessResult::Value { value: val },
+                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
             }
         }
         _ => panic!("unsupported read command"),
@@ -380,23 +455,31 @@ fn process_write_impl(cid: u64,
                       ch: SendCh<Msg>,
                       snapshot: &Snapshot)
                       -> Result<()> {
+    let mut statistics = Statistics::default();
     let (pr, modifies) = match cmd {
-        Command::Prewrite { ref mutations, ref primary, start_ts, lock_ttl, .. } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, None);
-            let mut results = vec![];
+        Command::Prewrite { ref mutations, ref primary, start_ts, ref options, .. } => {
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
+            let mut locks = vec![];
             for m in mutations {
-                match txn.prewrite(m.clone(), primary, lock_ttl) {
-                    Ok(_) => results.push(Ok(())),
-                    e @ Err(MvccError::KeyIsLocked { .. }) => results.push(e.map_err(Error::from)),
+                match txn.prewrite(m.clone(), primary, options) {
+                    Ok(_) => {}
+                    e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                    }
                     Err(e) => return Err(Error::from(e)),
                 }
             }
-            let res = results.drain(..).map(|x| x.map_err(StorageError::from)).collect();
-            let pr = ProcessResult::MultiRes { results: res };
-            (pr, txn.modifies())
+            if locks.is_empty() {
+                let pr = ProcessResult::MultiRes { results: vec![] };
+                (pr, txn.modifies())
+            } else {
+                // Skip write stage if some keys are locked.
+                let pr = ProcessResult::MultiRes { results: locks };
+                (pr, vec![])
+            }
         }
         Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, lock_ts, None);
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, lock_ts, None);
             for k in keys {
                 try!(txn.commit(&k, commit_ts));
             }
@@ -405,14 +488,14 @@ fn process_write_impl(cid: u64,
             (pr, txn.modifies())
         }
         Command::Cleanup { ref key, start_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, None);
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
             try!(txn.rollback(&key));
 
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
         }
         Command::Rollback { ref keys, start_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, None);
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
             for k in keys {
                 try!(txn.rollback(&k));
             }
@@ -422,7 +505,7 @@ fn process_write_impl(cid: u64,
         }
         Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(snapshot, start_ts, None);
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
             for k in keys {
                 match commit_ts {
                     Some(ts) => try!(txn.commit(&k, ts)),
@@ -450,7 +533,7 @@ fn process_write_impl(cid: u64,
         }
         Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(snapshot, 0, Some(ScanMode::Mixed));
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, 0, Some(ScanMode::Mixed));
             for k in keys {
                 try!(txn.gc(k, safe_point));
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
@@ -485,22 +568,6 @@ fn process_write_impl(cid: u64,
     Ok(())
 }
 
-/// Extracts the context of a command.
-fn extract_ctx(cmd: &Command) -> &Context {
-    match *cmd {
-        Command::Get { ref ctx, .. } |
-        Command::BatchGet { ref ctx, .. } |
-        Command::Scan { ref ctx, .. } |
-        Command::Prewrite { ref ctx, .. } |
-        Command::Commit { ref ctx, .. } |
-        Command::Cleanup { ref ctx, .. } |
-        Command::Rollback { ref ctx, .. } |
-        Command::ScanLock { ref ctx, .. } |
-        Command::ResolveLock { ref ctx, .. } |
-        Command::Gc { ref ctx, .. } => ctx,
-    }
-}
-
 impl Scheduler {
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
@@ -509,6 +576,12 @@ impl Scheduler {
     }
 
     fn insert_ctx(&mut self, ctx: RunningCtx) {
+        if ctx.lock.is_write_lock() {
+            self.running_write_count += 1;
+        }
+        if ctx.tag == CMD_TAG_GC {
+            self.has_gc_command = true;
+        }
         let cid = ctx.cid;
         if self.cmd_ctxs.insert(cid, ctx).is_some() {
             panic!("command cid={} shouldn't exist", cid);
@@ -519,41 +592,33 @@ impl Scheduler {
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
+        if ctx.lock.is_write_lock() {
+            self.running_write_count -= 1;
+        }
+        if ctx.tag == CMD_TAG_GC {
+            self.has_gc_command = false;
+        }
         SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
         ctx
     }
 
     fn get_ctx_tag(&self, cid: u64) -> &'static str {
-        let ctx = self.cmd_ctxs.get(&cid).unwrap();
+        let ctx = &self.cmd_ctxs[&cid];
         ctx.tag
     }
 
-    /// Generates the lock for a command.
-    ///
-    /// Basically, read-only commands require no latches, write commands require latches hashed
-    /// by the referenced keys.
-    fn gen_lock(&self, cmd: &Command) -> Lock {
-        match *cmd {
-            Command::Prewrite { ref mutations, .. } => {
-                let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-                self.latches.gen_lock(&keys)
-            }
-            Command::Commit { ref keys, .. } |
-            Command::Rollback { ref keys, .. } => self.latches.gen_lock(keys),
-            Command::Cleanup { ref key, .. } => self.latches.gen_lock(&[key]),
-            _ => Lock::new(vec![]),
-        }
-    }
-
     /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(&mut self, cid: u64, snapshot: Box<Snapshot>) {
+    fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
         debug!("process cmd with snapshot, cid={}", cid);
-        let cmd = {
+        let mut cmd = {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
             assert_eq!(ctx.cid, cid);
             ctx.cmd.take().unwrap()
         };
+        if let Some(term) = cb_ctx.term {
+            cmd.mut_context().set_term(term);
+        }
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
         if readcmd {
@@ -578,9 +643,9 @@ impl Scheduler {
 
     /// Extracts the context of a command.
     fn extract_context(&self, cid: u64) -> &Context {
-        let ctx = &self.cmd_ctxs.get(&cid).unwrap();
+        let ctx = &self.cmd_ctxs[&cid];
         assert_eq!(ctx.cid, cid);
-        extract_ctx(ctx.cmd.as_ref().unwrap())
+        ctx.cmd.as_ref().unwrap().get_context()
     }
 
     /// Event handler for new command.
@@ -597,24 +662,33 @@ impl Scheduler {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
-        let lock = self.gen_lock(&cmd);
+        let lock = gen_command_lock(&self.latches, &cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
         self.lock_and_get_snapshot(cid);
     }
 
     fn too_busy(&self) -> bool {
-        self.cmd_ctxs.len() >= self.sched_too_busy_threshold
+        self.running_write_count >= self.sched_too_busy_threshold
     }
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
         if !cmd.readonly() && self.too_busy() {
+            SCHED_TOO_BUSY_COUNTER_VEC.with_label_values(&[cmd.tag()]).inc();
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
-        } else {
-            self.schedule_command(cmd, callback);
+            return;
         }
+        // Allow 1 GC command at the same time.
+        if cmd.tag() == CMD_TAG_GC && self.has_gc_command {
+            SCHED_TOO_BUSY_COUNTER_VEC.with_label_values(&[cmd.tag()]).inc();
+            execute_callback(callback,
+                             ProcessResult::Failed { err: StorageError::SchedTooBusy });
+            return;
+
+        }
+        self.schedule_command(cmd, callback);
     }
 
     /// Tries to acquire all the required latches for a command.
@@ -635,12 +709,15 @@ impl Scheduler {
     fn get_snapshot(&mut self, cid: u64) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot"]).inc();
         let ch = self.schedch.clone();
-        let cb = box move |snapshot: EngineResult<Box<Snapshot>>| {
-            if let Err(e) = ch.send(Msg::SnapshotFinished {
+        let cb = box move |(cb_ctx, snapshot)| {
+            match ch.send(Msg::SnapshotFinished {
                 cid: cid,
+                cb_ctx: cb_ctx,
                 snapshot: snapshot,
             }) {
-                panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e);
+                Ok(_) => {}
+                e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+                Err(e) => panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e),
             }
         };
 
@@ -654,13 +731,16 @@ impl Scheduler {
     /// Event handler for the completion of get snapshot.
     ///
     /// Delivers the command along with the snapshot to a worker thread to execute.
-    fn on_snapshot_finished(&mut self, cid: u64, snapshot: EngineResult<Box<Snapshot>>) {
+    fn on_snapshot_finished(&mut self,
+                            cid: u64,
+                            cb_ctx: CbContext,
+                            snapshot: EngineResult<Box<Snapshot>>) {
         debug!("receive snapshot finish msg for cid={}", cid);
         match snapshot {
             Ok(snapshot) => {
                 SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
                     .inc();
-                self.process_by_worker(cid, snapshot);
+                self.process_by_worker(cid, cb_ctx, snapshot);
             }
             Err(e) => {
                 SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
@@ -714,7 +794,7 @@ impl Scheduler {
             return self.on_write_finished(cid, pr, Ok(()));
         }
         let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
-        if let Err(e) = self.engine.async_write(extract_ctx(&cmd), to_be_write, engine_cb) {
+        if let Err(e) = self.engine.async_write(cmd.get_context(), to_be_write, engine_cb) {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
                 .inc();
             self.finish_with_err(cid, Error::from(e));
@@ -764,6 +844,24 @@ impl Scheduler {
     }
 }
 
+/// Generates the lock for a command.
+///
+/// Basically, read-only commands require no latches, write commands require latches hashed
+/// by the referenced keys.
+pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
+    match *cmd {
+        Command::Prewrite { ref mutations, .. } => {
+            let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
+            latches.gen_lock(&keys)
+        }
+        Command::Commit { ref keys, .. } |
+        Command::Rollback { ref keys, .. } |
+        Command::ResolveLock { ref keys, .. } => latches.gen_lock(keys),
+        Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
+        _ => Lock::new(vec![]),
+    }
+}
+
 /// Handler of the scheduler event loop.
 impl mio::Handler for Scheduler {
     type Timeout = ();
@@ -774,13 +872,15 @@ impl mio::Handler for Scheduler {
         match msg {
             Msg::Quit => self.shutdown(event_loop),
             Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-            Msg::SnapshotFinished { cid, snapshot } => self.on_snapshot_finished(cid, snapshot),
+            Msg::SnapshotFinished { cid, cb_ctx, snapshot } => {
+                self.on_snapshot_finished(cid, cb_ctx, snapshot)
+            }
             Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
             Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
                 self.on_write_prepare_finished(cid, cmd, pr, to_be_write)
             }
             Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
-            Msg::WriteFinished { cid, pr, result } => self.on_write_finished(cid, pr, result),
+            Msg::WriteFinished { cid, pr, result, .. } => self.on_write_finished(cid, pr, result),
         }
     }
 
@@ -788,6 +888,113 @@ impl mio::Handler for Scheduler {
     fn tick(&mut self, event_loop: &mut EventLoop<Self>) {
         if !event_loop.is_running() {
             // stop work threads if has
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kvproto::kvrpcpb::Context;
+    use storage::txn::latch::*;
+    use storage::{Command, make_key, Options, Mutation};
+
+    #[test]
+    fn test_command_latches() {
+        let readonly_cmds = vec![Command::Get {
+                                     ctx: Context::new(),
+                                     key: make_key(b"k"),
+                                     start_ts: 25,
+                                 },
+                                 Command::BatchGet {
+                                     ctx: Context::new(),
+                                     keys: vec![make_key(b"k")],
+                                     start_ts: 25,
+                                 },
+                                 Command::Scan {
+                                     ctx: Context::new(),
+                                     start_key: make_key(b"k"),
+                                     limit: 100,
+                                     start_ts: 25,
+                                     options: Options::default(),
+                                 },
+                                 Command::ScanLock {
+                                     ctx: Context::new(),
+                                     max_ts: 5,
+                                 },
+                                 Command::ResolveLock {
+                                     ctx: Context::new(),
+                                     start_ts: 10,
+                                     commit_ts: Some(20),
+                                     scan_key: None,
+                                     keys: vec![],
+                                 },
+                                 Command::Gc {
+                                     ctx: Context::new(),
+                                     safe_point: 5,
+                                     scan_key: None,
+                                     keys: vec![make_key(b"k")],
+                                 }];
+        let write_cmds = vec![Command::Prewrite {
+                                  ctx: Context::new(),
+                                  mutations: vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+                                  primary: b"k".to_vec(),
+                                  start_ts: 10,
+                                  options: Options::default(),
+                              },
+                              Command::Commit {
+                                  ctx: Context::new(),
+                                  keys: vec![make_key(b"k")],
+                                  lock_ts: 10,
+                                  commit_ts: 20,
+                              },
+                              Command::Cleanup {
+                                  ctx: Context::new(),
+                                  key: make_key(b"k"),
+                                  start_ts: 10,
+                              },
+                              Command::Rollback {
+                                  ctx: Context::new(),
+                                  keys: vec![make_key(b"k")],
+                                  start_ts: 10,
+                              },
+                              Command::ResolveLock {
+                                  ctx: Context::new(),
+                                  start_ts: 10,
+                                  commit_ts: Some(20),
+                                  scan_key: None,
+                                  keys: vec![make_key(b"k")],
+                              }];
+
+        let mut latches = Latches::new(1024);
+
+        let write_locks: Vec<Lock> = write_cmds.into_iter()
+            .enumerate()
+            .map(|(id, cmd)| {
+                let mut lock = gen_command_lock(&latches, &cmd);
+                assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
+                lock
+            })
+            .collect();
+
+        for (id, cmd) in readonly_cmds.iter().enumerate() {
+            let mut lock = gen_command_lock(&latches, cmd);
+            assert!(latches.acquire(&mut lock, id as u64));
+        }
+
+        // acquire/release locks one by one.
+        let max_id = write_locks.len() as u64 - 1;
+        for (id, mut lock) in write_locks.into_iter().enumerate() {
+            let id = id as u64;
+            if id != 0 {
+                assert!(latches.acquire(&mut lock, id));
+            }
+            let unlocked = latches.release(&lock, id);
+            if id as u64 == max_id {
+                assert_eq!(unlocked, vec![]);
+            } else {
+                assert_eq!(unlocked, vec![id + 1]);
+            }
         }
     }
 }
