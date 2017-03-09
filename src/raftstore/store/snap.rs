@@ -685,10 +685,15 @@ mod v2 {
         let mut f = try!(OpenOptions::new().read(true).open(&p));
         let mut buf = vec![0; DIGEST_BUFFER_SIZE];
         loop {
-            let n = try!(f.read(&mut buf[..]));
-            digest.write(&buf[..n]);
-            if n < DIGEST_BUFFER_SIZE {
-                return Ok(digest.sum32());
+            match f.read(&mut buf[..]) {
+                Ok(0) => {
+                    return Ok(digest.sum32());
+                }
+                Ok(n) => {
+                    digest.write(&buf[..n]);
+                }
+                Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(err) => return Err(err),
             }
         }
     }
