@@ -314,6 +314,11 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
         get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
+    let rate_bytes_per_sec = get_toml_int(config, "rocksdb.rate-bytes-per-sec", Some(0));
+    if rate_bytes_per_sec > 0 {
+        opts.set_ratelimiter(rate_bytes_per_sec as i64);
+    }
+
     opts
 }
 

@@ -155,6 +155,9 @@ stats-dump-period-sec = 600
 # least 2MB;
 # compaction_readahead_size = 0
 
+# Limit the disk IO of compaction and flush.
+# rate-bytes-per-sec = "100MB"
+
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
 # compression method (if any) is used to compress a block.
