@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, Mutex};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
@@ -176,7 +176,14 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone()).unwrap();
+        let (tx, rx) = mpsc::channel();
+        node.start(event_loop,
+                   engine,
+                   simulate_trans.clone(),
+                   snap_mgr.clone(),
+                   tx,
+                   rx)
+            .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         debug!("node_id: {} tmp: {:?}",
                node_id,

@@ -44,7 +44,7 @@ quick_error! {
 impl<T: Debug> From<NotifyError<T>> for Error {
     fn from(e: NotifyError<T>) -> Error {
         match e {
-            // ALLERT!! May cause sensitive data leak.
+            // ALERT!! May cause sensitive data leak.
             NotifyError::Full(m) => Error::Discard(format!("Failed to send {:?} due to full", m)),
             NotifyError::Closed(..) => Error::Closed,
             _ => box_err!("{:?}", e),

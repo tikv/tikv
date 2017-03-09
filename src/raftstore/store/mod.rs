@@ -28,6 +28,7 @@ mod worker;
 mod metrics;
 mod engine_metrics;
 mod local_metrics;
+mod local_read;
 
 pub use self::msg::{Msg, Callback, Tick, SnapshotStatusMsg};
 pub use self::store::{StoreChannel, Store, create_event_loop};

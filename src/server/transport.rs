@@ -13,6 +13,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
 use raftstore::store::{Msg as StoreMsg, Transport, Callback};
 use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
@@ -107,6 +108,58 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
             region_id: region_id,
             to_peer_id: to_peer_id,
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct LocalReadRaftStoreRouter {
+    pub tx: Sender<StoreMsg>,
+    store_id: u64,
+}
+
+impl LocalReadRaftStoreRouter {
+    pub fn new(tx: Sender<StoreMsg>, store_id: u64) -> LocalReadRaftStoreRouter {
+        LocalReadRaftStoreRouter {
+            tx: tx,
+            store_id: store_id,
+        }
+    }
+
+    fn validate_store_id(&self, store_id: u64) -> RaftStoreResult<()> {
+        if store_id != self.store_id {
+            let store = store_id.to_string();
+            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["store_not_match", &*store]).inc();
+            Err(RaftStoreError::StoreNotMatch(store_id, self.store_id))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl RaftStoreRouter for LocalReadRaftStoreRouter {
+    fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    fn send(&self, msg: StoreMsg) -> RaftStoreResult<()> {
+        if let Err(e) = self.tx.send(msg) {
+            return Err(box_err!("send msg to local read router failed, err {:?}", e));
+        }
+        Ok(())
+    }
+
+    fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
+        let store_id = req.get_header().get_peer().get_store_id();
+        try!(self.validate_store_id(store_id));
+        self.send(StoreMsg::new_raft_cmd(req, cb))
+    }
+
+    fn report_unreachable(&self, _: u64, _: u64, _: u64) -> RaftStoreResult<()> {
+        Ok(())
     }
 }
 

@@ -12,13 +12,14 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::collections::hash_map::Values;
 use std::vec::Vec;
 use std::default::Default;
-use std::time::{Instant, Duration};
+use std::time::{Instant, Duration as StdDuration};
 
 use time::Timespec;
 use rocksdb::{DB, WriteBatch};
@@ -54,6 +55,8 @@ use super::transport::Transport;
 use super::engine::Snapshot;
 use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
+use super::msg::Msg;
+use super::local_read::PeerStatusChange;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 
@@ -227,6 +230,8 @@ pub struct Peer {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+
+    local_read_tx: Sender<Msg>,
 }
 
 impl Peer {
@@ -319,6 +324,7 @@ impl Peer {
             leader_lease_expired_time: None,
             written_bytes: 0,
             written_keys: 0,
+            local_read_tx: store.get_local_read_tx(),
         };
 
         peer.load_all_coprocessors();
@@ -494,6 +500,15 @@ impl Peer {
                     // to be unsafe until next_lease_expired_time from now
                     self.leader_lease_expired_time =
                         Some(Either::Right(self.next_lease_expired_time(clocktime::raw_now())));
+                    self.local_read_tx
+                        .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                            region_id: self.region().get_id(),
+                            leader_lease_expired_time: Some(self.leader_lease_expired_time.clone()),
+                            applied_index_term: Some(self.get_store().applied_index_term),
+                            term: Some(self.term()),
+                            ..Default::default()
+                        }))
+                        .unwrap();
 
                     metrics.timeout_now += 1;
                 }
@@ -527,7 +542,7 @@ impl Peer {
         }
     }
 
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+    pub fn collect_down_peers(&self, max_duration: StdDuration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer.get_id() {
@@ -562,7 +577,7 @@ impl Peer {
         pending_peers
     }
 
-    pub fn check_stale_state(&mut self, d: Duration) -> StaleState {
+    pub fn check_stale_state(&mut self, d: StdDuration) -> StaleState {
         // Updates the `leader_missing_time` according to the current state.
         if self.leader_id() == raft::INVALID_ID {
             if self.leader_missing_time.is_none() {
@@ -581,7 +596,7 @@ impl Peer {
         // Checks whether the current peer is stale.
         let duration = match self.leader_missing_time {
             Some(t) => t.elapsed(),
-            None => Duration::new(0, 0),
+            None => StdDuration::new(0, 0),
         };
         if duration >= d {
             // Resets the `leader_missing_time` to avoid sending the same tasks to
@@ -613,15 +628,37 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    self.leader_lease_expired_time =
+                    let leader_lease_expired_time =
                         Some(Either::Left(self.next_lease_expired_time(clocktime::raw_now())));
+                    self.leader_lease_expired_time = leader_lease_expired_time.clone();
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
                            self.leader_lease_expired_time);
+                    self.local_read_tx
+                        .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                            region_id: self.region().get_id(),
+                            leader_id: Some(ss.leader_id),
+                            leader_lease_expired_time: Some(leader_lease_expired_time.clone()),
+                            applied_index_term: Some(self.get_store().applied_index_term),
+                            term: Some(self.term()),
+                            ..Default::default()
+                        }))
+                        .unwrap();
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
                     self.leader_lease_expired_time = None;
+
+                    self.local_read_tx
+                        .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                            region_id: self.region().get_id(),
+                            leader_id: Some(ss.leader_id),
+                            leader_lease_expired_time: Some(None),
+                            applied_index_term: Some(self.get_store().applied_index_term),
+                            term: Some(self.term()),
+                            ..Default::default()
+                        }))
+                        .unwrap();
                 }
                 _ => {}
             }
@@ -870,6 +907,18 @@ impl Peer {
                        current_expired_time,
                        next_expired_time);
                 self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
+
+                // Notify local read thread to update lease.
+                self.local_read_tx
+                    .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                        region_id: self.region().get_id(),
+                        leader_lease_expired_time: Some(self.leader_lease_expired_time
+                            .clone()),
+                        applied_index_term: Some(self.get_store().applied_index_term),
+                        term: Some(self.term()),
+                        ..Default::default()
+                    }))
+                    .unwrap();
             }
         } else if self.is_leader() {
             // This peer is leader but its leader lease has expired.
@@ -880,6 +929,17 @@ impl Peer {
                    self.tag,
                    self.leader_lease_expired_time);
             self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
+
+            // Notify local read thread to update lease.
+            self.local_read_tx
+                .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                    region_id: self.region().get_id(),
+                    leader_lease_expired_time: Some(self.leader_lease_expired_time.clone()),
+                    applied_index_term: Some(self.get_store().applied_index_term),
+                    term: Some(self.term()),
+                    ..Default::default()
+                }))
+                .unwrap();
         }
     }
 
@@ -1034,6 +1094,15 @@ impl Peer {
                    self.leader_lease_expired_time);
             // Reset leader lease expiring time.
             self.leader_lease_expired_time = None;
+            self.local_read_tx
+                .send(Msg::UpdatePeerStatus(PeerStatusChange {
+                    region_id: self.region().get_id(),
+                    leader_lease_expired_time: None,
+                    applied_index_term: Some(self.get_store().applied_index_term),
+                    term: Some(self.term()),
+                    ..Default::default()
+                }))
+                .unwrap();
         }
 
         // Perform a consistent read to Raft quorum and try to renew the leader lease.
