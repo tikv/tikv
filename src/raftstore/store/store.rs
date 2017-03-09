@@ -56,7 +56,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState, ReadyContext};
-use super::peer_storage::ApplySnapResult;
+use super::peer_storage::{self, ApplySnapResult};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -589,10 +589,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
-                debug!("msg {:?} is overlapped with region {:?}, queue for later split",
-                       msg,
-                       exist_region);
-                self.pending_votes.push(msg.to_owned());
+                debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
+                if util::is_first_vote_msg(msg) {
+                    self.pending_votes.push(msg.to_owned());
+                }
                 return Ok(false);
             }
         }
@@ -619,7 +619,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if try!(self.is_msg_stale(&msg)) {
+        if try!(self.check_msg(&msg)) {
             return Ok(());
         }
 
@@ -671,7 +671,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         true
     }
 
-    fn is_msg_stale(&self, msg: &RaftMessage) -> Result<bool> {
+    fn check_msg(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let is_vote_msg = msg.get_message().get_msg_type() == MessageType::MsgRequestVote;
@@ -714,6 +714,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
+                if util::is_first_vote_msg(msg) {
+                    self.pending_votes.push(msg.to_owned());
+                }
                 return Err(box_err!("[region {}] region not exist but not tombstone: {:?}",
                                     region_id,
                                     local_state));
