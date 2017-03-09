@@ -194,7 +194,6 @@ impl<'a> MvccTxn<'a> {
             }
             _ => {
                 return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
-                    // Already committed by concurrent transaction.
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
