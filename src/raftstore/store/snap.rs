@@ -1471,18 +1471,18 @@ mod v2 {
             }
             let (_, kvs) = super::encode_cf_size_checksums(&cf_file).unwrap();
             let mut cf_size_checksums = super::decode_cf_size_checksums(&kvs[..]).unwrap();
-            for (i, x) in cf_size_checksums.drain(..).enumerate() {
-                if x.0 != cf_file[i].cf {
-                    panic!("{}: expect cf {}, got {}", i, cf_file[i].cf, x.0);
+            for (i, (cf, size, checksum)) in cf_size_checksums.drain(..).enumerate() {
+                if cf != cf_file[i].cf {
+                    panic!("{}: expect cf {}, got {}", i, cf_file[i].cf, cf);
                 }
-                if x.1 != cf_file[i].size {
-                    panic!("{}: expect cf size {}, got {}", i, cf_file[i].size, x.1);
+                if size != cf_file[i].size {
+                    panic!("{}: expect cf size {}, got {}", i, cf_file[i].size, size);
                 }
-                if x.2 != cf_file[i].checksum {
+                if checksum != cf_file[i].checksum {
                     panic!("{}: expect cf checksum {}, got {}",
                            i,
                            cf_file[i].checksum,
-                           x.2);
+                           checksum);
                 }
             }
         }
