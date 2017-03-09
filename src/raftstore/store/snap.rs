@@ -1226,11 +1226,7 @@ mod v2 {
         }
 
         fn exists(&self) -> bool {
-            for cf_file in &self.cf_files {
-                if !file_exists(&cf_file.path) {
-                    return false;
-                }
-            }
+            self.cf_files.iter().all(|cf_file| file_exists(&cf_file.path)) &&
             file_exists(&self.meta_file.path)
         }
 
