@@ -1302,10 +1302,7 @@ mod v2 {
 
                 let cf_handle = box_try!(rocksdb::get_cf_handle(&context.db, &cf));
                 let ingest_opt = IngestExternalFileOptions::new().move_files(true);
-                if let Err(e) = context.db
-                    .ingest_external_file_cf(cf_handle, &ingest_opt, &[&path]) {
-                    return Err(Error::Other(box_err!(e)));
-                }
+                box_try!(context.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[&path]));
                 context.snapshot_size += size as usize;
             }
             Ok(())
