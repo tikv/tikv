@@ -25,16 +25,15 @@ use protobuf::RepeatedField;
 
 use rand::{self, Rng};
 
-use kvproto::{metapb, pdpb, eraftpb};
-use kvproto::pdpb2;
-use kvproto::pdpb2_grpc::{self, PD};
+use kvproto::{metapb, pdpb};
+use kvproto::pdpb_grpc::{self, PD};
 
 use super::{Result, PdClient};
 use super::metrics::*;
 
 pub struct RpcClient {
-    members: pdpb2::GetPDMembersResponse,
-    inner: RwLock<pdpb2_grpc::PDClient>,
+    members: pdpb::GetMembersResponse,
+    inner: RwLock<pdpb_grpc::PDClient>,
 }
 
 impl RpcClient {
@@ -51,8 +50,8 @@ impl RpcClient {
         })
     }
 
-    fn header(&self) -> pdpb2::RequestHeader {
-        let mut header = pdpb2::RequestHeader::new();
+    fn header(&self) -> pdpb::RequestHeader {
+        let mut header = pdpb::RequestHeader::new();
         header.set_cluster_id(self.members.get_header().get_cluster_id());
         header
     }
@@ -60,7 +59,7 @@ impl RpcClient {
 
 
 pub fn validate_endpoints(endpoints: &[&str])
-                          -> Result<(pdpb2_grpc::PDClient, pdpb2::GetPDMembersResponse)> {
+                          -> Result<(pdpb_grpc::PDClient, pdpb::GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
     }
@@ -85,7 +84,7 @@ pub fn validate_endpoints(endpoints: &[&str])
             }
         };
 
-        let resp = match client.GetPDMembers(pdpb2::GetPDMembersRequest::new()) {
+        let resp = match client.GetMembers(pdpb::GetMembersRequest::new()) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -121,7 +120,7 @@ pub fn validate_endpoints(endpoints: &[&str])
     }
 }
 
-fn connect(addr: &str) -> Result<pdpb2_grpc::PDClient> {
+fn connect(addr: &str) -> Result<pdpb_grpc::PDClient> {
     let (host, port) = {
         let mut parts = addr.split(':');
         (parts.next().unwrap().to_owned(), parts.next().unwrap().parse::<u16>().unwrap())
@@ -129,12 +128,13 @@ fn connect(addr: &str) -> Result<pdpb2_grpc::PDClient> {
 
     let mut conf: grpc::client::GrpcClientConf = Default::default();
     conf.http.no_delay = Some(true);
-    pdpb2_grpc::PDClient::new(&host, port, false, conf).map_err(|e| box_err!(e))
+    pdpb_grpc::PDClient::new(&host, port, false, conf).map_err(|e| box_err!(e))
 }
 
 
-fn try_connect(members: &pdpb2::GetPDMembersResponse) -> Result<pdpb2_grpc::PDClient> {
+fn try_connect(members: &pdpb::GetMembersResponse) -> Result<pdpb_grpc::PDClient> {
     // Randomize endpoints.
+    // TODO: Connect leader first.
     let members = members.get_members();
     let mut indexes: Vec<usize> = (0..members.len()).collect();
     rand::thread_rng().shuffle(&mut indexes);
@@ -161,7 +161,7 @@ const MAX_RETRY_COUNT: usize = 100;
 
 #[inline]
 fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
-    where F: Fn(RwLockReadGuard<pdpb2_grpc::PDClient>) -> result::Result<R, grpc::error::GrpcError>
+    where F: Fn(RwLockReadGuard<pdpb_grpc::PDClient>) -> result::Result<R, grpc::error::GrpcError>
 {
     let mut resp = None;
     for _ in 0..MAX_RETRY_COUNT {
@@ -199,24 +199,13 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
     resp.ok_or(box_err!("fail to request"))
 }
 
-fn check_resp_header(header: &pdpb2::ResponseHeader) -> Result<()> {
+fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
     if !header.has_error() {
         return Ok(());
     }
     // TODO: translate more error types
     let err = header.get_error();
     Err(box_err!(err.get_message()))
-}
-
-fn map_eraft_type(t: pdpb2::ConfChangeType) -> eraftpb::ConfChangeType {
-     match t {
-         pdpb2::ConfChangeType::AddNode => {
-             eraftpb::ConfChangeType::AddNode
-         }
-         pdpb2::ConfChangeType::RemoveNode => {
-             eraftpb::ConfChangeType::RemoveNode
-         }
-     }
 }
 
 impl fmt::Debug for RpcClient {
@@ -232,7 +221,7 @@ impl PdClient for RpcClient {
     }
 
     fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()> {
-        let mut req = pdpb2::BootstrapRequest::new();
+        let mut req = pdpb::BootstrapRequest::new();
         req.set_header(self.header());
         req.set_store(stores);
         req.set_region(region);
@@ -243,7 +232,7 @@ impl PdClient for RpcClient {
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
-        let mut req = pdpb2::IsBootstrappedRequest::new();
+        let mut req = pdpb::IsBootstrappedRequest::new();
         req.set_header(self.header());
 
         let resp = try!(do_request(self, |client| client.IsBootstrapped(req.clone())));
@@ -253,7 +242,7 @@ impl PdClient for RpcClient {
     }
 
     fn alloc_id(&self) -> Result<u64> {
-        let mut req = pdpb2::AllocIDRequest::new();
+        let mut req = pdpb::AllocIDRequest::new();
         req.set_header(self.header());
 
         let resp = try!(do_request(self, |client| client.AllocID(req.clone())));
@@ -263,7 +252,7 @@ impl PdClient for RpcClient {
     }
 
     fn put_store(&self, store: metapb::Store) -> Result<()> {
-        let mut req = pdpb2::PutStoreRequest::new();
+        let mut req = pdpb::PutStoreRequest::new();
         req.set_header(self.header());
         req.set_store(store);
 
@@ -274,7 +263,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        let mut req = pdpb2::GetStoreRequest::new();
+        let mut req = pdpb::GetStoreRequest::new();
         req.set_header(self.header());
         req.set_store_id(store_id);
 
@@ -285,7 +274,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-        let mut req = pdpb2::GetClusterConfigRequest::new();
+        let mut req = pdpb::GetClusterConfigRequest::new();
         req.set_header(self.header());
 
         let mut resp = try!(do_request(self, |client| client.GetClusterConfig(req.clone())));
@@ -295,7 +284,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
-        let mut req = pdpb2::GetRegionRequest::new();
+        let mut req = pdpb::GetRegionRequest::new();
         req.set_header(self.header());
         req.set_region_key(key.to_vec());
 
@@ -306,7 +295,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
-        let mut req = pdpb2::GetRegionByIDRequest::new();
+        let mut req = pdpb::GetRegionByIDRequest::new();
         req.set_header(self.header());
         req.set_region_id(region_id);
 
@@ -326,102 +315,43 @@ impl PdClient for RpcClient {
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>)
                         -> Result<pdpb::RegionHeartbeatResponse> {
-        let mut req = pdpb2::RegionHeartbeatRequest::new();
+        let mut req = pdpb::RegionHeartbeatRequest::new();
         req.set_header(self.header());
         req.set_region(region);
         req.set_leader(leader);
-        req.set_down_peers(down_peers.into_iter()
-            .map(|mut p| {
-                let mut p2 = pdpb2::PeerStats::new();
-                if p.has_peer() {
-                    p2.set_peer(p.take_peer());
-                }
-                p2.set_down_seconds(p.get_down_seconds());
-                p2
-            })
-            .collect());
+        req.set_down_peers(RepeatedField::from_vec(down_peers));
         req.set_pending_peers(RepeatedField::from_vec(pending_peers));
 
-        let mut resp = try!(do_request(self, |client| client.RegionHeartbeat(req.clone())));
+        let resp = try!(do_request(self, |client| client.RegionHeartbeat(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
-        let mut ret = pdpb::RegionHeartbeatResponse::new();
-        if resp.has_change_peer() {
-            let mut cp = pdpb::ChangePeer::new();
-            let mut cp2 = resp.take_change_peer();
-            let ty = cp2.get_change_type();
-            cp.set_change_type(map_eraft_type(ty));
-            if cp2.has_peer() {
-                cp.set_peer(cp2.take_peer());
-            }
-            ret.set_change_peer(cp);
-        }
-        if resp.has_transfer_leader() {
-            let mut tf = pdpb::TransferLeader::new();
-            let mut tf2 = resp.take_transfer_leader();
-            if tf2.has_peer() {
-                tf.set_peer(tf2.take_peer());
-            }
-            ret.set_transfer_leader(tf);
-        }
-        Ok(ret)
+        Ok(resp)
     }
 
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
-        let mut req = pdpb2::AskSplitRequest::new();
+        let mut req = pdpb::AskSplitRequest::new();
         req.set_header(self.header());
         req.set_region(region);
 
-        let mut resp = try!(do_request(self, |client| client.AskSplit(req.clone())));
+        let resp = try!(do_request(self, |client| client.AskSplit(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
-        let mut ret = pdpb::AskSplitResponse::new();
-        ret.set_new_region_id(resp.get_new_region_id());
-        ret.set_new_peer_ids(resp.take_new_peer_ids());
-        Ok(ret)
+        Ok(resp)
     }
 
     fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
-        let mut req = pdpb2::StoreHeartbeatRequest::new();
+        let mut req = pdpb::StoreHeartbeatRequest::new();
         req.set_header(self.header());
-        let mut stats2 = pdpb2::StoreStats::new();
-        if stats.has_store_id() {
-            stats2.set_store_id(stats.get_store_id())
-        }
-        if stats.has_capacity() {
-            stats2.set_capacity(stats.get_capacity())
-        }
-        if stats.has_available() {
-            stats2.set_available(stats.get_available())
-        }
-        if stats.has_region_count() {
-            stats2.set_region_count(stats.get_region_count())
-        }
-        if stats.has_sending_snap_count() {
-            stats2.set_sending_snap_count(stats.get_sending_snap_count())
-        }
-        if stats.has_receiving_snap_count() {
-            stats2.set_receiving_snap_count(stats.get_receiving_snap_count())
-        }
-        if stats.has_start_time() {
-            stats2.set_start_time(stats.get_start_time())
-        }
-        if stats.has_applying_snap_count() {
-            stats2.set_applying_snap_count(stats.get_applying_snap_count())
-        }
-        if stats.has_is_busy() {
-            stats2.set_is_busy(stats.get_is_busy())
-        }
-        req.set_stats(stats2);
+        req.set_stats(stats);
 
         let resp = try!(do_request(self, |client| client.StoreHeartbeat(req.clone())));
-
         try!(check_resp_header(resp.get_header()));
+
         Ok(())
     }
 
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()> {
-        let mut req = pdpb2::ReportSplitRequest::new();
+        let mut req = pdpb::ReportSplitRequest::new();
         req.set_header(self.header());
         req.set_left(left);
         req.set_right(right);
