@@ -1038,11 +1038,8 @@ mod v2 {
 
         fn try_delete(&self) -> io::Result<()> {
             debug!("deleting {}", self.path());
-            let mut exists = false;
+            let exists = self.exists();
             let mut total_size = 0;
-            if self.exists() {
-                exists = true;
-            }
             for cf_file in &self.cf_files {
                 if file_exists(&cf_file.tmp_path) {
                     delete_file(&cf_file.tmp_path);
