@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn test_sched_too_busy() {
         let mut config = Config::new();
-        config.sched_too_busy_threshold = 0;
+        config.sched_too_busy_threshold = 1;
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
@@ -984,13 +984,29 @@ mod tests {
                        100,
                        expect_get_none(tx.clone()))
             .unwrap();
-        rx.recv().unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
                             Options::default(),
+                            expect_ok(tx.clone()))
+            .unwrap();
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
+                            b"y".to_vec(),
+                            101,
+                            Options::default(),
                             expect_too_busy(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"z"), b"102".to_vec()))],
+                            b"y".to_vec(),
+                            102,
+                            Options::default(),
+                            expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
