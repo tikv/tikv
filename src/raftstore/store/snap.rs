@@ -621,7 +621,6 @@ mod v1 {
 }
 
 mod v2 {
-    use std::error::Error as StdError;
     use std::io::{self, Read, Write, ErrorKind};
     use std::fs::{self, File, OpenOptions, Metadata};
     use std::path::{Path, PathBuf};
@@ -1285,9 +1284,7 @@ mod v2 {
             // write meta file
             let mut v = vec![];
             try!(self.meta_file.data.write_to_vec(&mut v));
-            if let Err(e) = self.meta_file.file.take().unwrap().write_all(&v[..]) {
-                return Err(io::Error::new(ErrorKind::Other, e.description()));
-            }
+            try!(self.meta_file.file.take().unwrap().write_all(&v[..]));
             try!(fs::rename(&self.meta_file.tmp_path, &self.meta_file.path));
             let mut size_track = self.size_track.wl();
             *size_track = size_track.saturating_add(total_size);
