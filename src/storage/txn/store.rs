@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::{Key, Value, KvPair, Snapshot, ScanMode};
-use storage::mvcc::{MvccReader, ScanMetrics, Error as MvccError};
+use storage::{Key, Value, KvPair, Snapshot, ScanMode, Statistics};
+use storage::mvcc::{MvccReader, Error as MvccError};
 use super::{Error, Result};
 
 pub struct SnapshotStore<'a> {
@@ -28,15 +28,18 @@ impl<'a> SnapshotStore<'a> {
         }
     }
 
-    pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        let mut reader = MvccReader::new(self.snapshot, None, true, None);
+    pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
+        let mut reader = MvccReader::new(self.snapshot, statistics, None, true, None);
         let v = try!(reader.get(key, self.start_ts));
         Ok(v)
     }
 
-    pub fn batch_get(&self, keys: &[Key]) -> Result<Vec<Result<Option<Value>>>> {
+    pub fn batch_get(&self,
+                     keys: &[Key],
+                     statistics: &mut Statistics)
+                     -> Result<Vec<Result<Option<Value>>>> {
         // TODO: sort the keys and use ScanMode::Forward
-        let mut reader = MvccReader::new(self.snapshot, None, true, None);
+        let mut reader = MvccReader::new(self.snapshot, statistics, None, true, None);
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
@@ -49,9 +52,10 @@ impl<'a> SnapshotStore<'a> {
     pub fn scanner(&self,
                    mode: ScanMode,
                    key_only: bool,
-                   upper_bound: Option<Vec<u8>>)
+                   upper_bound: Option<Vec<u8>>,
+                   statistics: &'a mut Statistics)
                    -> Result<StoreScanner> {
-        let mut reader = MvccReader::new(self.snapshot, Some(mode), true, upper_bound);
+        let mut reader = MvccReader::new(self.snapshot, statistics, Some(mode), true, upper_bound);
         reader.set_key_only(key_only);
         Ok(StoreScanner {
             reader: reader,
@@ -66,15 +70,12 @@ pub struct StoreScanner<'a> {
 }
 
 impl<'a> StoreScanner<'a> {
-    pub fn seek(&mut self, key: Key, metrics: &mut ScanMetrics) -> Result<Option<(Key, Value)>> {
-        Ok(try!(self.reader.seek(key, self.start_ts, metrics)))
+    pub fn seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
+        Ok(try!(self.reader.seek(key, self.start_ts)))
     }
 
-    pub fn reverse_seek(&mut self,
-                        key: Key,
-                        metrics: &mut ScanMetrics)
-                        -> Result<Option<(Key, Value)>> {
-        Ok(try!(self.reader.reverse_seek(key, self.start_ts, metrics)))
+    pub fn reverse_seek(&mut self, key: Key) -> Result<Option<(Key, Value)>> {
+        Ok(try!(self.reader.reverse_seek(key, self.start_ts)))
     }
 
     #[inline]
@@ -93,14 +94,10 @@ impl<'a> StoreScanner<'a> {
         }
     }
 
-    pub fn scan(&mut self,
-                mut key: Key,
-                limit: usize,
-                metrics: &mut ScanMetrics)
-                -> Result<Vec<Result<KvPair>>> {
+    pub fn scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         while results.len() < limit {
-            match self.seek(key, metrics) {
+            match self.seek(key) {
                 Ok(Some((k, v))) => {
                     results.push(Ok((try!(k.raw()), v)));
                     key = k;
@@ -114,14 +111,10 @@ impl<'a> StoreScanner<'a> {
         Ok(results)
     }
 
-    pub fn reverse_scan(&mut self,
-                        mut key: Key,
-                        limit: usize,
-                        metrics: &mut ScanMetrics)
-                        -> Result<Vec<Result<KvPair>>> {
+    pub fn reverse_scan(&mut self, mut key: Key, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = vec![];
         while results.len() < limit {
-            match self.reverse_seek(key, metrics) {
+            match self.reverse_seek(key) {
                 Ok(Some((k, v))) => {
                     results.push(Ok((try!(k.raw()), v)));
                     key = k;
