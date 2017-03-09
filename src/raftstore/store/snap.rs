@@ -1098,20 +1098,13 @@ mod v2 {
         }
 
         fn switch_to_cf_file(&mut self, cf: String) -> io::Result<()> {
-            let mut cf_found = false;
-            let mut index = 0;
-            for (i, f) in self.cf_files.iter().enumerate() {
-                if f.cf == cf {
-                    cf_found = true;
-                    index = i;
-                    break;
+            match self.cf_files.iter().position(|x| x.cf == cf) {
+                Some(index) => {
+                    self.cf_index = index;
+                    Ok(())
                 }
+                None => Err(io::Error::new(ErrorKind::Other, format!("fail to find cf {}", cf))),
             }
-            if !cf_found {
-                return Err(io::Error::new(ErrorKind::Other, format!("fail to find cf {}", cf)));
-            }
-            self.cf_index = index;
-            Ok(())
         }
 
         fn add_kv(&mut self, k: &[u8], v: &[u8]) -> io::Result<()> {
