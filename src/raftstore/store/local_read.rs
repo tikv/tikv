@@ -104,7 +104,7 @@ impl PeerStatus {
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        if self.applied_index_term != self.term {
+        if self.applied_index_term == 0 || self.term == 0 || self.applied_index_term != self.term {
             LOCAL_READ_THREAD_COUNTER_VEC.with_label_values(&["term_not_eq"]).inc();
             return false;
         }
