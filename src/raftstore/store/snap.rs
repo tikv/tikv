@@ -640,7 +640,7 @@ mod v2 {
 
     use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Error, Result,
+    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Result,
                 SnapKey, Snapshot, ApplyContext, check_abort, need_to_pack};
 
     const META_FILE_SUFFIX: &'static str = ".meta";
@@ -1068,7 +1068,6 @@ mod v2 {
             let cf_size_checksums =
                 box_try!(decode_cf_size_checksums(self.meta_file.data.get_data()));
             for (cf, expected_size, expected_checksum) in cf_size_checksums {
-                let mut checked = false;
                 for cf_file in &self.cf_files {
                     if cf_file.cf != cf {
                         continue;
@@ -1089,9 +1088,7 @@ mod v2 {
                                             cf_file.cf,
                                             expected_checksum));
                     }
-                    checked = true;
                 }
-                assert!(checked);
             }
             Ok(())
         }
@@ -1316,12 +1313,11 @@ mod v2 {
             }
             while self.cf_index < self.cf_files.len() {
                 match self.cf_files[self.cf_index].file.as_mut().unwrap().read(buf) {
+                    Ok(0) => {
+                        // EOF. Switch to next file.
+                        self.cf_index += 1;
+                    }
                     Ok(n) => {
-                        if n == 0 {
-                            // EOF. switch to next file
-                            self.cf_index += 1;
-                            continue;
-                        }
                         return Ok(n);
                     }
                     e => return e,
