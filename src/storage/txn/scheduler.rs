@@ -240,6 +240,9 @@ pub struct Scheduler {
     worker_pool: ThreadPool,
 
     has_gc_command: bool,
+
+    // used to control write flow
+    running_write_count: usize,
 }
 
 impl Scheduler {
@@ -260,6 +263,7 @@ impl Scheduler {
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
             has_gc_command: false,
+            running_write_count: 0,
         }
     }
 }
@@ -561,6 +565,9 @@ impl Scheduler {
     }
 
     fn insert_ctx(&mut self, ctx: RunningCtx) {
+        if ctx.lock.is_write_lock() {
+            self.running_write_count += 1;
+        }
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = true;
         }
@@ -574,6 +581,9 @@ impl Scheduler {
     fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
         let ctx = self.cmd_ctxs.remove(&cid).unwrap();
         assert_eq!(ctx.cid, cid);
+        if ctx.lock.is_write_lock() {
+            self.running_write_count -= 1;
+        }
         if ctx.tag == CMD_TAG_GC {
             self.has_gc_command = false;
         }
@@ -648,7 +658,7 @@ impl Scheduler {
     }
 
     fn too_busy(&self) -> bool {
-        self.cmd_ctxs.len() >= self.sched_too_busy_threshold
+        self.running_write_count >= self.sched_too_busy_threshold
     }
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
