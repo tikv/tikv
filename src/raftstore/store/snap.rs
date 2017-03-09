@@ -1367,17 +1367,8 @@ mod v2 {
 
     impl Drop for Snap {
         fn drop(&mut self) {
-            let mut to_cleanup = false;
-            for cf_file in &self.cf_files {
-                if file_exists(&cf_file.tmp_path) {
-                    to_cleanup = true;
-                    break;
-                }
-            }
-            if file_exists(&self.meta_file.tmp_path) {
-                to_cleanup = true;
-            }
-            if to_cleanup {
+            if self.cf_files.iter().any(|cf_file| file_exists(&cf_file.tmp_path)) ||
+               file_exists(&self.meta_file.tmp_path) {
                 self.delete()
             }
         }
