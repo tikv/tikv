@@ -43,7 +43,7 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::{rocksdb, HashMap, HashSet, FixRingQueue};
+use util::{rocksdb, HashMap, HashSet, FixedRingQueue};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -56,7 +56,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState, ReadyContext};
-use super::peer_storage::{self, ApplySnapResult};
+use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -68,6 +68,7 @@ use prometheus::local::LocalHistogram;
 type Key = Vec<u8>;
 
 const MIO_TICK_RATIO: u64 = 10;
+const PENDING_VOTES_CAP: usize = 20;
 
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
@@ -114,7 +115,7 @@ pub struct Store<T, C: 'static> {
     start_time: Timespec,
     is_busy: bool,
 
-    pending_votes: FixRingQueue<RaftMessage>,
+    pending_votes: FixedRingQueue<RaftMessage>,
 
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
@@ -186,7 +187,7 @@ impl<T, C> Store<T, C> {
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
-            pending_votes: FixRingQueue::with_capacity(10),
+            pending_votes: FixedRingQueue::with_capacity(PENDING_VOTES_CAP),
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
@@ -1062,15 +1063,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             Ok(mut new_peer) => {
                 peer = new_peer.peer.clone();
-                // If this peer is the leader of the region before split, it's intuitional for
-                // it to become the leader of new split region.
-                // The ticks are accelerated here, so that the peer for the new split region
-                // comes to campaign earlier than the other follower peers. And then it's more
-                // likely for this peer to become the leader of the new split region.
-                // If the other follower peers applies logs too slowly, they may fail to vote the
-                // `MsgRequestVote` from this peer on its campaign.
-                // In this worst case scenario, the new split raft group will not be available
-                // since there is no leader established during one election timeout after the split.
                 if let Some(left) = self.region_peers.get(&region_id) {
                     campaigned = new_peer.maybe_campaign(left, &mut self.pending_raft_groups);
 

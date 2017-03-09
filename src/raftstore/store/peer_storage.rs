@@ -110,8 +110,6 @@ pub struct PeerStorage {
     pub region: metapb::Region,
     pub raft_state: RaftLocalState,
     pub apply_state: RaftApplyState,
-    // The term of last applied entry. This value may not be correct if the peer is
-    // just split.
     pub applied_index_term: u64,
     pub last_term: u64,
 

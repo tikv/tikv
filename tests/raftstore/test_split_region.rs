@@ -551,9 +551,8 @@ fn test_node_split_stale_epoch() {
 
 
 // For the peer which is the leader of the region before split,
-// it would accelerate ticks for the peer of new region after split, so that the peer of new region
-// could start campaign faster. and then this peer may take the leadership earlier.
-// `test_tick_acceleration_after_split` is a helper function for testing this feature.
+// it should campaigns immediately. and then this peer may take the leadership earlier.
+// `test_quick_election_after_split` is a helper function for testing this feature.
 fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     // Calculate the reserved time before a new campaign after split.
     let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
