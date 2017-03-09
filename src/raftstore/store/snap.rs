@@ -632,10 +632,11 @@ mod v2 {
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{KeyValue, RaftSnapshotData};
     use rocksdb::{EnvOptions, Options, SstFileWriter, IngestExternalFileOptions};
-    use storage::{CfName, ALL_CFS};
+    use storage::{CfName, ALL_CFS, CF_LOCK};
     use util::{HandyRwLock, rocksdb};
     use util::codec::number::{self, NumberEncoder, NumberDecoder};
     use util::codec::bytes::{BytesEncoder, BytesDecoder};
+    use util::config::parse_rocksdb_per_level_compression;
     use raftstore::Result as RaftStoreResult;
 
     use super::super::keys::{enc_start_key, enc_end_key};
@@ -648,6 +649,8 @@ mod v2 {
     const SNAPSHOT_META_PREFIX_CHECKSUM: &'static str = "checksum";
     const ENCODE_DECODE_DESC: bool = false;
     const DIGEST_BUFFER_SIZE: usize = 10240;
+    const NO_COMPRESSION_PER_LEVEL: &'static str = "no:no:no:no:no:no:no";
+    const LZ4_COMPRESSION_PER_LEVEL: &'static str = "lz4:lz4:lz4:lz4:lz4:lz4:lz4";
 
     fn get_snapshot_cfs() -> Vec<CfName> {
         let size = ALL_CFS.len();
@@ -954,7 +957,13 @@ mod v2 {
             for cf_file in &mut self.cf_files {
                 // initialize sst file writer
                 let env_opt = EnvOptions::new();
-                let io_options = Options::new();
+                let mut io_options = Options::new();
+                let per_level_compression = if cf_file.cf == CF_LOCK {
+                    parse_rocksdb_per_level_compression(NO_COMPRESSION_PER_LEVEL).unwrap()
+                } else {
+                    parse_rocksdb_per_level_compression(LZ4_COMPRESSION_PER_LEVEL).unwrap()
+                };
+                io_options.compression_per_level(&per_level_compression);
                 let mut writer = SstFileWriter::new(&env_opt, &io_options);
                 if let Err(e) = writer.open(&cf_file.tmp_path) {
                     return Err(io::Error::new(ErrorKind::Other, e));
