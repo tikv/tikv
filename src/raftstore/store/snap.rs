@@ -697,7 +697,7 @@ mod v2 {
         }
     }
 
-    fn encode_cf_size_checksums(cf_files: &[CfFile]) -> RaftStoreResult<(u64, Vec<KeyValue>)> {
+    fn encode_cf_size_and_checksums(cf_files: &[CfFile]) -> RaftStoreResult<(u64, Vec<KeyValue>)> {
         let mut total_size = 0;
         let mut kvs = Vec::with_capacity(cf_files.len());
         for cf_file in cf_files {
@@ -729,18 +729,18 @@ mod v2 {
     }
 
 
-    fn decode_cf_size_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(CfName, u64, u32)>> {
+    fn decode_cf_size_and_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(CfName, u64, u32)>> {
         let snapshot_cfs = get_snapshot_cfs();
         let mut cf_sizes: Vec<(CfName, u64)> = vec![];
         let mut cf_checksums: Vec<(CfName, u32)> = vec![];
         for kv in kvs {
             let mut key_bytes = kv.get_key();
             let decoded = try!(key_bytes.decode_bytes(ENCODE_DECODE_DESC));
-            let key = match String::from_utf8(decoded.clone()) {
+            let key = match String::from_utf8(decoded) {
                 Ok(s) => s,
                 Err(e) => {
                     return Err(box_err!("fail to parse snapshot meta key {:?}, err: {:?}",
-                                        decoded,
+                                        key_bytes,
                                         e));
                 }
             };
@@ -897,7 +897,7 @@ mod v2 {
                                                    snapshot_data: RaftSnapshotData,
                                                    size_track: Arc<RwLock<u64>>)
                                                    -> RaftStoreResult<Snap> {
-            let cf_size_checksums = try!(decode_cf_size_checksums(snapshot_data.get_data()));
+            let cf_size_checksums = try!(decode_cf_size_and_checksums(snapshot_data.get_data()));
             let dir_path = dir.into();
             if !dir_path.exists() {
                 try!(fs::create_dir_all(dir_path.as_path()));
@@ -1048,7 +1048,9 @@ mod v2 {
                 }
                 delete_file(&cf_file.path);
             }
-            delete_file(&self.meta_file.tmp_path);
+            if file_exists(&self.meta_file.tmp_path) {
+                delete_file(&self.meta_file.tmp_path);
+            }
             delete_file(&self.meta_file.path);
             let size_to_sub = if exists {
                 total_size
@@ -1066,34 +1068,39 @@ mod v2 {
 
         fn validate(&self) -> RaftStoreResult<()> {
             let cf_size_checksums =
-                box_try!(decode_cf_size_checksums(self.meta_file.data.get_data()));
-            for (cf, expected_size, expected_checksum) in cf_size_checksums {
-                for cf_file in &self.cf_files {
-                    if cf_file.cf != cf {
-                        continue;
+                box_try!(decode_cf_size_and_checksums(self.meta_file.data.get_data()));
+            for cf_file in &self.cf_files {
+                match cf_size_checksums.iter().find(|x| x.0 == cf_file.cf) {
+                    Some(x) => {
+                        let expected_size = x.1;
+                        let expected_checksum = x.2;
+                        let size = try!(get_file_size(&cf_file.path));
+                        if size != expected_size {
+                            return Err(box_err!("invalid snapshot file size {} for cf {}, \
+                                                 expected {}",
+                                                size,
+                                                cf_file.cf,
+                                                expected_size));
+                        }
+                        let checksum = try!(calc_checksum(&cf_file.path));
+                        if checksum != expected_checksum {
+                            return Err(box_err!("invalid snapshot file checksum {} for cf {}, \
+                                                 expected {}",
+                                                checksum,
+                                                cf_file.cf,
+                                                expected_checksum));
+                        }
                     }
-                    let size = try!(get_file_size(&cf_file.path));
-                    if size != expected_size {
-                        return Err(box_err!("invalid snapshot file size {} for cf {}, expected \
-                                             {}",
-                                            size,
-                                            cf_file.cf,
-                                            expected_size));
-                    }
-                    let checksum = try!(calc_checksum(&cf_file.path));
-                    if checksum != expected_checksum {
-                        return Err(box_err!("invalid snapshot file checksum {} for cf {}, \
-                                             expected {}",
-                                            checksum,
-                                            cf_file.cf,
-                                            expected_checksum));
+                    None => {
+                        return Err(box_err!("missing snapshot file size and checksum for cf {}",
+                                            cf_file.cf));
                     }
                 }
             }
             Ok(())
         }
 
-        fn switch_to_cf_file(&mut self, cf: String) -> io::Result<()> {
+        fn switch_to_cf_file(&mut self, cf: &str) -> io::Result<()> {
             match self.cf_files.iter().position(|x| x.cf == cf) {
                 Some(index) => {
                     self.cf_index = index;
@@ -1165,7 +1172,7 @@ mod v2 {
                 if !need_to_pack(cf) {
                     continue;
                 }
-                try!(self.switch_to_cf_file(cf.to_owned()));
+                try!(self.switch_to_cf_file(cf));
                 try!(snap.scan_cf(cf,
                                   &begin_key,
                                   &end_key,
@@ -1205,7 +1212,7 @@ mod v2 {
                  -> RaftStoreResult<()> {
             try!(self.do_build(snap, region));
             // set snapshot meta data
-            let (total_size, kvs) = try!(encode_cf_size_checksums(&self.cf_files[..]));
+            let (total_size, kvs) = try!(encode_cf_size_and_checksums(&self.cf_files[..]));
             snap_data.set_file_size(total_size);
             snap_data.set_data(RepeatedField::from_vec(kvs));
             // save snapshot meta file to meta file
@@ -1457,7 +1464,7 @@ mod v2 {
         }
 
         #[test]
-        fn test_encode_decode_cf_size_checksums() {
+        fn test_encode_decode_cf_size_and_checksums() {
             let mut cfs = super::get_snapshot_cfs();
             let mut cf_file = Vec::with_capacity(cfs.len());
             for (i, cf) in cfs.drain(..).enumerate() {
@@ -1469,8 +1476,8 @@ mod v2 {
                 };
                 cf_file.push(f);
             }
-            let (_, kvs) = super::encode_cf_size_checksums(&cf_file).unwrap();
-            let mut cf_size_checksums = super::decode_cf_size_checksums(&kvs[..]).unwrap();
+            let (_, kvs) = super::encode_cf_size_and_checksums(&cf_file).unwrap();
+            let mut cf_size_checksums = super::decode_cf_size_and_checksums(&kvs[..]).unwrap();
             for (i, (cf, size, checksum)) in cf_size_checksums.drain(..).enumerate() {
                 if cf != cf_file[i].cf {
                     panic!("{}: expect cf {}, got {}", i, cf_file[i].cf, cf);
