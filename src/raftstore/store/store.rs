@@ -43,7 +43,7 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::{rocksdb, HashMap, HashSet, FixedRingQueue};
+use util::{rocksdb, HashMap, HashSet, RingQueue};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -115,7 +115,7 @@ pub struct Store<T, C: 'static> {
     start_time: Timespec,
     is_busy: bool,
 
-    pending_votes: FixedRingQueue<RaftMessage>,
+    pending_votes: RingQueue<RaftMessage>,
 
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
@@ -187,7 +187,7 @@ impl<T, C> Store<T, C> {
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
-            pending_votes: FixedRingQueue::with_capacity(PENDING_VOTES_CAP),
+            pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,

@@ -423,19 +423,19 @@ pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
 }
 
 /// A simple ring queue with fixed capacity.
-pub struct FixedRingQueue<T> {
+pub struct RingQueue<T> {
     buf: VecDeque<T>,
     cap: usize,
 }
 
-impl<T> FixedRingQueue<T> {
+impl<T> RingQueue<T> {
     #[inline]
     fn len(&self) -> usize {
         self.buf.len()
     }
 
-    pub fn with_capacity(cap: usize) -> FixedRingQueue<T> {
-        FixedRingQueue {
+    pub fn with_capacity(cap: usize) -> RingQueue<T> {
+        RingQueue {
             buf: VecDeque::with_capacity(cap),
             cap: cap,
         }
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_fixed_ring_queue() {
-        let mut queue = FixedRingQueue::with_capacity(10);
+        let mut queue = RingQueue::with_capacity(10);
         for num in 0..20 {
             queue.push(num);
             assert_eq!(queue.len(), cmp::min(num + 1, 10));
