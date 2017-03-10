@@ -119,6 +119,7 @@ pub struct Store<T, C: 'static> {
 
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
+    lock_cf_written_bytes: u64,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -193,6 +194,7 @@ impl<T, C> Store<T, C> {
             is_busy: false,
             region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
+            lock_cf_written_bytes: 0,
         };
         try!(s.init());
         Ok(s)
@@ -513,6 +515,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         debug!("{} async apply finish: {:?}", p.tag, res);
                         p.post_apply(&res, &mut self.pending_raft_groups);
                     }
+                    self.lock_cf_written_bytes += res.metrics.lock_cf_written_bytes;
                     self.on_ready_result(res.region_id, res.exec_res);
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
@@ -1685,15 +1688,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        let task = CompactTask {
-            cf_name: String::from(CF_LOCK),
-            start_key: None,
-            end_key: None,
-        };
-        if let Err(e) = self.compact_worker.schedule(task) {
-            error!("{} failed to schedule compact lock cf task: {:?}",
-                   self.tag,
-                   e);
+        if self.lock_cf_written_bytes > self.cfg.lock_cf_compact_threshold {
+            self.lock_cf_written_bytes = 0;
+            let task = CompactTask {
+                cf_name: String::from(CF_LOCK),
+                start_key: None,
+                end_key: None,
+            };
+            if let Err(e) = self.compact_worker.schedule(task) {
+                error!("{} failed to schedule compact lock cf task: {:?}",
+                       self.tag,
+                       e);
+            }
         }
 
         self.register_compact_lock_cf_tick(event_loop);

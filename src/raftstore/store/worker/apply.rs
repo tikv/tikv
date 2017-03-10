@@ -765,6 +765,10 @@ impl ApplyDelegate {
         self.metrics.size_diff_hint += value.len() as i64;
         if req.get_put().has_cf() {
             let cf = req.get_put().get_cf();
+            if cf == CF_LOCK {
+                self.metrics.lock_cf_written_bytes += key.len() as u64;
+                self.metrics.lock_cf_written_bytes += value.len() as u64;
+            }
             // TODO: check whether cf exists or not.
             rocksdb::get_cf_handle(&self.engine, cf)
                 .and_then(|handle| ctx.wb.put_cf(handle, &key, value))
@@ -804,8 +808,11 @@ impl ApplyDelegate {
                 .unwrap_or_else(|e| {
                     panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
                 });
-            // lock cf is compact periodically.
-            if cf != CF_LOCK {
+
+            if cf == CF_LOCK {
+                // delete is a kind of write for RocksDB.
+                self.metrics.lock_cf_written_bytes += key.len() as u64;
+            } else {
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
@@ -1014,6 +1021,7 @@ pub struct ApplyMetrics {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub lock_cf_written_bytes: u64,
 }
 
 #[derive(Debug)]

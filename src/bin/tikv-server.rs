@@ -569,6 +569,9 @@ fn build_cfg(matches: &Matches,
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
+    cfg_u64(&mut cfg.raft_store.lock_cf_compact_threshold,
+            config,
+            "raftstore.lock-cf-compact-threshold");
     cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
             config,
             "raftstore.raft-entry-max-size");
@@ -598,6 +601,9 @@ fn build_cfg(matches: &Matches,
                   "storage.scheduler-worker-pool-size") {
         cfg.storage.sched_worker_pool_size = adjust_sched_workers_by_cpu_num(total_cpu_num);
     }
+    cfg_usize(&mut cfg.storage.sched_too_busy_threshold,
+              config,
+              "storage.scheduler-too-busy-threshold");
 
     cfg
 }
