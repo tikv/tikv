@@ -64,6 +64,7 @@ signal = "0.2"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
+branch = "hhkbp2/specify-cf-for-SstFileWriter"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto"

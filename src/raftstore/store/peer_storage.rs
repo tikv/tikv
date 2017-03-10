@@ -890,7 +890,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = try!(mgr.rl().get_snapshot_for_building(&key));
+    let mut s = try!(mgr.rl().get_snapshot_for_building(&key, snap));
 
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
@@ -979,14 +979,14 @@ mod test {
     use util::worker::{Worker, Scheduler};
     use util::HandyRwLock;
     use util::rocksdb::new_engine;
-    use storage::{CF_DEFAULT, CF_RAFT};
+    use storage::ALL_CFS;
     use kvproto::eraftpb::HardState;
     use rocksdb::WriteBatch;
 
     use super::*;
 
     fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");

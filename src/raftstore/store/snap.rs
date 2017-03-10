@@ -878,10 +878,11 @@ mod v2 {
 
         pub fn new_for_building<T: Into<PathBuf>>(dir: T,
                                                   key: &SnapKey,
+                                                  snap: &DbSnapshot,
                                                   size_track: Arc<RwLock<u64>>)
-                                                  -> io::Result<Snap> {
+                                                  -> RaftStoreResult<Snap> {
             let mut s = try!(Snap::new(dir, key, size_track, true));
-            try!(s.init_for_building());
+            try!(s.init_for_building(snap));
             Ok(s)
         }
 
@@ -953,7 +954,7 @@ mod v2 {
             Ok(s)
         }
 
-        fn init_for_building(&mut self) -> io::Result<()> {
+        fn init_for_building(&mut self, snap: &DbSnapshot) -> RaftStoreResult<()> {
             for cf_file in &mut self.cf_files {
                 // initialize sst file writer
                 let env_opt = EnvOptions::new();
@@ -964,10 +965,9 @@ mod v2 {
                     parse_rocksdb_per_level_compression(LZ4_COMPRESSION_PER_LEVEL).unwrap()
                 };
                 io_options.compression_per_level(&per_level_compression);
-                let mut writer = SstFileWriter::new(&env_opt, &io_options);
-                if let Err(e) = writer.open(&cf_file.tmp_path) {
-                    return Err(io::Error::new(ErrorKind::Other, e));
-                }
+                let handle = try!(snap.cf_handle(&cf_file.cf));
+                let mut writer = SstFileWriter::new(&env_opt, &io_options, handle);
+                box_try!(writer.open(&cf_file.tmp_path));
                 cf_file.sst_writer = Some(writer);
             }
             let f = try!(OpenOptions::new()
@@ -1161,7 +1161,7 @@ mod v2 {
                                self.path(),
                                e);
                         try!(self.try_delete());
-                        try!(self.init_for_building());
+                        try!(self.init_for_building(snap));
                     }
                 }
             }
@@ -1525,7 +1525,9 @@ mod v2 {
             let src_dir = TempDir::new("test-snap-file-src").unwrap();
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(src_dir.path(), &key, size_track.clone()).unwrap();
+            let mut s1 =
+                Snap::new_for_building(src_dir.path(), &key, &snapshot, size_track.clone())
+                    .unwrap();
             // Ensure that this snapshot file doesn't exist before being built.
             assert!(!s1.exists());
             assert_eq!(*size_track.rl(), 0);
@@ -1708,9 +1710,12 @@ impl SnapManagerCore {
         self.registry.contains_key(key)
     }
 
-    pub fn get_snapshot_for_building(&self, key: &SnapKey) -> io::Result<Box<Snapshot>> {
+    pub fn get_snapshot_for_building(&self,
+                                     key: &SnapKey,
+                                     snap: &DbSnapshot)
+                                     -> RaftStoreResult<Box<Snapshot>> {
         if self.use_sst_file_snapshot {
-            let f = try!(v2::Snap::new_for_building(&self.base, key, self.snap_size.clone()));
+            let f = try!(v2::Snap::new_for_building(&self.base, key, snap, self.snap_size.clone()));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(&self.base, self.snap_size.clone(), true, key));
@@ -1934,12 +1939,12 @@ mod test {
         mgr.wl().init().unwrap();
         assert_eq!(mgr.rl().get_total_snap_size(), 0);
 
-        let key1 = SnapKey::new(1, 1, 1);
-        let size_track = Arc::new(RwLock::new(0));
-        let mut s1 = SnapV2::new_for_building(&path, &key1, size_track.clone()).unwrap();
-        let mut region = v2::test::get_test_region(1, 1, 1);
         let db_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2-db").unwrap();
         let snapshot = DbSnapshot::new(v2::test::get_test_db(&db_dir).unwrap());
+        let key1 = SnapKey::new(1, 1, 1);
+        let size_track = Arc::new(RwLock::new(0));
+        let mut s1 = SnapV2::new_for_building(&path, &key1, &snapshot, size_track.clone()).unwrap();
+        let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         s1.build(&snapshot, &region, &mut snap_data).unwrap();
@@ -1954,7 +1959,7 @@ mod test {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 = SnapV2::new_for_building(&path, &key2, size_track.clone()).unwrap();
+        let s3 = SnapV2::new_for_building(&path, &key2, &snapshot, size_track.clone()).unwrap();
         let s4 = SnapV2::new_for_receiving(&path, &key2, snap_data, size_track.clone()).unwrap();
 
         assert!(s1.exists());
@@ -1986,12 +1991,12 @@ mod test {
         let src_mgr = new_snap_mgr(src_path, None, false);
         src_mgr.wl().init().unwrap();
 
-        let key = SnapKey::new(1, 1, 1);
-        let mut s1 = src_mgr.rl().get_snapshot_for_building(&key).unwrap();
-        let region = v2::test::get_test_region(1, 1, 1);
         let src_db_dir = TempDir::new("test-snap-v1-v2-compatible-src-db").unwrap();
         let db = v2::test::get_test_db(&src_db_dir).unwrap();
         let snapshot = DbSnapshot::new(db.clone());
+        let key = SnapKey::new(1, 1, 1);
+        let mut s1 = src_mgr.rl().get_snapshot_for_building(&key, &snapshot).unwrap();
+        let region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         s1.build(&snapshot, &region, &mut snap_data).unwrap();
