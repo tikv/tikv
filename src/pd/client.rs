@@ -15,13 +15,14 @@ use std::fmt;
 use std::result;
 use std::thread;
 use std::sync::RwLock;
-use std::sync::RwLockReadGuard;
 use std::time::Duration;
 use std::collections::HashSet;
 
 use grpc;
 
 use protobuf::RepeatedField;
+
+use url::Url;
 
 use rand::{self, Rng};
 
@@ -31,9 +32,14 @@ use kvproto::pdpb_grpc::{self, PD};
 use super::{Result, PdClient};
 use super::metrics::*;
 
-pub struct RpcClient {
+struct Inner {
     members: pdpb::GetMembersResponse,
-    inner: RwLock<pdpb_grpc::PDClient>,
+    client: pdpb_grpc::PDClient,
+}
+
+pub struct RpcClient {
+    cluster_id: u64,
+    inner: RwLock<Inner>,
 }
 
 impl RpcClient {
@@ -45,14 +51,17 @@ impl RpcClient {
 
         let (client, members) = try!(validate_endpoints(&endpoints));
         Ok(RpcClient {
-            members: members,
-            inner: RwLock::new(client),
+            cluster_id: members.get_header().get_cluster_id(),
+            inner: RwLock::new(Inner {
+                members: members,
+                client: client,
+            }),
         })
     }
 
     fn header(&self) -> pdpb::RequestHeader {
         let mut header = pdpb::RequestHeader::new();
-        header.set_cluster_id(self.members.get_header().get_cluster_id());
+        header.set_cluster_id(self.cluster_id);
         header
     }
 }
@@ -67,7 +76,6 @@ pub fn validate_endpoints(endpoints: &[&str])
     let len = endpoints.len();
     let mut endpoints_set = HashSet::with_capacity(len);
 
-    let mut pd_client = None;
     let mut members = None;
     let mut cluster_id = None;
     for ep in endpoints {
@@ -106,24 +114,41 @@ pub fn validate_endpoints(endpoints: &[&str])
         }
         // TODO: check all fields later?
 
-        if pd_client.is_none() {
-            pd_client = Some(client);
-        }
         if members.is_none() {
             members = Some(resp);
         }
     }
 
-    match (pd_client, members) {
-        (Some(pd_client), Some(members)) => Ok((pd_client, members)),
+    info!("All PD endpoints are consistent, {:?}", endpoints);
+
+    match members {
+        Some(members) => {
+            let client = box_try!(try_connect(&members));
+            Ok((client, members))
+        }
         _ => Err(box_err!("PD cluster failed to respond")),
     }
 }
 
 fn connect(addr: &str) -> Result<pdpb_grpc::PDClient> {
-    let (host, port) = {
-        let mut parts = addr.split(':');
-        (parts.next().unwrap().to_owned(), parts.next().unwrap().parse::<u16>().unwrap())
+    info!("connect to PD endpoint: {:?}", addr);
+    let (host, port) = match Url::parse(addr) {
+        Ok(ep) => {
+            let host = match ep.host_str() {
+                Some(h) => h.to_owned(),
+                None => return Err(box_err!("unkown host, please specify the host")),
+            };
+            let port = match ep.port() {
+                Some(p) => p,
+                None => return Err(box_err!("unkown port, please specify the port")),
+            };
+            (host, port)
+        }
+
+        Err(_) => {
+            let mut parts = addr.split(':');
+            (parts.next().unwrap().to_owned(), parts.next().unwrap().parse::<u16>().unwrap())
+        }
     };
 
     let mut conf: grpc::client::GrpcClientConf = Default::default();
@@ -131,16 +156,24 @@ fn connect(addr: &str) -> Result<pdpb_grpc::PDClient> {
     pdpb_grpc::PDClient::new(&host, port, false, conf).map_err(|e| box_err!(e))
 }
 
-
+// TODO: update members.
 fn try_connect(members: &pdpb::GetMembersResponse) -> Result<pdpb_grpc::PDClient> {
+    // Try to connect the PD cluster leader.
+    let leader = members.get_leader();
+    for ep in leader.get_client_urls() {
+        if let Ok(client) = connect(ep.as_str()) {
+            return Ok(client);
+        }
+    }
+
+    // Then try to connect other members.
     // Randomize endpoints.
-    // TODO: Connect leader first.
     let members = members.get_members();
     let mut indexes: Vec<usize> = (0..members.len()).collect();
     rand::thread_rng().shuffle(&mut indexes);
 
     for i in indexes {
-        for ep in members[i].get_peer_urls() {
+        for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
                 Ok(cli) => {
                     info!("PD client connects to {}", ep);
@@ -159,17 +192,16 @@ fn try_connect(members: &pdpb::GetMembersResponse) -> Result<pdpb_grpc::PDClient
 
 const MAX_RETRY_COUNT: usize = 100;
 
-#[inline]
 fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
-    where F: Fn(RwLockReadGuard<pdpb_grpc::PDClient>) -> result::Result<R, grpc::error::GrpcError>
+    where F: Fn(&pdpb_grpc::PDClient) -> result::Result<R, grpc::error::GrpcError>
 {
     let mut resp = None;
     for _ in 0..MAX_RETRY_COUNT {
-        let cli = client.inner.read().unwrap();
+        let inner = client.inner.read().unwrap();
 
         let r = {
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = f(cli);
+            let r = f(&inner.client);
             timer.observe_duration();
             r
         };
@@ -181,10 +213,10 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                let mut cli = client.inner.write().unwrap();
-                match try_connect(&client.members) {
+                let mut inner = client.inner.write().unwrap();
+                match try_connect(&inner.members) {
                     Ok(c) => {
-                        *cli = c;
+                        inner.client = c;
                     }
                     Err(e) => {
                         error!("{:?}", e);
@@ -210,14 +242,15 @@ fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
 
 impl fmt::Debug for RpcClient {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "PD gRPC Client connects to cluster {:?}", self.members)
+        write!(fmt,
+               "PD gRPC Client connects to cluster {:?}",
+               self.cluster_id)
     }
 }
 
 impl PdClient for RpcClient {
     fn get_cluster_id(&self) -> Result<u64> {
-        let id = self.members.get_header().get_cluster_id();
-        Ok(id)
+        Ok(self.cluster_id)
     }
 
     fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()> {
