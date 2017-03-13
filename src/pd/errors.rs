@@ -23,11 +23,6 @@ quick_error!{
             cause(err)
             description(err.description())
         }
-        Codec(err: ::util::codec::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
         ClusterBootstrapped(cluster_id: u64) {
             description("cluster bootstrap error")
             display("cluster {} is already bootstrapped", cluster_id)
