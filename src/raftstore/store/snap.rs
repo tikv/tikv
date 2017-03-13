@@ -1002,6 +1002,9 @@ mod v2 {
         }
 
         fn init_for_applying(&mut self) -> RaftStoreResult<()> {
+            if !self.exists() {
+                return Err(box_err!("snapshot file {} not exists", self.path()));
+            }
             self.load_snapshot_metadata()
         }
 
@@ -1722,9 +1725,10 @@ impl SnapManagerCore {
     }
 
     pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
-        let s = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), true, key));
-        if s.exists() {
-            return Ok(Box::new(s));
+        if let Ok(s) = v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), true, key) {
+            if s.exists() {
+                return Ok(Box::new(s));
+            }
         }
         let s = try!(v2::Snap::new_for_sending(&self.base, key, self.snap_size.clone()));
         Ok(Box::new(s))
@@ -1749,11 +1753,12 @@ impl SnapManagerCore {
     }
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
-        let s = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), false, key));
-        if s.exists() {
-            return Ok(Box::new(s));
+        if let Ok(s) = v2::Snap::new_for_applying(&self.base, key, self.snap_size.clone()) {
+            if s.exists() {
+                return Ok(Box::new(s));
+            }
         }
-        let s = try!(v2::Snap::new_for_applying(&self.base, key, self.snap_size.clone()));
+        let s = try!(v1::Snap::new_for_reading(&self.base, self.snap_size.clone(), false, key));
         Ok(Box::new(s))
     }
 
