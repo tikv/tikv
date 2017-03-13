@@ -43,7 +43,7 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::{rocksdb, HashMap, HashSet};
+use util::{rocksdb, HashMap, HashSet, RingQueue};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -68,6 +68,7 @@ use prometheus::local::LocalHistogram;
 type Key = Vec<u8>;
 
 const MIO_TICK_RATIO: u64 = 10;
+const PENDING_VOTES_CAP: usize = 20;
 
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
@@ -113,6 +114,8 @@ pub struct Store<T, C: 'static> {
 
     start_time: Timespec,
     is_busy: bool,
+
+    pending_votes: RingQueue<RaftMessage>,
 
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
@@ -185,6 +188,7 @@ impl<T, C> Store<T, C> {
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
+            pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
@@ -589,9 +593,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
-                debug!("msg {:?} is overlapped with region {:?}, ignored",
-                       msg,
-                       exist_region);
+                debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
+                if util::is_first_vote_msg(msg) {
+                    self.pending_votes.push(msg.to_owned());
+                }
                 return Ok(false);
             }
         }
@@ -618,7 +623,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if try!(self.is_msg_stale(&msg)) {
+        if try!(self.check_msg(&msg)) {
             return Ok(());
         }
 
@@ -670,7 +675,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         true
     }
 
-    fn is_msg_stale(&self, msg: &RaftMessage) -> Result<bool> {
+    fn check_msg(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let is_vote_msg = msg.get_message().get_msg_type() == MessageType::MsgRequestVote;
@@ -713,6 +718,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
+                if util::is_first_vote_msg(msg) {
+                    self.pending_votes.push(msg.to_owned());
+                }
                 return Err(box_err!("[region {}] region not exist but not tombstone: {:?}",
                                     region_id,
                                     local_state));
@@ -1048,6 +1056,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        let mut campaigned = false;
+        let peer;
         match Peer::create(self, &right) {
             Err(e) => {
                 // peer information is already written into db, can't recover.
@@ -1055,26 +1065,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("create new split region {:?} err {:?}", right, e);
             }
             Ok(mut new_peer) => {
-                // If this peer is the leader of the region before split, it's intuitional for
-                // it to become the leader of new split region.
-                // The ticks are accelerated here, so that the peer for the new split region
-                // comes to campaign earlier than the other follower peers. And then it's more
-                // likely for this peer to become the leader of the new split region.
-                // If the other follower peers applies logs too slowly, they may fail to vote the
-                // `MsgRequestVote` from this peer on its campaign.
-                // In this worst case scenario, the new split raft group will not be available
-                // since there is no leader established during one election timeout after the split.
-                let is_leader = self.region_peers[&region_id].is_leader();
-                if is_leader && right.get_peers().len() > 1 {
-                    for _ in 0..new_peer.accelerate_campaign_ticks() {
-                        new_peer.raft_group.tick();
-                    }
-                }
+                peer = new_peer.peer.clone();
+                if let Some(left) = self.region_peers.get(&region_id) {
+                    campaigned = new_peer.maybe_campaign(left, &mut self.pending_raft_groups);
 
-                if is_leader {
-                    // Notify pd immediately to let it update the region meta.
-                    let left = &self.region_peers[&region_id];
-                    self.report_split_pd(left, &new_peer);
+                    if left.is_leader() {
+                        // Notify pd immediately to let it update the region meta.
+                        self.report_split_pd(left, &new_peer);
+                    }
                 }
 
                 // Insert new regions and validation
@@ -1092,6 +1090,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
                 self.region_peers.insert(new_region_id, new_peer);
+            }
+        }
+
+        if !campaigned {
+            if let Some(pos) = self.pending_votes
+                .iter()
+                .rev()
+                .position(|m| m.get_to_peer() == &peer) {
+                let msg = self.pending_votes.swap_remove_front(pos).unwrap();
+                let _ = self.on_raft_message(msg);
             }
         }
     }

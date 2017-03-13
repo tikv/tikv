@@ -656,8 +656,7 @@ impl ApplyDelegate {
                                 new_peer_ids.len()));
         }
 
-        for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
-            let peer_id = new_peer_ids[index];
+        for (peer, &peer_id) in new_region.mut_peers().iter_mut().zip(new_peer_ids) {
             peer.set_id(peer_id);
         }
 
