@@ -123,7 +123,7 @@ pub fn validate_endpoints(endpoints: &[&str])
 
     match members {
         Some(members) => {
-            let client = box_try!(try_connect(&members));
+            let (client, members) = box_try!(try_connect_leader(&members));
             Ok((client, members))
         }
         _ => Err(box_err!("PD cluster failed to respond")),
@@ -131,7 +131,7 @@ pub fn validate_endpoints(endpoints: &[&str])
 }
 
 fn connect(addr: &str) -> Result<pdpb_grpc::PDClient> {
-    info!("connect to PD endpoint: {:?}", addr);
+    debug!("connect to PD endpoint: {:?}", addr);
     let (host, port) = match Url::parse(addr) {
         Ok(ep) => {
             let host = match ep.host_str() {
@@ -153,16 +153,29 @@ fn connect(addr: &str) -> Result<pdpb_grpc::PDClient> {
 
     let mut conf: grpc::client::GrpcClientConf = Default::default();
     conf.http.no_delay = Some(true);
-    pdpb_grpc::PDClient::new(&host, port, false, conf).map_err(|e| box_err!(e))
+
+    // TODO: It seems that `new` always return an Ok(_).
+    match pdpb_grpc::PDClient::new(&host, port, false, conf) {
+        Ok(client) => {
+            // try request.
+            match client.GetMembers(pdpb::GetMembersRequest::new()) {
+                Ok(_) => Ok(client),
+                Err(e) => Err(box_err!("fail to connect to {:?} {:?}", addr, e)),
+            }
+        }
+
+        Err(e) => Err(box_err!(e)),
+    }
 }
 
-// TODO: update members.
-fn try_connect(members: &pdpb::GetMembersResponse) -> Result<pdpb_grpc::PDClient> {
+fn try_connect_leader(members: &pdpb::GetMembersResponse)
+                      -> Result<(pdpb_grpc::PDClient, pdpb::GetMembersResponse)> {
     // Try to connect the PD cluster leader.
     let leader = members.get_leader();
     for ep in leader.get_client_urls() {
         if let Ok(client) = connect(ep.as_str()) {
-            return Ok(client);
+            info!("connect to PD leader {:?}", ep);
+            return Ok((client, members.clone()));
         }
     }
 
@@ -176,8 +189,15 @@ fn try_connect(members: &pdpb::GetMembersResponse) -> Result<pdpb_grpc::PDClient
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
                 Ok(cli) => {
-                    info!("PD client connects to {}", ep);
-                    return Ok(cli);
+                    let resp = match cli.GetMembers(pdpb::GetMembersRequest::new()) {
+                        Ok(resp) => resp,
+                        Err(e) => {
+                            error!("PD endpoint {} failed to respond: {:?}", ep, e);
+                            continue;
+                        }
+                    };
+
+                    return Ok((cli, resp));
                 }
                 Err(_) => {
                     error!("failed to connect to {}, try next", ep);
@@ -191,15 +211,15 @@ fn try_connect(members: &pdpb::GetMembersResponse) -> Result<pdpb_grpc::PDClient
 }
 
 const MAX_RETRY_COUNT: usize = 100;
+const RETRY_INTERVAL: u64 = 1;
 
 fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
     where F: Fn(&pdpb_grpc::PDClient) -> result::Result<R, grpc::error::GrpcError>
 {
     let mut resp = None;
     for _ in 0..MAX_RETRY_COUNT {
-        let inner = client.inner.read().unwrap();
-
         let r = {
+            let inner = client.inner.read().unwrap();
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
             let r = f(&inner.client);
             timer.observe_duration();
@@ -214,13 +234,14 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
             Err(e) => {
                 error!("fail to request: {:?}", e);
                 let mut inner = client.inner.write().unwrap();
-                match try_connect(&inner.members) {
-                    Ok(c) => {
+                match try_connect_leader(&inner.members) {
+                    Ok((c, m)) => {
                         inner.client = c;
+                        inner.members = m;
                     }
                     Err(e) => {
-                        error!("{:?}", e);
-                        thread::sleep(Duration::from_secs(1));
+                        error!("fail to connect to PD leader {:?}", e);
+                        thread::sleep(Duration::from_secs(RETRY_INTERVAL));
                     }
                 }
                 continue;
