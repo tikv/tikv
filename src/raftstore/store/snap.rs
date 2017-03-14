@@ -715,7 +715,12 @@ mod v2 {
     fn encode_cf_size_and_checksums(cf_files: &[CfFile]) -> RaftStoreResult<(u64, Vec<KeyValue>)> {
         let mut total_size = 0;
         let mut kvs = Vec::with_capacity(cf_files.len());
+        let snapshot_cfs = get_snapshot_cfs();
         for cf_file in cf_files {
+            if snapshot_cfs.iter().find(|&cf| cf_file.cf == *cf).is_none() {
+                return Err(box_err!("invalid snapshot cf {}", cf_file.cf));
+            }
+
             total_size += cf_file.size;
 
             // add size meta for this cf file
@@ -743,15 +748,14 @@ mod v2 {
         Ok((total_size, kvs))
     }
 
-
     fn decode_cf_size_and_checksums(kvs: &[KeyValue]) -> RaftStoreResult<Vec<(CfName, u64, u32)>> {
         let snapshot_cfs = get_snapshot_cfs();
         let mut cf_sizes: Vec<(CfName, u64)> = vec![];
         let mut cf_checksums: Vec<(CfName, u32)> = vec![];
         for kv in kvs {
             let mut key_bytes = kv.get_key();
-            let decoded = try!(key_bytes.decode_bytes(ENCODE_DECODE_DESC));
-            let key = match String::from_utf8(decoded) {
+            let decoded_key = try!(key_bytes.decode_bytes(ENCODE_DECODE_DESC));
+            let key = match String::from_utf8(decoded_key) {
                 Ok(s) => s,
                 Err(e) => {
                     return Err(box_err!("fail to parse snapshot meta key {:?}, err: {:?}",
@@ -775,11 +779,13 @@ mod v2 {
                     cf_sizes.push((cf, size));
                 }
                 SNAPSHOT_META_PREFIX_CHECKSUM => {
-                    let value = try!(kv.get_value().decode_u64());
-                    if value > u32::max_value() as u64 {
-                        return Err(box_err!("invalid snapshot checksum {} for cf {}", value, cf));
+                    let checksum = try!(kv.get_value().decode_u64());
+                    if checksum > u32::max_value() as u64 {
+                        return Err(box_err!("invalid snapshot checksum {} for cf {}",
+                                            checksum,
+                                            cf));
                     }
-                    cf_checksums.push((cf, value as u32));
+                    cf_checksums.push((cf, checksum as u32));
                 }
                 _ => return Err(box_err!("invalid snapshot meta prefix {}", strs[0])),
             }
@@ -1176,10 +1182,10 @@ mod v2 {
                 match self.validate() {
                     Ok(()) => return Ok(()),
                     Err(e) => {
-                        error!("[region {}] file {} is invalid, will rebuild: {:?}",
-                               region.get_id(),
-                               self.path(),
-                               e);
+                        warn!("[region {}] file {} is invalid, will rebuild: {:?}",
+                              region.get_id(),
+                              self.path(),
+                              e);
                         try!(self.try_delete());
                         try!(self.init_for_building(snap));
                     }
