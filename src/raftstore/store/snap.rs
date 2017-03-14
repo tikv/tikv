@@ -183,13 +183,14 @@ mod v1 {
     use rocksdb::{Writable, WriteBatch};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use util::{HandyRwLock, rocksdb};
+    use util::{HandyRwLock, rocksdb, duration_to_sec};
     use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
     use raftstore::Result as RaftStoreResult;
 
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
+    use super::super::metrics::SNAPSHOT_BUILD_TIME_HISTOGRAM;
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX, Result,
                 SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
 
@@ -332,8 +333,6 @@ mod v1 {
                 }
             }
 
-            let t = Instant::now();
-            let mut snap_size = 0;
             let mut snap_key_count = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
             for cf in snap.cf_names() {
@@ -346,12 +345,11 @@ mod v1 {
                                   &end_key,
                                   false,
                                   &mut |key, value| {
-                    snap_size += key.len() + value.len();
-                    snap_key_count += 1;
-                    try!(self.encode_compact_bytes(key));
-                    try!(self.encode_compact_bytes(value));
-                    Ok(true)
-                }));
+                                      snap_key_count += 1;
+                                      try!(self.encode_compact_bytes(key));
+                                      try!(self.encode_compact_bytes(value));
+                                      Ok(true)
+                                  }));
                 // use an empty byte array to indicate that cf reaches an end.
                 box_try!(self.encode_compact_bytes(b""));
             }
@@ -359,12 +357,6 @@ mod v1 {
             box_try!(self.encode_compact_bytes(b""));
             try!(self.save_with_checksum());
             context.snapshot_kv_count = snap_key_count;
-            info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
-                  region.get_id(),
-                  snap_size,
-                  snap_key_count,
-                  t.elapsed());
-
             Ok(())
         }
     }
@@ -376,11 +368,19 @@ mod v1 {
                  snap_data: &mut RaftSnapshotData,
                  context: &mut BuildContext)
                  -> RaftStoreResult<()> {
+            let t = Instant::now();
             try!(self.do_build(snap, region, context));
             let size = try!(self.total_size());
             snap_data.set_file_size(size);
             snap_data.set_version(SNAPSHOT_VERSION);
             context.snapshot_size = size;
+            SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+            info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
+                  region.get_id(),
+                  size,
+                  context.snapshot_kv_count,
+                  t.elapsed());
+
             Ok(())
         }
 
@@ -650,12 +650,13 @@ mod v2 {
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, KeyValue, RaftSnapshotData};
     use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions};
     use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use util::{HandyRwLock, rocksdb};
+    use util::{HandyRwLock, rocksdb, duration_to_sec};
     use util::codec::bytes::{BytesEncoder, BytesDecoder};
     use raftstore::Result as RaftStoreResult;
 
     use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
+    use super::super::metrics::SNAPSHOT_BUILD_TIME_HISTOGRAM;
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Result,
                 SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
 
@@ -1148,8 +1149,6 @@ mod v2 {
                 }
             }
 
-            let t = Instant::now();
-            let mut snap_size = 0;
             let mut snap_key_count = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
             for cf in snap.cf_names() {
@@ -1162,7 +1161,6 @@ mod v2 {
                                   &end_key,
                                   false,
                                   &mut |key, value| {
-                                      snap_size += key.len() + value.len();
                                       snap_key_count += 1;
                                       try!(self.add_kv(key, value));
                                       Ok(true)
@@ -1170,11 +1168,6 @@ mod v2 {
             }
             try!(self.save_cf_files());
             context.snapshot_kv_count = snap_key_count;
-            info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
-                  region.get_id(),
-                  snap_size,
-                  snap_key_count,
-                  t.elapsed());
 
             Ok(())
         }
@@ -1196,6 +1189,7 @@ mod v2 {
                  snap_data: &mut RaftSnapshotData,
                  context: &mut BuildContext)
                  -> RaftStoreResult<()> {
+            let t = Instant::now();
             try!(self.do_build(snap, region, context));
             // set snapshot meta data
             let (total_size, kv) = try!(encode_snapshot_meta(&self.cf_files[..]));
@@ -1209,6 +1203,13 @@ mod v2 {
             let mut size_track = self.size_track.wl();
             *size_track = size_track.saturating_add(total_size);
             context.snapshot_size = total_size;
+            SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+            info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
+                  region.get_id(),
+                  total_size,
+                  context.snapshot_kv_count,
+                  t.elapsed());
+
             Ok(())
         }
 
