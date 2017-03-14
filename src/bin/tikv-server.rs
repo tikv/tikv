@@ -276,6 +276,15 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
+    let wal_dir = get_toml_string(config, "rocksdb.wal-dir", Some("".to_owned()));
+    if !wal_dir.is_empty() { opts.set_wal_dir(&wal_dir) };
+
+    let wal_ttl_seconds = get_toml_int(config, "rocksdb.wal-ttl-seconds", Some(0));
+    opts.set_wal_ttl_seconds(wal_ttl_seconds as u64);
+
+    let wal_size_limit_mb = get_toml_int(config, "rocksdb.wal-size-limit-mb", Some(0));
+    opts.set_wal_size_limit_mb(wal_size_limit_mb as u64);
+
     let max_total_wal_size = get_toml_int(config,
                                           "rocksdb.max-total-wal-size",
                                           Some(4 * 1024 * 1024 * 1024));
