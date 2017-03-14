@@ -57,8 +57,6 @@ const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
 
 const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 9 seconds
 
-const DEFAULT_ACCELERATE_CAMPAIGN_RESERVED_TICKS: usize = 1;
-
 const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = false;
 
 #[derive(Debug, Clone)]
@@ -131,15 +129,6 @@ pub struct Config {
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: TimeDuration,
 
-    // For the peer which is the leader of the region before split,
-    // it would accelerate ticks for the peer of new region after split, so that
-    // the peer of new region could start campaign faster. And then this peer may take
-    // the leadership earlier and shorten the leading missing time to gain higher availability.
-    // To make sure followers are replicated up-to-date and be ready to vote this peer's campaign,
-    // The time interval specified by `accelerate_campaign_reserved_ticks * raft_base_tick_interval`
-    // would be reserved before the peer of new region starts to campaign.
-    pub accelerate_campaign_reserved_ticks: usize,
-
     pub use_sst_file_snapshot: bool,
 }
 
@@ -177,7 +166,6 @@ impl Default for Config {
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
             raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),
-            accelerate_campaign_reserved_ticks: DEFAULT_ACCELERATE_CAMPAIGN_RESERVED_TICKS,
             use_sst_file_snapshot: DEFAULT_USE_SST_FILE_SNAPSHOT,
         }
     }
@@ -219,13 +207,6 @@ impl Config {
             return Err(box_err!("election timeout {} ms is less than lease {} ms",
                                 election_timeout,
                                 lease));
-        }
-
-        if self.accelerate_campaign_reserved_ticks >= self.raft_election_timeout_ticks {
-            return Err(box_err!("accelerate campaign reserved ticks {} must < election timeout \
-                                 ticks {}",
-                                self.accelerate_campaign_reserved_ticks,
-                                self.raft_election_timeout_ticks));
         }
 
         Ok(())

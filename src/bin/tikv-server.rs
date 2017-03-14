@@ -587,9 +587,6 @@ fn build_cfg(matches: &Matches,
     cfg_u64(&mut cfg.raft_store.consistency_check_tick_interval,
             config,
             "raftstore.consistency-check-interval");
-    cfg_usize(&mut cfg.raft_store.accelerate_campaign_reserved_ticks,
-              config,
-              "raftstore.accelerate-campaign-reserved-ticks");
     cfg.raft_store.use_sst_file_snapshot =
         get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(false));
     cfg_usize(&mut cfg.storage.sched_notify_capacity,

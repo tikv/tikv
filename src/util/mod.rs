@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use std::collections::vec_deque::{Iter, VecDeque};
+
 use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
@@ -420,12 +422,47 @@ pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
     Ok(())
 }
 
+/// A simple ring queue with fixed capacity.
+pub struct RingQueue<T> {
+    buf: VecDeque<T>,
+    cap: usize,
+}
+
+impl<T> RingQueue<T> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub fn with_capacity(cap: usize) -> RingQueue<T> {
+        RingQueue {
+            buf: VecDeque::with_capacity(cap),
+            cap: cap,
+        }
+    }
+
+    pub fn push(&mut self, t: T) {
+        if self.len() == self.cap {
+            self.buf.pop_front();
+        }
+        self.buf.push_back(t);
+    }
+
+    pub fn iter(&self) -> Iter<T> {
+        self.buf.iter()
+    }
+
+    pub fn swap_remove_front(&mut self, pos: usize) -> Option<T> {
+        self.buf.swap_remove_front(pos)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{SocketAddr, AddrParseError};
     use std::time::Duration;
     use std::rc::Rc;
-    use std::f64;
+    use std::{f64, cmp};
     use std::sync::atomic::{AtomicBool, Ordering};
     use super::*;
 
@@ -452,6 +489,26 @@ mod tests {
             let ret: Result<SocketAddr, AddrParseError> = addr.parse();
             assert_eq!(ret.is_ok(), ok);
         }
+    }
+
+    #[test]
+    fn test_fixed_ring_queue() {
+        let mut queue = RingQueue::with_capacity(10);
+        for num in 0..20 {
+            queue.push(num);
+            assert_eq!(queue.len(), cmp::min(num + 1, 10));
+        }
+        assert_eq!(None, queue.swap_remove_front(10));
+        for i in 0..6 {
+            assert_eq!(Some(12 + i), queue.swap_remove_front(2));
+            assert_eq!(queue.len(), 9 - i);
+        }
+        let left: Vec<_> = queue.iter().cloned().collect();
+        assert_eq!(vec![10, 11, 18, 19], left);
+        for _ in 0..4 {
+            queue.swap_remove_front(0).unwrap();
+        }
+        assert_eq!(None, queue.swap_remove_front(0));
     }
 
     #[test]
