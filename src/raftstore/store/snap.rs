@@ -649,7 +649,7 @@ mod v2 {
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, KeyValue, RaftSnapshotData};
     use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions};
-    use storage::{CfName, ALL_CFS};
+    use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use util::{HandyRwLock, rocksdb};
     use util::codec::bytes::{BytesEncoder, BytesDecoder};
     use raftstore::Result as RaftStoreResult;
@@ -663,18 +663,7 @@ mod v2 {
     const META_FILE_SUFFIX: &'static str = ".meta";
     const ENCODE_DECODE_DESC: bool = false;
     const DIGEST_BUFFER_SIZE: usize = 10240;
-
-    fn get_snapshot_cfs() -> Vec<CfName> {
-        let size = ALL_CFS.len();
-        let mut cfs = Vec::with_capacity(size);
-        for cf in ALL_CFS {
-            if !need_to_pack(cf) {
-                continue;
-            }
-            cfs.push(*cf);
-        }
-        cfs
-    }
+    const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
     fn get_file_size(path: &str) -> io::Result<u64> {
         let meta = try!(fs::metadata(path));
@@ -715,9 +704,8 @@ mod v2 {
     fn encode_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<(u64, KeyValue)> {
         let mut total_size = 0;
         let mut meta = Vec::with_capacity(cf_files.len());
-        let snapshot_cfs = get_snapshot_cfs();
         for cf_file in cf_files {
-            if snapshot_cfs.iter().find(|&cf| cf_file.cf == *cf).is_none() {
+            if SNAPSHOT_CFS.iter().find(|&cf| cf_file.cf == *cf).is_none() {
                 return Err(box_err!("failed to encode invalid snapshot cf {}", cf_file.cf));
             }
 
@@ -749,7 +737,6 @@ mod v2 {
 
         let mut snapshot_meta = SnapshotMeta::new();
         try!(snapshot_meta.merge_from_bytes(kvs[0].get_value()));
-        let snapshot_cfs = get_snapshot_cfs();
         let mut res: Vec<(CfName, u64, u32)> = Vec::with_capacity(snapshot_meta.get_cf_files()
             .len());
         for cf_file_meta in snapshot_meta.get_cf_files() {
@@ -761,7 +748,7 @@ mod v2 {
                     return Err(box_err!("fail to parse snapshot cf {:?}, err: {:?}", cf_bytes, e))
                 }
             };
-            let found = snapshot_cfs.iter().find(|&s| cf == *s);
+            let found = SNAPSHOT_CFS.iter().find(|&s| cf == *s);
             if found.is_none() {
                 return Err(box_err!("failed to decode invalid snapshot cf {}", cf));
             }
@@ -771,10 +758,10 @@ mod v2 {
             }
             res.push((cf_name, cf_file_meta.get_size(), cf_file_meta.get_checksum()));
         }
-        if res.len() != snapshot_cfs.len() {
+        if res.len() != SNAPSHOT_CFS.len() {
             return Err(box_err!("invalid number of snapshot meta cf file: {}, expect: {}",
                                 res.len(),
-                                snapshot_cfs.len()));
+                                SNAPSHOT_CFS.len()));
         }
         Ok(res)
     }
@@ -833,9 +820,8 @@ mod v2 {
             };
             let prefix = format!("{}_{}", snap_prefix, key);
             let display_path = Snap::get_display_path(&dir_path, &prefix);
-            let snapshot_cfs = get_snapshot_cfs();
-            let mut cf_files = Vec::with_capacity(snapshot_cfs.len());
-            for cf in snapshot_cfs {
+            let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
+            for cf in SNAPSHOT_CFS {
                 let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
                 let path = dir_path.join(filename).as_path().to_str().unwrap().to_owned();
                 let tmp_path = format!("{}{}", path, TMP_FILE_SUFFIX);
@@ -944,20 +930,20 @@ mod v2 {
         }
 
         fn init_for_building(&mut self, snap: &DbSnapshot) -> RaftStoreResult<()> {
+            let env_opt = EnvOptions::new();
             for cf_file in &mut self.cf_files {
                 // initialize sst file writer
-                let env_opt = EnvOptions::new();
                 let handle = try!(snap.cf_handle(&cf_file.cf));
                 let io_options = snap.get_db().get_options_cf(handle);
                 let mut writer = SstFileWriter::new(&env_opt, &io_options, handle);
                 box_try!(writer.open(&cf_file.tmp_path));
                 cf_file.sst_writer = Some(writer);
             }
-            let f = try!(OpenOptions::new()
+            let file = try!(OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&self.meta_file.tmp_path));
-            self.meta_file.file = Some(f);
+            self.meta_file.file = Some(file);
             Ok(())
         }
 
@@ -1012,7 +998,7 @@ mod v2 {
         }
 
         fn get_display_path(dir_path: &PathBuf, prefix: &str) -> String {
-            let mut cf_names = get_snapshot_cfs().iter().fold(String::from(""), |mut acc, x| {
+            let mut cf_names = SNAPSHOT_CFS.iter().fold(String::from(""), |mut acc, x| {
                 if acc.is_empty() {
                     acc += "(";
                     acc += x;
@@ -1485,9 +1471,8 @@ mod v2 {
 
         #[test]
         fn test_encode_decode_snapshot_meta() {
-            let mut cfs = super::get_snapshot_cfs();
-            let mut cf_file = Vec::with_capacity(cfs.len());
-            for (i, cf) in cfs.drain(..).enumerate() {
+            let mut cf_file = Vec::with_capacity(super::SNAPSHOT_CFS.len());
+            for (i, cf) in super::SNAPSHOT_CFS.iter().enumerate() {
                 let f = super::CfFile {
                     cf: cf,
                     size: 100 * (i + 1) as u64,
