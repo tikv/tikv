@@ -1241,10 +1241,13 @@ mod v2 {
 
         fn save(&mut self) -> io::Result<()> {
             debug!("saving to {}", self.path());
-            // check that all cf files have been fully written, and the checksums of them match
+            let mut total_size = 0;
             for cf_file in &mut self.cf_files {
-                let mut file = cf_file.file.take().unwrap();
-                try!(file.flush());
+                // Check each cf file has been fully written, and the checksum matches.
+                {
+                    let mut file = cf_file.file.take().unwrap();
+                    try!(file.flush());
+                }
                 let size = try!(get_file_size(&cf_file.tmp_path));
                 if size != cf_file.size {
                     return Err(io::Error::new(ErrorKind::Other,
@@ -1267,9 +1270,7 @@ mod v2 {
                                                       checksum,
                                                       cf_file.checksum)));
                 }
-            }
-            let mut total_size = 0;
-            for cf_file in &mut self.cf_files {
+
                 try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
                 total_size += cf_file.size;
             }
