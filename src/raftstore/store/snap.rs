@@ -1035,16 +1035,16 @@ mod v2 {
         }
 
         fn get_display_path(dir_path: &PathBuf, prefix: &str) -> String {
-            let mut cf_names = String::from("");
-            for (i, cf) in get_snapshot_cfs().iter().enumerate() {
-                if i == 0 {
-                    cf_names += "(";
-                    cf_names += cf;
+            let mut cf_names = get_snapshot_cfs().iter().fold(String::from(""), |mut acc, x| {
+                if acc.is_empty() {
+                    acc += "(";
+                    acc += x;
                 } else {
-                    cf_names += "|";
-                    cf_names += cf;
+                    acc += "|";
+                    acc += x;
                 }
-            }
+                acc
+            });
             cf_names += ")";
             format!("{}/{}_{}{}",
                     dir_path.as_path().to_str().unwrap().to_owned(),
