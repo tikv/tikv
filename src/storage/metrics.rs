@@ -55,6 +55,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_scheduler_too_busy_total",
+            "Total count of scheduler too busy",
+            &["type"]
+        ).unwrap();
+
     pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_scheduler_kv_command_key_read",
@@ -63,10 +70,10 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 
-    pub static ref KV_COMMAND_SCAN_EFFICIENCY: Histogram =
+    pub static ref KV_COMMAND_SCAN_INEFFICIENCY: Histogram =
         register_histogram!(
-            "tikv_scheudler_kv_scan_efficiency",
-            "Bucketed histogram of kv keys scan efficiency",
+            "tikv_scheudler_kv_scan_inefficiency",
+            "Bucketed histogram of kv keys scan inefficiency",
             vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         ).unwrap();
 

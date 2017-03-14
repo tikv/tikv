@@ -151,33 +151,43 @@ pub trait Peekable {
     }
 }
 
-#[derive(Clone)]
-pub enum SeekMode {
-    TotalOrderSeek,
-    PrefixSeek,
+#[derive(Clone, PartialEq)]
+enum SeekMode {
+    TotalOrder,
+    Prefix,
 }
 
-#[derive(Clone)]
 pub struct IterOption {
-    pub upper_bound: Option<Vec<u8>>,
-    pub fill_cache: bool,
-    pub seek_mode: SeekMode,
+    upper_bound: Option<Vec<u8>>,
+    fill_cache: bool,
+    seek_mode: SeekMode,
 }
 
 impl IterOption {
-    pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool, seek_mode: SeekMode) -> IterOption {
+    pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool) -> IterOption {
         IterOption {
             upper_bound: upper_bound,
             fill_cache: fill_cache,
-            seek_mode: seek_mode,
+            seek_mode: SeekMode::TotalOrder,
         }
     }
 
+    pub fn use_prefix_seek(mut self) -> IterOption {
+        self.seek_mode = SeekMode::Prefix;
+        self
+    }
+
     pub fn total_order_seek_used(&self) -> bool {
-        match self.seek_mode {
-            SeekMode::TotalOrderSeek => true,
-            _ => false,
-        }
+        self.seek_mode == SeekMode::TotalOrder
+    }
+
+    pub fn upper_bound(&self) -> Option<&[u8]> {
+        self.upper_bound.as_ref().map(|v| v.as_slice())
+    }
+
+    pub fn set_upper_bound(mut self, bound: Vec<u8>) -> IterOption {
+        self.upper_bound = Some(bound);
+        self
     }
 }
 
@@ -186,7 +196,7 @@ impl Default for IterOption {
         IterOption {
             upper_bound: None,
             fill_cache: true,
-            seek_mode: SeekMode::TotalOrderSeek,
+            seek_mode: SeekMode::TotalOrder,
         }
     }
 }
@@ -201,11 +211,8 @@ pub trait Iterable {
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(self.new_iterator(IterOption::new(Some(end_key.to_vec()),
-                                                    fill_cache,
-                                                    SeekMode::TotalOrderSeek)),
-                  start_key,
-                  f)
+        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        scan_impl(self.new_iterator(iter_opt), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
@@ -218,12 +225,8 @@ pub trait Iterable {
                   -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(try!(self.new_iterator_cf(cf,
-                                            IterOption::new(Some(end_key.to_vec()),
-                                                            fill_cache,
-                                                            SeekMode::TotalOrderSeek))),
-                  start_key,
-                  f)
+        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        scan_impl(try!(self.new_iterator_cf(cf, iter_opt)), start_key, f)
     }
 
     // Seek the first key >= given key, if no found, return None.
@@ -399,10 +402,8 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
     let handle = try!(rocksdb::get_cf_handle(db, cf));
     try!(db.delete_file_in_range_cf(handle, start_key, end_key));
 
-    let mut it = try!(db.new_iterator_cf(cf,
-                                         IterOption::new(Some(end_key.to_vec()),
-                                                         false,
-                                                         SeekMode::TotalOrderSeek)));
+    let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+    let mut it = try!(db.new_iterator_cf(cf, iter_opt));
 
     let mut wb = WriteBatch::new();
     it.seek(start_key.into());

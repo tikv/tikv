@@ -46,7 +46,8 @@ pub fn open_opt(opts: Options,
 }
 
 pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
-    let opts = Options::new();
+    let mut opts = Options::new();
+    opts.enable_statistics();
     let mut cfs_opts = vec![];
     for _ in 0..cfs.len() {
         cfs_opts.push(Options::new());

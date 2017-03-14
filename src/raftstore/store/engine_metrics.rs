@@ -22,6 +22,8 @@ pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-
 pub const ROCKSDB_TABLE_READERS_MEM: &'static str = "rocksdb.estimate-table-readers-mem";
 pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &'static str = "rocksdb.cur-size-all-mem-tables";
 pub const ROCKSDB_ESTIMATE_NUM_KEYS: &'static str = "rocksdb.estimate-num-keys";
+pub const ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES: &'static str = "rocksdb.\
+                                                         estimate-pending-compaction-bytes";
 pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[TickerType::BlockCacheMiss,
                                                          TickerType::BlockCacheHit,
                                                          TickerType::MemtableHit,
@@ -37,7 +39,9 @@ pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[TickerType::BlockCacheM
                                                          TickerType::BytesWritten,
                                                          TickerType::BytesRead,
                                                          TickerType::IterBytesRead,
-                                                         TickerType::StallMicros];
+                                                         TickerType::StallMicros,
+                                                         TickerType::CompactReadBytes,
+                                                         TickerType::CompactWriteBytes];
 pub const ENGINE_HIST_TYPES: &'static [HistType] =
     &[HistType::DbGetMicros, HistType::DbWriteMicros, HistType::DbSeekMicros];
 
@@ -98,6 +102,13 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
         }
         TickerType::StallMicros => {
             STORE_ENGINE_STALL_MICROS.set(value as f64);
+        }
+        TickerType::CompactReadBytes => {
+            STORE_ENGINE_COMPACTION_FLOW_VEC.with_label_values(&["bytes_read"]).set(value as f64);
+        }
+        TickerType::CompactWriteBytes => {
+            STORE_ENGINE_COMPACTION_FLOW_VEC.with_label_values(&["bytes_written"])
+                .set(value as f64);
         }
         _ => {}
     }
@@ -172,6 +183,13 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
             STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC.with_label_values(&[cf])
                 .set(num_keys as f64);
         }
+
+        // Pending compaction bytes
+        if let Some(pending_compaction_bytes) =
+               engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES) {
+            STORE_ENGINE_PENDING_COMACTION_BYTES_VEC.with_label_values(&[cf])
+                .set(pending_compaction_bytes as f64);
+        }
     }
     used_size
 }
@@ -229,7 +247,7 @@ lazy_static!{
     pub static ref STORE_ENGINE_FLOW_VEC: GaugeVec =
         register_gauge_vec!(
             "tikv_engine_flow_bytes",
-            "Bytes and keys of read/write.",
+            "Bytes and keys of read/written.",
             &["type"]
         ).unwrap();
 
@@ -257,6 +275,20 @@ lazy_static!{
         register_gauge_vec!(
             "tikv_engine_seek_micro_seconds",
             "Seek micros histogram.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_PENDING_COMACTION_BYTES_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_pending_compaction_bytes",
+            "Pending compaction bytes.",
+            &["cf"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_COMPACTION_FLOW_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_compaction_flow_bytes",
+            "Bytes of read/written during compaction.",
             &["type"]
         ).unwrap();
 }
