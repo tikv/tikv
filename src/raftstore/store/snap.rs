@@ -111,13 +111,23 @@ impl Display for SnapKey {
     }
 }
 
-pub struct ApplyContext {
+#[derive(Default)]
+pub struct BuildContext {
+    pub snapshot_size: u64,
+    pub snapshot_kv_count: usize,
+}
+
+impl BuildContext {
+    pub fn new() -> BuildContext {
+        BuildContext { ..Default::default() }
+    }
+}
+
+pub struct ApplyOptions {
     pub db: Arc<DB>,
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
-    pub snapshot_size: usize,
-    pub snapshot_kv_count: usize,
 }
 
 /// `Snapshot` is a trait for snapshot.
@@ -131,7 +141,8 @@ pub trait Snapshot: Read + Write + Send {
     fn build(&mut self,
              snap: &DbSnapshot,
              region: &Region,
-             snap_data: &mut RaftSnapshotData)
+             snap_data: &mut RaftSnapshotData,
+             context: &mut BuildContext)
              -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
@@ -139,7 +150,7 @@ pub trait Snapshot: Read + Write + Send {
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn save(&mut self) -> io::Result<()>;
-    fn apply(&mut self, context: &mut ApplyContext) -> Result<()>;
+    fn apply(&mut self, options: ApplyOptions) -> Result<()>;
 }
 
 // A helper function to copy snapshot.
@@ -180,7 +191,7 @@ mod v1 {
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX, Result,
-                SnapKey, Snapshot, ApplyContext, check_abort, need_to_pack};
+                SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
 
     pub const CRC32_BYTES_COUNT: usize = 4;
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
@@ -301,7 +312,11 @@ mod v1 {
             Ok(())
         }
 
-        fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> RaftStoreResult<()> {
+        fn do_build(&mut self,
+                    snap: &DbSnapshot,
+                    region: &Region,
+                    context: &mut BuildContext)
+                    -> RaftStoreResult<()> {
             if self.exists() {
                 match self.get_validation_reader().and_then(|r| r.validate()) {
                     Ok(()) => return Ok(()),
@@ -318,7 +333,7 @@ mod v1 {
 
             let t = Instant::now();
             let mut snap_size = 0;
-            let mut snap_key_cnt = 0;
+            let mut snap_key_count = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
             for cf in snap.cf_names() {
                 if !need_to_pack(cf) {
@@ -331,7 +346,7 @@ mod v1 {
                                   false,
                                   &mut |key, value| {
                     snap_size += key.len() + value.len();
-                    snap_key_cnt += 1;
+                    snap_key_count += 1;
                     try!(self.encode_compact_bytes(key));
                     try!(self.encode_compact_bytes(value));
                     Ok(true)
@@ -342,12 +357,13 @@ mod v1 {
             // use an empty byte array to indicate that kvpair reaches an end.
             box_try!(self.encode_compact_bytes(b""));
             try!(self.save_with_checksum());
-
+            context.snapshot_kv_count = snap_key_count;
             info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
                   region.get_id(),
                   snap_size,
-                  snap_key_cnt,
+                  snap_key_count,
                   t.elapsed());
+
             Ok(())
         }
     }
@@ -356,11 +372,13 @@ mod v1 {
         fn build(&mut self,
                  snap: &DbSnapshot,
                  region: &Region,
-                 snap_data: &mut RaftSnapshotData)
+                 snap_data: &mut RaftSnapshotData,
+                 context: &mut BuildContext)
                  -> RaftStoreResult<()> {
-            try!(self.do_build(snap, region));
+            try!(self.do_build(snap, region, context));
             let size = try!(self.total_size());
             snap_data.set_file_size(size);
+            context.snapshot_size = size;
             Ok(())
         }
 
@@ -394,36 +412,33 @@ mod v1 {
             self.save_impl(false)
         }
 
-        fn apply(&mut self, context: &mut ApplyContext) -> Result<()> {
+        fn apply(&mut self, options: ApplyOptions) -> Result<()> {
             let mut reader = box_try!(self.get_validation_reader());
             loop {
-                try!(check_abort(&context.abort));
+                try!(check_abort(&options.abort));
                 let cf = box_try!(reader.decode_compact_bytes());
                 if cf.is_empty() {
                     break;
                 }
-                let handle = box_try!(rocksdb::get_cf_handle(&context.db, unsafe {
+                let handle = box_try!(rocksdb::get_cf_handle(&options.db, unsafe {
                     str::from_utf8_unchecked(&cf)
                 }));
                 let mut wb = WriteBatch::new();
                 let mut batch_size = 0;
                 loop {
-                    try!(check_abort(&context.abort));
+                    try!(check_abort(&options.abort));
                     let key = box_try!(reader.decode_compact_bytes());
                     if key.is_empty() {
-                        box_try!(context.db.write(wb));
-                        context.snapshot_size += batch_size;
+                        box_try!(options.db.write(wb));
                         break;
                     }
-                    context.snapshot_kv_count += 1;
-                    box_try!(util::check_key_in_region(keys::origin_key(&key), &context.region));
+                    box_try!(util::check_key_in_region(keys::origin_key(&key), &options.region));
                     batch_size += key.len();
                     let value = box_try!(reader.decode_compact_bytes());
                     batch_size += value.len();
                     box_try!(wb.put_cf(handle, &key, &value));
-                    if batch_size >= context.write_batch_size {
-                        box_try!(context.db.write(wb));
-                        context.snapshot_size += batch_size;
+                    if batch_size >= options.write_batch_size {
+                        box_try!(options.db.write(wb));
                         wb = WriteBatch::new();
                         batch_size = 0;
                     }
@@ -641,7 +656,7 @@ mod v2 {
     use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Result,
-                SnapKey, Snapshot, ApplyContext, check_abort, need_to_pack};
+                SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
 
     const META_FILE_SUFFIX: &'static str = ".meta";
     const SNAPSHOT_META_PREFIX_SIZE: &'static str = "size";
@@ -1152,7 +1167,11 @@ mod v2 {
             Ok(())
         }
 
-        fn do_build(&mut self, snap: &DbSnapshot, region: &Region) -> RaftStoreResult<()> {
+        fn do_build(&mut self,
+                    snap: &DbSnapshot,
+                    region: &Region,
+                    context: &mut BuildContext)
+                    -> RaftStoreResult<()> {
             if self.exists() {
                 match self.validate() {
                     Ok(()) => return Ok(()),
@@ -1188,12 +1207,13 @@ mod v2 {
                                   }));
             }
             try!(self.save_cf_files());
-
+            context.snapshot_kv_count = snap_key_count;
             info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
                   region.get_id(),
                   snap_size,
                   snap_key_count,
                   t.elapsed());
+
             Ok(())
         }
 
@@ -1211,9 +1231,10 @@ mod v2 {
         fn build(&mut self,
                  snap: &DbSnapshot,
                  region: &Region,
-                 snap_data: &mut RaftSnapshotData)
+                 snap_data: &mut RaftSnapshotData,
+                 context: &mut BuildContext)
                  -> RaftStoreResult<()> {
-            try!(self.do_build(snap, region));
+            try!(self.do_build(snap, region, context));
             // set snapshot meta data
             let (total_size, kvs) = try!(encode_cf_size_and_checksums(&self.cf_files[..]));
             snap_data.set_file_size(total_size);
@@ -1224,6 +1245,7 @@ mod v2 {
             // add size
             let mut size_track = self.size_track.wl();
             *size_track = size_track.saturating_add(total_size);
+            context.snapshot_size = total_size;
             Ok(())
         }
 
@@ -1298,19 +1320,18 @@ mod v2 {
             Ok(())
         }
 
-        fn apply(&mut self, context: &mut ApplyContext) -> Result<()> {
+        fn apply(&mut self, options: ApplyOptions) -> Result<()> {
             for (cf, path, size) in box_try!(self.list_cf_path_sizes()) {
                 if size == 0 {
                     // Skip ingesting empty sst file since that would cause an error
                     // "Corruption: file is too short to be an sstable"
                     continue;
                 }
-                try!(check_abort(&context.abort));
+                try!(check_abort(&options.abort));
 
-                let cf_handle = box_try!(rocksdb::get_cf_handle(&context.db, &cf));
+                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, &cf));
                 let ingest_opt = IngestExternalFileOptions::new().move_files(true);
-                box_try!(context.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[&path]));
-                context.snapshot_size += size as usize;
+                box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[&path]));
             }
             Ok(())
         }
@@ -1398,10 +1419,10 @@ mod v2 {
         use util::{rocksdb, HandyRwLock};
         use raftstore::Result;
         use raftstore::store::keys;
-        use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable};
+        use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable, Iterable};
         use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
         use super::super::{SNAP_GEN_PREFIX, need_to_pack, SnapKey, Snapshot};
-        use super::{Snap, ApplyContext};
+        use super::{Snap, BuildContext, ApplyOptions};
 
         const TEST_STORE_ID: u64 = 1;
         const TEST_KEY: &[u8] = b"akey";
@@ -1425,6 +1446,25 @@ mod v2 {
                 try!(db.put_msg_cf(handle, &key[..], &p));
             }
             Ok(Arc::new(db))
+        }
+
+        pub fn get_kv_count(snap: &DbSnapshot) -> usize {
+            let mut kv_count = 0;
+            for cf in snap.cf_names() {
+                if !need_to_pack(cf) {
+                    continue;
+                }
+                snap.scan_cf(cf,
+                             &keys::data_key(b"a"),
+                             &keys::data_key(b"z"),
+                             false,
+                             &mut |_, _| {
+                                 kv_count += 1;
+                                 Ok(true)
+                             })
+                    .unwrap();
+            }
+            kv_count
         }
 
         pub fn get_test_region(region_id: u64, store_id: u64, peer_id: u64) -> Region {
@@ -1535,7 +1575,8 @@ mod v2 {
 
             let mut snap_data = RaftSnapshotData::new();
             snap_data.set_region(region.clone());
-            s1.build(&snapshot, &region, &mut snap_data).unwrap();
+            let mut context = BuildContext::new();
+            s1.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
 
             // Ensure that this snapshot file does exist after being built.
             assert!(s1.exists());
@@ -1543,6 +1584,8 @@ mod v2 {
             // Ensure the `size_track` is modified correctly.
             let size = *size_track.rl();
             assert_eq!(size, total_size);
+            assert_eq!(context.snapshot_size as u64, size);
+            assert_eq!(context.snapshot_kv_count, get_kv_count(&snapshot));
 
             // Ensure this snapshot could be read for sending.
             let mut s2 = Snap::new_for_sending(src_dir.path(), &key, size_track.clone()).unwrap();
@@ -1579,18 +1622,16 @@ mod v2 {
             assert!(s4.exists());
 
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
-            let dst_db = rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
-            let mut context = ApplyContext {
-                db: Arc::new(dst_db),
+            let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(),
+                                                      ALL_CFS)
+                .unwrap());
+            let options = ApplyOptions {
+                db: dst_db.clone(),
                 region: region.clone(),
                 abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
                 write_batch_size: 10 * 1024 * 1024,
-                snapshot_size: 0,
-                snapshot_kv_count: 0,
             };
-            s4.apply(&mut context).unwrap();
-            assert_eq!(context.snapshot_size as u64, size);
-            assert_eq!(context.snapshot_kv_count, 0);
+            s4.apply(options).unwrap();
 
             // Ensure `delete()` works to delete the dest snapshot.
             s4.delete();
@@ -1599,7 +1640,7 @@ mod v2 {
             assert_eq!(*size_track.rl(), 0);
 
             // Verify the data is correct after applying snapshot.
-            assert_eq_db(db, context.db.as_ref());
+            assert_eq_db(db, dst_db.as_ref());
         }
     }
 }
@@ -1865,7 +1906,7 @@ mod test {
     use util::{rocksdb, HandyRwLock};
     use super::super::peer_storage::JOB_STATUS_RUNNING;
     use super::super::engine::Snapshot as DbSnapshot;
-    use super::{SnapKey, ApplyContext, Snapshot, new_snap_mgr};
+    use super::{SnapKey, BuildContext, ApplyOptions, Snapshot, new_snap_mgr};
     use super::v1::{Snap as SnapV1, CRC32_BYTES_COUNT};
     use super::v2::{self, Snap as SnapV2};
 
@@ -1950,7 +1991,8 @@ mod test {
         let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
-        s1.build(&snapshot, &region, &mut snap_data).unwrap();
+        let mut context = BuildContext::new();
+        s1.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
         let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone()).unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = SnapV2::new_for_receiving(&path, &key1, snap_data.clone(), size_track.clone())
@@ -2002,7 +2044,8 @@ mod test {
         let region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
-        s1.build(&snapshot, &region, &mut snap_data).unwrap();
+        let mut context = BuildContext::new();
+        s1.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
         let mut v = vec![];
         snap_data.write_to_vec(&mut v).unwrap();
 
@@ -2020,18 +2063,17 @@ mod test {
         s3.save().unwrap();
 
         let dst_db_dir = TempDir::new("test-snap-v1-v2-compatible-dst-db").unwrap();
-        let dst_db = rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
-        let mut context = ApplyContext {
-            db: Arc::new(dst_db),
+        let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS)
+            .unwrap());
+        let options = ApplyOptions {
+            db: dst_db.clone(),
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: 10 * 1024 * 1024,
-            snapshot_size: 0,
-            snapshot_kv_count: 0,
         };
         let mut s4 = dst_mgr.rl().get_snapshot_for_applying(&key).unwrap();
-        s4.apply(&mut context).unwrap();
+        s4.apply(options).unwrap();
 
-        v2::test::assert_eq_db(db, context.db.as_ref());
+        v2::test::assert_eq_db(db, dst_db.as_ref());
     }
 }
