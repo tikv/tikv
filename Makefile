@@ -8,6 +8,10 @@ ifeq ($(ROCKSDB_SYS_PORTABLE),1)
 ENABLE_FEATURES += portable
 endif
 
+ifeq ($(ROCKSDB_SYS_SSE),1)
+ENABLE_FEATURES += sse
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 DEPS_PATH = $(CURDIR)/tmp
@@ -36,7 +40,7 @@ release:
 	cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 
 static_release:
-	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 make release
+	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 ROCKSDB_SYS_SSE=1  make release
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
