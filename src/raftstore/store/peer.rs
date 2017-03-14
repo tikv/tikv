@@ -401,41 +401,6 @@ impl Peer {
         self.raft_group.raft.state == StateRole::Leader
     }
 
-    // When this peer is the leader of the region before split,
-    // `accelerate_campaign_ticks` specifies the tick number to be accelerated
-    // after the region split. So this peer of new split region may campaign and become leader
-    // earlier than other follower peers.
-    pub fn accelerate_campaign_ticks(&self) -> usize {
-        // The best case for the fast campaign after a split is:
-        //   1. The leader of old region replicates the log entry (it's called S later)
-        //      which contains split request to quorum by sending out AppendEntries requests.
-        //   2. The leader of old region commits the log entry S.
-        //   3. The leader of old region send AppendEntries (it's call C later) requests to
-        //      tell followers to commit the log entry S.
-        //   4. The leader of old region applies this log entry S, and then raftstore
-        //      accelerates ticks for the peer of the new region. This peer shares the same store
-        //      with old leader. It will start to campaign soon and send out RequestVote requests
-        //      (they are called V later).
-        //   5. The followers receive AppendEntries requests from leader for replication in 1,
-        //      and then make it persistent and applie the split log entry so that
-        //      create a new region.
-        //   6. The followers receive RequestVote requests from leader in 4, and then vote
-        //      the campaign.
-        // However it's possible that 4 happens before 3, if RequestVote requests V in 4 is sent
-        // to the followers earlier than AppendEntries requests C in 3, the followers would not
-        // be ready to vote the campaign as 6 describes. Then the tick acceleration in 4 would be
-        // useless, so the campaign still happens after the election timeout.
-        // To make the best case happen at high degree of possibility, a time gap of
-        // `accelerate_campaign_reserved_ticks * raft_base_tick_interval` is reserved for
-        // the followers to receive AppendEntries request and to apply them.
-        let ticks = self.raft_group.raft.get_randomized_election_timeout() -
-                    self.cfg.accelerate_campaign_reserved_ticks;
-        debug!("{} about to accelerate {} ticks for fast campaign after split",
-               self.tag,
-               ticks);
-        ticks
-    }
-
     #[inline]
     pub fn get_store(&self) -> &PeerStorage {
         self.raft_group.get_store()
@@ -897,6 +862,27 @@ impl Peer {
         };
 
         self.update_lease_with(propose_time);
+
+        true
+    }
+
+    pub fn maybe_campaign(&mut self,
+                          last_peer: &Peer,
+                          pending_raft_groups: &mut HashSet<u64>)
+                          -> bool {
+        if self.region().get_peers().len() <= 1 {
+            // The peer campaigned when it was created, no need to do it again.
+            return false;
+        }
+
+        if !last_peer.is_leader() {
+            return false;
+        }
+
+        // If last peer is the leader of the region before split, it's intuitional for
+        // it to become the leader of new split region.
+        let _ = self.raft_group.campaign();
+        self.mark_to_be_checked(pending_raft_groups);
 
         true
     }
