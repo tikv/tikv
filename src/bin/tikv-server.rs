@@ -65,6 +65,7 @@ use tikv::util::time_monitor::TimeMonitor;
 const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
 const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
 const KB: u64 = 1024;
+const MB: u64 = KB * 1024;
 const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
 
 fn sanitize_memory_usage() -> bool {
@@ -282,7 +283,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let wal_ttl_seconds = get_toml_int(config, "rocksdb.wal-ttl-seconds", Some(0));
     opts.set_wal_ttl_seconds(wal_ttl_seconds as u64);
 
-    let wal_size_limit_mb = get_toml_int(config, "rocksdb.wal-size-limit-mb", Some(0));
+    let wal_size_limit = get_toml_int(config, "rocksdb.wal-size-limit", Some(0));
+    // return size in MB
+    let wal_size_limit_mb = align_to_mb(wal_size_limit as u64) / MB;
     opts.set_wal_size_limit_mb(wal_size_limit_mb as u64);
 
     let max_total_wal_size = get_toml_int(config,
