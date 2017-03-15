@@ -235,9 +235,9 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
                 error!("fail to request: {:?}", e);
                 let mut inner = client.inner.write().unwrap();
                 match try_connect_leader(&inner.members) {
-                    Ok((c, m)) => {
-                        inner.client = c;
-                        inner.members = m;
+                    Ok((cli, mbrs)) => {
+                        inner.client = cli;
+                        inner.members = mbrs;
                     }
                     Err(e) => {
                         error!("fail to connect to PD leader {:?}", e);
