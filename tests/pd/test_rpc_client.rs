@@ -62,9 +62,7 @@ fn test_rpc_client() {
     }
 }
 
-// Waiting pingcap/kvproto#135 and pingcap/pd#493
 #[test]
-#[ignore]
 fn test_rpc_client_safely_new() {
     let endpoints_1 = match env::var("PD_ENDPOINTS") {
         Ok(v) => v,
