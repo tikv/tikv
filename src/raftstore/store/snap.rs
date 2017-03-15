@@ -648,13 +648,15 @@ mod v2 {
     use protobuf::{Message, RepeatedField};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
-    use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions};
+    use rocksdb::{Writable, WriteBatch, EnvOptions, SstFileWriter, IngestExternalFileOptions};
     use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
+    use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
     use raftstore::Result as RaftStoreResult;
 
-    use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
+    use super::super::keys::{self, enc_start_key, enc_end_key};
+    use super::super::util;
     use super::super::metrics::SNAPSHOT_BUILD_TIME_HISTOGRAM;
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Result,
                 SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
@@ -725,13 +727,7 @@ mod v2 {
     }
 
     fn check_snapshot_meta(snapshot_meta: &SnapshotMeta) -> RaftStoreResult<Vec<CfName>> {
-        let n = snapshot_meta.get_cf_files().len();
-        if n != SNAPSHOT_CFS.len() {
-            return Err(box_err!("invalid number of snapshot meta cf file: {}, expect: {}",
-                                n,
-                                SNAPSHOT_CFS.len()));
-        }
-        let mut res = Vec::with_capacity(n);
+        let mut res = Vec::with_capacity(SNAPSHOT_CFS.len());
         for cf_file_meta in snapshot_meta.get_cf_files() {
             let found = SNAPSHOT_CFS.iter().find(|&s| cf_file_meta.get_cf() == *s);
             if found.is_none() {
@@ -743,6 +739,11 @@ mod v2 {
                 return Err(box_err!("failed to decode duplicated snapshot cf {}", cf_name));
             }
             res.push(*cf_name);
+        }
+        if res.len() != SNAPSHOT_CFS.len() {
+            return Err(box_err!("invalid number of snapshot meta cf file: {}, expect: {}",
+                                res.len(),
+                                SNAPSHOT_CFS.len()));
         }
         Ok(res)
     }
@@ -878,12 +879,20 @@ mod v2 {
             }
             let env_opt = EnvOptions::new();
             for cf_file in &mut self.cf_files {
-                // initialize sst file writer
-                let handle = try!(snap.cf_handle(&cf_file.cf));
-                let io_options = snap.get_db().get_options_cf(handle);
-                let mut writer = SstFileWriter::new(&env_opt, &io_options, handle);
-                box_try!(writer.open(&cf_file.tmp_path));
-                cf_file.sst_writer = Some(writer);
+                if cf_file.cf == CF_LOCK {
+                    let f = try!(OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&cf_file.tmp_path));
+                    cf_file.file = Some(f);
+                } else {
+                    // initialize sst file writer
+                    let handle = try!(snap.cf_handle(&cf_file.cf));
+                    let io_options = snap.get_db().get_options_cf(handle);
+                    let mut writer = SstFileWriter::new(&env_opt, &io_options, handle);
+                    box_try!(writer.open(&cf_file.tmp_path));
+                    cf_file.sst_writer = Some(writer);
+                }
             }
             let file = try!(OpenOptions::new()
                 .write(true)
@@ -1043,7 +1052,9 @@ mod v2 {
 
         fn save_cf_files(&mut self) -> io::Result<()> {
             for cf_file in &mut self.cf_files {
-                if cf_file.kv_count == 0 {
+                if cf_file.cf == CF_LOCK {
+                    let _ = cf_file.file.take();
+                } else if cf_file.kv_count == 0 {
                     let _ = cf_file.sst_writer.take().unwrap();
                 } else {
                     let mut writer = cf_file.sst_writer.take().unwrap();
@@ -1096,15 +1107,31 @@ mod v2 {
                     continue;
                 }
                 try!(self.switch_to_cf_file(cf));
-                try!(snap.scan_cf(cf,
-                                  &begin_key,
-                                  &end_key,
-                                  false,
-                                  &mut |key, value| {
-                                      snap_key_count += 1;
-                                      try!(self.add_kv(key, value));
-                                      Ok(true)
-                                  }));
+                if cf == CF_LOCK {
+                    let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
+                    try!(snap.scan_cf(cf,
+                                      &begin_key,
+                                      &end_key,
+                                      false,
+                                      &mut |key, value| {
+                                          snap_key_count += 1;
+                                          try!(file.encode_compact_bytes(key));
+                                          try!(file.encode_compact_bytes(value));
+                                          Ok(true)
+                                      }));
+                    // use an empty byte array to indicate that cf reaches an end.
+                    try!(file.encode_compact_bytes(b""));
+                } else {
+                    try!(snap.scan_cf(cf,
+                                      &begin_key,
+                                      &end_key,
+                                      false,
+                                      &mut |key, value| {
+                                          snap_key_count += 1;
+                                          try!(self.add_kv(key, value));
+                                          Ok(true)
+                                      }));
+                }
             }
             try!(self.save_cf_files());
             context.snapshot_kv_count = snap_key_count;
@@ -1215,18 +1242,43 @@ mod v2 {
         }
 
         fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-            for cf_file in &self.cf_files {
-                if cf_file.size == 0 {
-                    // Skip ingesting empty sst file since that would cause an error
-                    // "Corruption: file is too short to be an sstable"
-                    continue;
-                }
+            for cf_file in &mut self.cf_files {
                 try!(check_abort(&options.abort));
-
                 let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, &cf_file.cf));
-                let ingest_opt = IngestExternalFileOptions::new().move_files(true);
-                box_try!(options.db
-                    .ingest_external_file_cf(cf_handle, &ingest_opt, &[&cf_file.path]));
+                if cf_file.cf == CF_LOCK {
+                    let mut file = box_try!(File::open(&cf_file.path));
+                    let mut wb = WriteBatch::new();
+                    let mut batch_size = 0;
+                    loop {
+                        try!(check_abort(&options.abort));
+                        let key = box_try!(file.decode_compact_bytes());
+                        if key.is_empty() {
+                            box_try!(options.db.write(wb));
+                            break;
+                        }
+                        box_try!(util::check_key_in_region(keys::origin_key(&key),
+                                                           &options.region));
+                        batch_size += key.len();
+                        let value = box_try!(file.decode_compact_bytes());
+                        batch_size += value.len();
+                        box_try!(wb.put_cf(cf_handle, &key, &value));
+                        if batch_size >= options.write_batch_size {
+                            box_try!(options.db.write(wb));
+                            wb = WriteBatch::new();
+                            batch_size = 0;
+                        }
+                    }
+                } else {
+                    if cf_file.size == 0 {
+                        // Skip ingesting empty sst file since that would cause an error
+                        // "Corruption: file is too short to be an sstable"
+                        continue;
+                    }
+
+                    let ingest_opt = IngestExternalFileOptions::new().move_files(true);
+                    box_try!(options.db
+                        .ingest_external_file_cf(cf_handle, &ingest_opt, &[&cf_file.path]));
+                }
             }
             Ok(())
         }
