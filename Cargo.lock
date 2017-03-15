@@ -292,7 +292,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "grpc"
 version = "0.1.1"
-source = "git+https://github.com/pingcap/grpc-rust.git#9dd3862bbead5b05d8ca3961a36a26ec828f89c4"
+source = "git+https://github.com/pingcap/grpc-rust.git#d9ba76e6b25407e42ac6d88feed543efbd5c32c6"
 dependencies = [
  "futures 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -327,7 +327,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "httpbis"
 version = "0.1.1"
-source = "git+https://github.com/pingcap/grpc-rust.git#9dd3862bbead5b05d8ca3961a36a26ec828f89c4"
+source = "git+https://github.com/pingcap/grpc-rust.git#d9ba76e6b25407e42ac6d88feed543efbd5c32c6"
 dependencies = [
  "futures 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -393,7 +393,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto?branch=ov/grpc-pdpb#9430cf843f8d4cef93ec3bd9b7dedd06a1695b6a"
+source = "git+https://github.com/pingcap/kvproto?branch=ov/grpc-pdpb#50bf1d4264ed62a0316dffe62b8884d4dd9f0966"
 dependencies = [
  "futures 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
