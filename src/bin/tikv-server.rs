@@ -278,7 +278,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
     let wal_dir = get_toml_string(config, "rocksdb.wal-dir", Some("".to_owned()));
-    if !wal_dir.is_empty() { opts.set_wal_dir(&wal_dir) };
+    if !wal_dir.is_empty() {
+        opts.set_wal_dir(&wal_dir)
+    };
 
     let wal_ttl_seconds = get_toml_int(config, "rocksdb.wal-ttl-seconds", Some(0));
     opts.set_wal_ttl_seconds(wal_ttl_seconds as u64);

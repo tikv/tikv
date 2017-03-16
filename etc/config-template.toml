@@ -152,8 +152,8 @@ wal-recovery-mode = 2
 # When you set the path to rocksdb directory in memory like in /dev/shm, you may want to set
 # wal-ttl-seconds to a value greater than 0 (like 86400) and backup your db on a regular basis.
 # See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database
-wal-ttl-seconds = 0
-wal-size-limit = 0
+# wal-ttl-seconds = 0
+# wal-size-limit = 0
 
 # rocksdb max total wal size
 # max-total-wal-size = "4GB"
