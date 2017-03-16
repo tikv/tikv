@@ -760,12 +760,10 @@ impl Peer {
 
         // Note that only after handle read_states can we identify what requests are
         // actually stale.
-        if let Some(ref ss) = ready.ss {
-            if ss.raft_state != StateRole::Leader {
-                let term = self.term();
-                // all uncommitted reads will be dropped silently in raft.
-                self.pending_reads.clear_uncommitted(&self.tag, term);
-            }
+        if ready.ss.is_some() {
+            let term = self.term();
+            // all uncommitted reads will be dropped silently in raft.
+            self.pending_reads.clear_uncommitted(&self.tag, term);
         }
 
         if let Some(Either::Right(_)) = self.leader_lease_expired_time {

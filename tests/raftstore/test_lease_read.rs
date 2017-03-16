@@ -15,12 +15,13 @@
 
 use std::thread;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::sync::atomic::*;
+use std::time::*;
 use std::collections::HashSet;
 
 use time::Duration as TimeDuration;
 
-use kvproto::eraftpb::MessageType;
+use kvproto::eraftpb::{MessageType, ConfChangeType};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{RaftMessage, RaftLocalState};
@@ -37,17 +38,21 @@ use super::transport_simulate::*;
 use super::util::*;
 
 #[derive(Clone, Default)]
-struct LeaseReadDetector {
+struct LeaseReadFilter {
     ctx: Arc<RwLock<HashSet<Vec<u8>>>>,
+    take: bool,
 }
 
-impl Filter<RaftMessage> for LeaseReadDetector {
+impl Filter<RaftMessage> for LeaseReadFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut ctx = self.ctx.wl();
         for m in msgs {
-            let msg = m.get_message();
+            let msg = m.mut_message();
             if msg.get_msg_type() == MessageType::MsgHeartbeat && !msg.get_context().is_empty() {
                 ctx.insert(msg.get_context().to_owned());
+            }
+            if self.take {
+                msg.take_context();
             }
         }
         Ok(())
@@ -153,7 +158,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let state: RaftLocalState = engine.get_msg_cf(storage::CF_RAFT, &state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
 
-    let detector = LeaseReadDetector::default();
+    let detector = LeaseReadFilter::default();
     cluster.add_send_filter(CloneFilterFactory(detector.clone()));
 
     // Issue a read request and check the value on response.
@@ -299,7 +304,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     let peer3 = new_peer(peer3_store_id, 3);
     cluster.run();
 
-    let detector = LeaseReadDetector::default();
+    let detector = LeaseReadFilter::default();
     cluster.add_send_filter(CloneFilterFactory(detector.clone()));
 
     // write the initial value for a key.
@@ -379,4 +384,38 @@ fn test_server_lease_unsafe_during_leader_transfers() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     test_lease_unsafe_during_leader_transfers(&mut cluster);
+}
+
+#[test]
+fn test_node_callback_when_destroyed() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    let leader = cluster.leader_of_region(1).unwrap();
+    let cc = new_change_peer_request(ConfChangeType::RemoveNode, leader.clone());
+    let epoch = cluster.get_region_epoch(1);
+    let req = new_admin_request(1, &epoch, cc);
+    // so the leader can't commit the conf change yet.
+    let block = Arc::new(AtomicBool::new(true));
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, leader.get_store_id())
+        .msg_type(MessageType::MsgAppendResponse)
+        .direction(Direction::Recv)
+        .when(block.clone())));
+    let mut filter = LeaseReadFilter::default();
+    filter.take = true;
+    // so the leader can't perform read index.
+    cluster.add_send_filter(CloneFilterFactory(filter.clone()));
+    // it always timeout, no need to wait.
+    let _ = cluster.call_command_on_leader(req, Duration::from_millis(500));
+
+    let get = new_get_cmd(b"k1");
+    let req = new_request(1, epoch, vec![get], true);
+    block.store(false, Ordering::SeqCst);
+    let resp = cluster.call_command_on_leader(req, Duration::from_secs(3)).unwrap();
+    assert!(!filter.ctx.rl().is_empty(),
+            "read index should be performed");
+    assert!(resp.get_header().get_error().has_region_not_found(),
+            "{:?}",
+            resp);
 }
