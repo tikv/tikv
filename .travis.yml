@@ -1,9 +1,12 @@
 sudo: false
 language: rust
 cache:
-  directories:
-  - $HOME/.cache/
-  - $HOME/.cargo/
+  apt
+  cargo
+  ccache
+
+before_cache:
+  - find $TRAVIS_BUILD_DIR/target -maxdepth 1 -type f -delete
 
 matrix:
   include:
