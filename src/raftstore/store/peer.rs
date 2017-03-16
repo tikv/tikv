@@ -742,6 +742,9 @@ impl Peer {
                 let read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.uuid.as_bytes());
                 for (req, cb) in read.cmds {
+                    // TODO: we should add test case that a split happens before pending
+                    // read-index is handled. To do this we need to control async-apply
+                    // procedure precisely.
                     self.handle_read(req, cb);
                 }
                 propose_time = Some(read.renew_lease_time);
@@ -1449,6 +1452,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
+        try!(check_epoch(self.region(), req));
         let snap = Snapshot::new(self.engine.clone());
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
