@@ -31,6 +31,11 @@ quick_error!{
             description("cluster not bootstrap error")
             display("cluster {} is not bootstrapped", cluster_id)
         }
+        Grpc(err: ::grpc::error::GrpcError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())

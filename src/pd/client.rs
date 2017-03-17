@@ -26,15 +26,16 @@ use url::Url;
 
 use rand::{self, Rng};
 
-use kvproto::{metapb, pdpb};
-use kvproto::pdpb_grpc::{self, PD};
+use kvproto::metapb;
+use kvproto::pdpb::{self, GetMembersResponse};
+use kvproto::pdpb_grpc::{PD, PDClient};
 
-use super::{Result, PdClient};
+use super::{Result, Error, PdClient};
 use super::metrics::*;
 
 struct Inner {
-    members: pdpb::GetMembersResponse,
-    client: pdpb_grpc::PDClient,
+    members: GetMembersResponse,
+    client: PDClient,
 }
 
 pub struct RpcClient {
@@ -45,8 +46,11 @@ pub struct RpcClient {
 impl RpcClient {
     pub fn new(endpoints: &str) -> Result<RpcClient> {
         let endpoints: Vec<_> = endpoints.split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
+            .map(|s| if !s.starts_with("http://") {
+                format!("http://{}", s)
+            } else {
+                s.to_owned()
+            })
             .collect();
 
         let (client, members) = try!(validate_endpoints(&endpoints));
@@ -67,8 +71,7 @@ impl RpcClient {
 }
 
 
-pub fn validate_endpoints(endpoints: &[&str])
-                          -> Result<(pdpb_grpc::PDClient, pdpb::GetMembersResponse)> {
+pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
     }
@@ -119,57 +122,45 @@ pub fn validate_endpoints(endpoints: &[&str])
         }
     }
 
-    info!("All PD endpoints are consistent, {:?}", endpoints);
+    info!("All PD endpoints are consistent: {:?}", endpoints);
 
     match members {
         Some(members) => {
-            let (client, members) = box_try!(try_connect_leader(&members));
+            let (client, members) = try!(try_connect_leader(&members));
             Ok((client, members))
         }
         _ => Err(box_err!("PD cluster failed to respond")),
     }
 }
 
-fn connect(addr: &str) -> Result<pdpb_grpc::PDClient> {
+fn connect(addr: &str) -> Result<PDClient> {
     debug!("connect to PD endpoint: {:?}", addr);
-    let (host, port) = match Url::parse(addr) {
-        Ok(ep) => {
-            let host = match ep.host_str() {
-                Some(h) => h.to_owned(),
-                None => return Err(box_err!("unkown host, please specify the host")),
-            };
-            let port = match ep.port() {
-                Some(p) => p,
-                None => return Err(box_err!("unkown port, please specify the port")),
-            };
-            (host, port)
-        }
-
-        Err(_) => {
-            let mut parts = addr.split(':');
-            (parts.next().unwrap().to_owned(), parts.next().unwrap().parse::<u16>().unwrap())
-        }
+    let ep = box_try!(Url::parse(addr));
+    let host = match ep.host_str() {
+        Some(h) => h.to_owned(),
+        None => return Err(box_err!("unkown host, please specify the host")),
+    };
+    let port = match ep.port() {
+        Some(p) => p,
+        None => return Err(box_err!("unkown port, please specify the port")),
     };
 
     let mut conf: grpc::client::GrpcClientConf = Default::default();
     conf.http.no_delay = Some(true);
 
     // TODO: It seems that `new` always return an Ok(_).
-    match pdpb_grpc::PDClient::new(&host, port, false, conf) {
-        Ok(client) => {
+    PDClient::new(&host, port, false, conf)
+        .and_then(|client| {
             // try request.
             match client.GetMembers(pdpb::GetMembersRequest::new()) {
                 Ok(_) => Ok(client),
-                Err(e) => Err(box_err!("fail to connect to {:?} {:?}", addr, e)),
+                Err(e) => Err(e),
             }
-        }
-
-        Err(e) => Err(box_err!(e)),
-    }
+        })
+        .map_err(Error::Grpc)
 }
 
-fn try_connect_leader(members: &pdpb::GetMembersResponse)
-                      -> Result<(pdpb_grpc::PDClient, pdpb::GetMembersResponse)> {
+fn try_connect_leader(members: &GetMembersResponse) -> Result<(PDClient, GetMembersResponse)> {
     // Try to connect the PD cluster leader.
     let leader = members.get_leader();
     for ep in leader.get_client_urls() {
@@ -214,9 +205,8 @@ const MAX_RETRY_COUNT: usize = 100;
 const RETRY_INTERVAL: u64 = 1;
 
 fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
-    where F: Fn(&pdpb_grpc::PDClient) -> result::Result<R, grpc::error::GrpcError>
+    where F: Fn(&PDClient) -> result::Result<R, grpc::error::GrpcError>
 {
-    let mut resp = None;
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
             let inner = client.inner.read().unwrap();
@@ -228,8 +218,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
 
         match r {
             Ok(r) => {
-                resp = Some(r);
-                break;
+                return Ok(r);
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
@@ -244,12 +233,11 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
                         thread::sleep(Duration::from_secs(RETRY_INTERVAL));
                     }
                 }
-                continue;
             }
         }
     }
 
-    resp.ok_or(box_err!("fail to request"))
+    Err(box_err!("fail to request"))
 }
 
 fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
