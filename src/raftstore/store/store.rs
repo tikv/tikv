@@ -421,7 +421,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Applying snapshot may take an unexpected long time.
         for peer in self.region_peers.values_mut() {
-            peer.mut_store().cancel_applying_snap();
+            peer.stop();
         }
 
         // Wait all workers finish.
