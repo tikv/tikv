@@ -16,8 +16,7 @@ use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::{Msg as StoreMsg, Transport};
 use tikv::server::transport::*;
-use tikv::util::HandyRwLock;
-use tikv::util::transport;
+use tikv::util::{HandyRwLock, transport, Either};
 
 use rand;
 use std::collections::HashMap;
@@ -26,7 +25,7 @@ use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
 use std::{time, usize, thread};
 use std::vec::Vec;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::*;
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;
@@ -279,7 +278,7 @@ pub struct RegionPacketFilter {
     region_id: u64,
     store_id: u64,
     direction: Direction,
-    allow: Arc<AtomicUsize>,
+    block: Either<Arc<AtomicUsize>, Arc<AtomicBool>>,
     msg_type: Option<MessageType>,
 }
 
@@ -294,11 +293,20 @@ impl Filter<RaftMessage> for RegionPacketFilter {
                (self.direction.is_send() && self.store_id == from_store_id ||
                 self.direction.is_recv() && self.store_id == to_store_id) &&
                self.msg_type.as_ref().map_or(true, |t| t == &m.get_message().get_msg_type()) {
-                if self.allow.load(Ordering::Relaxed) > 0 {
-                    self.allow.fetch_sub(1, Ordering::Relaxed);
-                    return true;
-                }
-                return false;
+                return match self.block {
+                    Either::Left(ref count) => {
+                        loop {
+                            let left = count.load(Ordering::SeqCst);
+                            if left == 0 {
+                                return false;
+                            }
+                            if count.compare_and_swap(left, left - 1, Ordering::SeqCst) == left {
+                                return true;
+                            }
+                        }
+                    }
+                    Either::Right(ref block) => !block.load(Ordering::SeqCst),
+                };
             }
             true
         });
@@ -313,7 +321,7 @@ impl RegionPacketFilter {
             store_id: store_id,
             direction: Direction::Both,
             msg_type: None,
-            allow: Arc::new(AtomicUsize::new(0)),
+            block: Either::Right(Arc::new(AtomicBool::new(true))),
         }
     }
 
@@ -328,7 +336,12 @@ impl RegionPacketFilter {
     }
 
     pub fn allow(mut self, number: usize) -> RegionPacketFilter {
-        self.allow = Arc::new(AtomicUsize::new(number));
+        self.block = Either::Left(Arc::new(AtomicUsize::new(number)));
+        self
+    }
+
+    pub fn when(mut self, condition: Arc<AtomicBool>) -> RegionPacketFilter {
+        self.block = Either::Right(condition);
         self
     }
 }

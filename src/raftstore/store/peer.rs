@@ -63,6 +63,14 @@ struct ReadIndexRequest {
     renew_lease_time: Timespec,
 }
 
+impl Drop for ReadIndexRequest {
+    fn drop(&mut self) {
+        if !self.cmds.is_empty() {
+            panic!("callback of index read {} is leak.", self.uuid);
+        }
+    }
+}
+
 #[derive(Default)]
 struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
@@ -71,8 +79,8 @@ struct ReadIndexQueue {
 
 impl ReadIndexQueue {
     fn clear_uncommitted(&mut self, tag: &str, term: u64) {
-        for read in self.reads.drain(self.ready_cnt..) {
-            for (req, cb) in read.cmds {
+        for mut read in self.reads.drain(self.ready_cnt..) {
+            for (req, cb) in read.cmds.drain(..) {
                 let uuid = util::get_uuid_from_req(&req).unwrap();
                 apply::notify_stale_req(tag, term, uuid, cb);
             }
@@ -362,6 +370,14 @@ impl Peer {
                 error!("{} failed to schedule clear data task: {:?}", self.tag, e);
             }
         }
+
+        for mut read in self.pending_reads.reads.drain(..) {
+            for (req, cb) in read.cmds.drain(..) {
+                let uuid = util::get_uuid_from_req(&req).unwrap();
+                apply::notify_req_region_removed(region.get_id(), self.peer.get_id(), uuid, cb);
+            }
+        }
+
         self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 
@@ -739,9 +755,9 @@ impl Peer {
         let mut propose_time = None;
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
-                let read = self.pending_reads.reads.pop_front().unwrap();
+                let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.uuid.as_bytes());
-                for (req, cb) in read.cmds {
+                for (req, cb) in read.cmds.drain(..) {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
                     // procedure precisely.
@@ -760,12 +776,10 @@ impl Peer {
 
         // Note that only after handle read_states can we identify what requests are
         // actually stale.
-        if let Some(ref ss) = ready.ss {
-            if ss.raft_state != StateRole::Leader {
-                let term = self.term();
-                // all uncommitted reads will be dropped silently in raft.
-                self.pending_reads.clear_uncommitted(&self.tag, term);
-            }
+        if ready.ss.is_some() {
+            let term = self.term();
+            // all uncommitted reads will be dropped silently in raft.
+            self.pending_reads.clear_uncommitted(&self.tag, term);
         }
 
         if let Some(Either::Right(_)) = self.leader_lease_expired_time {
@@ -809,8 +823,8 @@ impl Peer {
 
         if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
             for _ in 0..self.pending_reads.ready_cnt {
-                let read = self.pending_reads.reads.pop_front().unwrap();
-                for (req, cb) in read.cmds {
+                let mut read = self.pending_reads.reads.pop_front().unwrap();
+                for (req, cb) in read.cmds.drain(..) {
                     self.handle_read(req, cb);
                 }
             }
@@ -1304,6 +1318,13 @@ impl Peer {
 
     pub fn term(&self) -> u64 {
         self.raft_group.raft.term
+    }
+
+    pub fn stop(&mut self) {
+        self.mut_store().cancel_applying_snap();
+        for mut read in self.pending_reads.reads.drain(..) {
+            read.cmds.clear();
+        }
     }
 }
 
