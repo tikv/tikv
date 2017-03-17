@@ -190,7 +190,7 @@ mod v1 {
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
-    use super::super::metrics::SNAPSHOT_BUILD_TIME_HISTOGRAM;
+    use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX, Result,
                 SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
 
@@ -340,18 +340,26 @@ mod v1 {
                     continue;
                 }
                 box_try!(self.encode_compact_bytes(cf.as_bytes()));
+                let mut cf_key_count = 0;
                 try!(snap.scan_cf(cf,
                                   &begin_key,
                                   &end_key,
                                   false,
                                   &mut |key, value| {
-                                      snap_key_count += 1;
+                                      cf_key_count += 1;
                                       try!(self.encode_compact_bytes(key));
                                       try!(self.encode_compact_bytes(value));
                                       Ok(true)
                                   }));
                 // use an empty byte array to indicate that cf reaches an end.
                 box_try!(self.encode_compact_bytes(b""));
+                snap_key_count += cf_key_count;
+                SNAPSHOT_CF_KV_COUNT.with_label_values(&[cf]).observe(cf_key_count as f64);
+                info!("[region {}] scan snapshot {}, cf {}, key count {}",
+                      region.get_id(),
+                      self.path(),
+                      cf,
+                      cf_key_count);
             }
             // use an empty byte array to indicate that kvpair reaches an end.
             box_try!(self.encode_compact_bytes(b""));
@@ -375,8 +383,9 @@ mod v1 {
             snap_data.set_version(SNAPSHOT_VERSION);
             context.snapshot_size = size;
             SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
-            info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
+            info!("[region {}] scan snapshot {}, size {}, key count {}, takes {:?}",
                   region.get_id(),
+                  self.path(),
                   size,
                   context.snapshot_kv_count,
                   t.elapsed());
@@ -657,7 +666,7 @@ mod v2 {
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::super::keys::{self, enc_start_key, enc_end_key};
     use super::super::util;
-    use super::super::metrics::SNAPSHOT_BUILD_TIME_HISTOGRAM;
+    use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Result,
                 SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
 
@@ -1107,6 +1116,7 @@ mod v2 {
                     continue;
                 }
                 try!(self.switch_to_cf_file(cf));
+                let mut cf_key_count = 0;
                 if cf == CF_LOCK {
                     let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
                     try!(snap.scan_cf(cf,
@@ -1114,7 +1124,7 @@ mod v2 {
                                       &end_key,
                                       false,
                                       &mut |key, value| {
-                                          snap_key_count += 1;
+                                          cf_key_count += 1;
                                           try!(file.encode_compact_bytes(key));
                                           try!(file.encode_compact_bytes(value));
                                           Ok(true)
@@ -1127,11 +1137,18 @@ mod v2 {
                                       &end_key,
                                       false,
                                       &mut |key, value| {
-                                          snap_key_count += 1;
+                                          cf_key_count += 1;
                                           try!(self.add_kv(key, value));
                                           Ok(true)
                                       }));
                 }
+                snap_key_count += cf_key_count;
+                SNAPSHOT_CF_KV_COUNT.with_label_values(&[cf]).observe(cf_key_count as f64);
+                info!("[region {} scan snapshot {}, cf {}, key count {}]",
+                      region.get_id(),
+                      self.path(),
+                      cf,
+                      cf_key_count)
             }
             try!(self.save_cf_files());
             context.snapshot_kv_count = snap_key_count;
@@ -1162,8 +1179,9 @@ mod v2 {
             *size_track = size_track.saturating_add(total_size);
             context.snapshot_size = total_size;
             SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
-            info!("[region {}] scan snapshot, size {}, key count {}, takes {:?}",
+            info!("[region {}] scan snapshot {}, size {}, key count {}, takes {:?}",
                   region.get_id(),
+                  self.path(),
                   total_size,
                   context.snapshot_kv_count,
                   t.elapsed());

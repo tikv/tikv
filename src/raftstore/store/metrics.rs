@@ -144,6 +144,14 @@ lazy_static! {
             "Total number of GC raft log."
         ).unwrap();
 
+    pub static ref SNAPSHOT_CF_KV_COUNT: HistogramVec =
+        register_histogram_vec!(
+            "tikv_snapshot_cf_kv_count",
+            "Total number of cf kv of snapshot",
+            &["type"],
+            exponential_buckets(100.0, 2.0, 20).unwrap()
+        ).unwrap();
+
     pub static ref SNAPSHOT_BUILD_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_build_time_duration_secs",
