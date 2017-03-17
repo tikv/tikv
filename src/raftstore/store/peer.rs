@@ -1319,6 +1319,13 @@ impl Peer {
     pub fn term(&self) -> u64 {
         self.raft_group.raft.term
     }
+
+    pub fn stop(&mut self) {
+        self.mut_store().cancel_applying_snap();
+        for mut read in self.pending_reads.reads.drain(..) {
+            read.cmds.clear();
+        }
+    }
 }
 
 pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> {
