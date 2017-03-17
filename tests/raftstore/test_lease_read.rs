@@ -386,6 +386,8 @@ fn test_server_lease_unsafe_during_leader_transfers() {
     test_lease_unsafe_during_leader_transfers(&mut cluster);
 }
 
+/// test whether the read index callback will be handled when a region is destroyed.
+/// If it's not handled properly, it will cause dead lock in transaction scheduler.
 #[test]
 fn test_node_callback_when_destroyed() {
     let count = 3;
