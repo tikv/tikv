@@ -147,9 +147,17 @@ lazy_static! {
     pub static ref SNAPSHOT_CF_KV_COUNT: HistogramVec =
         register_histogram_vec!(
             "tikv_snapshot_cf_kv_count",
-            "Total number of cf kv of snapshot",
+            "Total number of kv in each cf file of snapshot",
             &["type"],
             exponential_buckets(100.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref SNAPSHOT_CF_SIZE: HistogramVec =
+        register_histogram_vec!(
+            "tikv_snapshot_cf_size",
+            "Total size of each cf file of snapshot",
+            &["type"],
+            exponential_buckets(1024.0, 2.0, 22).unwrap()
         ).unwrap();
 
     pub static ref SNAPSHOT_BUILD_TIME_HISTOGRAM: Histogram =
