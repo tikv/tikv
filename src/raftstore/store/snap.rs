@@ -681,28 +681,28 @@ mod v2 {
     const DIGEST_BUFFER_SIZE: usize = 10240;
     const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
-    fn get_file_size(path: &str) -> io::Result<u64> {
+    fn get_file_size(path: &PathBuf) -> io::Result<u64> {
         let meta = try!(fs::metadata(path));
         Ok(meta.len())
     }
 
-    fn file_exists(file: &str) -> bool {
+    fn file_exists(file: &PathBuf) -> bool {
         let path = Path::new(file);
         path.exists() && path.is_file()
     }
 
-    fn delete_file(file: &str) -> bool {
+    fn delete_file(file: &PathBuf) -> bool {
         if !file_exists(file) {
             return true;
         }
         if let Err(e) = fs::remove_file(file) {
-            warn!("failed to delete file {}: {:?}", file, e);
+            warn!("failed to delete file {}: {:?}", file.display(), e);
             return false;
         }
         true
     }
 
-    fn calc_checksum(p: &str) -> io::Result<u32> {
+    fn calc_checksum(p: &PathBuf) -> io::Result<u32> {
         let mut digest = Digest::new(crc32::IEEE);
         let mut f = try!(OpenOptions::new().read(true).open(&p));
         let mut buf = vec![0; DIGEST_BUFFER_SIZE];
@@ -772,7 +772,7 @@ mod v2 {
     #[derive(Default)]
     struct CfFile {
         pub cf: CfName,
-        pub path: String,
+        pub path: PathBuf,
         pub size: u64,
 
         // for building snapshot
@@ -782,7 +782,7 @@ mod v2 {
         pub file: Option<File>,
 
         // for writing snapshot
-        pub tmp_path: String,
+        pub tmp_path: PathBuf,
         pub written_size: u64,
 
         pub checksum: u32,
@@ -791,11 +791,11 @@ mod v2 {
     #[derive(Default)]
     struct MetaFile {
         pub meta: SnapshotMeta,
-        pub path: String,
+        pub path: PathBuf,
         pub file: Option<File>,
 
         // for writing snapshot
-        pub tmp_path: String,
+        pub tmp_path: PathBuf,
     }
 
     pub struct Snap {
@@ -827,8 +827,8 @@ mod v2 {
             let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
             for cf in cfs {
                 let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
-                let path = dir_path.join(filename).as_path().to_str().unwrap().to_owned();
-                let tmp_path = format!("{}{}", path, TMP_FILE_SUFFIX);
+                let path = dir_path.join(&filename);
+                let tmp_path = dir_path.join(format!("{}{}", filename, TMP_FILE_SUFFIX));
                 let cf_file = CfFile {
                     cf: cf,
                     path: path,
@@ -838,8 +838,8 @@ mod v2 {
                 cf_files.push(cf_file);
             }
             let meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
-            let meta_path = dir_path.join(meta_filename).as_path().to_str().unwrap().to_owned();
-            let meta_tmp_path = format!("{}{}", meta_path, TMP_FILE_SUFFIX);
+            let meta_path = dir_path.join(&meta_filename);
+            let meta_tmp_path = dir_path.join(format!("{}{}", meta_filename, TMP_FILE_SUFFIX));
             let meta_file = MetaFile {
                 path: meta_path,
                 tmp_path: meta_tmp_path,
@@ -914,7 +914,7 @@ mod v2 {
                     let handle = try!(snap.cf_handle(&cf_file.cf));
                     let io_options = snap.get_db().get_options_cf(handle);
                     let mut writer = SstFileWriter::new(&env_opt, &io_options, handle);
-                    box_try!(writer.open(&cf_file.tmp_path));
+                    box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
                 }
             }
@@ -1006,7 +1006,7 @@ mod v2 {
             });
             cf_names += ")";
             format!("{}/{}_{}{}",
-                    dir_path.as_path().to_str().unwrap().to_owned(),
+                    dir_path.as_path().to_str().unwrap(),
                     prefix,
                     cf_names,
                     SST_FILE_SUFFIX)
@@ -1258,7 +1258,7 @@ mod v2 {
                                               format!("snapshot file {} for cf {} size \
                                                        mismatches, real size {}, expected size \
                                                        {}",
-                                                      cf_file.path,
+                                                      cf_file.path.display(),
                                                       cf_file.cf,
                                                       size,
                                                       cf_file.size)));
@@ -1269,7 +1269,7 @@ mod v2 {
                                               format!("snapshot file {} for cf {} checksum \
                                                        mismatches, real checksum {}, expected \
                                                        checksum {}",
-                                                      cf_file.path,
+                                                      cf_file.path.display(),
                                                       cf_file.cf,
                                                       checksum,
                                                       cf_file.checksum)));
@@ -1322,8 +1322,8 @@ mod v2 {
                     }
                 } else {
                     let ingest_opt = IngestExternalFileOptions::new().move_files(true);
-                    box_try!(options.db
-                        .ingest_external_file_cf(cf_handle, &ingest_opt, &[&cf_file.path]));
+                    let path = cf_file.path.as_path().to_str().unwrap();
+                    box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
                 }
             }
             Ok(())
