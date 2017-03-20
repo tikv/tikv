@@ -325,7 +325,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     }
 
     let compaction_readahead_size =
-        get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
+        get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
     opts
