@@ -122,11 +122,10 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersR
         }
     }
 
-    info!("All PD endpoints are consistent: {:?}", endpoints);
-
     match members {
         Some(members) => {
             let (client, members) = try!(try_connect_leader(&members));
+            info!("All PD endpoints are consistent: {:?}", endpoints);
             Ok((client, members))
         }
         _ => Err(box_err!("PD cluster failed to respond")),
@@ -190,8 +189,8 @@ fn try_connect_leader(members: &GetMembersResponse) -> Result<(PDClient, GetMemb
 
                     return Ok((cli, resp));
                 }
-                Err(_) => {
-                    error!("failed to connect to {}, try next", ep);
+                Err(err) => {
+                    error!("failed to connect to {}, {:?}", ep, err);
                     continue;
                 }
             }
