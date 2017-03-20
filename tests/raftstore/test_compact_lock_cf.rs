@@ -20,8 +20,9 @@ use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
 
 fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
+    let interval = 500;
     // set lock_cf_compact_interval.
-    cluster.cfg.raft_store.lock_cf_compact_interval = 1000;
+    cluster.cfg.raft_store.lock_cf_compact_interval = interval;
     // set lock_cf_compact_threshold.
     cluster.cfg.raft_store.lock_cf_compact_threshold = 100;
     cluster.run();
@@ -33,7 +34,7 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // wait for reach the lock_cf_compact_interval, but not reach
     // lock_cf_compact_threshold, so there is no compaction.
-    sleep_ms(2000);
+    sleep_ms(interval * 2);
 
     for engine in cluster.engines.values() {
         let compact_write_bytes =
@@ -48,7 +49,7 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // wait for reach the lock_cf_compact_interval, and reach
     // lock_cf_compact_threshold, fire compaction.
-    sleep_ms(2000);
+    sleep_ms(interval * 2);
 
     for engine in cluster.engines.values() {
         let compact_write_bytes =
