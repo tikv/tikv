@@ -329,7 +329,7 @@ impl<T: FnOnce()> Drop for DeferContext<T> {
 }
 
 /// Represents a value of one of two possible types (a more generic Result.)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Either<L, R> {
     Left(L),
     Right(R),
