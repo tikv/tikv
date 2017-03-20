@@ -12,12 +12,14 @@
 // limitations under the License.
 
 
-use std::{thread, error};
+use std::{thread, error, io};
 use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::sync::mpsc;
 use std::time::Duration;
 use super::metrics::*;
 
-use mio::{Sender, NotifyError};
+use mio;
 
 const MAX_SEND_RETRY_CNT: usize = 5;
 
@@ -52,16 +54,57 @@ impl<T: Debug> From<NotifyError<T>> for Error {
     }
 }
 
-pub struct SendCh<T> {
-    ch: Sender<T>,
-    name: &'static str,
+#[derive(Debug)]
+pub enum NotifyError<T> {
+    Full(T),
+    Closed(Option<T>),
+    Io(io::Error),
 }
 
-impl<T: Debug> SendCh<T> {
-    pub fn new(ch: Sender<T>, name: &'static str) -> SendCh<T> {
-        SendCh {
+pub trait Sender<T>: Clone {
+    fn send(&self, t: T) -> Result<(), NotifyError<T>>;
+}
+
+impl<T> Sender<T> for mio::Sender<T> {
+    fn send(&self, t: T) -> Result<(), NotifyError<T>> {
+        match mio::Sender::send(self, t) {
+            Ok(()) => Ok(()),
+            Err(mio::NotifyError::Closed(t)) => Err(NotifyError::Closed(t)),
+            Err(mio::NotifyError::Full(t)) => Err(NotifyError::Full(t)),
+            Err(mio::NotifyError::Io(e)) => Err(NotifyError::Io(e)),
+        }
+    }
+}
+
+impl<T> Sender<T> for mpsc::SyncSender<T> {
+    fn send(&self, t: T) -> Result<(), NotifyError<T>> {
+        match mpsc::SyncSender::try_send(self, t) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Disconnected(t)) => Err(NotifyError::Closed(Some(t))),
+            Err(mpsc::TrySendError::Full(t)) => Err(NotifyError::Full(t)),
+        }
+    }
+}
+
+/// A channel that handle error with retry automatically.
+pub struct RetryableSendCh<T, C: Sender<T>> {
+    ch: C,
+    name: &'static str,
+
+    marker: PhantomData<T>,
+}
+
+// We only care about self.ch. When using built-in derive, the T will be
+// also taken into consideration.
+unsafe impl<T, C: Sender<T> + Send> Send for RetryableSendCh<T, C> {}
+unsafe impl<T, C: Sender<T> + Sync> Sync for RetryableSendCh<T, C> {}
+
+impl<T: Debug, C: Sender<T>> RetryableSendCh<T, C> {
+    pub fn new(ch: C, name: &'static str) -> RetryableSendCh<T, C> {
+        RetryableSendCh {
             ch: ch,
             name: name,
+            marker: Default::default(),
         }
     }
 
@@ -96,14 +139,18 @@ impl<T: Debug> SendCh<T> {
     }
 }
 
-impl<T> Clone for SendCh<T> {
-    fn clone(&self) -> SendCh<T> {
-        SendCh {
+impl<T, C: Sender<T>> Clone for RetryableSendCh<T, C> {
+    fn clone(&self) -> RetryableSendCh<T, C> {
+        RetryableSendCh {
             ch: self.ch.clone(),
             name: self.name,
+            marker: Default::default(),
         }
     }
 }
+
+pub type SendCh<T> = RetryableSendCh<T, mio::Sender<T>>;
+pub type SyncSendCh<T> = RetryableSendCh<T, mpsc::SyncSender<T>>;
 
 #[cfg(test)]
 mod tests {
