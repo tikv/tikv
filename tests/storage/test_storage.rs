@@ -319,6 +319,19 @@ fn test_txn_store_resolve_lock2() {
 }
 
 #[test]
+fn test_txn_store_commit_illegal_tso() {
+    let store = AssertionStorage::default();
+    let commit_ts = 4;
+    let start_ts = 5;
+    store.prewrite_ok(vec![Mutation::Put((make_key(b"primary"), b"p-5".to_vec())),
+                           Mutation::Put((make_key(b"secondary"), b"s-5".to_vec()))],
+                      b"primary",
+                      start_ts);
+
+    store.commit_with_illegal_tso(vec![b"primary"], start_ts, commit_ts);
+}
+
+#[test]
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();

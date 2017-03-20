@@ -248,6 +248,22 @@ impl AssertionStorage {
         self.store.commit(self.ctx.clone(), keys, start_ts, commit_ts).unwrap();
     }
 
+    pub fn commit_with_illegal_tso(&self, keys: Vec<&[u8]>, sts: u64, cmt_ts: u64) {
+        let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
+        let resp = self.store.commit(self.ctx.clone(), keys, sts, cmt_ts);
+        assert!(resp.is_err());
+        let err = resp.unwrap_err();
+        match err {
+            storage::Error::Txn(txn::Error::InvalidTxnTso { start_ts, commit_ts }) => {
+                assert_eq!(sts, start_ts);
+                assert_eq!(cmt_ts, commit_ts);
+            }
+            _ => {
+                panic!("expect invalid tso error, but got {:?}", err);
+            }
+        }
+    }
+
     pub fn cleanup_ok(&self, key: &[u8], start_ts: u64) {
         self.store.cleanup(self.ctx.clone(), make_key(key), start_ts).unwrap();
     }
