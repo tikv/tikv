@@ -747,6 +747,12 @@ mod v2 {
             if res.iter().any(|cf| cf_name == cf) {
                 return Err(box_err!("failed to decode duplicated snapshot cf {}", cf_name));
             }
+            if cf_file_meta.get_size() == 0 && cf_file_meta.get_checksum() != 0 {
+                return Err(box_err!("invalid checksum {} for cf {}, checksum of empty cf file \
+                                     should be 0",
+                                    cf_file_meta.get_checksum(),
+                                    cf_name));
+            }
             res.push(*cf_name);
         }
         if res.len() != SNAPSHOT_CFS.len() {
@@ -800,7 +806,7 @@ mod v2 {
                                  size_track: Arc<RwLock<u64>>,
                                  cfs: &[CfName],
                                  sending: bool)
-                                 -> io::Result<Snap> {
+                                 -> RaftStoreResult<Snap> {
             let dir_path = dir.into();
             if !dir_path.exists() {
                 try!(fs::create_dir_all(dir_path.as_path()));
@@ -833,13 +839,17 @@ mod v2 {
                 tmp_path: meta_tmp_path,
                 ..Default::default()
             };
-            let s = Snap {
+            let mut s = Snap {
                 display_path: display_path,
                 cf_files: cf_files,
                 cf_index: 0,
                 meta_file: meta_file,
                 size_track: size_track,
             };
+            // load snapshot meta if meta_file exists
+            if file_exists(&s.meta_file.path) {
+                try!(s.load_snapshot_meta())
+            }
             Ok(s)
         }
 
@@ -877,8 +887,7 @@ mod v2 {
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, SNAPSHOT_CFS, false));
-            try!(s.init_for_applying());
+            let s = try!(Snap::new(dir, key, size_track, SNAPSHOT_CFS, false));
             Ok(s)
         }
 
@@ -917,20 +926,25 @@ mod v2 {
             }
             for cf_file in &mut self.cf_files {
                 // initialize cf file size and reader
-                let size = try!(get_file_size(&cf_file.path));
-                let file = try!(File::open(&cf_file.path));
-                cf_file.size = size;
-                cf_file.file = Some(file);
+                if cf_file.size > 0 {
+                    let size = try!(get_file_size(&cf_file.path));
+                    let file = try!(File::open(&cf_file.path));
+                    cf_file.size = size;
+                    cf_file.file = Some(file);
+                }
             }
-            self.load_snapshot_metadata()
+            Ok(())
         }
 
         fn init_for_receiving(&mut self, snapshot_meta: SnapshotMeta) -> RaftStoreResult<()> {
+            try!(self.set_snapshot_meta(snapshot_meta));
             if self.exists() {
                 return Ok(());
             }
-            try!(self.set_snapshot_meta(snapshot_meta));
             for cf_file in &mut self.cf_files {
+                if cf_file.size == 0 {
+                    continue;
+                }
                 let f =
                     try!(OpenOptions::new().write(true).create_new(true).open(&cf_file.tmp_path));
                 cf_file.file = Some(f);
@@ -941,13 +955,6 @@ mod v2 {
                 .open(&self.meta_file.tmp_path));
             self.meta_file.file = Some(f);
             Ok(())
-        }
-
-        fn init_for_applying(&mut self) -> RaftStoreResult<()> {
-            if !self.exists() {
-                return Err(box_err!("snapshot file {} not exists", self.path()));
-            }
-            self.load_snapshot_metadata()
         }
 
         fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
@@ -974,7 +981,7 @@ mod v2 {
             Ok(())
         }
 
-        fn load_snapshot_metadata(&mut self) -> RaftStoreResult<()> {
+        fn load_snapshot_meta(&mut self) -> RaftStoreResult<()> {
             let snapshot_meta = try!(self.read_snapshot_meta());
             try!(self.set_snapshot_meta(snapshot_meta));
             Ok(())
@@ -1071,9 +1078,15 @@ mod v2 {
                         return Err(io::Error::new(ErrorKind::Other, e));
                     }
                 }
-                try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
-                cf_file.size = try!(get_file_size(&cf_file.path));
-                cf_file.checksum = try!(calc_checksum(&cf_file.path));
+                let size = try!(get_file_size(&cf_file.tmp_path));
+                if size > 0 {
+                    try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
+                    cf_file.size = size;
+                    cf_file.checksum = try!(calc_checksum(&cf_file.path));
+                } else {
+                    // Clean up the `tmp_path` if this cf file is empty.
+                    delete_file(&cf_file.tmp_path);
+                }
             }
             Ok(())
         }
@@ -1194,7 +1207,7 @@ mod v2 {
         }
 
         fn exists(&self) -> bool {
-            self.cf_files.iter().all(|cf_file| file_exists(&cf_file.path)) &&
+            self.cf_files.iter().all(|cf_file| cf_file.size == 0 || file_exists(&cf_file.path)) &&
             file_exists(&self.meta_file.path)
         }
 
@@ -1218,6 +1231,11 @@ mod v2 {
             debug!("saving to {}", self.path());
             let mut total_size = 0;
             for cf_file in &mut self.cf_files {
+                if cf_file.size == 0 {
+                    // Skip empty cf file.
+                    continue;
+                }
+
                 // Check each cf file has been fully written, and the checksum matches.
                 {
                     let mut file = cf_file.file.take().unwrap();
@@ -1247,7 +1265,7 @@ mod v2 {
                 }
 
                 try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
-                total_size += cf_file.size;
+                total_size += size;
             }
             // write meta file
             let mut v = vec![];
@@ -1261,6 +1279,11 @@ mod v2 {
 
         fn apply(&mut self, options: ApplyOptions) -> Result<()> {
             for cf_file in &mut self.cf_files {
+                if cf_file.size == 0 {
+                    // Skip empty cf file.
+                    continue;
+                }
+
                 try!(check_abort(&options.abort));
                 let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, &cf_file.cf));
                 if cf_file.cf == CF_LOCK {
@@ -1287,12 +1310,6 @@ mod v2 {
                         }
                     }
                 } else {
-                    if cf_file.size == 0 {
-                        // Skip ingesting empty sst file since that would cause an error
-                        // "Corruption: file is too short to be an sstable"
-                        continue;
-                    }
-
                     let ingest_opt = IngestExternalFileOptions::new().move_files(true);
                     box_try!(options.db
                         .ingest_external_file_cf(cf_handle, &ingest_opt, &[&cf_file.path]));
@@ -1308,7 +1325,12 @@ mod v2 {
                 return Ok(0);
             }
             while self.cf_index < self.cf_files.len() {
-                match self.cf_files[self.cf_index].file.as_mut().unwrap().read(buf) {
+                let cf_file = &mut self.cf_files[self.cf_index];
+                if cf_file.size == 0 {
+                    self.cf_index += 1;
+                    continue;
+                }
+                match cf_file.file.as_mut().unwrap().read(buf) {
                     Ok(0) => {
                         // EOF. Switch to next file.
                         self.cf_index += 1;
@@ -1331,6 +1353,10 @@ mod v2 {
             let mut next_buf = buf;
             while self.cf_index < self.cf_files.len() {
                 let cf_file = &mut self.cf_files[self.cf_index];
+                if cf_file.size == 0 {
+                    self.cf_index += 1;
+                    continue;
+                }
                 let left = (cf_file.size - cf_file.written_size) as usize;
                 if left == 0 {
                     self.cf_index += 1;
