@@ -11,13 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Result, Write, Read, BufRead};
+use std::io::{Result, Write, Read, BufRead, ErrorKind};
 use std::fmt::{self, Debug, Formatter};
 use alloc::raw_vec::RawVec;
 use std::{cmp, ptr, slice, mem};
 
 use bytes::{ByteBuf, MutByteBuf, alloc};
-pub use mio::{TryRead, TryWrite};
 
 use util::escape;
 
@@ -219,14 +218,20 @@ impl PipeBuffer {
         let mut readed;
         {
             let (left, right) = self.slice_append();
-            match try!(r.try_read(left)) {
-                None => return Ok(0),
-                Some(l) => readed = l,
+            match r.read(left) {
+                Ok(l) => readed = l,
+                Err(e) => {
+                    return if e.kind() == ErrorKind::WouldBlock {
+                        Ok(0)
+                    } else {
+                        Err(e)
+                    };
+                }
             }
             end += readed;
             if readed == left.len() && !right.is_empty() {
                 // Can't return error because r has been read into left.
-                if let Ok(Some(l)) = r.try_read(right) {
+                if let Ok(l) = r.read(right) {
                     end = l;
                     readed += l;
                 }
@@ -246,14 +251,20 @@ impl PipeBuffer {
         let mut written;
         {
             let (left, right) = self.slice();
-            match try!(w.try_write(left)) {
-                None => return Ok(0),
-                Some(l) => written = l,
+            match w.write(left) {
+                Ok(l) => written = l,
+                Err(e) => {
+                    return if e.kind() == ErrorKind::WouldBlock {
+                        Ok(0)
+                    } else {
+                        Err(e)
+                    };
+                }
             }
             start += written;
             if written == left.len() && !right.is_empty() {
                 // Can't return error because left has written into w.
-                if let Ok(Some(l)) = w.try_write(right) {
+                if let Ok(l) = w.write(right) {
                     start = l;
                     written += l;
                 }
