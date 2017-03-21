@@ -770,19 +770,14 @@ mod v2 {
     struct CfFile {
         pub cf: CfName,
         pub path: PathBuf,
-        pub size: u64,
-
-        // for building snapshot
-        pub sst_writer: Option<SstFileWriter>,
-        pub kv_count: u64,
-        // for sending/receiving snapshot
-        pub file: Option<File>,
-
-        // for writing snapshot
         pub tmp_path: PathBuf,
+        pub sst_writer: Option<SstFileWriter>,
+        pub file: Option<File>,
+        pub kv_count: u64,
+        pub size: u64,
         pub written_size: u64,
-
         pub checksum: u32,
+        pub write_digest: Option<Digest>,
     }
 
     #[derive(Default)]
@@ -951,6 +946,7 @@ mod v2 {
                 let f =
                     try!(OpenOptions::new().write(true).create_new(true).open(&cf_file.tmp_path));
                 cf_file.file = Some(f);
+                cf_file.write_digest = Some(Digest::new(crc32::IEEE));
             }
             let f = try!(OpenOptions::new()
                 .write(true)
@@ -1260,18 +1256,17 @@ mod v2 {
                     let mut file = cf_file.file.take().unwrap();
                     try!(file.flush());
                 }
-                let size = try!(get_file_size(&cf_file.tmp_path));
-                if size != cf_file.size {
+                if cf_file.written_size != cf_file.size {
                     return Err(io::Error::new(ErrorKind::Other,
                                               format!("snapshot file {} for cf {} size \
                                                        mismatches, real size {}, expected size \
                                                        {}",
                                                       cf_file.path.display(),
                                                       cf_file.cf,
-                                                      size,
+                                                      cf_file.written_size,
                                                       cf_file.size)));
                 }
-                let checksum = try!(calc_checksum(&cf_file.tmp_path));
+                let checksum = cf_file.write_digest.as_ref().unwrap().sum32();
                 if checksum != cf_file.checksum {
                     return Err(io::Error::new(ErrorKind::Other,
                                               format!("snapshot file {} for cf {} checksum \
@@ -1284,7 +1279,7 @@ mod v2 {
                 }
 
                 try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
-                total_size += size;
+                total_size += cf_file.size;
             }
             // write meta file
             let mut v = vec![];
@@ -1382,13 +1377,16 @@ mod v2 {
                     continue;
                 }
                 let mut file = cf_file.file.as_mut().unwrap();
+                let mut digest = cf_file.write_digest.as_mut().unwrap();
                 if next_buf.len() > left {
                     try!(file.write_all(&next_buf[0..left]));
+                    digest.write(&next_buf[0..left]);
                     cf_file.written_size += left as u64;
                     self.cf_index += 1;
                     next_buf = &next_buf[left..];
                 } else {
                     try!(file.write_all(next_buf));
+                    digest.write(next_buf);
                     cf_file.written_size += next_buf.len() as u64;
                     return Ok(buf.len());
                 }
