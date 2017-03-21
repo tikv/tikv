@@ -130,6 +130,31 @@ create-if-missing = true
 # 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
 wal-recovery-mode = 2
 
+# rocksdb write-ahead logs dir path
+# This specifies the absolute dir path for write-ahead logs (WAL).
+# If it is empty, the log files will be in the same dir as data.
+# When you set the path to rocksdb directory in memory like in /dev/shm, you may want to set
+# wal-dir to a directory on a persistent storage.
+# See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database
+# wal-dir = "/tmp/tikv/store"
+
+# The following two fields affect how archived write-ahead logs will be deleted.
+# 1. If both set to 0, logs will be deleted asap and will not get into the archive.
+# 2. If wal-ttl-seconds is 0 and wal-size-limit is not 0,
+#    WAL files will be checked every 10 min and if total size is greater
+#    then wal-size-limit, they will be deleted starting with the
+#    earliest until size_limit is met. All empty files will be deleted.
+# 3. If wal-ttl-seconds is not 0 and wal-size-limit is 0, then
+#    WAL files will be checked every wal-ttl-seconds / 2 and those that
+#    are older than wal-ttl-seconds will be deleted.
+# 4. If both are not 0, WAL files will be checked every 10 min and both
+#    checks will be performed with ttl being first.
+# When you set the path to rocksdb directory in memory like in /dev/shm, you may want to set
+# wal-ttl-seconds to a value greater than 0 (like 86400) and backup your db on a regular basis.
+# See https://github.com/facebook/rocksdb/wiki/How-to-persist-in-memory-RocksDB-database
+# wal-ttl-seconds = 0
+# wal-size-limit = 0
+
 # rocksdb max total wal size
 # max-total-wal-size = "4GB"
 
@@ -153,7 +178,7 @@ stats-dump-period-sec = 600
 # Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
 # If you want to use rocksdb on multi disks or spinning disks, you should set value at
 # least 2MB;
-# compaction_readahead_size = 0
+# compaction-readahead-size = 0
 
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
