@@ -674,7 +674,7 @@ fn build_raftkv(config: &toml::Value,
     let mut snap_path = path.clone();
     snap_path.push("snap");
     let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
+    let snap_mgr = SnapManager::new(snap_path, Some(node.get_sendch()));
 
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
