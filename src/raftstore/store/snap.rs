@@ -133,10 +133,10 @@ pub struct ApplyOptions {
 /// `Snapshot` is a trait for snapshot.
 /// It's used in these scenarios:
 ///   1. build local snapshot
-///   1. read local snapshot and then replicate it to remote raftstores
-///   2. receive snapshot from remote raftstore and write it to local storage
-///   3. snapshot gc
+///   2. read local snapshot and then replicate it to remote raftstores
+///   3. receive snapshot from remote raftstore and write it to local storage
 ///   4. apply snapshot
+///   5. snapshot gc
 pub trait Snapshot: Read + Write + Send {
     fn build(&mut self,
              snap: &DbSnapshot,
@@ -180,7 +180,7 @@ mod v1 {
     use std::time::Instant;
     use crc::crc32::{self, Digest, Hasher32};
     use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
-    use rocksdb::{Writable, WriteBatch};
+    use rocksdb::{Writable, WriteBatch, CFHandle};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::RaftSnapshotData;
     use util::{HandyRwLock, rocksdb, duration_to_sec};
@@ -198,6 +198,57 @@ mod v1 {
     pub const SNAPSHOT_VERSION: u64 = 1;
     pub const CRC32_BYTES_COUNT: usize = 4;
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
+
+    pub fn build_plain_cf_file<E: BytesEncoder>(encoder: &mut E,
+                                                snap: &DbSnapshot,
+                                                cf: &str,
+                                                start_key: &[u8],
+                                                end_key: &[u8])
+                                                -> RaftStoreResult<(usize, usize)> {
+        let mut cf_key_count = 0;
+        let mut cf_size = 0;
+        try!(snap.scan_cf(cf,
+                          start_key,
+                          end_key,
+                          false,
+                          &mut |key, value| {
+            cf_key_count += 1;
+            cf_size += key.len() + value.len();
+            try!(encoder.encode_compact_bytes(key));
+            try!(encoder.encode_compact_bytes(value));
+            Ok(true)
+        }));
+        // use an empty byte array to indicate that cf reaches an end.
+        box_try!(encoder.encode_compact_bytes(b""));
+        Ok((cf_key_count, cf_size))
+    }
+
+    pub fn apply_plain_cf_file<D: CompactBytesDecoder>(decoder: &mut D,
+                                                       options: &ApplyOptions,
+                                                       handle: &CFHandle)
+                                                       -> Result<()> {
+        let mut wb = WriteBatch::new();
+        let mut batch_size = 0;
+        loop {
+            try!(check_abort(&options.abort));
+            let key = box_try!(decoder.decode_compact_bytes());
+            if key.is_empty() {
+                box_try!(options.db.write(wb));
+                break;
+            }
+            box_try!(util::check_key_in_region(keys::origin_key(&key), &options.region));
+            batch_size += key.len();
+            let value = box_try!(decoder.decode_compact_bytes());
+            batch_size += value.len();
+            box_try!(wb.put_cf(handle, &key, &value));
+            if batch_size >= options.write_batch_size {
+                box_try!(options.db.write(wb));
+                wb = WriteBatch::new();
+                batch_size = 0;
+            }
+        }
+        Ok(())
+    }
 
     /// A structure represents the snapshot.
     ///
@@ -341,21 +392,8 @@ mod v1 {
                     continue;
                 }
                 box_try!(self.encode_compact_bytes(cf.as_bytes()));
-                let mut cf_key_count = 0;
-                let mut cf_size = 0;
-                try!(snap.scan_cf(cf,
-                                  &begin_key,
-                                  &end_key,
-                                  false,
-                                  &mut |key, value| {
-                    cf_key_count += 1;
-                    cf_size += key.len() + value.len();
-                    try!(self.encode_compact_bytes(key));
-                    try!(self.encode_compact_bytes(value));
-                    Ok(true)
-                }));
-                // use an empty byte array to indicate that cf reaches an end.
-                box_try!(self.encode_compact_bytes(b""));
+                let (cf_key_count, cf_size) =
+                    try!(build_plain_cf_file(self, snap, cf, &begin_key, &end_key));
                 snap_key_count += cf_key_count;
                 SNAPSHOT_CF_KV_COUNT.with_label_values(&[cf]).observe(cf_key_count as f64);
                 SNAPSHOT_CF_SIZE.with_label_values(&[cf]).observe(cf_size as f64);
@@ -439,26 +477,7 @@ mod v1 {
                 let handle = box_try!(rocksdb::get_cf_handle(&options.db, unsafe {
                     str::from_utf8_unchecked(&cf)
                 }));
-                let mut wb = WriteBatch::new();
-                let mut batch_size = 0;
-                loop {
-                    try!(check_abort(&options.abort));
-                    let key = box_try!(reader.decode_compact_bytes());
-                    if key.is_empty() {
-                        box_try!(options.db.write(wb));
-                        break;
-                    }
-                    box_try!(util::check_key_in_region(keys::origin_key(&key), &options.region));
-                    batch_size += key.len();
-                    let value = box_try!(reader.decode_compact_bytes());
-                    batch_size += value.len();
-                    box_try!(wb.put_cf(handle, &key, &value));
-                    if batch_size >= options.write_batch_size {
-                        box_try!(options.db.write(wb));
-                        wb = WriteBatch::new();
-                        batch_size = 0;
-                    }
-                }
+                try!(apply_plain_cf_file(&mut reader, &options, handle));
             }
 
             box_try!(reader.validate());
@@ -662,19 +681,18 @@ mod v2 {
     use protobuf::{Message, RepeatedField};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
-    use rocksdb::{Writable, WriteBatch, EnvOptions, SstFileWriter, IngestExternalFileOptions};
+    use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions};
     use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
-    use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
     use raftstore::Result as RaftStoreResult;
 
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
-    use super::super::keys::{self, enc_start_key, enc_end_key};
-    use super::super::util;
+    use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Result,
                 SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
+    use super::v1::{build_plain_cf_file, apply_plain_cf_file};
 
     pub const SNAPSHOT_VERSION: u64 = 2;
     const META_FILE_SUFFIX: &'static str = ".meta";
@@ -1134,35 +1152,24 @@ mod v2 {
                     continue;
                 }
                 try!(self.switch_to_cf_file(cf));
-                let mut cf_key_count = 0;
-                let mut cf_size = 0;
-                if cf == CF_LOCK {
+                let (cf_key_count, cf_size) = if cf == CF_LOCK {
                     let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
-                    try!(snap.scan_cf(cf,
-                                      &begin_key,
-                                      &end_key,
-                                      false,
-                                      &mut |key, value| {
-                        cf_key_count += 1;
-                        cf_size += key.len() + value.len();
-                        try!(file.encode_compact_bytes(key));
-                        try!(file.encode_compact_bytes(value));
-                        Ok(true)
-                    }));
-                    // use an empty byte array to indicate that cf reaches an end.
-                    try!(file.encode_compact_bytes(b""));
+                    try!(build_plain_cf_file(file, snap, cf, &begin_key, &end_key))
                 } else {
+                    let mut key_count = 0;
+                    let mut size = 0;
                     try!(snap.scan_cf(cf,
                                       &begin_key,
                                       &end_key,
                                       false,
                                       &mut |key, value| {
-                                          cf_key_count += 1;
-                                          cf_size += key.len() + value.len();
+                                          key_count += 1;
+                                          size += key.len() + value.len();
                                           try!(self.add_kv(key, value));
                                           Ok(true)
                                       }));
-                }
+                    (key_count, size)
+                };
                 snap_key_count += cf_key_count;
                 SNAPSHOT_CF_KV_COUNT.with_label_values(&[cf]).observe(cf_key_count as f64);
                 SNAPSHOT_CF_SIZE.with_label_values(&[cf]).observe(cf_size as f64);
@@ -1302,27 +1309,7 @@ mod v2 {
                 let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, &cf_file.cf));
                 if cf_file.cf == CF_LOCK {
                     let mut file = box_try!(File::open(&cf_file.path));
-                    let mut wb = WriteBatch::new();
-                    let mut batch_size = 0;
-                    loop {
-                        try!(check_abort(&options.abort));
-                        let key = box_try!(file.decode_compact_bytes());
-                        if key.is_empty() {
-                            box_try!(options.db.write(wb));
-                            break;
-                        }
-                        box_try!(util::check_key_in_region(keys::origin_key(&key),
-                                                           &options.region));
-                        batch_size += key.len();
-                        let value = box_try!(file.decode_compact_bytes());
-                        batch_size += value.len();
-                        box_try!(wb.put_cf(cf_handle, &key, &value));
-                        if batch_size >= options.write_batch_size {
-                            box_try!(options.db.write(wb));
-                            wb = WriteBatch::new();
-                            batch_size = 0;
-                        }
-                    }
+                    try!(apply_plain_cf_file(&mut file, &options, cf_handle));
                 } else {
                     let ingest_opt = IngestExternalFileOptions::new().move_files(true);
                     let path = cf_file.path.as_path().to_str().unwrap();
