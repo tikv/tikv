@@ -291,6 +291,22 @@ impl AssertionStorage {
         self.store.resolve_lock(self.ctx.clone(), start_ts, commit_ts).unwrap();
     }
 
+    pub fn resolve_lock_with_illegal_tso(&self, sts: u64, cmt_ts: Option<u64>) {
+        let resp = self.store.resolve_lock(self.ctx.clone(), sts, cmt_ts);
+        assert!(resp.is_err());
+        let err = resp.unwrap_err();
+        match err {
+            storage::Error::Txn(txn::Error::InvalidTxnTso { start_ts, commit_ts }) => {
+                assert_eq!(sts, start_ts);
+                assert_eq!(cmt_ts.unwrap(), commit_ts);
+            }
+            _ => {
+                panic!("expect invalid tso error, but got {:?}", err);
+            }
+        }
+    }
+
+
     pub fn gc_ok(&self, safe_point: u64) {
         self.store.gc(self.ctx.clone(), safe_point).unwrap();
     }
