@@ -720,15 +720,12 @@ mod v2 {
         }
     }
 
-    fn get_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<(u64, SnapshotMeta)> {
-        let mut total_size = 0;
+    fn get_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
         let mut meta = Vec::with_capacity(cf_files.len());
         for cf_file in cf_files {
             if SNAPSHOT_CFS.iter().find(|&cf| cf_file.cf == *cf).is_none() {
                 return Err(box_err!("failed to encode invalid snapshot cf {}", cf_file.cf));
             }
-
-            total_size += cf_file.size;
 
             let mut cf_file_meta = SnapshotCFFile::new();
             cf_file_meta.set_cf(cf_file.cf.to_owned());
@@ -738,7 +735,7 @@ mod v2 {
         }
         let mut snapshot_meta = SnapshotMeta::new();
         snapshot_meta.set_cf_files(RepeatedField::from_vec(meta));
-        Ok((total_size, snapshot_meta))
+        Ok(snapshot_meta)
     }
 
     fn check_snapshot_meta(snapshot_meta: &SnapshotMeta) -> RaftStoreResult<Vec<CfName>> {
@@ -989,6 +986,7 @@ mod v2 {
 
         fn load_snapshot_meta(&mut self) -> RaftStoreResult<()> {
             let snapshot_meta = try!(self.read_snapshot_meta());
+            let _ = try!(check_snapshot_meta(&snapshot_meta));
             try!(self.set_snapshot_meta(snapshot_meta));
             Ok(())
         }
@@ -1033,6 +1031,11 @@ mod v2 {
 
         fn validate(&self) -> RaftStoreResult<()> {
             for cf_file in &self.cf_files {
+                if cf_file.size == 0 {
+                    // Skip empty file. The checksum of this cf file should be 0 and
+                    // this is checked when loading the snapshot meta.
+                    continue;
+                }
                 let size = try!(get_file_size(&cf_file.path));
                 if size != cf_file.size {
                     return Err(box_err!("invalid snapshot file size {} for cf {}, expected {}",
@@ -1177,6 +1180,11 @@ mod v2 {
             try!(self.save_cf_files());
             context.snapshot_kv_count = snap_key_count;
 
+            // save snapshot meta to meta file
+            let snapshot_meta = try!(get_snapshot_meta(&self.cf_files[..]));
+            self.meta_file.meta = snapshot_meta;
+            try!(self.save_meta_file());
+
             Ok(())
         }
     }
@@ -1190,18 +1198,18 @@ mod v2 {
                  -> RaftStoreResult<()> {
             let t = Instant::now();
             try!(self.do_build(snap, region, context));
+
             // set snapshot meta data
-            let (total_size, snapshot_meta) = try!(get_snapshot_meta(&self.cf_files[..]));
+            let total_size = try!(self.total_size());
             snap_data.set_file_size(total_size);
             snap_data.set_version(SNAPSHOT_VERSION);
-            snap_data.set_meta(snapshot_meta.clone());
-            // save snapshot meta file to meta file
-            self.meta_file.meta = snapshot_meta;
-            try!(self.save_meta_file());
+            snap_data.set_meta(self.meta_file.meta.clone());
+
             // add size
             let mut size_track = self.size_track.wl();
             *size_track = size_track.saturating_add(total_size);
             context.snapshot_size = total_size;
+
             SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
             info!("[region {}] scan snapshot {}, size {}, key count {}, takes {:?}",
                   region.get_id(),
@@ -1520,7 +1528,7 @@ mod v2 {
                 };
                 cf_file.push(f);
             }
-            let (_, meta) = super::get_snapshot_meta(&cf_file).unwrap();
+            let meta = super::get_snapshot_meta(&cf_file).unwrap();
             let _ = super::check_snapshot_meta(&meta).unwrap();
             for (i, cf_file_meta) in meta.get_cf_files().iter().enumerate() {
                 if cf_file_meta.get_cf() != cf_file[i].cf {
@@ -1650,6 +1658,44 @@ mod v2 {
 
             // Verify the data is correct after applying snapshot.
             assert_eq_db(db, dst_db.as_ref());
+        }
+
+        #[test]
+        fn test_empty_snap_validation() {
+            test_snap_validation(get_test_empty_db);
+        }
+
+        #[test]
+        fn test_non_empty_snap_validation() {
+            test_snap_validation(get_test_db);
+        }
+
+        fn test_snap_validation(get_db: fn(p: &TempDir) -> Result<Arc<DB>>) {
+            let region_id = 1;
+            let region = get_test_region(region_id, 1, 1);
+            let db_dir = TempDir::new("test-snap-validation-db").unwrap();
+            let db = get_db(&db_dir).unwrap();
+            let snapshot = DbSnapshot::new(db.clone());
+
+            let dir = TempDir::new("test-snap-validation").unwrap();
+            let key = SnapKey::new(region_id, 1, 1);
+            let size_track = Arc::new(RwLock::new(0));
+            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+            assert!(!s1.exists());
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data.set_region(region.clone());
+            let mut context = BuildContext::new();
+            s1.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
+            assert!(s1.exists());
+
+            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+            assert!(s2.exists());
+
+            s2.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
+            assert!(s2.exists());
         }
     }
 }
