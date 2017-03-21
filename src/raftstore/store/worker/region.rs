@@ -24,7 +24,7 @@ use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 
 use util::worker::Runnable;
-use util::{escape, HandyRwLock, rocksdb};
+use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
@@ -194,10 +194,10 @@ impl Runner {
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        let mut s = box_try!(self.mgr.rl().get_snapshot_for_applying(&snap_key));
-        self.mgr.wl().register(snap_key.clone(), SnapEntry::Applying);
+        let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
+        self.mgr.register(snap_key.clone(), SnapEntry::Applying);
         defer!({
-            self.mgr.wl().deregister(&snap_key, &SnapEntry::Applying);
+            self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));

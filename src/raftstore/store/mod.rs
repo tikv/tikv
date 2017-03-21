@@ -39,4 +39,4 @@ pub use self::engine::{Peekable, Iterable, Mutable};
 pub use self::peer_storage::{PeerStorage, do_snapshot, SnapState, RAFT_INIT_LOG_TERM,
                              RAFT_INIT_LOG_INDEX};
 pub use self::snap::{SnapKey, Snapshot, BuildContext, ApplyOptions, SnapEntry, SnapManager,
-                     new_snap_mgr, check_abort, copy_snapshot};
+                     check_abort, copy_snapshot};

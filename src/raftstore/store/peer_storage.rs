@@ -25,7 +25,6 @@ use kvproto::metapb::{self, Region};
 use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
-use util::HandyRwLock;
 use util::worker::Scheduler;
 use util::rocksdb;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
@@ -862,8 +861,8 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     let key = SnapKey::new(region_id, term, idx);
 
-    mgr.wl().register(key.clone(), SnapEntry::Generating);
-    defer!(mgr.wl().deregister(&key, &SnapEntry::Generating));
+    mgr.register(key.clone(), SnapEntry::Generating);
+    defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
     let state: RegionLocalState = try!(snap.get_msg(&keys::region_state_key(key.region_id))
         .and_then(|res| {
@@ -890,8 +889,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = try!(mgr.rl().get_snapshot_for_building(&key, snap));
-
+    let mut s = try!(mgr.get_snapshot_for_building(&key, snap));
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
@@ -977,11 +975,10 @@ mod test {
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, new_snap_mgr, SnapKey, copy_snapshot};
+    use raftstore::store::{bootstrap, SnapKey, copy_snapshot};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
     use util::worker::{Worker, Scheduler};
-    use util::HandyRwLock;
     use util::rocksdb::new_engine;
     use storage::ALL_CFS;
     use kvproto::eraftpb::HardState;
@@ -1138,9 +1135,9 @@ mod test {
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(),
-                               None,
-                               use_sst_file_snapshot);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
+                                   None,
+                                   use_sst_file_snapshot);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1299,9 +1296,9 @@ mod test {
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(),
-                               None,
-                               use_sst_file_snapshot);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
+                                   None,
+                                   use_sst_file_snapshot);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
@@ -1316,8 +1313,8 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
-        let from = mgr.rl().get_snapshot_for_sending(&key).unwrap();
-        let to = mgr.rl().get_snapshot_for_receiving(&key, b"").unwrap();
+        let from = mgr.get_snapshot_for_sending(&key).unwrap();
+        let to = mgr.get_snapshot_for_receiving(&key, b"").unwrap();
         copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();

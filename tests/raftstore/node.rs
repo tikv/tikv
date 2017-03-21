@@ -28,7 +28,7 @@ use tikv::raftstore::store::*;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::eraftpb::MessageType;
-use tikv::raftstore::{store, Result, Error};
+use tikv::raftstore::{Result, Error};
 use tikv::util::HandyRwLock;
 use tikv::util::transport::SendCh;
 use tikv::server::Config as ServerConfig;
@@ -82,24 +82,24 @@ impl Channel<RaftMessage> for ChannelTransport {
             let key = SnapKey::from_snap(snap).unwrap();
             let from = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
-                    p.0.wl().register(key.clone(), SnapEntry::Sending);
-                    p.0.rl().get_snapshot_for_sending(&key).unwrap()
+                    p.0.register(key.clone(), SnapEntry::Sending);
+                    p.0.get_snapshot_for_sending(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
             let to = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
-                    p.0.wl().register(key.clone(), SnapEntry::Receiving);
+                    p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
-                    p.0.rl().get_snapshot_for_receiving(&key, data).unwrap()
+                    p.0.get_snapshot_for_receiving(&key, data).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
 
             defer!({
                 let core = self.rl();
-                core.snap_paths[&from_store].0.wl().deregister(&key, &SnapEntry::Sending);
-                core.snap_paths[&to_store].0.wl().deregister(&key, &SnapEntry::Receiving);
+                core.snap_paths[&from_store].0.deregister(&key, &SnapEntry::Sending);
+                core.snap_paths[&to_store].0.deregister(&key, &SnapEntry::Receiving);
             });
 
             try!(copy_snapshot(from, to));
@@ -167,9 +167,9 @@ impl Simulator for NodeCluster {
         let (snap_mgr, tmp) = if node_id == 0 ||
                                  !self.trans.rl().snap_paths.contains_key(&node_id) {
             let tmp = TempDir::new("test_cluster").unwrap();
-            let snap_mgr = store::new_snap_mgr(tmp.path().to_str().unwrap(),
-                                               Some(node.get_sendch()),
-                                               cfg.raft_store.use_sst_file_snapshot);
+            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(),
+                                            Some(node.get_sendch()),
+                                            cfg.raft_store.use_sst_file_snapshot);
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.rl();

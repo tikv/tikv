@@ -27,7 +27,7 @@ use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_lo
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
-use tikv::raftstore::store::Msg as StoreMsg;
+use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
 use tikv::util::codec::{Error as CodecError, rpc};
 use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, ALL_CFS};
@@ -154,9 +154,9 @@ impl Simulator for ServerCluster {
         let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
         let simulate_trans = SimulateTransport::new(trans.clone());
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
-        let snap_mgr = store::new_snap_mgr(tmp_str,
-                                           Some(node.get_sendch()),
-                                           cfg.raft_store.use_sst_file_snapshot);
+        let snap_mgr = SnapManager::new(tmp_str,
+                                        Some(node.get_sendch()),
+                                        cfg.raft_store.use_sst_file_snapshot);
 
         node.start(store_event_loop,
                    engine.clone(),

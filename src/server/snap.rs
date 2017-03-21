@@ -28,7 +28,7 @@ use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
 use util::codec::rpc;
 use util::buf::PipeBuffer;
-use util::{HandyRwLock, HashMap};
+use util::HashMap;
 use util::transport::SendCh;
 
 use super::metrics::*;
@@ -85,10 +85,10 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(&snap));
-    mgr.wl().register(key.clone(), SnapEntry::Sending);
-    let mut s = box_try!(mgr.rl().get_snapshot_for_sending(&key));
+    mgr.register(key.clone(), SnapEntry::Sending);
+    let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
     defer!({
-        mgr.wl().deregister(&key, &SnapEntry::Sending);
+        mgr.deregister(&key, &SnapEntry::Sending);
     });
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
@@ -149,9 +149,10 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
                 match SnapKey::from_snap(meta.get_message().get_snapshot()).and_then(|key| {
-                    match mgr.rl()
-                        .get_snapshot_for_receiving(&key,
-                                                    meta.get_message().get_snapshot().get_data()) {
+                    match mgr.get_snapshot_for_receiving(&key,
+                                                         meta.get_message()
+                                                             .get_snapshot()
+                                                             .get_data()) {
                         Ok(s) => Ok((s, key)),
                         Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.description())),
                     }
@@ -167,7 +168,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             return;
                         }
                         debug!("begin to receive snap {:?}", meta);
-                        mgr.wl().register(key, SnapEntry::Receiving);
+                        mgr.register(key, SnapEntry::Receiving);
                         self.files.insert(token, (snap, meta));
                     }
                     Err(e) => {
@@ -191,7 +192,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                                    err);
                             let (_, msg) = e.remove();
                             let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
-                            self.snap_mgr.wl().deregister(&key, &SnapEntry::Receiving);
+                            self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
                             should_close = true;
                         }
                     }
@@ -208,7 +209,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
                         info!("saving snapshot to {}", snap.path());
                         defer!({
-                            self.snap_mgr.wl().deregister(&key, &SnapEntry::Receiving);
+                            self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
                             self.close(token);
                         });
                         if let Err(e) = snap.save() {
@@ -232,7 +233,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     debug!("discard snapshot: {:?}", msg);
                     // because token is inserted, following can't panic.
                     let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
-                    self.snap_mgr.wl().deregister(&key, &SnapEntry::Receiving);
+                    self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
                 }
             }
             Task::SendTo { addr, data, cb } => {

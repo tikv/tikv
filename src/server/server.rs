@@ -658,7 +658,7 @@ mod tests {
     use kvproto::msgpb::{Message, MessageType};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
-    use raftstore::store::{self, Msg as StoreMsg};
+    use raftstore::store::Msg as StoreMsg;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -733,7 +733,7 @@ mod tests {
                         storage,
                         ch,
                         resolver,
-                        store::new_snap_mgr("", None, cfg.raft_store.use_sst_file_snapshot))
+                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
                 .unwrap();
 
         for i in 0..10 {
