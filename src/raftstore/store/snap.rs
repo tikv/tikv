@@ -1167,7 +1167,7 @@ mod v2 {
                 snap_key_count += cf_key_count;
                 SNAPSHOT_CF_KV_COUNT.with_label_values(&[cf]).observe(cf_key_count as f64);
                 SNAPSHOT_CF_SIZE.with_label_values(&[cf]).observe(cf_size as f64);
-                info!("[region {} scan snapshot {}, cf {}, key count {}, size {}",
+                info!("[region {}] scan snapshot {}, cf {}, key count {}, size {}",
                       region.get_id(),
                       self.path(),
                       cf,
