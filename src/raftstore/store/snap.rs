@@ -699,6 +699,10 @@ mod v2 {
     const DIGEST_BUFFER_SIZE: usize = 10240;
     const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
+    fn plain_file_used(cf: &str) -> bool {
+        cf == CF_LOCK
+    }
+
     fn get_file_size(path: &PathBuf) -> io::Result<u64> {
         let meta = try!(fs::metadata(path));
         Ok(meta.len())
@@ -913,7 +917,7 @@ mod v2 {
             }
             let env_opt = EnvOptions::new();
             for cf_file in &mut self.cf_files {
-                if cf_file.cf == CF_LOCK {
+                if plain_file_used(cf_file.cf) {
                     let f = try!(OpenOptions::new()
                         .write(true)
                         .create_new(true)
@@ -1091,7 +1095,7 @@ mod v2 {
 
         fn save_cf_files(&mut self) -> io::Result<()> {
             for cf_file in &mut self.cf_files {
-                if cf_file.cf == CF_LOCK {
+                if plain_file_used(cf_file.cf) {
                     let _ = cf_file.file.take();
                 } else if cf_file.kv_count == 0 {
                     let _ = cf_file.sst_writer.take().unwrap();
@@ -1152,7 +1156,7 @@ mod v2 {
                     continue;
                 }
                 try!(self.switch_to_cf_file(cf));
-                let (cf_key_count, cf_size) = if cf == CF_LOCK {
+                let (cf_key_count, cf_size) = if plain_file_used(cf) {
                     let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
                     try!(build_plain_cf_file(file, snap, cf, &begin_key, &end_key))
                 } else {
@@ -1307,7 +1311,7 @@ mod v2 {
 
                 try!(check_abort(&options.abort));
                 let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, &cf_file.cf));
-                if cf_file.cf == CF_LOCK {
+                if plain_file_used(cf_file.cf) {
                     let mut file = box_try!(File::open(&cf_file.path));
                     try!(apply_plain_cf_file(&mut file, &options, cf_handle));
                 } else {
