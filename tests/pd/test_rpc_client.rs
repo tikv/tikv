@@ -23,18 +23,6 @@ use super::mock::case::*;
 use super::mock::Server as MockServer;
 
 #[test]
-fn _3_logger_setup() {
-    // Set up ci test fail case log.
-    // The prefix "_" here is to guarantee running this case first.
-
-    use std::env;
-    use util;
-    if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
-        util::init_log();
-    }
-}
-
-#[test]
 fn test_rpc_client() {
     let eps = "http://127.0.0.1:3079".to_owned();
 
