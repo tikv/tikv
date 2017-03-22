@@ -13,7 +13,6 @@
 
 use std::usize;
 use std::collections::BinaryHeap;
-use std::collections::hash_map::Entry;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -36,8 +35,9 @@ use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
-use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
+use util::{escape, duration_to_ms, duration_to_sec, Either};
 use util::worker::{BatchRunnable, Scheduler};
+use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use server::OnResponse;
 
 use super::{Error, Result};
@@ -1156,7 +1156,7 @@ mod tests {
     use util::codec::Datum;
     use util::xeval::EvalContext;
     use util::codec::table::RowColsDict;
-    use util::HashMap;
+    use util::collections::HashMap;
 
     use std::rc::Rc;
     use std::sync::*;

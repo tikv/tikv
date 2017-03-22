@@ -23,7 +23,8 @@ use util::codec::datum::{Datum, DatumDecoder};
 use util::codec::mysql::DecimalDecoder;
 use util::codec::mysql::{MAX_FSP, Duration};
 use util::TryInsertWith;
-use util::{codec, HashMap};
+use util::codec;
+use util::collections::HashMap;
 
 use super::{Result, Error};
 

@@ -17,7 +17,7 @@ use std::path::Path;
 use storage::CF_DEFAULT;
 use rocksdb::{DB, Options, SliceTransform};
 
-use super::HashSet;
+use super::collections::HashSet;
 
 pub use rocksdb::CFHandle;
 

@@ -17,7 +17,8 @@ use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
 
 use util::xeval::EvalContext;
-use util::{escape, HashMap, HashSet, BuildHasherDefault};
+use util::escape;
+use util::collections::{HashMap, HashSet, BuildHasherDefault};
 
 use super::number::{NumberDecoder, NumberEncoder};
 use super::bytes::BytesDecoder;
@@ -334,7 +335,7 @@ mod test {
     use util::codec::mysql::types;
     use util::codec::datum::{self, Datum, DatumDecoder};
     use util::codec::number::NumberEncoder;
-    use util::{HashMap, HashSet, BuildHasherDefault};
+    use util::collections::{HashMap, HashSet, BuildHasherDefault};
 
     use super::*;
 

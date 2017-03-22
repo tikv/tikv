@@ -17,14 +17,13 @@ use std::io;
 use std::{slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
-use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-
 use std::collections::vec_deque::{Iter, VecDeque};
 
 use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
+use util::collections::HashMapEntry as Entry;
 
 #[macro_use]
 pub mod macros;
@@ -42,10 +41,9 @@ pub mod time_monitor;
 pub mod file_log;
 pub mod clocktime;
 pub mod metrics;
+pub mod collections;
 #[cfg(target_os="linux")]
 mod thread_metrics;
-
-pub use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet, FnvBuildHasher as BuildHasherDefault};
 
 pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     if entries.is_empty() {

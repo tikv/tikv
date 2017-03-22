@@ -48,10 +48,11 @@ use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
 use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
+use tikv::util::collections::HashMap;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
                    Config, bind, create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};

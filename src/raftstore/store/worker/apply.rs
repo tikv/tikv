@@ -13,11 +13,9 @@
 
 
 use std::sync::Arc;
-use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::fmt::{self, Display, Formatter};
 use std::collections::VecDeque;
-use std::collections::hash_map::Entry as MapEntry;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use uuid::Uuid;
@@ -31,6 +29,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
+use util::collections::{HashMap, HashMapEntry as MapEntry, BuildHasherDefault};
 use storage::{CF_LOCK, CF_RAFT};
 use raftstore::{Result, Error};
 use raftstore::store::{Store, cmd_resp, keys, util};
@@ -1044,7 +1043,8 @@ pub struct Runner {
 
 impl Runner {
     pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>) -> Runner {
-        let mut delegates = HashMap::with_capacity(store.get_peers().len());
+        let mut delegates = HashMap::with_capacity_and_hasher(store.get_peers().len(),
+                                                              BuildHasherDefault::default());
         for (&region_id, p) in store.get_peers() {
             delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }

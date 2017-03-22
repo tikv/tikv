@@ -15,7 +15,6 @@ use std::fmt::{self, Formatter, Display};
 use std::io;
 use std::net::{SocketAddr, TcpStream};
 use std::io::Read;
-use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
 use std::time::{Instant, Duration};
 
@@ -27,7 +26,7 @@ use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
 use util::codec::rpc;
 use util::buf::PipeBuffer;
-use util::HashMap;
+use util::collections::{HashMap, HashMapEntry as Entry};
 use util::transport::SendCh;
 
 use super::metrics::*;
