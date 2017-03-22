@@ -61,6 +61,7 @@ extern crate url;
 extern crate fs2;
 extern crate regex;
 extern crate fnv;
+extern crate ordermap;
 
 #[macro_use]
 pub mod util;

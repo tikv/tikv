@@ -65,14 +65,13 @@ macro_rules! count_args {
 macro_rules! map {
     () => {
         {
-            $crate::util::collections::HashMap::default()
+            $crate::util::collections::HashMap::new()
         }
     };
     ( $( $k:expr => $v:expr ),+ ) => {
         {
-            let mut temp_map = $crate::util::collections::HashMap::with_capacity_and_hasher(
-                count_args!($(($k, $v)),+),
-                $crate::util::BuildHasherDefault::default());
+            let mut temp_map = $crate::util::collections::HashMap::with_capacity(
+                count_args!($(($k, $v)),+));
             $(
                 temp_map.insert($k, $v);
             )+

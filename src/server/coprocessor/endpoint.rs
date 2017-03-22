@@ -669,20 +669,23 @@ impl SelectContextCore {
             for item in sel.get_group_by() {
                 try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, item.get_expr()));
             }
-            if !aggr_cols_map.is_empty() {
+            if !aggr_cols_map.len() == 0 {
                 for cond_col in cond_col_map.keys() {
                     aggr_cols_map.remove(cond_col);
                 }
-                aggr_cols = aggr_cols_map.drain().map(|(_, v)| v).collect();
+                aggr_cols = aggr_cols_map.clone().into_iter().map(|(_, v)| v).collect();
+                aggr_cols_map.clear();
             }
-            cond_cols = cond_col_map.drain().map(|(_, v)| v).collect();
+            cond_cols = cond_col_map.clone().into_iter().map(|(_, v)| v).collect();
+            cond_col_map.clear();
 
             // get topn cols
             let mut topn_col_map = HashMap::default();
             for item in sel.get_order_by() {
                 try!(collect_col_in_expr(&mut topn_col_map, select_cols, item.get_expr()))
             }
-            topn_cols = topn_col_map.drain().map(|(_, v)| v).collect();
+            topn_cols = topn_col_map.clone().into_iter().map(|(_, v)| v).collect();
+            topn_col_map.clear();
             order_by_cols.extend_from_slice(sel.get_order_by())
         }
 

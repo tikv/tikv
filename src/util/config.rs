@@ -468,7 +468,7 @@ mod test {
         }
 
         let map = parse_store_labels("").unwrap();
-        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
 
         let map = parse_store_labels("a=0").unwrap();
         assert_eq!(map.get("a").unwrap(), "0");

@@ -277,7 +277,7 @@ impl<T: Storage> Raft<T> {
             raft_log: raft_log,
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
-            prs: HashMap::with_capacity_and_hasher(peers.len(), BuildHasherDefault::default()),
+            prs: HashMap::with_capacity(peers.len()),
             state: StateRole::Follower,
             check_quorum: c.check_quorum,
             pre_vote: c.pre_vote,
@@ -1567,8 +1567,7 @@ impl<T: Storage> Raft<T> {
               self.raft_log.last_term(),
               meta.get_index(),
               meta.get_term());
-        self.prs = HashMap::with_capacity_and_hasher(meta.get_conf_state().get_nodes().len(),
-                                                     BuildHasherDefault::default());
+        self.prs = HashMap::with_capacity(meta.get_conf_state().get_nodes().len());
         for &n in meta.get_conf_state().get_nodes() {
             let next_idx = self.raft_log.last_index() + 1;
             let matched = if n == self.id { next_idx - 1 } else { 0 };
@@ -1616,7 +1615,7 @@ impl<T: Storage> Raft<T> {
         self.pending_conf = false;
 
         // do not try to commit or abort transferring if there is no nodes in the cluster.
-        if self.prs.is_empty() {
+        if self.prs.len() == 0 {
             return;
         }
 
