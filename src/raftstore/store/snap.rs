@@ -229,7 +229,7 @@ mod v1 {
             try!(check_abort(&options.abort));
             let key = box_try!(decoder.decode_compact_bytes());
             if key.is_empty() {
-                if batch_size != 0 {
+                if batch_size > 0 {
                     box_try!(options.db.write(wb));
                 }
                 break;
@@ -835,6 +835,7 @@ mod v2 {
             };
             let prefix = format!("{}_{}", snap_prefix, key);
             let display_path = Snap::get_display_path(&dir_path, &prefix);
+
             let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
             for cf in cfs {
                 let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
@@ -848,6 +849,7 @@ mod v2 {
                 };
                 cf_files.push(cf_file);
             }
+
             let meta_filename = format!("{}{}", prefix, META_FILE_SUFFIX);
             let meta_path = dir_path.join(&meta_filename);
             let meta_tmp_path = dir_path.join(format!("{}{}", meta_filename, TMP_FILE_SUFFIX));
@@ -856,6 +858,7 @@ mod v2 {
                 tmp_path: meta_tmp_path,
                 ..Default::default()
             };
+
             let mut s = Snap {
                 display_path: display_path,
                 cf_files: cf_files,
@@ -1169,9 +1172,9 @@ mod v2 {
                       cf_key_count,
                       cf_size);
             }
+
             try!(self.save_cf_files());
             context.snapshot_kv_count = snap_key_count;
-
             // save snapshot meta to meta file
             let snapshot_meta = try!(get_snapshot_meta(&self.cf_files[..]));
             self.meta_file.meta = snapshot_meta;
@@ -1340,6 +1343,7 @@ mod v2 {
             if buf.len() == 0 {
                 return Ok(0);
             }
+
             let mut next_buf = buf;
             while self.cf_index < self.cf_files.len() {
                 let cf_file = &mut self.cf_files[self.cf_index];
@@ -1347,11 +1351,13 @@ mod v2 {
                     self.cf_index += 1;
                     continue;
                 }
+
                 let left = (cf_file.size - cf_file.written_size) as usize;
                 if left == 0 {
                     self.cf_index += 1;
                     continue;
                 }
+
                 let mut file = cf_file.file.as_mut().unwrap();
                 let mut digest = cf_file.write_digest.as_mut().unwrap();
                 if next_buf.len() > left {
@@ -1367,6 +1373,7 @@ mod v2 {
                     return Ok(buf.len());
                 }
             }
+
             let n = buf.len() - next_buf.len();
             Ok(n)
         }
