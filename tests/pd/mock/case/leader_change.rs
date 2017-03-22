@@ -23,7 +23,7 @@ use kvproto::pdpb::*;
 use super::Case;
 use super::Result;
 
-pub const LEADER_INTERVAL: u64 = 5;
+pub const LEADER_INTERVAL_SEC: u64 = 2;
 
 #[derive(Debug)]
 struct Roulette {
@@ -81,7 +81,7 @@ impl LeaderChange {
     }
 
     pub fn get_leader_interval() -> Duration {
-        Duration::from_secs(LEADER_INTERVAL)
+        Duration::from_secs(LEADER_INTERVAL_SEC)
     }
 }
 
@@ -93,7 +93,7 @@ impl Case for LeaderChange {
     fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut r = self.r.lock().unwrap();
         let now = Instant::now();
-        if now.duration_since(r.ts) > Duration::from_secs(LEADER_INTERVAL) {
+        if now.duration_since(r.ts) > LeaderChange::get_leader_interval() {
             r.idx += 1;
             r.ts = now;
             return Some(Err(GrpcError::Other("not leader")));
@@ -110,7 +110,7 @@ impl Case for LeaderChange {
 
         let mut r = self.r.lock().unwrap();
         let now = Instant::now();
-        if now.duration_since(r.ts) > Duration::from_secs(LEADER_INTERVAL) {
+        if now.duration_since(r.ts) > LeaderChange::get_leader_interval() {
             r.idx += 1;
             r.ts = now;
             return Some(Err(GrpcError::Other("not leader")));

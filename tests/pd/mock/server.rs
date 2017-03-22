@@ -24,6 +24,7 @@ use kvproto::pdpb::*;
 use kvproto::pdpb_grpc::{PDAsync, PDAsyncServer};
 
 use super::Case;
+use super::case::Result;
 
 pub struct Server {
     _server: PDAsyncServer,
@@ -43,22 +44,23 @@ impl Server {
     }
 }
 
-macro_rules! try_takeover {
-    ($sel:ident.$method:ident($($arg:expr),*)) => ({
-        if let Some(ref case) = $sel.case {
-            match case.$method($($arg),*) {
-                Some(Ok(resp)) => return futures::future::ok(resp).boxed(),
-                Some(Err(err)) => return futures::future::err(err).boxed(),
-                _ => (),
-            }
+fn try_takeover<F, R, A: Case, B: Case>(mock: &Mock<A, B>, f: F) -> GrpcFutureSend<R>
+    where R: Send + 'static,
+          F: Fn(&Case) -> Option<Result<R>>
+{
+    if let Some(ref case) = mock.case {
+        match f(case.as_ref()) {
+            Some(Ok(resp)) => return futures::future::ok(resp).boxed(),
+            Some(Err(err)) => return futures::future::err(err).boxed(),
+            _ => (),
         }
+    }
 
-        match $sel.handler.$method($($arg),*) {
-            Some(Ok(resp)) => futures::future::ok(resp).boxed(),
-            Some(Err(err)) => futures::future::err(err).boxed(),
-            _ => futures::future::err(GrpcError::Other("unimpl")).boxed(),
-        }
-    })
+    match f(mock.handler.as_ref()) {
+        Some(Ok(resp)) => futures::future::ok(resp).boxed(),
+        Some(Err(err)) => futures::future::err(err).boxed(),
+        _ => futures::future::err(GrpcError::Other("unimpl")).boxed(),
+    }
 }
 
 #[derive(Debug)]
@@ -69,7 +71,7 @@ struct Mock<C: Case, H: Case> {
 
 impl<C: Case, H: Case> PDAsync for Mock<C, H> {
     fn GetMembers(&self, req: GetMembersRequest) -> GrpcFutureSend<GetMembersResponse> {
-        try_takeover!(self.GetMembers(&req))
+        try_takeover(self, |c| c.GetMembers(&req))
     }
 
     fn Tso(&self, _: GrpcStreamSend<TsoRequest>) -> GrpcStreamSend<TsoResponse> {
@@ -77,19 +79,19 @@ impl<C: Case, H: Case> PDAsync for Mock<C, H> {
     }
 
     fn Bootstrap(&self, req: BootstrapRequest) -> GrpcFutureSend<BootstrapResponse> {
-        try_takeover!(self.Bootstrap(&req))
+        try_takeover(self, |c| c.Bootstrap(&req))
     }
 
     fn IsBootstrapped(&self, req: IsBootstrappedRequest) -> GrpcFutureSend<IsBootstrappedResponse> {
-        try_takeover!(self.IsBootstrapped(&req))
+        try_takeover(self, |c| c.IsBootstrapped(&req))
     }
 
     fn AllocID(&self, req: AllocIDRequest) -> GrpcFutureSend<AllocIDResponse> {
-        try_takeover!(self.AllocID(&req))
+        try_takeover(self, |c| c.AllocID(&req))
     }
 
     fn GetStore(&self, req: GetStoreRequest) -> GrpcFutureSend<GetStoreResponse> {
-        try_takeover!(self.GetStore(&req))
+        try_takeover(self, |c| c.GetStore(&req))
     }
 
     fn PutStore(&self, _: PutStoreRequest) -> GrpcFutureSend<PutStoreResponse> {
@@ -111,7 +113,7 @@ impl<C: Case, H: Case> PDAsync for Mock<C, H> {
     }
 
     fn GetRegionByID(&self, req: GetRegionByIDRequest) -> GrpcFutureSend<GetRegionResponse> {
-        try_takeover!(self.GetRegionByID(&req))
+        try_takeover(self, |c| c.GetRegionByID(&req))
     }
 
     fn AskSplit(&self, _: AskSplitRequest) -> GrpcFutureSend<AskSplitResponse> {
