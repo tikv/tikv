@@ -13,34 +13,48 @@
 
 
 use tikv::storage::CF_LOCK;
-use tikv::util::rocksdb::get_cf_handle;
-use rocksdb::Range;
+use rocksdb::DBStatisticsTickerType;
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
 
 fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.lock_cf_compact_interval = 1000;
+    let interval = 500;
+    // set lock_cf_compact_interval.
+    cluster.cfg.raft_store.lock_cf_compact_interval = interval;
+    // set lock_cf_compact_threshold.
+    cluster.cfg.raft_store.lock_cf_compact_threshold = 100;
     cluster.run();
 
     for i in 1..9 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
     }
-    for i in 1..9 {
-        let k = format!("k{}", i);
-        cluster.must_delete_cf(CF_LOCK, k.as_bytes());
-    }
 
-    // wait for compacting cf-lock
-    sleep_ms(2000);
+    // wait for reach the lock_cf_compact_interval, but not reach
+    // lock_cf_compact_threshold, so there is no compaction.
+    sleep_ms(interval * 2);
 
     for engine in cluster.engines.values() {
-        let cf_handle = get_cf_handle(engine, CF_LOCK).unwrap();
-        let approximate_size =
-            engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
-        assert_eq!(approximate_size, 0);
+        let compact_write_bytes =
+            engine.get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
+        assert_eq!(compact_write_bytes, 0);
+    }
+
+    for i in 10..999 {
+        let (k, v) = (format!("k{}", i), format!("value{}", i));
+        cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
+    }
+
+    // wait for reach the lock_cf_compact_interval, and reach
+    // lock_cf_compact_threshold, fire compaction.
+    sleep_ms(interval * 2);
+
+    for engine in cluster.engines.values() {
+        let compact_write_bytes =
+            engine.get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
+        assert!(compact_write_bytes > 0);
     }
 }
 

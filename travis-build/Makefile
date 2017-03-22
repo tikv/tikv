@@ -66,9 +66,9 @@ prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov ${LOCAL_DIR}
 
 prepare_brew:
 	brew update && \
-	brew install gflags snappy
+	brew install gflags snappy rocksdb
 
-prepare_osx: ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/bin/pd-server | prepare_brew prepare_rust
+prepare_osx: ${LOCAL_DIR}/bin/pd-server | prepare_brew prepare_rust
 
 test_linux test_osx:
 	export CI=true && ${CI_BUILD_DIR}/test.sh

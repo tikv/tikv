@@ -16,9 +16,12 @@ use std::option::Option;
 use uuid::Uuid;
 
 use kvproto::metapb;
-use kvproto::eraftpb::{self, ConfChangeType};
+use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Result, Error};
+
+use super::peer_storage;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     for peer in region.get_peers() {
@@ -69,6 +72,12 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
     }
+}
+
+#[inline]
+pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
+    msg.get_message().get_msg_type() == MessageType::MsgRequestVote &&
+    msg.get_message().get_term() == peer_storage::RAFT_INIT_LOG_TERM + 1
 }
 
 const STR_CONF_CHANGE_ADD_NODE: &'static str = "AddNode";

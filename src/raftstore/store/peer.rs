@@ -64,6 +64,14 @@ struct ReadIndexRequest {
     renew_lease_time: Timespec,
 }
 
+impl Drop for ReadIndexRequest {
+    fn drop(&mut self) {
+        if !self.cmds.is_empty() {
+            panic!("callback of index read {} is leak.", self.uuid);
+        }
+    }
+}
+
 #[derive(Default)]
 struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
@@ -72,8 +80,8 @@ struct ReadIndexQueue {
 
 impl ReadIndexQueue {
     fn clear_uncommitted(&mut self, tag: &str, term: u64) {
-        for read in self.reads.drain(self.ready_cnt..) {
-            for (req, cb) in read.cmds {
+        for mut read in self.reads.drain(self.ready_cnt..) {
+            for (req, cb) in read.cmds.drain(..) {
                 let uuid = util::get_uuid_from_req(&req).unwrap();
                 apply::notify_stale_req(tag, term, uuid, cb);
             }
@@ -365,6 +373,14 @@ impl Peer {
                 error!("{} failed to schedule clear data task: {:?}", self.tag, e);
             }
         }
+
+        for mut read in self.pending_reads.reads.drain(..) {
+            for (req, cb) in read.cmds.drain(..) {
+                let uuid = util::get_uuid_from_req(&req).unwrap();
+                apply::notify_req_region_removed(region.get_id(), self.peer.get_id(), uuid, cb);
+            }
+        }
+
         self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 
@@ -402,41 +418,6 @@ impl Peer {
 
     pub fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
-    }
-
-    // When this peer is the leader of the region before split,
-    // `accelerate_campaign_ticks` specifies the tick number to be accelerated
-    // after the region split. So this peer of new split region may campaign and become leader
-    // earlier than other follower peers.
-    pub fn accelerate_campaign_ticks(&self) -> usize {
-        // The best case for the fast campaign after a split is:
-        //   1. The leader of old region replicates the log entry (it's called S later)
-        //      which contains split request to quorum by sending out AppendEntries requests.
-        //   2. The leader of old region commits the log entry S.
-        //   3. The leader of old region send AppendEntries (it's call C later) requests to
-        //      tell followers to commit the log entry S.
-        //   4. The leader of old region applies this log entry S, and then raftstore
-        //      accelerates ticks for the peer of the new region. This peer shares the same store
-        //      with old leader. It will start to campaign soon and send out RequestVote requests
-        //      (they are called V later).
-        //   5. The followers receive AppendEntries requests from leader for replication in 1,
-        //      and then make it persistent and applie the split log entry so that
-        //      create a new region.
-        //   6. The followers receive RequestVote requests from leader in 4, and then vote
-        //      the campaign.
-        // However it's possible that 4 happens before 3, if RequestVote requests V in 4 is sent
-        // to the followers earlier than AppendEntries requests C in 3, the followers would not
-        // be ready to vote the campaign as 6 describes. Then the tick acceleration in 4 would be
-        // useless, so the campaign still happens after the election timeout.
-        // To make the best case happen at high degree of possibility, a time gap of
-        // `accelerate_campaign_reserved_ticks * raft_base_tick_interval` is reserved for
-        // the followers to receive AppendEntries request and to apply them.
-        let ticks = self.raft_group.raft.get_randomized_election_timeout() -
-                    self.cfg.accelerate_campaign_reserved_ticks;
-        debug!("{} about to accelerate {} ticks for fast campaign after split",
-               self.tag,
-               ticks);
-        ticks
     }
 
     #[inline]
@@ -777,9 +758,12 @@ impl Peer {
         let mut propose_time = None;
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
-                let read = self.pending_reads.reads.pop_front().unwrap();
+                let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.uuid.as_bytes());
-                for (req, cb) in read.cmds {
+                for (req, cb) in read.cmds.drain(..) {
+                    // TODO: we should add test case that a split happens before pending
+                    // read-index is handled. To do this we need to control async-apply
+                    // procedure precisely.
                     self.handle_read(req, cb);
                 }
                 propose_time = Some(read.renew_lease_time);
@@ -795,12 +779,10 @@ impl Peer {
 
         // Note that only after handle read_states can we identify what requests are
         // actually stale.
-        if let Some(ref ss) = ready.ss {
-            if ss.raft_state != StateRole::Leader {
-                let term = self.term();
-                // all uncommitted reads will be dropped silently in raft.
-                self.pending_reads.clear_uncommitted(&self.tag, term);
-            }
+        if ready.ss.is_some() {
+            let term = self.term();
+            // all uncommitted reads will be dropped silently in raft.
+            self.pending_reads.clear_uncommitted(&self.tag, term);
         }
 
         if let Some(Either::Right(_)) = self.leader_lease_expired_time {
@@ -844,8 +826,8 @@ impl Peer {
 
         if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
             for _ in 0..self.pending_reads.ready_cnt {
-                let read = self.pending_reads.reads.pop_front().unwrap();
-                for (req, cb) in read.cmds {
+                let mut read = self.pending_reads.reads.pop_front().unwrap();
+                for (req, cb) in read.cmds.drain(..) {
                     self.handle_read(req, cb);
                 }
             }
@@ -900,6 +882,27 @@ impl Peer {
         };
 
         self.update_lease_with(propose_time);
+
+        true
+    }
+
+    pub fn maybe_campaign(&mut self,
+                          last_peer: &Peer,
+                          pending_raft_groups: &mut HashSet<u64>)
+                          -> bool {
+        if self.region().get_peers().len() <= 1 {
+            // The peer campaigned when it was created, no need to do it again.
+            return false;
+        }
+
+        if !last_peer.is_leader() {
+            return false;
+        }
+
+        // If last peer is the leader of the region before split, it's intuitional for
+        // it to become the leader of new split region.
+        let _ = self.raft_group.campaign();
+        self.mark_to_be_checked(pending_raft_groups);
 
         true
     }
@@ -1319,6 +1322,13 @@ impl Peer {
     pub fn term(&self) -> u64 {
         self.raft_group.raft.term
     }
+
+    pub fn stop(&mut self) {
+        self.mut_store().cancel_applying_snap();
+        for mut read in self.pending_reads.reads.drain(..) {
+            read.cmds.clear();
+        }
+    }
 }
 
 pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> {
@@ -1467,6 +1477,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
+        try!(check_epoch(self.region(), req));
         let snap = Snapshot::new(self.engine.clone());
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());

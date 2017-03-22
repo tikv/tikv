@@ -47,17 +47,10 @@ pub struct PendingCmd {
     pub cb: Option<Callback>,
 }
 
-impl PendingCmd {
-    #[inline]
-    fn call(&mut self, resp: RaftCmdResponse) {
-        self.cb.take().unwrap().call_box((resp,));
-    }
-}
-
 impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
-            panic!("callback of {} is leak.", self.uuid);
+            panic!("callback of pending command {} is leak.", self.uuid);
         }
     }
 }
@@ -119,15 +112,19 @@ pub enum ExecResult {
 }
 
 /// Call the callback of `cmd` that the region is removed.
-pub fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
+    notify_req_region_removed(region_id, peer_id, cmd.uuid, cmd.cb.take().unwrap());
+}
+
+pub fn notify_req_region_removed(region_id: u64, peer_id: u64, uuid: Uuid, cb: Callback) {
     let region_not_found = Error::RegionNotFound(region_id);
     let mut resp = cmd_resp::new_error(region_not_found);
-    cmd_resp::bind_uuid(&mut resp, cmd.uuid);
+    cmd_resp::bind_uuid(&mut resp, uuid);
     debug!("[region {}] {} is removed, notify {}.",
            region_id,
            peer_id,
-           cmd.uuid);
-    cmd.call(resp);
+           uuid);
+    cb(resp);
 }
 
 /// Call the callback of `cmd` when it can not be processed further.
@@ -656,8 +653,7 @@ impl ApplyDelegate {
                                 new_peer_ids.len()));
         }
 
-        for (index, peer) in new_region.mut_peers().iter_mut().enumerate() {
-            let peer_id = new_peer_ids[index];
+        for (peer, &peer_id) in new_region.mut_peers().iter_mut().zip(new_peer_ids) {
             peer.set_id(peer_id);
         }
 
@@ -766,6 +762,10 @@ impl ApplyDelegate {
         self.metrics.size_diff_hint += value.len() as i64;
         if req.get_put().has_cf() {
             let cf = req.get_put().get_cf();
+            if cf == CF_LOCK {
+                self.metrics.lock_cf_written_bytes += key.len() as u64;
+                self.metrics.lock_cf_written_bytes += value.len() as u64;
+            }
             // TODO: check whether cf exists or not.
             rocksdb::get_cf_handle(&self.engine, cf)
                 .and_then(|handle| ctx.wb.put_cf(handle, &key, value))
@@ -805,8 +805,11 @@ impl ApplyDelegate {
                 .unwrap_or_else(|e| {
                     panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
                 });
-            // lock cf is compact periodically.
-            if cf != CF_LOCK {
+
+            if cf == CF_LOCK {
+                // delete is a kind of write for RocksDB.
+                self.metrics.lock_cf_written_bytes += key.len() as u64;
+            } else {
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
@@ -1015,6 +1018,7 @@ pub struct ApplyMetrics {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub lock_cf_written_bytes: u64,
 }
 
 #[derive(Debug)]
