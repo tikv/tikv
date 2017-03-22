@@ -30,12 +30,15 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 
 use raftstore::Result as RaftStoreResult;
 use raftstore::store::Msg;
-use storage::CF_RAFT;
+use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::transport::SendCh;
 use util::{HandyRwLock, HashMap};
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
+
+// Data in CF_RAFT should be excluded for a snapshot.
+const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &'static str = "gen";
@@ -163,13 +166,6 @@ pub fn copy_snapshot(mut from: Box<Snapshot>, mut to: Box<Snapshot>) -> io::Resu
     Ok(())
 }
 
-fn need_to_pack(cf: &str) -> bool {
-    // Data in CF_RAFT should be excluded for a snapshot.
-    // Check CF_RAFT here and skip it, even though CF_RAFT should not occur
-    // in the range [begin_key, end_key) of a RocksDB snapshot usually.
-    cf != CF_RAFT
-}
-
 mod v1 {
     use std::cmp;
     use std::io::{self, Read, Write, ErrorKind};
@@ -192,8 +188,8 @@ mod v1 {
     use super::super::util;
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX, Result,
-                SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
+    use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX,
+                Result, SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort};
 
     pub const SNAPSHOT_VERSION: u64 = 1;
     pub const CRC32_BYTES_COUNT: usize = 4;
@@ -233,7 +229,9 @@ mod v1 {
             try!(check_abort(&options.abort));
             let key = box_try!(decoder.decode_compact_bytes());
             if key.is_empty() {
-                box_try!(options.db.write(wb));
+                if batch_size != 0 {
+                    box_try!(options.db.write(wb));
+                }
                 break;
             }
             box_try!(util::check_key_in_region(keys::origin_key(&key), &options.region));
@@ -387,10 +385,7 @@ mod v1 {
 
             let mut snap_key_count = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
-            for cf in snap.cf_names() {
-                if !need_to_pack(cf) {
-                    continue;
-                }
+            for cf in SNAPSHOT_CFS {
                 box_try!(self.encode_compact_bytes(cf.as_bytes()));
                 let (cf_key_count, cf_size) =
                     try!(build_plain_cf_file(self, snap, cf, &begin_key, &end_key));
@@ -673,7 +668,7 @@ mod v1 {
 mod v2 {
     use std::io::{self, Read, Write, ErrorKind};
     use std::fs::{self, File, OpenOptions, Metadata};
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
     use std::str;
     use std::time::Instant;
@@ -682,49 +677,30 @@ mod v2 {
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
     use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions};
-    use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use storage::{CfName, CF_LOCK};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
+    use util::file::{get_file_size, file_exists, delete_file_if_exist};
     use raftstore::Result as RaftStoreResult;
 
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::super::keys::{enc_start_key, enc_end_key};
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
-    use super::{SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX, Result,
-                SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort, need_to_pack};
+    use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX,
+                Result, SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort};
     use super::v1::{build_plain_cf_file, apply_plain_cf_file};
 
     pub const SNAPSHOT_VERSION: u64 = 2;
     const META_FILE_SUFFIX: &'static str = ".meta";
     const DIGEST_BUFFER_SIZE: usize = 10240;
-    const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
+
+    #[inline]
     fn plain_file_used(cf: &str) -> bool {
         cf == CF_LOCK
     }
 
-    fn get_file_size(path: &PathBuf) -> io::Result<u64> {
-        let meta = try!(fs::metadata(path));
-        Ok(meta.len())
-    }
-
-    fn file_exists(file: &PathBuf) -> bool {
-        let path = Path::new(file);
-        path.exists() && path.is_file()
-    }
-
-    fn delete_file(file: &PathBuf) -> bool {
-        if !file_exists(file) {
-            return true;
-        }
-        if let Err(e) = fs::remove_file(file) {
-            warn!("failed to delete file {}: {:?}", file.display(), e);
-            return false;
-        }
-        true
-    }
-
-    fn calc_checksum(p: &PathBuf) -> io::Result<u32> {
+    fn calc_crc32(p: &PathBuf) -> io::Result<u32> {
         let mut digest = Digest::new(crc32::IEEE);
         let mut f = try!(OpenOptions::new().read(true).open(&p));
         let mut buf = vec![0; DIGEST_BUFFER_SIZE];
@@ -786,6 +762,27 @@ mod v2 {
                                 SNAPSHOT_CFS.len()));
         }
         Ok(res)
+    }
+
+    fn check_file_size_and_checksum(path: &PathBuf,
+                                    expect_size: u64,
+                                    expect_checksum: u32)
+                                    -> RaftStoreResult<()> {
+        let size = try!(get_file_size(path));
+        if size != expect_size {
+            return Err(box_err!("invalid size {} for snapshot cf file {}, expected {}",
+                                size,
+                                path.display(),
+                                expect_size));
+        }
+        let checksum = try!(calc_crc32(&path));
+        if checksum != expect_checksum {
+            return Err(box_err!("invalid checksum {} for snapshot cf file {}, expected {}",
+                                checksum,
+                                path.display(),
+                                expect_checksum));
+        }
+        Ok(())
     }
 
     #[derive(Default)]
@@ -995,6 +992,11 @@ mod v2 {
                     return Err(box_err!("cf {} doesn't exist in snapshot meta", cf_file.cf));
                 }
                 let meta = found.unwrap();
+                if file_exists(&cf_file.path) {
+                    try!(check_file_size_and_checksum(&cf_file.path,
+                                                      meta.get_size(),
+                                                      meta.get_checksum()));
+                }
                 cf_file.size = meta.get_size();
                 cf_file.checksum = meta.get_checksum();
             }
@@ -1033,14 +1035,14 @@ mod v2 {
             let exists = if to_be_dropped { self.exists() } else { true };
             let mut total_size = 0;
             for cf_file in &self.cf_files {
-                delete_file(&cf_file.tmp_path);
-                delete_file(&cf_file.path);
+                delete_file_if_exist(&cf_file.tmp_path);
+                delete_file_if_exist(&cf_file.path);
                 if exists {
                     total_size += cf_file.size;
                 }
             }
-            delete_file(&self.meta_file.tmp_path);
-            delete_file(&self.meta_file.path);
+            delete_file_if_exist(&self.meta_file.tmp_path);
+            delete_file_if_exist(&self.meta_file.path);
             if exists {
                 let mut size_track = self.size_track.wl();
                 *size_track = size_track.saturating_sub(total_size);
@@ -1054,21 +1056,7 @@ mod v2 {
                     // this is checked when loading the snapshot meta.
                     continue;
                 }
-                let size = try!(get_file_size(&cf_file.path));
-                if size != cf_file.size {
-                    return Err(box_err!("invalid snapshot file size {} for cf {}, expected {}",
-                                        size,
-                                        cf_file.cf,
-                                        cf_file.size));
-                }
-                let checksum = try!(calc_checksum(&cf_file.path));
-                if checksum != cf_file.checksum {
-                    return Err(box_err!("invalid snapshot file checksum {} for cf {}, expected \
-                                         {}",
-                                        checksum,
-                                        cf_file.cf,
-                                        cf_file.checksum));
-                }
+                try!(check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum));
             }
             Ok(())
         }
@@ -1109,10 +1097,10 @@ mod v2 {
                 if size > 0 {
                     try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
                     cf_file.size = size;
-                    cf_file.checksum = try!(calc_checksum(&cf_file.path));
+                    cf_file.checksum = try!(calc_crc32(&cf_file.path));
                 } else {
                     // Clean up the `tmp_path` if this cf file is empty.
-                    delete_file(&cf_file.tmp_path);
+                    delete_file_if_exist(&cf_file.tmp_path);
                 }
             }
             Ok(())
@@ -1151,10 +1139,7 @@ mod v2 {
 
             let mut snap_key_count = 0;
             let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
-            for cf in snap.cf_names() {
-                if !need_to_pack(cf) {
-                    continue;
-                }
+            for cf in SNAPSHOT_CFS {
                 try!(self.switch_to_cf_file(cf));
                 let (cf_key_count, cf_size) = if plain_file_used(cf) {
                     let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
@@ -1182,7 +1167,7 @@ mod v2 {
                       self.path(),
                       cf,
                       cf_key_count,
-                      cf_size)
+                      cf_size);
             }
             try!(self.save_cf_files());
             context.snapshot_kv_count = snap_key_count;
@@ -1420,8 +1405,8 @@ mod v2 {
         use raftstore::store::keys;
         use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable, Iterable};
         use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-        use super::super::{SNAP_GEN_PREFIX, need_to_pack, SnapKey, Snapshot};
-        use super::{Snap, BuildContext, ApplyOptions};
+        use super::super::{SNAP_GEN_PREFIX, SnapKey, Snapshot};
+        use super::{SNAPSHOT_CFS, Snap, BuildContext, ApplyOptions};
 
         const TEST_STORE_ID: u64 = 1;
         const TEST_KEY: &[u8] = b"akey";
@@ -1437,7 +1422,7 @@ mod v2 {
             let db = try!(rocksdb::new_engine(p, ALL_CFS));
             let key = keys::data_key(TEST_KEY);
             // write some data into each cf
-            for (i, cf) in ALL_CFS.into_iter().enumerate() {
+            for (i, cf) in ALL_CFS.iter().enumerate() {
                 let handle = try!(rocksdb::get_cf_handle(&db, cf));
                 let mut p = Peer::new();
                 p.set_store_id(TEST_STORE_ID);
@@ -1449,10 +1434,7 @@ mod v2 {
 
         pub fn get_kv_count(snap: &DbSnapshot) -> usize {
             let mut kv_count = 0;
-            for cf in snap.cf_names() {
-                if !need_to_pack(cf) {
-                    continue;
-                }
+            for cf in SNAPSHOT_CFS {
                 snap.scan_cf(cf,
                              &keys::data_key(b"a"),
                              &keys::data_key(b"z"),
@@ -1482,10 +1464,7 @@ mod v2 {
 
         pub fn assert_eq_db(expected_db: Arc<DB>, db: &DB) {
             let key = keys::data_key(TEST_KEY);
-            for cf in ALL_CFS {
-                if !need_to_pack(cf) {
-                    continue;
-                }
+            for cf in SNAPSHOT_CFS {
                 let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
                 if p1.is_some() {
                     let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
