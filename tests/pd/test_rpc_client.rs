@@ -11,21 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
+use std::thread;
+use std::sync::Arc;
+use std::time::Duration;
 
 use kvproto::metapb;
 
 use tikv::pd::{PdClient, RpcClient, validate_endpoints};
 
+use super::mock::case::*;
+use super::mock::Server as MockServer;
+
 #[test]
 fn test_rpc_client() {
-    // We need to set all members in PD_ENDPOINTS to pass this test.
-    let endpoints = match env::var("PD_ENDPOINTS") {
-        Ok(v) => v,
-        Err(_) => return,
-    };
+    let eps = "http://127.0.0.1:3079".to_owned();
 
-    let client = RpcClient::new(&endpoints).unwrap();
+    let se = Arc::new(Service::new(vec![eps.clone()]));
+    let _server = MockServer::run("127.0.0.1:3079", se.clone(), Some(se.clone()));
+
+    thread::sleep(Duration::from_secs(1));
+
+    let client = RpcClient::new(&eps).unwrap();
     assert!(client.get_cluster_id().unwrap() != 0);
 
     let store_id = client.alloc_id().unwrap();
@@ -55,7 +61,7 @@ fn test_rpc_client() {
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let client = RpcClient::new(&endpoints).unwrap();
+        let client = RpcClient::new(&eps).unwrap();
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
@@ -63,16 +69,21 @@ fn test_rpc_client() {
 }
 
 #[test]
-fn test_rpc_client_safely_new() {
-    let endpoints_1 = match env::var("PD_ENDPOINTS") {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let endpoints_2 = match env::var("PD_ENDPOINTS_SEP") {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let endpoints = &[endpoints_1.as_str(), endpoints_2.as_str()];
+fn test_validate_endpoints() {
+    let eps = vec![
+        "http://127.0.0.1:13079".to_owned(),
+        "http://127.0.0.1:23079".to_owned(),
+        "http://127.0.0.1:33079".to_owned(),
+    ];
 
-    assert!(validate_endpoints(endpoints).is_err());
+    let se = Arc::new(Service::new(eps.clone()));
+    let sp = Arc::new(Split::new(eps.clone()));
+
+    let _server_a = MockServer::run("127.0.0.1:13079", se.clone(), Some(sp.clone()));
+    let _server_b = MockServer::run("127.0.0.1:23079", se.clone(), Some(sp.clone()));
+    let _server_c = MockServer::run("127.0.0.1:33079", se.clone(), Some(sp.clone()));
+
+    thread::sleep(Duration::from_secs(1));
+
+    assert!(validate_endpoints(&eps).is_err());
 }

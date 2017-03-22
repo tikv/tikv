@@ -27,7 +27,7 @@ use url::Url;
 use rand::{self, Rng};
 
 use kvproto::metapb;
-use kvproto::pdpb::{self, GetMembersResponse};
+use kvproto::pdpb::{self, GetMembersResponse, Member};
 use kvproto::pdpb_grpc::{PD, PDClient};
 
 use super::{Result, Error, PdClient};
@@ -67,6 +67,12 @@ impl RpcClient {
         let mut header = pdpb::RequestHeader::new();
         header.set_cluster_id(self.cluster_id);
         header
+    }
+
+    // For tests
+    pub fn get_leader(&self) -> Member {
+        let inner = self.inner.read().unwrap();
+        inner.members.get_leader().clone()
     }
 }
 
@@ -189,8 +195,8 @@ fn try_connect_leader(members: &GetMembersResponse) -> Result<(PDClient, GetMemb
 
                     return Ok((cli, resp));
                 }
-                Err(err) => {
-                    error!("failed to connect to {}, {:?}", ep, err);
+                Err(e) => {
+                    error!("failed to connect to {}, {:?}", ep, e);
                     continue;
                 }
             }

@@ -39,6 +39,9 @@ extern crate time;
 extern crate rustc_serialize;
 extern crate fnv;
 extern crate test;
+extern crate grpc;
+extern crate futures;
+extern crate futures_cpupool;
 
 mod raft;
 mod raftstore;
