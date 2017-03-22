@@ -479,7 +479,7 @@ fn process_write_impl(cid: u64,
             }
         }
         Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
-            if lock_ts > commit_ts {
+            if commit_ts <= lock_ts {
                 return Err(Error::InvalidTxnTso {
                     start_ts: lock_ts,
                     commit_ts: commit_ts,
@@ -511,7 +511,7 @@ fn process_write_impl(cid: u64,
         }
         Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, ref keys } => {
             if let Some(cts) = commit_ts {
-                if cts < start_ts {
+                if cts <= start_ts {
                     return Err(Error::InvalidTxnTso {
                         start_ts: start_ts,
                         commit_ts: cts,
