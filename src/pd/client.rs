@@ -165,40 +165,44 @@ fn connect(addr: &str) -> Result<PDClient> {
         .map_err(Error::Grpc)
 }
 
-fn try_connect_leader(members: &GetMembersResponse) -> Result<(PDClient, GetMembersResponse)> {
-    // Try to connect the PD cluster leader.
-    let leader = members.get_leader();
-    for ep in leader.get_client_urls() {
-        if let Ok(client) = connect(ep.as_str()) {
-            info!("connect to PD leader {:?}", ep);
-            return Ok((client, members.clone()));
-        }
-    }
-
-    // Then try to connect other members.
+fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMembersResponse)> {
+    // Try to connect other members.
     // Randomize endpoints.
-    let members = members.get_members();
+    let members = previous.get_members();
     let mut indexes: Vec<usize> = (0..members.len()).collect();
     rand::thread_rng().shuffle(&mut indexes);
 
+    let mut resp = None;
     for i in indexes {
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
-                Ok(cli) => {
-                    let resp = match cli.GetMembers(pdpb::GetMembersRequest::new()) {
-                        Ok(resp) => resp,
+                Ok(c) => {
+                    match c.GetMembers(pdpb::GetMembersRequest::new()) {
+                        Ok(r) => {
+                            resp = Some(r);
+                            break;
+                        }
                         Err(e) => {
                             error!("PD endpoint {} failed to respond: {:?}", ep, e);
                             continue;
                         }
                     };
-
-                    return Ok((cli, resp));
                 }
                 Err(e) => {
                     error!("failed to connect to {}, {:?}", ep, e);
                     continue;
                 }
+            }
+        }
+    }
+
+    // Then try to connect the PD cluster leader.
+    if let Some(resp) = resp {
+        let leader = resp.get_leader().clone();
+        for ep in leader.get_client_urls() {
+            if let Ok(client) = connect(ep.as_str()) {
+                info!("connect to PD leader {:?}", ep);
+                return Ok((client, resp));
             }
         }
     }
