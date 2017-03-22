@@ -120,7 +120,7 @@ fn test_server_pd_transfer_leader() {
 }
 
 #[test]
-fn test_node_pd_transfer_leader_v() {
+fn test_node_pd_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
     test_pd_transfer_leader(&mut cluster);
 }

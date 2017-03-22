@@ -90,6 +90,7 @@ pub struct Store<T, C: 'static> {
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
+    // the pending snapshots between two mio ticks.
     pending_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
@@ -608,9 +609,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(true)
     }
 
-    // Clippy doesn't allow hash_map contains_key followed by insert, and suggests
-    // using entry().or_insert() instead, but we can't use this because creating peer
-    // may fail, so we allow map_entry.
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         if !self.is_raft_msg_valid(&msg) {

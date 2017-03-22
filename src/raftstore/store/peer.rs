@@ -943,7 +943,8 @@ impl Peer {
             Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 self.propose_transfer_leader(req, cb, metrics);
-                return false;
+                // return true to let raftstore send out the message immediately.
+                return true;
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 is_conf_change = true;
