@@ -8,9 +8,11 @@ use kvproto::pdpb::*;
 
 mod service;
 mod split;
+mod leader_change;
 
 pub use self::service::Service;
 pub use self::split::Split;
+pub use self::leader_change::LeaderChange;
 
 pub type Result<T> = result::Result<T, GrpcError>;
 

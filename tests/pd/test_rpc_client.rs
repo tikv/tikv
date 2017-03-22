@@ -23,6 +23,18 @@ use super::mock::case::*;
 use super::mock::Server as MockServer;
 
 #[test]
+fn _3_logger_setup() {
+    // Set up ci test fail case log.
+    // The prefix "_" here is to guarantee running this case first.
+
+    use std::env;
+    use util;
+    if env::var("CI").is_ok() && env::var("LOG_FILE").is_ok() {
+        util::init_log();
+    }
+}
+
+#[test]
 fn test_rpc_client() {
     let eps = "http://127.0.0.1:3079".to_owned();
 
@@ -86,4 +98,36 @@ fn test_validate_endpoints() {
     thread::sleep(Duration::from_secs(1));
 
     assert!(validate_endpoints(&eps).is_err());
+}
+
+#[test]
+fn test_change_leader() {
+    let mut eps = vec![
+        "http://127.0.0.1:43079".to_owned(),
+        "http://127.0.0.1:53079".to_owned(),
+        "http://127.0.0.1:63079".to_owned(),
+    ];
+
+    let se = Arc::new(Service::new(eps.clone()));
+    let lc = Arc::new(LeaderChange::new(eps.clone()));
+
+    let _server_a = MockServer::run("127.0.0.1:43079", se.clone(), Some(lc.clone()));
+    let _server_b = MockServer::run("127.0.0.1:53079", se.clone(), Some(lc.clone()));
+    let _server_a = MockServer::run("127.0.0.1:63079", se.clone(), Some(lc.clone()));
+
+    thread::sleep(Duration::from_secs(1));
+
+    let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
+    let leader = client.get_leader();
+
+    for _ in 0..5 {
+        client.is_cluster_bootstrapped().unwrap();
+        let new = client.get_leader();
+        if new != leader {
+            return;
+        }
+        thread::sleep(LeaderChange::get_leader_interval());
+    }
+
+    panic!("failed, leader should changed");
 }
