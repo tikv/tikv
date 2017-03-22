@@ -12,6 +12,7 @@ default = []
 dev = ["clippy"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
+sse = ["rocksdb/sse"]
 
 [lib]
 name = "tikv"

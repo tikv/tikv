@@ -33,7 +33,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, duration_to_sec, escape};
+use util::{SlowTimer, duration_to_sec, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -372,7 +372,7 @@ impl<T, C> Store<T, C> {
 
 impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        try!(self.snap_mgr.wl().init());
+        try!(self.snap_mgr.init());
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
@@ -421,7 +421,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Applying snapshot may take an unexpected long time.
         for peer in self.region_peers.values_mut() {
-            peer.mut_store().cancel_applying_snap();
+            peer.stop();
         }
 
         // Wait all workers finish.
@@ -1548,7 +1548,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_capacity(capacity);
 
         let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
-        used_size += self.snap_mgr.rl().get_total_snap_size();
+        used_size += self.snap_mgr.get_total_snap_size();
 
         let mut available = if capacity > used_size {
             capacity - used_size
@@ -1567,7 +1567,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_available(available);
         stats.set_region_count(self.region_peers.len() as u32);
 
-        let snap_stats = self.snap_mgr.rl().stats();
+        let snap_stats = self.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
 
@@ -1620,7 +1620,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        let mut snap_keys = try!(self.snap_mgr.wl().list_snap());
+        let mut snap_keys = try!(self.snap_mgr.list_snap());
         if snap_keys.is_empty() {
             return Ok(());
         }
@@ -1628,7 +1628,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         let mut is_applying_snap = false;
         for (key, is_sending) in snap_keys {
-            if self.snap_mgr.rl().has_registered(&key) {
+            if self.snap_mgr.has_registered(&key) {
                 continue;
             }
             if last_region_id != key.region_id {
@@ -1650,7 +1650,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             if is_sending {
-                let s = try!(self.snap_mgr.rl().get_snapshot_for_sending(&key));
+                let s = try!(self.snap_mgr.get_snapshot_for_sending(&key));
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
@@ -1672,7 +1672,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] snap file {} has been applied, delete.",
                       key.region_id,
                       key);
-                let a = try!(self.snap_mgr.rl().get_snapshot_for_applying(&key));
+                let a = try!(self.snap_mgr.get_snapshot_for_applying(&key));
                 a.delete();
             }
         }

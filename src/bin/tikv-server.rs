@@ -65,6 +65,7 @@ use tikv::util::time_monitor::TimeMonitor;
 const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
 const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
 const KB: u64 = 1024;
+const MB: u64 = KB * 1024;
 const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
 
 fn sanitize_memory_usage() -> bool {
@@ -276,6 +277,19 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
+    let wal_dir = get_toml_string(config, "rocksdb.wal-dir", Some("".to_owned()));
+    if !wal_dir.is_empty() {
+        opts.set_wal_dir(&wal_dir)
+    };
+
+    let wal_ttl_seconds = get_toml_int(config, "rocksdb.wal-ttl-seconds", Some(0));
+    opts.set_wal_ttl_seconds(wal_ttl_seconds as u64);
+
+    let wal_size_limit = get_toml_int(config, "rocksdb.wal-size-limit", Some(0));
+    // return size in MB
+    let wal_size_limit_mb = align_to_mb(wal_size_limit as u64) / MB;
+    opts.set_wal_size_limit_mb(wal_size_limit_mb as u64);
+
     let max_total_wal_size = get_toml_int(config,
                                           "rocksdb.max-total-wal-size",
                                           Some(4 * 1024 * 1024 * 1024));
@@ -311,7 +325,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     }
 
     let compaction_readahead_size =
-        get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
+        get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
     opts
@@ -445,25 +459,52 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     opt
 }
 
-fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
+fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(16 * 1024);
-    block_base_opts.set_lru_cache(64 * 1024 * 1024);
+
+    let block_cache_size = get_toml_int(config,
+                                        "rocksdb.lockcf.block-cache-size",
+                                        Some(64 * 1024 * 1024));
+    block_base_opts.set_lru_cache(block_cache_size as usize);
+
     block_base_opts.set_bloom_filter(10, false);
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = "no:no:no:no:no:no:no".to_owned();
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
-    opts.set_write_buffer_size(64 * 1024 * 1024);
-    opts.set_max_write_buffer_number(5);
-    opts.set_max_bytes_for_level_base(64 * 1024 * 1024);
+
+    let write_buffer_size = get_toml_int(config,
+                                         "rocksdb.lockcf.write-buffer-size",
+                                         Some(64 * 1024 * 1024));
+    opts.set_write_buffer_size(write_buffer_size as u64);
+
+    let max_write_buffer_number =
+        get_toml_int(config, "rocksdb.lockcf.max-write-buffer-number", Some(5));
+    opts.set_max_write_buffer_number(max_write_buffer_number as i32);
+
+    let max_bytes_for_level_base = get_toml_int(config,
+                                                "rocksdb.lockcf.max-bytes-for-level-base",
+                                                Some(64 * 1024 * 1024));
+    opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
     opts.set_target_file_size_base(32 * 1024 * 1024);
 
     // set level0_file_num_compaction_trigger = 1 is very important,
     // this will result in fewer sst files in lock cf.
     opts.set_level_zero_file_num_compaction_trigger(1);
+
+    let level_zero_slowdown_writes_trigger = get_toml_int(config,
+                                                          "rocksdb.lockcf.\
+                                                           level0-slowdown-writes-trigger",
+                                                          Some(20));
+    opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
+
+    let level_zero_stop_writes_trigger = get_toml_int(config,
+                                                      "rocksdb.lockcf.level0-stop-writes-trigger",
+                                                      Some(36));
+    opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
     opts
 }
@@ -618,7 +659,7 @@ fn build_raftkv(config: &toml::Value,
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_db_option(config);
     let cfs_opts = vec![get_rocksdb_default_cf_option(config, total_mem),
-                        get_rocksdb_lock_cf_option(),
+                        get_rocksdb_lock_cf_option(config),
                         get_rocksdb_write_cf_option(config, total_mem),
                         get_rocksdb_raftlog_cf_option(config, total_mem)];
     let mut db_path = path.clone();
@@ -633,7 +674,7 @@ fn build_raftkv(config: &toml::Value,
     let mut snap_path = path.clone();
     snap_path.push("snap");
     let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
+    let snap_mgr = SnapManager::new(snap_path, Some(node.get_sendch()));
 
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
