@@ -35,3 +35,72 @@ pub fn delete_file_if_exist(file: &PathBuf) -> bool {
     }
     true
 }
+
+#[cfg(test)]
+mod test {
+    use std::io::Write;
+    use std::fs::OpenOptions;
+    use tempdir::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn test_get_file_size() {
+        let tmp_dir = TempDir::new("").unwrap();
+        let dir_path = tmp_dir.path().to_path_buf();
+
+        // Ensure it works to get the size of an empty file.
+        let empty_file = dir_path.join("empty_file");
+        {
+            let _ = OpenOptions::new().write(true).create_new(true).open(&empty_file).unwrap();
+        }
+        assert_eq!(get_file_size(&empty_file).unwrap(), 0);
+
+        // Ensure it works to get the size of an non-empty file.
+        let non_empty_file = dir_path.join("non_empty_file");
+        let size = 5;
+        let v = vec![0; size];
+        {
+            let mut f =
+                OpenOptions::new().write(true).create_new(true).open(&non_empty_file).unwrap();
+            f.write_all(&v[..]).unwrap();
+        }
+        assert_eq!(get_file_size(&non_empty_file).unwrap(), size as u64);
+
+        // Ensure it works for non-existent file.
+        let non_existent_file = dir_path.join("non_existent_file");
+        assert!(get_file_size(&non_existent_file).is_err());
+    }
+
+    #[test]
+    fn test_file_exists() {
+        let tmp_dir = TempDir::new("").unwrap();
+        let dir_path = tmp_dir.path().to_path_buf();
+
+        let existent_file = dir_path.join("empty_file");
+        {
+            let _ = OpenOptions::new().write(true).create_new(true).open(&existent_file).unwrap();
+        }
+        assert_eq!(file_exists(&existent_file), true);
+
+        let non_existent_file = dir_path.join("non_existent_file");
+        assert_eq!(file_exists(&non_existent_file), false);
+    }
+
+    #[test]
+    fn test_delete_file_if_exists() {
+        let tmp_dir = TempDir::new("").unwrap();
+        let dir_path = tmp_dir.path().to_path_buf();
+
+        let existent_file = dir_path.join("empty_file");
+        {
+            let _ = OpenOptions::new().write(true).create_new(true).open(&existent_file).unwrap();
+        }
+        assert_eq!(file_exists(&existent_file), true);
+        assert_eq!(delete_file_if_exist(&existent_file), true);
+        assert_eq!(file_exists(&existent_file), false);
+
+        let non_existent_file = dir_path.join("non_existent_file");
+        assert_eq!(delete_file_if_exist(&non_existent_file), true);
+    }
+}
