@@ -36,11 +36,7 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     req.mut_header().set_peer(new_peer(2, 2));
     cluster.call_command(req, Duration::from_secs(3)).unwrap();
     thread::sleep(reserved_time);
-    let status_req = new_region_leader_cmd();
-    let req = new_status_request(1, new_peer(3, 3), status_req);
-    let resp = cluster.call_command(req, Duration::from_secs(1)).unwrap();
-    assert_eq!(resp.get_status_response().get_region_leader().get_leader(),
-               &new_peer(3, 3));
+    assert_eq!(cluster.query_leader(3, 1), Some(new_peer(3, 3)));
 
     let mut req = new_request(region.get_id(),
                               region.take_region_epoch(),
