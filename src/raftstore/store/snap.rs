@@ -1234,11 +1234,7 @@ mod v2 {
         }
 
         fn total_size(&self) -> io::Result<u64> {
-            let mut total_size = 0;
-            for cf_file in &self.cf_files {
-                total_size += cf_file.size;
-            }
-            Ok(total_size)
+            Ok(self.cf_files.iter().fold(0, |acc, x| acc + x.size))
         }
 
         fn save(&mut self) -> io::Result<()> {
