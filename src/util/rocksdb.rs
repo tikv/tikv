@@ -61,15 +61,20 @@ fn check_and_open(path: &str,
                   -> Result<DB, String> {
     // If db not exist, create it.
     if !db_exist(path) {
-        // opts is used as Rocksdb's Options(include DBOptions and ColumnFamilyOptions)
-        // when call DB::open.
         db_opt.create_if_missing(true);
-        let mut db = try!(DB::open(db_opt, path));
-        for (cf, ref cf_opt) in cfs_opts {
-            if cf == "default" {
+
+        let mut cfs = vec![];
+        let mut cfs_opts_ref = vec![];
+        if let Some(opt) = cfs_opts.get(CF_DEFAULT) {
+            cfs.push(CF_DEFAULT);
+            cfs_opts_ref.push(opt);
+        }
+        let mut db = try!(DB::open_cf(db_opt, path, cfs.as_slice(), cfs_opts_ref.as_slice()));
+        for (cf, cf_opt) in &cfs_opts {
+            if *cf == "default" {
                 continue;
             }
-            try!(db.create_cf(cf, cf_opt));
+            try!(db.create_cf(*cf, cf_opt));
         }
 
         return Ok(db);
