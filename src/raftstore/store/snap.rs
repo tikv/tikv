@@ -947,9 +947,7 @@ mod v2 {
             for cf_file in &mut self.cf_files {
                 // initialize cf file size and reader
                 if cf_file.size > 0 {
-                    let size = try!(get_file_size(&cf_file.path));
                     let file = try!(File::open(&cf_file.path));
-                    cf_file.size = size;
                     cf_file.file = Some(file);
                 }
             }
