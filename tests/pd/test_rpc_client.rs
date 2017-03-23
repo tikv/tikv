@@ -32,7 +32,7 @@ fn test_rpc_client() {
     thread::sleep(Duration::from_secs(1));
 
     let client = RpcClient::new(&eps).unwrap();
-    assert!(client.get_cluster_id().unwrap() != 0);
+    assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::new();
