@@ -479,6 +479,12 @@ fn process_write_impl(cid: u64,
             }
         }
         Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
+            if commit_ts <= lock_ts {
+                return Err(Error::InvalidTxnTso {
+                    start_ts: lock_ts,
+                    commit_ts: commit_ts,
+                });
+            }
             let mut txn = MvccTxn::new(snapshot, &mut statistics, lock_ts, None);
             for k in keys {
                 try!(txn.commit(&k, commit_ts));
@@ -504,6 +510,14 @@ fn process_write_impl(cid: u64,
             (pr, txn.modifies())
         }
         Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, ref keys } => {
+            if let Some(cts) = commit_ts {
+                if cts <= start_ts {
+                    return Err(Error::InvalidTxnTso {
+                        start_ts: start_ts,
+                        commit_ts: cts,
+                    });
+                }
+            }
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
             for k in keys {

@@ -55,6 +55,12 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        InvalidTxnTso {start_ts: u64, commit_ts: u64} {
+            description("Invalid transaction tso")
+            display("Invalid transaction tso with start_ts:{},commit_ts:{}",
+                        start_ts,
+                        commit_ts)
+        }
     }
 }
 
