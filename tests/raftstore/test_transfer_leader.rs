@@ -20,7 +20,7 @@ use kvproto::eraftpb::MessageType;
 use std::time::Duration;
 use std::thread;
 
-fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval);
     cluster.run();
@@ -55,15 +55,15 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_server_transfer_leader() {
+fn test_server_basic_transfer_leader() {
     let mut cluster = new_server_cluster(0, 5);
-    test_transfer_leader(&mut cluster);
+    test_basic_transfer_leader(&mut cluster);
 }
 
 #[test]
-fn test_node_transfer_leader() {
+fn test_node_basic_transfer_leader() {
     let mut cluster = new_node_cluster(0, 5);
-    test_transfer_leader(&mut cluster);
+    test_basic_transfer_leader(&mut cluster);
 }
 
 fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
