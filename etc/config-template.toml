@@ -99,6 +99,9 @@ max-peer-down-duration = "5m"
 endpoints = ""
 
 [rocksdb]
+# RocksDB info log directory, if set, RocksDB will save the log in `info-log-dir/LOG`.
+# info-log-dir = ""
+
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
 max-background-compactions = 6

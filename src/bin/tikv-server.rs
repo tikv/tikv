@@ -325,6 +325,13 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
         get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
+    let info_log_dir = get_toml_string(config, "rocksdb.info-log-dir", Some("".to_owned()));
+    if !info_log_dir.is_empty() {
+        opts.create_info_log(&info_log_dir).unwrap_or_else(|e| {
+            panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
+        })
+    }
+
     opts
 }
 
