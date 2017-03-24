@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::usize;
 use std::collections::BinaryHeap;
 use std::collections::hash_map::Entry;
