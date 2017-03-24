@@ -994,7 +994,7 @@ mod v2 {
 
         fn load_snapshot_meta(&mut self) -> RaftStoreResult<()> {
             let snapshot_meta = try!(self.read_snapshot_meta());
-            let _ = try!(check_snapshot_meta(&snapshot_meta));
+            try!(check_snapshot_meta(&snapshot_meta));
             try!(self.set_snapshot_meta(snapshot_meta));
             Ok(())
         }
