@@ -34,7 +34,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::peer::ReadyContext;
 use super::metrics::*;
-use super::{BuildContext, SnapKey, SnapEntry, SnapManager};
+use super::{SnapshotStatistics, SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -893,14 +893,14 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
-    let mut context = BuildContext::new();
-    try!(s.build(snap, state.get_region(), &mut snap_data, &mut context));
+    let mut stat = SnapshotStatistics::new();
+    try!(s.build(snap, state.get_region(), &mut snap_data, &mut stat));
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
     snapshot.set_data(v);
 
-    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(context.snapshot_kv_count as f64);
-    SNAPSHOT_SIZE_HISTOGRAM.observe(context.snapshot_size as f64);
+    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
+    SNAPSHOT_SIZE_HISTOGRAM.observe(stat.size as f64);
 
     Ok(snapshot)
 }

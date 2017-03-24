@@ -115,14 +115,14 @@ impl Display for SnapKey {
 }
 
 #[derive(Default)]
-pub struct BuildContext {
-    pub snapshot_size: u64,
-    pub snapshot_kv_count: usize,
+pub struct SnapshotStatistics {
+    pub size: u64,
+    pub kv_count: usize,
 }
 
-impl BuildContext {
-    pub fn new() -> BuildContext {
-        BuildContext { ..Default::default() }
+impl SnapshotStatistics {
+    pub fn new() -> SnapshotStatistics {
+        SnapshotStatistics { ..Default::default() }
     }
 }
 
@@ -145,7 +145,7 @@ pub trait Snapshot: Read + Write + Send {
              snap: &DbSnapshot,
              region: &Region,
              snap_data: &mut RaftSnapshotData,
-             context: &mut BuildContext)
+             stat: &mut SnapshotStatistics)
              -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
@@ -189,7 +189,7 @@ mod v1 {
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX,
-                Result, SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort};
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort};
 
     pub const SNAPSHOT_VERSION: u64 = 1;
     pub const CRC32_BYTES_COUNT: usize = 4;
@@ -367,7 +367,7 @@ mod v1 {
         fn do_build(&mut self,
                     snap: &DbSnapshot,
                     region: &Region,
-                    context: &mut BuildContext)
+                    stat: &mut SnapshotStatistics)
                     -> RaftStoreResult<()> {
             if self.exists() {
                 match self.get_validation_reader().and_then(|r| r.validate()) {
@@ -402,7 +402,7 @@ mod v1 {
             // use an empty byte array to indicate that kvpair reaches an end.
             box_try!(self.encode_compact_bytes(b""));
             try!(self.save_with_checksum());
-            context.snapshot_kv_count = snap_key_count;
+            stat.kv_count = snap_key_count;
             Ok(())
         }
     }
@@ -412,20 +412,20 @@ mod v1 {
                  snap: &DbSnapshot,
                  region: &Region,
                  snap_data: &mut RaftSnapshotData,
-                 context: &mut BuildContext)
+                 stat: &mut SnapshotStatistics)
                  -> RaftStoreResult<()> {
             let t = Instant::now();
-            try!(self.do_build(snap, region, context));
+            try!(self.do_build(snap, region, stat));
             let size = try!(self.total_size());
             snap_data.set_file_size(size);
             snap_data.set_version(SNAPSHOT_VERSION);
-            context.snapshot_size = size;
+            stat.size = size;
             SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
             info!("[region {}] scan snapshot {}, size {}, key count {}, takes {:?}",
                   region.get_id(),
                   self.path(),
                   size,
-                  context.snapshot_kv_count,
+                  stat.kv_count,
                   t.elapsed());
 
             Ok(())
@@ -687,7 +687,7 @@ mod v2 {
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX,
-                Result, SnapKey, Snapshot, BuildContext, ApplyOptions, check_abort};
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort};
     use super::v1::{build_plain_cf_file, apply_plain_cf_file};
 
     pub const SNAPSHOT_VERSION: u64 = 2;
@@ -1099,7 +1099,7 @@ mod v2 {
         fn do_build(&mut self,
                     snap: &DbSnapshot,
                     region: &Region,
-                    context: &mut BuildContext)
+                    stat: &mut SnapshotStatistics)
                     -> RaftStoreResult<()> {
             if self.exists() {
                 match self.validate() {
@@ -1149,7 +1149,7 @@ mod v2 {
             }
 
             try!(self.save_cf_files());
-            context.snapshot_kv_count = snap_key_count;
+            stat.kv_count = snap_key_count;
             // save snapshot meta to meta file
             let snapshot_meta = try!(get_snapshot_meta(&self.cf_files[..]));
             self.meta_file.meta = snapshot_meta;
@@ -1164,10 +1164,10 @@ mod v2 {
                  snap: &DbSnapshot,
                  region: &Region,
                  snap_data: &mut RaftSnapshotData,
-                 context: &mut BuildContext)
+                 stat: &mut SnapshotStatistics)
                  -> RaftStoreResult<()> {
             let t = Instant::now();
-            try!(self.do_build(snap, region, context));
+            try!(self.do_build(snap, region, stat));
 
             // set snapshot meta data
             let total_size = try!(self.total_size());
@@ -1178,14 +1178,14 @@ mod v2 {
             // add size
             let mut size_track = self.size_track.wl();
             *size_track = size_track.saturating_add(total_size);
-            context.snapshot_size = total_size;
+            stat.size = total_size;
 
             SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
             info!("[region {}] scan snapshot {}, size {}, key count {}, takes {:?}",
                   region.get_id(),
                   self.path(),
                   total_size,
-                  context.snapshot_kv_count,
+                  stat.kv_count,
                   t.elapsed());
 
             Ok(())
@@ -1384,7 +1384,7 @@ mod v2 {
         use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable, Iterable};
         use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
         use super::super::{SNAP_GEN_PREFIX, SnapKey, Snapshot};
-        use super::{SNAPSHOT_CFS, Snap, BuildContext, ApplyOptions};
+        use super::{SNAPSHOT_CFS, Snap, SnapshotStatistics, ApplyOptions};
 
         const TEST_STORE_ID: u64 = 1;
         const TEST_KEY: &[u8] = b"akey";
@@ -1536,8 +1536,8 @@ mod v2 {
 
             let mut snap_data = RaftSnapshotData::new();
             snap_data.set_region(region.clone());
-            let mut context = BuildContext::new();
-            s1.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
+            let mut stat = SnapshotStatistics::new();
+            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
 
             // Ensure that this snapshot file does exist after being built.
             assert!(s1.exists());
@@ -1545,8 +1545,8 @@ mod v2 {
             // Ensure the `size_track` is modified correctly.
             let size = *size_track.rl();
             assert_eq!(size, total_size);
-            assert_eq!(context.snapshot_size as u64, size);
-            assert_eq!(context.snapshot_kv_count, get_kv_count(&snapshot));
+            assert_eq!(stat.size as u64, size);
+            assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
             // Ensure this snapshot could be read for sending.
             let mut s2 = Snap::new_for_sending(src_dir.path(), &key, size_track.clone()).unwrap();
@@ -1632,15 +1632,15 @@ mod v2 {
 
             let mut snap_data = RaftSnapshotData::new();
             snap_data.set_region(region.clone());
-            let mut context = BuildContext::new();
-            s1.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
+            let mut stat = SnapshotStatistics::new();
+            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s1.exists());
 
             let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
                 .unwrap();
             assert!(s2.exists());
 
-            s2.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
+            s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s2.exists());
         }
     }
@@ -1919,7 +1919,7 @@ mod test {
     use util::rocksdb;
     use super::super::peer_storage::JOB_STATUS_RUNNING;
     use super::super::engine::Snapshot as DbSnapshot;
-    use super::{SnapKey, BuildContext, ApplyOptions, Snapshot, SnapManager};
+    use super::{SnapKey, SnapshotStatistics, ApplyOptions, Snapshot, SnapManager};
     use super::v1::{Snap as SnapV1, CRC32_BYTES_COUNT};
     use super::v2::{self, Snap as SnapV2};
 
@@ -2004,8 +2004,8 @@ mod test {
         let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
-        let mut context = BuildContext::new();
-        s1.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
+        let mut stat = SnapshotStatistics::new();
+        s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
         let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone()).unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = SnapV2::new_for_receiving(&path,
@@ -2061,8 +2061,8 @@ mod test {
         let region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
-        let mut context = BuildContext::new();
-        s1.build(&snapshot, &region, &mut snap_data, &mut context).unwrap();
+        let mut stat = SnapshotStatistics::new();
+        s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
         let mut v = vec![];
         snap_data.write_to_vec(&mut v).unwrap();
 
