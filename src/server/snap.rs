@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::fmt::{self, Formatter, Display};
 use std::io;
 use std::net::{SocketAddr, TcpStream};
@@ -148,16 +147,17 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::Register(token, meta) => {
                 SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
-                match SnapKey::from_snap(meta.get_message().get_snapshot()).and_then(|key| {
-                    match mgr.get_snapshot_for_receiving(&key,
-                                                         meta.get_message()
-                                                             .get_snapshot()
-                                                             .get_data()) {
-                        Ok(s) => Ok((s, key)),
-                        Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.description())),
+                let key = match SnapKey::from_snap(meta.get_message().get_snapshot()) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        error!("failed to create snap key for token {:?}: {:?}", token, e);
+                        self.close(token);
+                        return;
                     }
-                }) {
-                    Ok((snap, key)) => {
+                };
+                match mgr.get_snapshot_for_receiving(&key,
+                                                     meta.get_message().get_snapshot().get_data()) {
+                    Ok(snap) => {
                         if snap.exists() {
                             info!("snapshot file {} already exists, skip receiving.",
                                   snap.path());
