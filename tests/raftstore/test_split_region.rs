@@ -555,9 +555,7 @@ fn test_node_split_stale_epoch() {
 // `test_quick_election_after_split` is a helper function for testing this feature.
 fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     // Calculate the reserved time before a new campaign after split.
-    let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval) *
-                        cluster.cfg.raft_store.raft_election_timeout_ticks as u32 /
-                        2;
+    let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval * 2);
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");

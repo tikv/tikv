@@ -942,8 +942,7 @@ impl Peer {
             Ok(RequestPolicy::ReadIndex) => return self.read_index(meta.uuid, req, cb, metrics),
             Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
             Ok(RequestPolicy::ProposeTransferLeader) => {
-                self.propose_transfer_leader(req, cb, metrics);
-                return false;
+                return self.propose_transfer_leader(req, cb, metrics)
             }
             Ok(RequestPolicy::ProposeConfChange) => {
                 is_conf_change = true;
@@ -1239,26 +1238,32 @@ impl Peer {
         Ok(())
     }
 
+    // Return true to if the transfer leader request is accepted.
     fn propose_transfer_leader(&mut self,
                                req: RaftCmdRequest,
                                cb: Callback,
-                               metrics: &mut RaftProposeMetrics) {
+                               metrics: &mut RaftProposeMetrics)
+                               -> bool {
         metrics.transfer_leader += 1;
 
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        if self.is_tranfer_leader_allowed(peer) {
+        let transfered = if self.is_tranfer_leader_allowed(peer) {
             self.transfer_leader(peer);
+            true
         } else {
             info!("{} transfer leader message {:?} ignored directly",
                   self.tag,
                   req);
-        }
+            false
+        };
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
         cb(make_transfer_leader_response());
+
+        transfered
     }
 
     fn propose_conf_change(&mut self,
