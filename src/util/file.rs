@@ -25,15 +25,13 @@ pub fn file_exists(file: &PathBuf) -> bool {
     path.exists() && path.is_file()
 }
 
-pub fn delete_file_if_exist(file: &PathBuf) -> bool {
+pub fn delete_file_if_exist(file: &PathBuf) {
     if !file_exists(file) {
-        return true;
+        return;
     }
     if let Err(e) = fs::remove_file(file) {
         warn!("failed to delete file {}: {:?}", file.display(), e);
-        return false;
     }
-    true
 }
 
 #[cfg(test)]
@@ -100,7 +98,7 @@ mod test {
             let _ = OpenOptions::new().write(true).create_new(true).open(&existent_file).unwrap();
         }
         assert_eq!(file_exists(&existent_file), true);
-        assert_eq!(delete_file_if_exist(&existent_file), true);
+        delete_file_if_exist(&existent_file);
         assert_eq!(file_exists(&existent_file), false);
 
         let perm_file = dir_path.join("perm_file");
@@ -110,10 +108,10 @@ mod test {
             f.set_permissions(perm).unwrap();
         }
         assert_eq!(file_exists(&perm_file), true);
-        assert_eq!(delete_file_if_exist(&perm_file), true);
+        delete_file_if_exist(&perm_file);
         assert_eq!(file_exists(&perm_file), false);
 
         let non_existent_file = dir_path.join("non_existent_file");
-        assert_eq!(delete_file_if_exist(&non_existent_file), true);
+        delete_file_if_exist(&non_existent_file);
     }
 }
