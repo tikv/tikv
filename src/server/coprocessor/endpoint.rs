@@ -102,7 +102,7 @@ impl Display for Task {
 
 pub struct RequestTask {
     req: Request,
-    pub start_ts: Option<u64>,
+    start_ts: Option<u64>,
     wait_time: Option<f64>,
     timer: Instant,
     // The deadline before which the task should be responded.
@@ -124,6 +124,10 @@ impl RequestTask {
             statistics: Default::default(),
             on_resp: on_resp,
         }
+    }
+
+    pub fn start_ts(&self) -> Option<u64> {
+        self.start_ts
     }
 
     #[inline]
@@ -198,8 +202,6 @@ impl Display for RequestTask {
                self.req.get_ranges().get(0))
     }
 }
-
-
 
 impl BatchRunnable<Task> for Host {
     // TODO: limit pending reqs

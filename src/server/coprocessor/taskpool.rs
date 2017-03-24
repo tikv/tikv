@@ -31,13 +31,9 @@ struct TaskMeta {
 }
 
 impl TaskMeta {
-    fn new(txn: u64,
-           snap: Box<Snapshot>,
-           task: RequestTask,
-           sel: Result<SelectRequest>)
-           -> TaskMeta {
+    fn new(snap: Box<Snapshot>, task: RequestTask, sel: Result<SelectRequest>) -> TaskMeta {
         TaskMeta {
-            txn_id: txn,
+            txn_id: task.start_ts().unwrap_or_default(),
             snap: snap,
             task: task,
             sel: sel,
@@ -75,11 +71,11 @@ impl TaskPoolMeta {
         self.waiting_tasks_num += tasks_len;
         for mut task in tasks {
             let sel = task.parse_sel();
-            let txn = task.start_ts.unwrap_or_default();
+            let txn = task.start_ts().unwrap_or_default();
             let mut txn_tasks = self.waiting_tasks
                 .entry(txn)
                 .or_insert_with(Vec::new);
-            let task_meta = TaskMeta::new(txn, snap.clone(), task, sel);
+            let task_meta = TaskMeta::new(snap.clone(), task, sel);
             txn_tasks.push(task_meta);
         }
         COPR_PENDING_REQS.with_label_values(&["select"]).add(tasks_len as f64);
