@@ -113,6 +113,20 @@ impl AssertionStorage {
         }
     }
 
+    fn expect_invalid_tso_err(&self, resp: Result<(), storage::Error>, sts: u64, cmt_ts: u64) {
+        assert!(resp.is_err());
+        let err = resp.unwrap_err();
+        match err {
+            storage::Error::Txn(txn::Error::InvalidTxnTso { start_ts, commit_ts }) => {
+                assert_eq!(sts, start_ts);
+                assert_eq!(cmt_ts, commit_ts);
+            }
+            _ => {
+                panic!("expect invalid tso error, but got {:?}", err);
+            }
+        }
+    }
+
     pub fn get_none_from_cluster(&mut self,
                                  cluster: &mut Cluster<ServerCluster>,
                                  key: &[u8],
@@ -248,6 +262,12 @@ impl AssertionStorage {
         self.store.commit(self.ctx.clone(), keys, start_ts, commit_ts).unwrap();
     }
 
+    pub fn commit_with_illegal_tso(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
+        let keys: Vec<Key> = keys.iter().map(|x| make_key(x)).collect();
+        let resp = self.store.commit(self.ctx.clone(), keys, start_ts, commit_ts);
+        self.expect_invalid_tso_err(resp, start_ts, commit_ts);
+    }
+
     pub fn cleanup_ok(&self, key: &[u8], start_ts: u64) {
         self.store.cleanup(self.ctx.clone(), make_key(key), start_ts).unwrap();
     }
@@ -274,6 +294,12 @@ impl AssertionStorage {
     pub fn resolve_lock_ok(&self, start_ts: u64, commit_ts: Option<u64>) {
         self.store.resolve_lock(self.ctx.clone(), start_ts, commit_ts).unwrap();
     }
+
+    pub fn resolve_lock_with_illegal_tso(&self, start_ts: u64, commit_ts: Option<u64>) {
+        let resp = self.store.resolve_lock(self.ctx.clone(), start_ts, commit_ts);
+        self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
+    }
+
 
     pub fn gc_ok(&self, safe_point: u64) {
         self.store.gc(self.ctx.clone(), safe_point).unwrap();
