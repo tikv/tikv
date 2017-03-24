@@ -39,7 +39,8 @@ pub fn delete_file_if_exist(file: &PathBuf) -> bool {
 #[cfg(test)]
 mod test {
     use std::io::Write;
-    use std::fs::OpenOptions;
+    use std::fs::{OpenOptions, Permissions};
+    use std::os::unix::fs::PermissionsExt;
     use tempdir::TempDir;
 
     use super::*;
@@ -77,6 +78,8 @@ mod test {
         let tmp_dir = TempDir::new("").unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 
+        assert_eq!(file_exists(&dir_path), false);
+
         let existent_file = dir_path.join("empty_file");
         {
             let _ = OpenOptions::new().write(true).create_new(true).open(&existent_file).unwrap();
@@ -99,6 +102,16 @@ mod test {
         assert_eq!(file_exists(&existent_file), true);
         assert_eq!(delete_file_if_exist(&existent_file), true);
         assert_eq!(file_exists(&existent_file), false);
+
+        let perm_file = dir_path.join("perm_file");
+        {
+            let f = OpenOptions::new().write(true).create_new(true).open(&perm_file).unwrap();
+            let perm = Permissions::from_mode(0o400);
+            f.set_permissions(perm).unwrap();
+        }
+        assert_eq!(file_exists(&perm_file), true);
+        assert_eq!(delete_file_if_exist(&perm_file), true);
+        assert_eq!(file_exists(&perm_file), false);
 
         let non_existent_file = dir_path.join("non_existent_file");
         assert_eq!(delete_file_if_exist(&non_existent_file), true);
