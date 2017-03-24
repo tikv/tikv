@@ -1274,7 +1274,7 @@ mod v2 {
                     let mut file = box_try!(File::open(&cf_file.path));
                     try!(apply_plain_cf_file(&mut file, &options, cf_handle));
                 } else {
-                    let ingest_opt = IngestExternalFileOptions::new().move_files(true);
+                    let ingest_opt = IngestExternalFileOptions::new();
                     let path = cf_file.path.as_path().to_str().unwrap();
                     box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
                 }
