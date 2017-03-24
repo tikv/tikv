@@ -748,12 +748,6 @@ mod v2 {
             if res.iter().any(|cf| cf_name == cf) {
                 return Err(box_err!("failed to decode duplicated snapshot cf {}", cf_name));
             }
-            if cf_file_meta.get_size() == 0 && cf_file_meta.get_checksum() != 0 {
-                return Err(box_err!("invalid checksum {} for cf {}, checksum of empty cf file \
-                                     should be 0",
-                                    cf_file_meta.get_checksum(),
-                                    cf_name));
-            }
             res.push(*cf_name);
         }
         if res.len() != SNAPSHOT_CFS.len() {
@@ -888,7 +882,17 @@ mod v2 {
                                                  size_track: Arc<RwLock<u64>>)
                                                  -> RaftStoreResult<Snap> {
             let mut s = try!(Snap::new(dir, key, size_track, SNAPSHOT_CFS, true));
-            try!(s.init_for_sending());
+
+            if !s.exists() {
+                return Err(box_err!("snapshot file {} not exist", s.path()));
+            }
+            for cf_file in &mut s.cf_files {
+                // initialize cf file size and reader
+                if cf_file.size > 0 {
+                    let file = try!(File::open(&cf_file.path));
+                    cf_file.file = Some(file);
+                }
+            }
             Ok(s)
         }
 
@@ -899,7 +903,25 @@ mod v2 {
                                                    -> RaftStoreResult<Snap> {
             let cfs = try!(check_snapshot_meta(&snapshot_meta));
             let mut s = try!(Snap::new(dir, key, size_track, &cfs[..], false));
-            try!(s.init_for_receiving(snapshot_meta));
+
+            try!(s.set_snapshot_meta(snapshot_meta));
+            if s.exists() {
+                return Ok(s);
+            }
+            for cf_file in &mut s.cf_files {
+                if cf_file.size == 0 {
+                    continue;
+                }
+                let f =
+                    try!(OpenOptions::new().write(true).create_new(true).open(&cf_file.tmp_path));
+                cf_file.file = Some(f);
+                cf_file.write_digest = Some(Digest::new(crc32::IEEE));
+            }
+            let f = try!(OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&s.meta_file.tmp_path));
+            s.meta_file.file = Some(f);
             Ok(s)
         }
 
@@ -920,7 +942,8 @@ mod v2 {
                 if plain_file_used(cf_file.cf) {
                     let f = try!(OpenOptions::new()
                         .write(true)
-                        .create_new(true)
+                        .create(true)
+                        .truncate(true)
                         .open(&cf_file.tmp_path));
                     cf_file.file = Some(f);
                 } else {
@@ -937,42 +960,6 @@ mod v2 {
                 .create_new(true)
                 .open(&self.meta_file.tmp_path));
             self.meta_file.file = Some(file);
-            Ok(())
-        }
-
-        fn init_for_sending(&mut self) -> RaftStoreResult<()> {
-            if !self.exists() {
-                return Err(box_err!("snapshot file {} not exist", self.path()));
-            }
-            for cf_file in &mut self.cf_files {
-                // initialize cf file size and reader
-                if cf_file.size > 0 {
-                    let file = try!(File::open(&cf_file.path));
-                    cf_file.file = Some(file);
-                }
-            }
-            Ok(())
-        }
-
-        fn init_for_receiving(&mut self, snapshot_meta: SnapshotMeta) -> RaftStoreResult<()> {
-            try!(self.set_snapshot_meta(snapshot_meta));
-            if self.exists() {
-                return Ok(());
-            }
-            for cf_file in &mut self.cf_files {
-                if cf_file.size == 0 {
-                    continue;
-                }
-                let f =
-                    try!(OpenOptions::new().write(true).create_new(true).open(&cf_file.tmp_path));
-                cf_file.file = Some(f);
-                cf_file.write_digest = Some(Digest::new(crc32::IEEE));
-            }
-            let f = try!(OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&self.meta_file.tmp_path));
-            self.meta_file.file = Some(f);
             Ok(())
         }
 
@@ -1013,19 +1000,9 @@ mod v2 {
         }
 
         fn get_display_path(dir_path: &PathBuf, prefix: &str) -> String {
-            let mut cf_names = SNAPSHOT_CFS.iter().fold(String::from(""), |mut acc, x| {
-                if acc.is_empty() {
-                    acc += "(";
-                    acc += x;
-                } else {
-                    acc += "|";
-                    acc += x;
-                }
-                acc
-            });
-            cf_names += ")";
+            let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
             format!("{}/{}_{}{}",
-                    dir_path.as_path().to_str().unwrap(),
+                    dir_path.display(),
                     prefix,
                     cf_names,
                     SST_FILE_SUFFIX)
