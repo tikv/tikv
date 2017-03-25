@@ -20,7 +20,7 @@ use std::process;
 use mio::EventLoop;
 use rocksdb::DB;
 
-use pd::{INVALID_ID, PdClient, Error as PdError};
+use pd::{INVALID_ID, PdClient, AsyncPdClient, Error as PdError};
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::metapb;
 use protobuf::RepeatedField;
@@ -45,7 +45,7 @@ pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<St
 
 // Node is a wrapper for raft store.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<C: PdClient + AsyncPdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
@@ -57,7 +57,7 @@ pub struct Node<C: PdClient + 'static> {
 }
 
 impl<C> Node<C>
-    where C: PdClient
+    where C: PdClient + AsyncPdClient
 {
     pub fn new<T>(event_loop: &mut EventLoop<Store<T, C>>,
                   cfg: &Config,
@@ -293,7 +293,7 @@ impl<C> Node<C>
 }
 
 impl<C> Drop for Node<C>
-    where C: PdClient
+    where C: PdClient + AsyncPdClient
 {
     fn drop(&mut self) {
         self.stop().unwrap();

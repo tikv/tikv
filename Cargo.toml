@@ -20,15 +20,15 @@ name = "tikv"
 [[bin]]
 name = "tikv-server"
 
-[[bin]]
-name = "bench-tikv"
-path = "benches/bin/bench-tikv.rs"
+# [[bin]]
+# name = "bench-tikv"
+# path = "benches/bin/bench-tikv.rs"
 
 [[bin]]
 name = "tikv-ctl"
 
-[[test]]
-name = "tests"
+# [[test]]
+# name = "tests"
 
 [dependencies]
 log = "0.3"
@@ -59,7 +59,7 @@ regex = "0.1"
 fnv = "1.0"
 sys-info = "0.4.1"
 futures = "0.1"
-futures-cpupool = "0.1"
+tokio-core = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"

@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,14 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use std::result;
 use std::thread;
-use std::sync::RwLock;
 use std::time::Duration;
 use std::collections::HashSet;
 
 use grpc;
+use grpc::futures_grpc::GrpcFutureSend;
 
 use protobuf::RepeatedField;
 
@@ -26,58 +24,18 @@ use url::Url;
 
 use rand::{self, Rng};
 
+use futures::Future;
+
 use kvproto::metapb;
-use kvproto::pdpb::{self, GetMembersResponse, Member};
-use kvproto::pdpb_grpc::{PD, PDClient};
+use kvproto::pdpb::{self, GetMembersResponse};
+use kvproto::pdpb_grpc::{PDAsync, PDAsyncClient};
 
-use super::{Result, Error, PdClient};
-use super::metrics::*;
-
-struct Inner {
-    members: GetMembersResponse,
-    client: PDClient,
-}
-
-pub struct RpcClient {
-    cluster_id: u64,
-    inner: RwLock<Inner>,
-}
-
-impl RpcClient {
-    pub fn new(endpoints: &str) -> Result<RpcClient> {
-        let endpoints: Vec<_> = endpoints.split(',')
-            .map(|s| if !s.starts_with("http://") {
-                format!("http://{}", s)
-            } else {
-                s.to_owned()
-            })
-            .collect();
-
-        let (client, members) = try!(validate_endpoints(&endpoints));
-        Ok(RpcClient {
-            cluster_id: members.get_header().get_cluster_id(),
-            inner: RwLock::new(Inner {
-                members: members,
-                client: client,
-            }),
-        })
-    }
-
-    fn header(&self) -> pdpb::RequestHeader {
-        let mut header = pdpb::RequestHeader::new();
-        header.set_cluster_id(self.cluster_id);
-        header
-    }
-
-    // For tests
-    pub fn get_leader(&self) -> Member {
-        let inner = self.inner.read().unwrap();
-        inner.members.get_leader().clone()
-    }
-}
+use super::super::{Result, Error, PdClient};
+use super::super::metrics::*;
+use super::RpcAsyncClient;
 
 
-pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersResponse)> {
+pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
     }
@@ -101,7 +59,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersR
             }
         };
 
-        let resp = match client.GetMembers(pdpb::GetMembersRequest::new()) {
+        let resp = match Future::wait(client.GetMembers(pdpb::GetMembersRequest::new())) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -138,7 +96,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersR
     }
 }
 
-fn connect(addr: &str) -> Result<PDClient> {
+fn connect(addr: &str) -> Result<PDAsyncClient> {
     debug!("connect to PD endpoint: {:?}", addr);
     let ep = box_try!(Url::parse(addr));
     let host = match ep.host_str() {
@@ -154,10 +112,10 @@ fn connect(addr: &str) -> Result<PDClient> {
     conf.http.no_delay = Some(true);
 
     // TODO: It seems that `new` always return an Ok(_).
-    PDClient::new(&host, port, false, conf)
+    PDAsyncClient::new(&host, port, false, conf)
         .and_then(|client| {
             // try request.
-            match client.GetMembers(pdpb::GetMembersRequest::new()) {
+            match Future::wait(client.GetMembers(pdpb::GetMembersRequest::new())) {
                 Ok(_) => Ok(client),
                 Err(e) => Err(e),
             }
@@ -165,7 +123,8 @@ fn connect(addr: &str) -> Result<PDClient> {
         .map_err(Error::Grpc)
 }
 
-fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMembersResponse)> {
+fn try_connect_leader(previous: &GetMembersResponse)
+                      -> Result<(PDAsyncClient, GetMembersResponse)> {
     // Try to connect other members.
     // Randomize endpoints.
     let members = previous.get_members();
@@ -177,7 +136,7 @@ fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMem
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
                 Ok(c) => {
-                    match c.GetMembers(pdpb::GetMembersRequest::new()) {
+                    match Future::wait(c.GetMembers(pdpb::GetMembersRequest::new())) {
                         Ok(r) => {
                             resp = Some(r);
                             break;
@@ -213,14 +172,14 @@ fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMem
 const MAX_RETRY_COUNT: usize = 100;
 const RETRY_INTERVAL: u64 = 1;
 
-fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
-    where F: Fn(&PDClient) -> result::Result<R, grpc::error::GrpcError>
+fn do_request<F, R>(client: &RpcAsyncClient, f: F) -> Result<R>
+    where F: Fn(&PDAsyncClient) -> GrpcFutureSend<R>
 {
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
             let inner = client.inner.read().unwrap();
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = f(&inner.client);
+            let r = Future::wait(f(&inner.client));
             timer.observe_duration();
             r
         };
@@ -258,15 +217,7 @@ fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
     Err(box_err!(err.get_message()))
 }
 
-impl fmt::Debug for RpcClient {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt,
-               "PD gRPC Client connects to cluster {:?}",
-               self.cluster_id)
-    }
-}
-
-impl PdClient for RpcClient {
+impl PdClient for RpcAsyncClient {
     fn get_cluster_id(&self) -> Result<u64> {
         Ok(self.cluster_id)
     }

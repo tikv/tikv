@@ -34,7 +34,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{SlowTimer, duration_to_sec, escape};
-use pd::PdClient;
+use pd::AsyncPdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
@@ -125,7 +125,7 @@ pub struct Store<T, C: 'static> {
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     where T: Transport,
-          C: PdClient
+          C: AsyncPdClient
 {
     let mut builder = EventLoopBuilder::new();
     // To make raft base tick more accurate, timer tick should be small enough.
@@ -371,7 +371,7 @@ impl<T, C> Store<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T: Transport, C: AsyncPdClient> Store<T, C> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         try!(self.snap_mgr.init());
 
@@ -1779,7 +1779,7 @@ fn verify_and_store_hash(region_id: u64,
     true
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T: Transport, C: AsyncPdClient> Store<T, C> {
     fn register_consistency_check_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::ConsistencyCheck,
@@ -1906,10 +1906,10 @@ fn new_compute_hash_request(region_id: u64, peer: metapb::Peer) -> RaftCmdReques
     request
 }
 
-fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T, C>>,
-                                             tick: Tick,
-                                             delay: u64)
-                                             -> Result<()> {
+fn register_timer<T: Transport, C: AsyncPdClient>(event_loop: &mut EventLoop<Store<T, C>>,
+                                                  tick: Tick,
+                                                  delay: u64)
+                                                  -> Result<()> {
     // TODO: now mio TimerError doesn't implement Error trait,
     // so we can't use `try!` directly.
     if delay == 0 {
@@ -1935,7 +1935,7 @@ fn new_compact_log_request(region_id: u64,
     request
 }
 
-impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
+impl<T: Transport, C: AsyncPdClient> mio::Handler for Store<T, C> {
     type Timeout = Tick;
     type Message = Msg;
 
@@ -2006,7 +2006,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
     }
 }
 
-impl<T: Transport, C: PdClient> Store<T, C> {
+impl<T: Transport, C: AsyncPdClient> Store<T, C> {
     /// load the target peer of request as mutable borrow.
     fn mut_target_peer(&mut self, request: &RaftCmdRequest) -> Result<&mut Peer> {
         let region_id = request.get_header().get_region_id();
