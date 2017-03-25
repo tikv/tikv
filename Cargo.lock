@@ -11,7 +11,6 @@ dependencies = [
  "fnv 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpc 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=ov/grpc-pdpb)",
