@@ -33,7 +33,6 @@ extern crate log;
 extern crate quick_error;
 extern crate test;
 extern crate protobuf;
-extern crate bytes;
 extern crate byteorder;
 extern crate rand;
 extern crate mio;
