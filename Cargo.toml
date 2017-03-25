@@ -83,7 +83,7 @@ default-features = false
 features = ["nightly", "push"]
 
 [dependencies.grpc]
-git = "https://github.com/pingcap/grpc-rust.git"
+git = "https://github.com/stepancheg/grpc-rust.git"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
