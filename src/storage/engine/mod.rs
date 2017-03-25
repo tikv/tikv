@@ -199,7 +199,8 @@ impl<'a> Cursor<'a> {
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Forward && self.valid() && self.iter.key() >= key.encoded() {
+        if self.scan_mode == ScanMode::Forward && self.valid() &&
+           self.iter.key() >= key.encoded().as_slice() {
             return Ok(true);
         }
 
@@ -231,10 +232,10 @@ impl<'a> Cursor<'a> {
             return Ok(false);
         }
         if ord == Ordering::Greater {
-            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded(),
+            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
                        self.seek(key, statistics));
             if self.iter.valid() {
-                if self.iter.key() < key.encoded() {
+                if self.iter.key() < key.encoded().as_slice() {
                     self.next(statistics);
                 }
             } else {
@@ -243,7 +244,7 @@ impl<'a> Cursor<'a> {
             }
         } else {
             // ord == Less
-            near_loop!(self.next(statistics) && self.iter.key() < key.encoded(),
+            near_loop!(self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
                        self.seek(key, statistics));
         }
         if !self.iter.valid() {
@@ -278,7 +279,7 @@ impl<'a> Cursor<'a> {
         }
 
         if self.scan_mode == ScanMode::Backward && self.valid() &&
-           self.iter.key() <= key.encoded() {
+           self.iter.key() <= key.encoded().as_slice() {
             return Ok(true);
         }
 
@@ -308,10 +309,10 @@ impl<'a> Cursor<'a> {
         }
 
         if ord == Ordering::Less {
-            near_loop!(self.next(statistics) && self.iter.key() < key.encoded(),
+            near_loop!(self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
                        self.seek_for_prev(key, statistics));
             if self.iter.valid() {
-                if self.iter.key() > key.encoded() {
+                if self.iter.key() > key.encoded().as_slice() {
                     self.prev(statistics);
                 }
             } else {
@@ -319,7 +320,7 @@ impl<'a> Cursor<'a> {
                 return Ok(true);
             }
         } else {
-            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded(),
+            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
                        self.seek_for_prev(key, statistics));
         }
 

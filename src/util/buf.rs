@@ -16,16 +16,7 @@ use std::fmt::{self, Debug, Formatter};
 use alloc::raw_vec::RawVec;
 use std::{cmp, ptr, slice, mem};
 
-use bytes::{ByteBuf, MutByteBuf, alloc};
-
 use util::escape;
-
-// `create_mem_buf` creates the buffer with fixed capacity s.
-pub fn create_mem_buf(s: usize) -> MutByteBuf {
-    unsafe {
-        ByteBuf::from_mem_ref(alloc::heap(s.next_power_of_two()), s as u32, 0, s as u32).flip()
-    }
-}
 
 /// `PipeBuffer` is useful when you want to move data from `Write` to a `Read` or vice versa.
 pub struct PipeBuffer {
