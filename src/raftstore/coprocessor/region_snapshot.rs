@@ -193,9 +193,9 @@ impl<'a> RegionIterator<'a> {
         if self.valid {
             let key = self.iter.key();
             self.valid = if forward {
-                key < &self.end_key
+                key < self.end_key.as_slice()
             } else {
-                key >= &self.start_key
+                key >= self.start_key.as_slice()
             };
         }
         self.valid
@@ -207,7 +207,7 @@ impl<'a> RegionIterator<'a> {
             return self.valid;
         }
 
-        while self.iter.key() >= &self.end_key && self.iter.prev() {
+        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {
         }
 
         self.valid = self.iter.valid();
