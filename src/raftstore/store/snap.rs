@@ -38,7 +38,7 @@ use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
 
 // Data in CF_RAFT should be excluded for a snapshot.
-const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &'static str = "gen";
@@ -1169,16 +1169,16 @@ mod v2 {
             let t = Instant::now();
             try!(self.do_build(snap, region, stat));
 
-            // set snapshot meta data
-            let total_size = try!(self.total_size());
-            snap_data.set_file_size(total_size);
-            snap_data.set_version(SNAPSHOT_VERSION);
-            snap_data.set_meta(self.meta_file.meta.clone());
-
             // add size
+            let total_size = try!(self.total_size());
             let mut size_track = self.size_track.wl();
             *size_track = size_track.saturating_add(total_size);
             stat.size = total_size;
+
+            // set snapshot meta data
+            snap_data.set_file_size(total_size);
+            snap_data.set_version(SNAPSHOT_VERSION);
+            snap_data.set_meta(self.meta_file.meta.clone());
 
             SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
             info!("[region {}] scan snapshot {}, size {}, key count {}, takes {:?}",
