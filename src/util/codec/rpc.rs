@@ -103,8 +103,6 @@ pub fn decode_body<R: BufRead, M: protobuf::Message>(payload: &mut R, m: &mut M)
 
 #[cfg(test)]
 mod tests {
-    use bytes::ByteBuf;
-
     use super::*;
     use kvproto::eraftpb::{Message, MessageType};
 
@@ -113,11 +111,11 @@ mod tests {
         let mut m1 = Message::new();
         m1.set_msg_type(MessageType::MsgBeat);
 
-        let mut w = ByteBuf::mut_with_capacity(64);
+        let mut w = Vec::with_capacity(64);
         assert_eq!(encode_msg(&mut w, 1, &m1).is_ok(), true);
 
         let mut m2 = Message::new();
-        assert_eq!(decode_msg(&mut w.flip(), &mut m2).unwrap(), 1);
+        assert_eq!(decode_msg(&mut w.as_slice(), &mut m2).unwrap(), 1);
         assert_eq!(m1, m2);
     }
 
