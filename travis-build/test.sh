@@ -31,7 +31,7 @@ if [[ "$ENABLE_FEATURES" = "" ]]; then
 fi
 export LOG_FILE=tests.log
 if [[ "$TRAVIS" = "true" ]]; then
-    export RUST_TEST_THREADS=1
+    export RUST_TEST_THREADS=2
 fi
 export RUSTFLAGS=-Dwarnings
 

@@ -54,21 +54,18 @@ ${LOCAL_DIR}/bin/pd-server:
 	mkdir -p ${LOCAL_DIR}/bin && \
 	cp bin/pd-server ${LOCAL_DIR}/bin/pd-server
 
-prepare_rust:
-	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=${RUSTC_DATE} --prefix=~/rust --disable-sudo --channel=nightly
-
-prepare-rustfmt: | prepare_rust
+prepare-rustfmt:
 	curl -L https://github.com/tennix/rustfmt/releases/download/v0.6/rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -o rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz && \
 	mkdir -p ${HOME}/.cargo/bin && tar xzf rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -C ${HOME}/.cargo/bin --strip-components=1
 	# cargo install --vers =0.6.0 rustfmt || exit 0
 
-prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_rust
+prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov ${LOCAL_DIR}/bin/pd-server prepare-rustfmt
 
 prepare_brew:
 	brew update && \
-	brew install gflags snappy
+	brew install gflags snappy rocksdb
 
-prepare_osx: ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/bin/pd-server | prepare_brew prepare_rust
+prepare_osx: ${LOCAL_DIR}/bin/pd-server | prepare_brew
 
 test_linux test_osx:
 	export CI=true && ${CI_BUILD_DIR}/test.sh

@@ -12,6 +12,7 @@ default = []
 dev = ["clippy"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
+sse = ["rocksdb/sse"]
 
 [lib]
 name = "tikv"
@@ -46,7 +47,6 @@ fs2 = "0.4"
 clippy = {version = "*", optional = true}
 rustc-serialize = "0.3"
 protobuf = "1.2.1"
-bytes  = "0.3.0"
 nix = "0.6.0"
 utime = "0.1"
 chrono = "0.2"
