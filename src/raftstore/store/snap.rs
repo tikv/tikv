@@ -718,7 +718,7 @@ mod v2 {
         }
     }
 
-    fn get_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
+    fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
         let mut meta = Vec::with_capacity(cf_files.len());
         for cf_file in cf_files {
             if SNAPSHOT_CFS.iter().find(|&cf| cf_file.cf == *cf).is_none() {
@@ -1128,7 +1128,7 @@ mod v2 {
             try!(self.save_cf_files());
             stat.kv_count = snap_key_count;
             // save snapshot meta to meta file
-            let snapshot_meta = try!(get_snapshot_meta(&self.cf_files[..]));
+            let snapshot_meta = try!(gen_snapshot_meta(&self.cf_files[..]));
             self.meta_file.meta = snapshot_meta;
             try!(self.save_meta_file());
 
@@ -1453,7 +1453,7 @@ mod v2 {
         }
 
         #[test]
-        fn test_get_snapshot_meta() {
+        fn test_gen_snapshot_meta() {
             let mut cf_file = Vec::with_capacity(super::SNAPSHOT_CFS.len());
             for (i, cf) in super::SNAPSHOT_CFS.iter().enumerate() {
                 let f = super::CfFile {
@@ -1464,7 +1464,7 @@ mod v2 {
                 };
                 cf_file.push(f);
             }
-            let meta = super::get_snapshot_meta(&cf_file).unwrap();
+            let meta = super::gen_snapshot_meta(&cf_file).unwrap();
             for (i, cf_file_meta) in meta.get_cf_files().iter().enumerate() {
                 if cf_file_meta.get_cf() != cf_file[i].cf {
                     panic!("{}: expect cf {}, got {}",
