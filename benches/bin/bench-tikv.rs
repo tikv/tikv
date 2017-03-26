@@ -34,6 +34,7 @@ extern crate uuid;
 extern crate test;
 extern crate kvproto;
 extern crate time;
+extern crate futures;
 
 #[allow(dead_code)]
 #[path="../../tests/util.rs"]

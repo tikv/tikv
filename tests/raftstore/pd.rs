@@ -24,7 +24,7 @@ use kvproto::eraftpb;
 use tikv::pd::{PdClient, Result, Error, Key};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
-use tikv::util::{HandyRwLock, escape};
+use tikv::util::HandyRwLock;
 use super::util::*;
 
 // Rule is just for special test which we want do more accurate control
@@ -491,104 +491,173 @@ impl TestPdClient {
     }
 }
 
-impl PdClient for TestPdClient {
-    fn get_cluster_id(&self) -> Result<u64> {
-        Ok(self.cluster_id)
-    }
+mod sync {
+    use kvproto::{metapb, pdpb};
+    use tikv::pd::{PdClient, Result, Error};
+    use tikv::util::{HandyRwLock, escape};
 
-    fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
-        if self.is_cluster_bootstrapped().unwrap() {
-            return Err(Error::ClusterBootstrapped(self.cluster_id));
+    use super::*;
+
+    impl PdClient for TestPdClient {
+        fn get_cluster_id(&self) -> Result<u64> {
+            Ok(self.cluster_id)
         }
 
-        self.cluster.wl().bootstrap(store, region);
+        fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
+            if self.is_cluster_bootstrapped().unwrap() {
+                return Err(Error::ClusterBootstrapped(self.cluster_id));
+            }
 
-        Ok(())
+            self.cluster.wl().bootstrap(store, region);
+
+            Ok(())
+        }
+
+        fn is_cluster_bootstrapped(&self) -> Result<bool> {
+            Ok(!self.cluster.rl().stores.is_empty())
+        }
+
+        fn alloc_id(&self) -> Result<u64> {
+            self.cluster.rl().alloc_id()
+        }
+
+        fn put_store(&self, store: metapb::Store) -> Result<()> {
+            try!(self.check_bootstrap());
+            self.cluster.wl().put_store(store)
+        }
+
+        fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
+            try!(self.check_bootstrap());
+            self.cluster.rl().get_store(store_id)
+        }
+
+
+        fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+            try!(self.check_bootstrap());
+            if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
+                if check_key_in_region(key, &region).is_ok() {
+                    return Ok(region);
+                }
+            }
+
+            Err(box_err!("no region contains key {:?}", escape(key)))
+        }
+
+        fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
+            try!(self.check_bootstrap());
+            self.cluster.rl().get_region_by_id(region_id)
+        }
+
+        fn get_cluster_config(&self) -> Result<metapb::Cluster> {
+            try!(self.check_bootstrap());
+            Ok(self.cluster.rl().meta.clone())
+        }
+
+
+        fn region_heartbeat(&self,
+                            region: metapb::Region,
+                            leader: metapb::Peer,
+                            down_peers: Vec<pdpb::PeerStats>,
+                            pending_peers: Vec<metapb::Peer>)
+                            -> Result<pdpb::RegionHeartbeatResponse> {
+            try!(self.check_bootstrap());
+            self.cluster.wl().region_heartbeat(region, leader, down_peers, pending_peers)
+        }
+
+        fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
+            try!(self.check_bootstrap());
+
+            // Must ConfVer and Version be same?
+            let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap().unwrap();
+            try!(check_stale_region(&cur_region, &region));
+
+            let mut resp = pdpb::AskSplitResponse::new();
+            resp.set_new_region_id(self.alloc_id().unwrap());
+            let mut peer_ids = vec![];
+            for _ in region.get_peers() {
+                peer_ids.push(self.alloc_id().unwrap());
+            }
+            resp.set_new_peer_ids(peer_ids);
+
+            Ok(resp)
+        }
+
+        fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
+            try!(self.check_bootstrap());
+
+            // Cache it directly now.
+            let store_id = stats.get_store_id();
+            self.cluster.wl().store_stats.insert(store_id, stats);
+
+            Ok(())
+        }
+
+        fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
+            // pd just uses this for history show, so here we just count it.
+            try!(self.check_bootstrap());
+            self.cluster.wl().split_count += 1;
+            Ok(())
+        }
     }
+}
 
-    fn is_cluster_bootstrapped(&self) -> Result<bool> {
-        Ok(!self.cluster.rl().stores.is_empty())
-    }
+mod async {
+    use futures::future;
+    use futures::Future;
+    use kvproto::{metapb, pdpb};
+    use tikv::pd::{PdClient, AsyncPdClient, PdFuture};
 
-    fn alloc_id(&self) -> Result<u64> {
-        self.cluster.rl().alloc_id()
-    }
+    use super::TestPdClient;
 
-    fn put_store(&self, store: metapb::Store) -> Result<()> {
-        try!(self.check_bootstrap());
-        self.cluster.wl().put_store(store)
-    }
-
-    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        try!(self.check_bootstrap());
-        self.cluster.rl().get_store(store_id)
-    }
-
-
-    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
-        try!(self.check_bootstrap());
-        if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
-            if check_key_in_region(key, &region).is_ok() {
-                return Ok(region);
+    impl AsyncPdClient for TestPdClient {
+        // Get region by region id.
+        fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
+            match PdClient::get_region_by_id(self, region_id) {
+                Ok(ret) => future::ok(ret).boxed(),
+                Err(err) => future::err(err).boxed(),
             }
         }
 
-        Err(box_err!("no region contains key {:?}", escape(key)))
-    }
-
-    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
-        try!(self.check_bootstrap());
-        self.cluster.rl().get_region_by_id(region_id)
-    }
-
-    fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-        try!(self.check_bootstrap());
-        Ok(self.cluster.rl().meta.clone())
-    }
-
-
-    fn region_heartbeat(&self,
-                        region: metapb::Region,
-                        leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>)
-                        -> Result<pdpb::RegionHeartbeatResponse> {
-        try!(self.check_bootstrap());
-        self.cluster.wl().region_heartbeat(region, leader, down_peers, pending_peers)
-    }
-
-    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
-        try!(self.check_bootstrap());
-
-        // Must ConfVer and Version be same?
-        let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap().unwrap();
-        try!(check_stale_region(&cur_region, &region));
-
-        let mut resp = pdpb::AskSplitResponse::new();
-        resp.set_new_region_id(self.alloc_id().unwrap());
-        let mut peer_ids = vec![];
-        for _ in region.get_peers() {
-            peer_ids.push(self.alloc_id().unwrap());
+        // Leader for a region will use this to heartbeat Pd.
+        fn region_heartbeat(&self,
+                            region: metapb::Region,
+                            leader: metapb::Peer,
+                            down_peers: Vec<pdpb::PeerStats>,
+                            pending_peers: Vec<metapb::Peer>)
+                            -> PdFuture<pdpb::RegionHeartbeatResponse> {
+            match PdClient::region_heartbeat(self, region, leader, down_peers, pending_peers) {
+                Ok(ret) => future::ok(ret).boxed(),
+                Err(err) => future::err(err).boxed(),
+            }
         }
-        resp.set_new_peer_ids(peer_ids);
 
-        Ok(resp)
-    }
+        // Ask pd for split, pd will returns the new split region id.
+        fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+            match PdClient::ask_split(self, region) {
+                Ok(ret) => future::ok(ret).boxed(),
+                Err(err) => future::err(err).boxed(),
+            }
+        }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
-        try!(self.check_bootstrap());
+        // Send store statistics regularly.
+        fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+            match PdClient::store_heartbeat(self, stats) {
+                Ok(ret) => future::ok(ret).boxed(),
+                Err(err) => future::err(err).boxed(),
+            }
+        }
 
-        // Cache it directly now.
-        let store_id = stats.get_store_id();
-        self.cluster.wl().store_stats.insert(store_id, stats);
+        // Report pd the split region.
+        fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()> {
+            match PdClient::report_split(self, left, right) {
+                Ok(ret) => future::ok(ret).boxed(),
+                Err(err) => future::err(err).boxed(),
+            }
+        }
 
-        Ok(())
-    }
-
-    fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
-        // pd just uses this for history show, so here we just count it.
-        try!(self.check_bootstrap());
-        self.cluster.wl().split_count += 1;
-        Ok(())
+        // Resolve a future in the client.
+        fn resolve(&self, f: Box<Future<Item = (), Error = ()> + Send + 'static>) {
+            Future::wait(f).ok();
+        }
     }
 }
