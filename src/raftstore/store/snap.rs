@@ -1008,25 +1008,6 @@ mod v2 {
                     SST_FILE_SUFFIX)
         }
 
-        fn try_delete(&self, to_be_dropped: bool) {
-            debug!("deleting {}", self.path());
-            let exists = if to_be_dropped { self.exists() } else { true };
-            let mut total_size = 0;
-            for cf_file in &self.cf_files {
-                delete_file_if_exist(&cf_file.tmp_path);
-                delete_file_if_exist(&cf_file.path);
-                if exists {
-                    total_size += cf_file.size;
-                }
-            }
-            delete_file_if_exist(&self.meta_file.tmp_path);
-            delete_file_if_exist(&self.meta_file.path);
-            if exists {
-                let mut size_track = self.size_track.wl();
-                *size_track = size_track.saturating_sub(total_size);
-            }
-        }
-
         fn validate(&self) -> RaftStoreResult<()> {
             for cf_file in &self.cf_files {
                 if cf_file.size == 0 {
@@ -1075,6 +1056,10 @@ mod v2 {
                 if size > 0 {
                     try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
                     cf_file.size = size;
+                    // add size
+                    let mut size_track = self.size_track.wl();
+                    *size_track = size_track.saturating_add(size);
+
                     cf_file.checksum = try!(calc_crc32(&cf_file.path));
                 } else {
                     // Clean up the `tmp_path` if this cf file is empty.
@@ -1169,12 +1154,8 @@ mod v2 {
             let t = Instant::now();
             try!(self.do_build(snap, region, stat));
 
-            // add size
             let total_size = try!(self.total_size());
-            let mut size_track = self.size_track.wl();
-            *size_track = size_track.saturating_add(total_size);
             stat.size = total_size;
-
             // set snapshot meta data
             snap_data.set_file_size(total_size);
             snap_data.set_version(SNAPSHOT_VERSION);
@@ -1201,7 +1182,17 @@ mod v2 {
         }
 
         fn delete(&self) {
-            self.try_delete(false);
+            debug!("deleting {}", self.path());
+            for cf_file in &self.cf_files {
+                delete_file_if_exist(&cf_file.tmp_path);
+                if file_exists(&cf_file.path) {
+                    let mut size_track = self.size_track.wl();
+                    *size_track = size_track.saturating_sub(cf_file.size);
+                }
+                delete_file_if_exist(&cf_file.path);
+            }
+            delete_file_if_exist(&self.meta_file.tmp_path);
+            delete_file_if_exist(&self.meta_file.path);
         }
 
         fn meta(&self) -> io::Result<Metadata> {
@@ -1360,9 +1351,16 @@ mod v2 {
 
     impl Drop for Snap {
         fn drop(&mut self) {
+            // cleanup if some of the cf files and meta file is partly written
             if self.cf_files.iter().any(|cf_file| file_exists(&cf_file.tmp_path)) ||
                file_exists(&self.meta_file.tmp_path) {
-                self.try_delete(true)
+                self.delete();
+                return;
+            }
+            // cleanup if data corruption happens and any file goes missing
+            if !self.exists() {
+                self.delete();
+                return;
             }
         }
     }
