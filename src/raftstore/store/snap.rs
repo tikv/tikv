@@ -736,28 +736,6 @@ mod v2 {
         Ok(snapshot_meta)
     }
 
-    fn check_snapshot_meta(snapshot_meta: &SnapshotMeta) -> RaftStoreResult<Vec<CfName>> {
-        let mut res = Vec::with_capacity(SNAPSHOT_CFS.len());
-        for cf_file_meta in snapshot_meta.get_cf_files() {
-            let found = SNAPSHOT_CFS.iter().find(|&s| cf_file_meta.get_cf() == *s);
-            if found.is_none() {
-                return Err(box_err!("failed to decode invalid snapshot cf {}",
-                                    cf_file_meta.get_cf()));
-            }
-            let cf_name = found.unwrap();
-            if res.iter().any(|cf| cf_name == cf) {
-                return Err(box_err!("failed to decode duplicated snapshot cf {}", cf_name));
-            }
-            res.push(*cf_name);
-        }
-        if res.len() != SNAPSHOT_CFS.len() {
-            return Err(box_err!("invalid number of snapshot meta cf file: {}, expect: {}",
-                                res.len(),
-                                SNAPSHOT_CFS.len()));
-        }
-        Ok(res)
-    }
-
     fn check_file_size_and_checksum(path: &PathBuf,
                                     expect_size: u64,
                                     expect_checksum: u32)
@@ -815,7 +793,6 @@ mod v2 {
         fn new<T: Into<PathBuf>>(dir: T,
                                  key: &SnapKey,
                                  size_track: Arc<RwLock<u64>>,
-                                 cfs: &[CfName],
                                  sending: bool)
                                  -> RaftStoreResult<Snap> {
             let dir_path = dir.into();
@@ -831,7 +808,7 @@ mod v2 {
             let display_path = Snap::get_display_path(&dir_path, &prefix);
 
             let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
-            for cf in cfs {
+            for cf in SNAPSHOT_CFS {
                 let filename = format!("{}_{}{}", prefix, cf, SST_FILE_SUFFIX);
                 let path = dir_path.join(&filename);
                 let tmp_path = dir_path.join(format!("{}{}", filename, TMP_FILE_SUFFIX));
@@ -872,7 +849,7 @@ mod v2 {
                                                   snap: &DbSnapshot,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, SNAPSHOT_CFS, true));
+            let mut s = try!(Snap::new(dir, key, size_track, true));
             try!(s.init_for_building(snap));
             Ok(s)
         }
@@ -881,7 +858,7 @@ mod v2 {
                                                  key: &SnapKey,
                                                  size_track: Arc<RwLock<u64>>)
                                                  -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, SNAPSHOT_CFS, true));
+            let mut s = try!(Snap::new(dir, key, size_track, true));
 
             if !s.exists() {
                 return Err(box_err!("snapshot file {} not exist", s.path()));
@@ -901,10 +878,9 @@ mod v2 {
                                                    snapshot_meta: SnapshotMeta,
                                                    size_track: Arc<RwLock<u64>>)
                                                    -> RaftStoreResult<Snap> {
-            let cfs = try!(check_snapshot_meta(&snapshot_meta));
-            let mut s = try!(Snap::new(dir, key, size_track, &cfs[..], false));
-
+            let mut s = try!(Snap::new(dir, key, size_track, false));
             try!(s.set_snapshot_meta(snapshot_meta));
+
             if s.exists() {
                 return Ok(s);
             }
@@ -929,7 +905,7 @@ mod v2 {
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let s = try!(Snap::new(dir, key, size_track, SNAPSHOT_CFS, false));
+            let s = try!(Snap::new(dir, key, size_track, false));
             Ok(s)
         }
 
@@ -994,7 +970,6 @@ mod v2 {
 
         fn load_snapshot_meta(&mut self) -> RaftStoreResult<()> {
             let snapshot_meta = try!(self.read_snapshot_meta());
-            try!(check_snapshot_meta(&snapshot_meta));
             try!(self.set_snapshot_meta(snapshot_meta));
             Ok(())
         }
@@ -1461,7 +1436,7 @@ mod v2 {
         }
 
         #[test]
-        fn test_get_and_check_snapshot_meta() {
+        fn test_get_snapshot_meta() {
             let mut cf_file = Vec::with_capacity(super::SNAPSHOT_CFS.len());
             for (i, cf) in super::SNAPSHOT_CFS.iter().enumerate() {
                 let f = super::CfFile {
@@ -1473,7 +1448,6 @@ mod v2 {
                 cf_file.push(f);
             }
             let meta = super::get_snapshot_meta(&cf_file).unwrap();
-            let _ = super::check_snapshot_meta(&meta).unwrap();
             for (i, cf_file_meta) in meta.get_cf_files().iter().enumerate() {
                 if cf_file_meta.get_cf() != cf_file[i].cf {
                     panic!("{}: expect cf {}, got {}",
