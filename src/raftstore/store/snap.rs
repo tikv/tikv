@@ -793,7 +793,8 @@ mod v2 {
         fn new<T: Into<PathBuf>>(dir: T,
                                  key: &SnapKey,
                                  size_track: Arc<RwLock<u64>>,
-                                 sending: bool)
+                                 sending: bool,
+                                 to_build: bool)
                                  -> RaftStoreResult<Snap> {
             let dir_path = dir.into();
             if !dir_path.exists() {
@@ -837,9 +838,18 @@ mod v2 {
                 meta_file: meta_file,
                 size_track: size_track,
             };
+
             // load snapshot meta if meta_file exists
             if file_exists(&s.meta_file.path) {
-                try!(s.load_snapshot_meta())
+                if let Err(e) = s.load_snapshot_meta() {
+                    if !to_build {
+                        return Err(e);
+                    }
+                    warn!("failed to load existent snapshot meta when try to build {}: {:?}",
+                          s.path(),
+                          e);
+                    s.delete();
+                }
             }
             Ok(s)
         }
@@ -849,7 +859,7 @@ mod v2 {
                                                   snap: &DbSnapshot,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, true));
+            let mut s = try!(Snap::new(dir, key, size_track, true, true));
             try!(s.init_for_building(snap));
             Ok(s)
         }
@@ -858,10 +868,11 @@ mod v2 {
                                                  key: &SnapKey,
                                                  size_track: Arc<RwLock<u64>>)
                                                  -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, true));
+            let mut s = try!(Snap::new(dir, key, size_track, true, false));
 
             if !s.exists() {
-                return Err(box_err!("snapshot file {} not exist", s.path()));
+                // Skip the initialization below if it doesn't exists.
+                return Ok(s);
             }
             for cf_file in &mut s.cf_files {
                 // initialize cf file size and reader
@@ -878,7 +889,7 @@ mod v2 {
                                                    snapshot_meta: SnapshotMeta,
                                                    size_track: Arc<RwLock<u64>>)
                                                    -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, false));
+            let mut s = try!(Snap::new(dir, key, size_track, false, false));
             try!(s.set_snapshot_meta(snapshot_meta));
 
             if s.exists() {
@@ -905,7 +916,7 @@ mod v2 {
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let s = try!(Snap::new(dir, key, size_track, false));
+            let s = try!(Snap::new(dir, key, size_track, false, false));
             Ok(s)
         }
 
@@ -971,6 +982,12 @@ mod v2 {
         fn load_snapshot_meta(&mut self) -> RaftStoreResult<()> {
             let snapshot_meta = try!(self.read_snapshot_meta());
             try!(self.set_snapshot_meta(snapshot_meta));
+            // check if there is a data corruption when the meta file exists
+            // but cf files are deleted.
+            if !self.exists() {
+                return Err(box_err!("snapshot {} is corrupted, some cf file is missing",
+                                    self.path()));
+            }
             Ok(())
         }
 
