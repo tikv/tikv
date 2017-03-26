@@ -148,7 +148,7 @@ impl fmt::Debug for RpcAsyncClient {
 // TODO: retry...
 impl AsyncPdClient for RpcAsyncClient {
     // Get region by region id.
-    fn get_region_by_id(&self, region_id: u64) -> PdFuture<metapb::Region> {
+    fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         let mut req = pdpb::GetRegionByIDRequest::new();
         req.set_header(self.header());
         req.set_region_id(region_id);
@@ -159,7 +159,11 @@ impl AsyncPdClient for RpcAsyncClient {
             .map_err(Error::Grpc)
             .and_then(|mut resp| {
                 try!(check_resp_header(resp.get_header()));
-                Ok(resp.take_region())
+                if resp.has_region() {
+                    Ok(Some(resp.take_region()))
+                } else {
+                    Ok(None)
+                }
             })
             .boxed()
     }

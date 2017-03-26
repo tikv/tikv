@@ -109,7 +109,7 @@ pub type PdFuture<T> = BoxFuture<T, Error>;
 
 pub trait AsyncPdClient: Send + Sync {
     // Get region by region id.
-    fn get_region_by_id(&self, region_id: u64) -> PdFuture<metapb::Region>;
+    fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
 
     // Leader for a region will use this to heartbeat Pd.
     fn region_heartbeat(&self,
