@@ -17,19 +17,11 @@ use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
 use std::thread::Builder;
 use std::result::Result;
+use std::boxed::FnBox;
 use super::HashMap;
 
-trait FnBox {
-    fn call_box(self: Box<Self>);
-}
 
-impl<F: FnOnce()> FnBox for F {
-    fn call_box(self: Box<F>) {
-        (*self)()
-    }
-}
-
-type Thunk<'a> = Box<FnBox + Send + 'a>;
+type Thunk<'a> = Box<FnBox() + Send + 'a>;
 
 struct TaskMeta<'a> {
     id: u64,
@@ -273,7 +265,7 @@ fn spawn_in_pool(name: Option<String>,
 
                 // handle task
                 if let Some(task_meta) = task {
-                    task_meta.task.call_box();
+                    task_meta.task.call_box(());
                     let mut meta = tasks.lock().unwrap();
                     meta.finished_task(task_meta.group_id);
                 }
