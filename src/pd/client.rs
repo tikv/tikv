@@ -30,6 +30,7 @@ use kvproto::metapb;
 use kvproto::pdpb::{self, GetMembersResponse, Member};
 use kvproto::pdpb_grpc::{PD, PDClient};
 
+use util::HandyRwLock;
 use super::{Result, Error, PdClient};
 use super::metrics::*;
 
@@ -71,7 +72,7 @@ impl RpcClient {
 
     // For tests
     pub fn get_leader(&self) -> Member {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.rl();
         inner.members.get_leader().clone()
     }
 }
@@ -218,7 +219,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
 {
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
-            let inner = client.inner.read().unwrap();
+            let inner = client.inner.rl();
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
             let r = f(&inner.client);
             timer.observe_duration();
@@ -231,7 +232,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                let mut inner = client.inner.write().unwrap();
+                let mut inner = client.inner.wl();
                 match try_connect_leader(&inner.members) {
                     Ok((cli, mbrs)) => {
                         inner.client = cli;
