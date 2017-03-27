@@ -974,11 +974,6 @@ mod v2 {
                                         cf_file.cf,
                                         meta.get_cf()));
                 }
-                let found = snapshot_meta.get_cf_files().iter().find(|x| x.get_cf() == cf_file.cf);
-                if found.is_none() {
-
-                }
-                let meta = found.unwrap();
                 if file_exists(&cf_file.path) {
                     try!(check_file_size_and_checksum(&cf_file.path,
                                                       meta.get_size(),
