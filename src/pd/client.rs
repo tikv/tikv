@@ -93,23 +93,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersR
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let client = match connect(ep) {
-            Ok(c) => c,
-            // Ignore failed PD node.
-            Err(e) => {
-                error!("PD endpoint {} is down: {:?}", ep, e);
-                continue;
-            }
-        };
-
-        let resp = match client.GetMembers(pdpb::GetMembersRequest::new()) {
-            Ok(resp) => resp,
-            // Ignore failed PD node.
-            Err(e) => {
-                error!("PD endpoint {} failed to respond: {:?}", ep, e);
-                continue;
-            }
-        };
+        let (_, resp) = try!(connect(ep));
 
         // Check cluster ID.
         let cid = resp.get_header().get_cluster_id();
@@ -139,7 +123,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersR
     }
 }
 
-fn connect(addr: &str) -> Result<PDClient> {
+fn connect(addr: &str) -> Result<(PDClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
     let ep = box_try!(Url::parse(addr));
     let host = match ep.host_str() {
@@ -159,7 +143,7 @@ fn connect(addr: &str) -> Result<PDClient> {
         .and_then(|client| {
             // try request.
             match client.GetMembers(pdpb::GetMembersRequest::new()) {
-                Ok(_) => Ok(client),
+                Ok(resp) => Ok((client, resp)),
                 Err(e) => Err(e),
             }
         })
@@ -177,17 +161,9 @@ fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMem
     'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
-                Ok(c) => {
-                    match c.GetMembers(pdpb::GetMembersRequest::new()) {
-                        Ok(r) => {
-                            resp = Some(r);
-                            break 'outer;
-                        }
-                        Err(e) => {
-                            error!("PD endpoint {} failed to respond: {:?}", ep, e);
-                            continue;
-                        }
-                    };
+                Ok((_, r)) => {
+                    resp = Some(r);
+                    break 'outer;
                 }
                 Err(e) => {
                     error!("failed to connect to {}, {:?}", ep, e);
@@ -201,7 +177,7 @@ fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMem
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok(client) = connect(ep.as_str()) {
+            if let Ok((client, _)) = connect(ep.as_str()) {
                 info!("connect to PD leader {:?}", ep);
                 return Ok((client, resp));
             }
