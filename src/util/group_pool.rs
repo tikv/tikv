@@ -16,46 +16,56 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
 use std::thread::Builder;
-use tipb::select::SelectRequest;
-use util::HashMap;
-use super::Result;
-use super::metrics::*;
-use super::endpoint::*;
-use storage::Snapshot;
+use std::result::Result;
+use super::HashMap;
 
-struct TaskMeta {
-    txn_id: u64,
-    snap: Box<Snapshot>,
-    task: RequestTask,
-    sel: Result<SelectRequest>,
+trait FnBox {
+    fn call_box(self: Box<Self>);
 }
 
-impl TaskMeta {
-    fn new(snap: Box<Snapshot>, task: RequestTask, sel: Result<SelectRequest>) -> TaskMeta {
+impl<F: FnOnce()> FnBox for F {
+    fn call_box(self: Box<F>) {
+        (*self)()
+    }
+}
+
+type Thunk<'a> = Box<FnBox + Send + 'a>;
+
+struct TaskMeta<'a> {
+    id: u64,
+    group_id: u64,
+    task: Thunk<'a>,
+}
+
+impl<'a> TaskMeta<'a> {
+    fn new<F>(id: u64, group_id: u64, job: F) -> TaskMeta<'static>
+        where F: FnOnce() + Send + 'static
+    {
         TaskMeta {
-            txn_id: task.start_ts().unwrap_or_default(),
-            snap: snap,
-            task: task,
-            sel: sel,
+            id: id,
+            group_id: group_id,
+            task: Box::new(job),
         }
     }
 }
 
-struct TaskPoolMeta {
+struct GroupTaskPoolMeta {
+    total_tasks_num: u64,
     concurrency: usize,
     running_thread_num: usize,
     running_tasks_num: usize,
     waiting_tasks_num: usize,
-    // txn_id=>count
+    // group_id=>count
     running_tasks: HashMap<u64, usize>,
-    // txn_id=> tasks array
-    waiting_tasks: HashMap<u64, Vec<TaskMeta>>,
+    // group_id=> tasks array
+    waiting_tasks: HashMap<u64, Vec<TaskMeta<'static>>>,
     stop_finished_sender: Sender<bool>, // send stop when running_thread_num turns 0
 }
 
-impl TaskPoolMeta {
-    fn new(concurrency: usize, stop_finished_sender: Sender<bool>) -> TaskPoolMeta {
-        TaskPoolMeta {
+impl GroupTaskPoolMeta {
+    fn new(concurrency: usize, stop_finished_sender: Sender<bool>) -> GroupTaskPoolMeta {
+        GroupTaskPoolMeta {
+            total_tasks_num: 0,
             running_tasks_num: 0,
             running_thread_num: 0,
             waiting_tasks_num: 0,
@@ -66,29 +76,26 @@ impl TaskPoolMeta {
         }
     }
 
-    fn push_tasks(&mut self, snap: Box<Snapshot>, tasks: Vec<RequestTask>) -> usize {
-        let tasks_len = tasks.len();
-        self.waiting_tasks_num += tasks_len;
-        for mut task in tasks {
-            let sel = task.parse_sel();
-            let txn = task.start_ts().unwrap_or_default();
-            let mut txn_tasks = self.waiting_tasks
-                .entry(txn)
-                .or_insert_with(Vec::new);
-            let task_meta = TaskMeta::new(snap.clone(), task, sel);
-            txn_tasks.push(task_meta);
-        }
-        COPR_PENDING_REQS.with_label_values(&["select"]).add(tasks_len as f64);
-        tasks_len
+    fn push_task<F>(&mut self, group_id: u64, job: F)
+        where F: FnOnce() + Send + 'static
+    {
+        let task = TaskMeta::new(self.total_tasks_num, group_id, job);
+        self.waiting_tasks_num += 1;
+        self.total_tasks_num += 1;
+        let group_id = task.group_id;
+        let mut group_tasks = self.waiting_tasks
+            .entry(group_id)
+            .or_insert_with(Vec::new);
+        group_tasks.push(task);
     }
 
     fn total_task_num(&self) -> usize {
         self.waiting_tasks_num + self.running_tasks_num
     }
 
-    fn new_thread_started(&mut self) -> Result<()> {
+    fn new_thread_started(&mut self) -> Result<(), &str> {
         if self.running_thread_num >= self.concurrency {
-            return Err(box_err!("too many thread"));
+            return Err("too many thread");
         }
         self.running_thread_num += 1;
         Ok(())
@@ -102,64 +109,67 @@ impl TaskPoolMeta {
     }
 
 
-    fn finished_task(&mut self, txn: u64) {
+    fn finished_task(&mut self, group_id: u64) {
         self.running_tasks_num -= 1;
-        // sub 1 in running tasks for txn.
-        if self.running_tasks[&txn] <= 1 {
-            self.running_tasks.remove(&txn);
+        // sub 1 in running tasks for group_id.
+        if self.running_tasks[&group_id] <= 1 {
+            self.running_tasks.remove(&group_id);
         } else {
-            let mut count = self.running_tasks.get_mut(&txn).unwrap();
+            let mut count = self.running_tasks.get_mut(&group_id).unwrap();
             *count -= 1;
         }
-        COPR_PENDING_REQS.with_label_values(&["select"]).sub(1.0);
     }
 
-    fn get_next_txn(&self) -> Option<u64> {
-        let mut next_txn = None;
-        for txn in self.waiting_tasks.keys() {
-            let count = match self.running_tasks.get(txn) {
-                None => 0 as usize,
-                Some(count) => *count,
-            };
-            // if no running task for txn, be the next txn.
-            if count == 0 {
-                return Some(*txn);
-            }
-
-            // else prefer txn with min running tasks.
-            if next_txn.is_none() {
-                next_txn = Some((*txn, count));
+    fn get_next_group(&self) -> Option<u64> {
+        let mut next_group = None; //(group_id,count,task_id)
+        for (group_id, tasks) in &self.waiting_tasks {
+            if tasks.is_empty() {
                 continue;
             }
-            let (_, pre_count) = next_txn.unwrap();
-            if pre_count > count {
-                next_txn = Some((*txn, count));
+            let front_task_id = tasks[0].id;
+            let mut count = 0;
+            if self.running_tasks.contains_key(group_id) {
+                count = self.running_tasks[group_id];
+            };
+            if next_group.is_none() {
+                next_group = Some((group_id, count, front_task_id));
+                continue;
             }
+            let (_, pre_count, pre_task_id) = next_group.unwrap();
+            if pre_count > count {
+                next_group = Some((group_id, count, front_task_id));
+                continue;
+            }
+
+            if pre_count == count && pre_task_id < front_task_id {
+                next_group = Some((group_id, count, front_task_id));
+            }
+
         }
 
-        if let Some((txn, _)) = next_txn {
-            return Some(txn);
+        if let Some((group_id, _, _)) = next_group {
+            return Some(*group_id);
         }
 
         // no tasks in waiting.
         None
     }
 
-    fn pop_next_task(&mut self) -> Option<(TaskMeta)> {
-        if let Some(txn) = self.get_next_txn() {
-            // running tasks for txn add 1.
-            self.running_tasks.entry(txn).or_insert(0 as usize);
-            let mut running_tasks = self.running_tasks.get_mut(&txn).unwrap();
+    fn pop_next_task(&mut self) -> Option<(TaskMeta<'static>)> {
+        if let Some(group_id) = self.get_next_group() {
+            // running tasks for group add 1.
+            self.running_tasks.entry(group_id).or_insert(0 as usize);
+            let mut running_tasks = self.running_tasks.get_mut(&group_id).unwrap();
             *running_tasks += 1;
-            // pop waiting task from txn.
-            let (empty_txn_waiting_tasks, task) = {
-                let mut waiting_tasks = self.waiting_tasks.get_mut(&txn).unwrap();
-                let task_meta = waiting_tasks.pop().unwrap();
+            // get front waiting task from group.
+            let (empty_group_wtasks, task) = {
+                let mut waiting_tasks = self.waiting_tasks.get_mut(&group_id).unwrap();
+                let task_meta = waiting_tasks.swap_remove(0);
                 (waiting_tasks.is_empty(), task_meta)
             };
-            // if waiting tasks for txn is empty,remove from waiting_tasks.
-            if empty_txn_waiting_tasks {
-                self.waiting_tasks.remove(&txn);
+            // if waiting tasks for group is empty,remove from waiting_tasks.
+            if empty_group_wtasks {
+                self.waiting_tasks.remove(&group_id);
             }
 
             self.waiting_tasks_num -= 1;
@@ -170,28 +180,28 @@ impl TaskPoolMeta {
     }
 }
 
-pub struct TaskPool {
-    tasks: Arc<Mutex<TaskPoolMeta>>,
+pub struct GroupTaskPool {
+    tasks: Arc<Mutex<GroupTaskPoolMeta>>,
     job_sender: Sender<bool>,
     stop_finished_receiver: Receiver<bool>,
     concurrency: usize,
 }
 
-impl TaskPool {
-    pub fn new(num_threads: usize) -> TaskPool {
+impl GroupTaskPool {
+    pub fn new(num_threads: usize) -> GroupTaskPool {
         assert!(num_threads >= 1);
         let name = Some(thd_name!("endpoint-pool"));
         let (jtx, jrx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
         let jrx = Arc::new(Mutex::new(jrx));
         let (stx, srx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
-        let tasks = Arc::new(Mutex::new(TaskPoolMeta::new(num_threads, stx)));
+        let tasks = Arc::new(Mutex::new(GroupTaskPoolMeta::new(num_threads, stx)));
 
         // Threadpool threads
         for _ in 0..num_threads {
             spawn_in_pool(name.clone(), jrx.clone(), tasks.clone());
         }
 
-        TaskPool {
+        GroupTaskPool {
             tasks: tasks.clone(),
             job_sender: jtx,
             stop_finished_receiver: srx,
@@ -199,17 +209,16 @@ impl TaskPool {
         }
     }
 
-    pub fn handle_batch(&mut self, snap: Box<Snapshot>, tasks: Vec<RequestTask>) {
-        // check length
-        let count = {
+    /// Executes the function `job` on a thread in the pool.
+    pub fn execute<F>(&mut self, group_id: u64, job: F)
+        where F: FnOnce() + Send + 'static
+    {
+        {
             let lock = self.tasks.clone();
             let mut meta = lock.lock().unwrap();
-            meta.push_tasks(snap, tasks)
-        };
-
-        for _ in 0..count {
-            self.job_sender.send(true).unwrap();
+            meta.push_task(group_id, job);
         }
+        self.job_sender.send(true).unwrap();
     }
 
     fn stop(&mut self) {
@@ -226,7 +235,7 @@ impl TaskPool {
     }
 }
 
-impl Drop for TaskPool {
+impl Drop for GroupTaskPool {
     fn drop(&mut self) {
         self.stop();
     }
@@ -234,7 +243,7 @@ impl Drop for TaskPool {
 
 fn spawn_in_pool(name: Option<String>,
                  receiver: Arc<Mutex<Receiver<bool>>>,
-                 tasks: Arc<Mutex<TaskPoolMeta>>) {
+                 tasks: Arc<Mutex<GroupTaskPoolMeta>>) {
     let mut builder = Builder::new();
     if let Some(ref name) = name {
         builder = builder.name(name.clone());
@@ -264,10 +273,9 @@ fn spawn_in_pool(name: Option<String>,
 
                 // handle task
                 if let Some(task_meta) = task {
-                    let end_point = TiDbEndPoint::new(task_meta.snap);
-                    end_point.handle_request(task_meta.task, task_meta.sel);
+                    task_meta.task.call_box();
                     let mut meta = tasks.lock().unwrap();
-                    meta.finished_task(task_meta.txn_id);
+                    meta.finished_task(task_meta.group_id);
                 }
             }
 

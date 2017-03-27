@@ -34,13 +34,13 @@ use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
+use util::group_pool::GroupTaskPool;
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
 use super::{Error, Result};
 use super::aggregate::{self, AggrFunc};
 use super::metrics::*;
-use super::taskpool::TaskPool;
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
@@ -68,7 +68,7 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: TaskPool,
+    pool: GroupTaskPool,
     max_running_task_count: usize,
 }
 
@@ -79,7 +79,7 @@ impl Host {
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: TaskPool::new(concurrency),
+            pool: GroupTaskPool::new(concurrency),
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
         }
     }
@@ -234,11 +234,21 @@ impl BatchRunnable<Task> for Host {
                             continue;
                         }
                     };
+                    let len = reqs.len() as f64;
                     if self.pool.get_tasks_num() >= self.max_running_task_count {
                         notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
                         continue;
                     }
-                    self.pool.handle_batch(snap, reqs);
+                    COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
+                    for mut req in reqs {
+                        let end_point = TiDbEndPoint::new(snap.clone());
+                        let sel = req.parse_sel();
+                        let txn_id = req.start_ts.unwrap_or_default();
+                        self.pool.execute(txn_id, move || {
+                            end_point.handle_request(req, sel);
+                            COPR_PENDING_REQS.with_label_values(&["select"]).sub(1.0);
+                        });
+                    }
                 }
             }
         }
