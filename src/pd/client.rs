@@ -93,7 +93,14 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersR
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = try!(connect(ep));
+        let (_, resp) = match connect(ep) {
+            Ok(resp) => resp,
+            // Ignore failed PD node.
+            Err(e) => {
+                error!("PD endpoint {} failed to respond: {:?}", ep, e);
+                continue;
+            }
+        };
 
         // Check cluster ID.
         let cid = resp.get_header().get_cluster_id();
@@ -126,20 +133,14 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersR
 fn connect(addr: &str) -> Result<(PDClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
     let ep = box_try!(Url::parse(addr));
-    let host = match ep.host_str() {
-        Some(h) => h.to_owned(),
-        None => return Err(box_err!("unkown host, please specify the host")),
-    };
-    let port = match ep.port() {
-        Some(p) => p,
-        None => return Err(box_err!("unkown port, please specify the port")),
-    };
+    let host = ep.host_str().unwrap();
+    let port = ep.port().unwrap();
 
     let mut conf: grpc::client::GrpcClientConf = Default::default();
     conf.http.no_delay = Some(true);
 
     // TODO: It seems that `new` always return an Ok(_).
-    PDClient::new(&host, port, false, conf)
+    PDClient::new(host, port, false, conf)
         .and_then(|client| {
             // try request.
             match client.GetMembers(pdpb::GetMembersRequest::new()) {
