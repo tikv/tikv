@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io;
+use std::io::{self, ErrorKind};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -26,11 +26,12 @@ pub fn file_exists(file: &PathBuf) -> bool {
 }
 
 pub fn delete_file_if_exist(file: &PathBuf) {
-    if !file_exists(file) {
-        return;
-    }
-    if let Err(e) = fs::remove_file(file) {
-        warn!("failed to delete file {}: {:?}", file.display(), e);
+    match fs::remove_file(file) {
+        Ok(_) => {}
+        Err(ref e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => {
+            warn!("failed to delete file {}: {:?}", file.display(), e);
+        }
     }
 }
 
@@ -89,7 +90,7 @@ mod test {
     }
 
     #[test]
-    fn test_delete_file_if_exists() {
+    fn test_delete_file_if_exist() {
         let tmp_dir = TempDir::new("").unwrap();
         let dir_path = tmp_dir.path().to_path_buf();
 

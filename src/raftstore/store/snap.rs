@@ -961,10 +961,22 @@ mod v2 {
         }
 
         fn set_snapshot_meta(&mut self, snapshot_meta: SnapshotMeta) -> RaftStoreResult<()> {
-            for cf_file in &mut self.cf_files {
+            if snapshot_meta.get_cf_files().len() != self.cf_files.len() {
+                return Err(box_err!("invalid cf number of snapshot meta, expect {}, got {}",
+                                    SNAPSHOT_CFS.len(),
+                                    snapshot_meta.get_cf_files().len()));
+            }
+            for (i, cf_file) in self.cf_files.iter_mut().enumerate() {
+                let meta = snapshot_meta.get_cf_files().get(i).unwrap();
+                if meta.get_cf() != cf_file.cf {
+                    return Err(box_err!("invalid {} cf in snapshot meta, expect {}, got {}",
+                                        i,
+                                        cf_file.cf,
+                                        meta.get_cf()));
+                }
                 let found = snapshot_meta.get_cf_files().iter().find(|x| x.get_cf() == cf_file.cf);
                 if found.is_none() {
-                    return Err(box_err!("cf {} doesn't exist in snapshot meta", cf_file.cf));
+
                 }
                 let meta = found.unwrap();
                 if file_exists(&cf_file.path) {
@@ -1197,7 +1209,6 @@ mod v2 {
 
         fn save(&mut self) -> io::Result<()> {
             debug!("saving to {}", self.path());
-            let mut total_size = 0;
             for cf_file in &mut self.cf_files {
                 if cf_file.size == 0 {
                     // Skip empty cf file.
@@ -1232,15 +1243,14 @@ mod v2 {
                 }
 
                 try!(fs::rename(&cf_file.tmp_path, &cf_file.path));
-                total_size += cf_file.size;
+                let mut size_track = self.size_track.wl();
+                *size_track = size_track.saturating_add(cf_file.size);
             }
             // write meta file
             let mut v = vec![];
             try!(self.meta_file.meta.write_to_vec(&mut v));
             try!(self.meta_file.file.take().unwrap().write_all(&v[..]));
             try!(fs::rename(&self.meta_file.tmp_path, &self.meta_file.path));
-            let mut size_track = self.size_track.wl();
-            *size_track = size_track.saturating_add(total_size);
             Ok(())
         }
 
