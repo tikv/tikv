@@ -147,12 +147,17 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::Register(token, meta) => {
                 SNAP_TASK_COUNTER.with_label_values(&["register"]).inc();
                 let mgr = self.snap_mgr.clone();
-                match SnapKey::from_snap(meta.get_message().get_snapshot()).and_then(|key| {
-                    mgr.get_snapshot_for_receiving(&key,
-                                                    meta.get_message().get_snapshot().get_data())
-                        .map(|s| (s, key))
-                }) {
-                    Ok((snap, key)) => {
+                let key = match SnapKey::from_snap(meta.get_message().get_snapshot()) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        error!("failed to create snap key for token {:?}: {:?}", token, e);
+                        self.close(token);
+                        return;
+                    }
+                };
+                match mgr.get_snapshot_for_receiving(&key,
+                                                     meta.get_message().get_snapshot().get_data()) {
+                    Ok(snap) => {
                         if snap.exists() {
                             info!("snapshot file {} already exists, skip receiving.",
                                   snap.path());
