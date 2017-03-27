@@ -173,14 +173,14 @@ fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMem
     rand::thread_rng().shuffle(&mut indexes);
 
     let mut resp = None;
-    for i in indexes {
+    'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
                 Ok(c) => {
                     match c.GetMembers(pdpb::GetMembersRequest::new()) {
                         Ok(r) => {
                             resp = Some(r);
-                            break;
+                            break 'outer;
                         }
                         Err(e) => {
                             error!("PD endpoint {} failed to respond: {:?}", ep, e);

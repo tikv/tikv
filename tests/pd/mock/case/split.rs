@@ -39,7 +39,7 @@ impl Split {
         }
 
         let mut resps = Vec::with_capacity(eps.len());
-        for (i, _) in (&eps).into_iter().enumerate() {
+        for i in 0..eps.len() {
             let mut resp = GetMembersResponse::new();
             let mut header = ResponseHeader::new();
             header.set_cluster_id(i as u64 + 1); // start from 1.

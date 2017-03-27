@@ -893,8 +893,10 @@ fn main() {
         }
     }
 
-    let pd_client = RpcClient::new(&pd_endpoints).unwrap();
-    let cluster_id = pd_client.get_cluster_id().unwrap();
+    let pd_client = RpcClient::new(&pd_endpoints)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let cluster_id = pd_client.get_cluster_id()
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     let total_cpu_num = cpu_num().unwrap();
     // return  memory in KB.
