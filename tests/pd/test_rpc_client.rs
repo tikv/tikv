@@ -101,7 +101,7 @@ fn test_change_leader() {
 
     let _server_a = MockServer::run("127.0.0.1:43079", se.clone(), Some(lc.clone()));
     let _server_b = MockServer::run("127.0.0.1:53079", se.clone(), Some(lc.clone()));
-    let _server_a = MockServer::run("127.0.0.1:63079", se.clone(), Some(lc.clone()));
+    let _server_c = MockServer::run("127.0.0.1:63079", se.clone(), Some(lc.clone()));
 
     thread::sleep(Duration::from_secs(1));
 
