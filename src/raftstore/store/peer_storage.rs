@@ -32,7 +32,6 @@ use raftstore::{Result, Error};
 use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
-use super::peer::ReadyContext;
 use super::metrics::*;
 use super::{SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
@@ -774,17 +773,17 @@ impl PeerStorage {
     /// to update the memory states properly.
     // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
     // a requirement to advance the ready object properly later.
-    pub fn handle_raft_ready<T>(&mut self,
-                                ready_ctx: &mut ReadyContext<T>,
-                                ready: &Ready)
-                                -> Result<InvokeContext> {
+    pub fn handle_raft_ready(&mut self,
+                             wb: &mut WriteBatch,
+                             ready: &Ready)
+                             -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
         if !raft::is_empty_snap(&ready.snapshot) {
-            try!(self.apply_snapshot(&mut ctx, &ready.snapshot, &mut ready_ctx.wb));
+            try!(self.apply_snapshot(&mut ctx, &ready.snapshot, wb));
         }
 
         if !ready.entries.is_empty() {
-            try!(self.append(&mut ctx, &ready.entries, &mut ready_ctx.wb));
+            try!(self.append(&mut ctx, &ready.entries, wb));
         }
 
         // Last index is 0 means the peer is created from raft message
@@ -796,11 +795,11 @@ impl PeerStorage {
         }
 
         if ctx.raft_state != self.raft_state {
-            try!(ctx.save_raft_to(&self.engine, &mut ready_ctx.wb));
+            try!(ctx.save_raft_to(&self.engine, wb));
         }
 
         if ctx.apply_state != self.apply_state {
-            try!(ctx.save_apply_to(&self.engine, &mut ready_ctx.wb));
+            try!(ctx.save_apply_to(&self.engine, wb));
         }
 
         Ok(ctx)
