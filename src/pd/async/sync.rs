@@ -132,14 +132,14 @@ fn try_connect_leader(previous: &GetMembersResponse)
     rand::thread_rng().shuffle(&mut indexes);
 
     let mut resp = None;
-    for i in indexes {
+    'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
                 Ok(c) => {
                     match Future::wait(c.GetMembers(pdpb::GetMembersRequest::new())) {
                         Ok(r) => {
                             resp = Some(r);
-                            break;
+                            break 'outer;
                         }
                         Err(e) => {
                             error!("PD endpoint {} failed to respond: {:?}", ep, e);
@@ -179,7 +179,7 @@ fn do_request<F, R>(client: &RpcAsyncClient, f: F) -> Result<R>
         let r = {
             let inner = client.inner.read().unwrap();
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = Future::wait(f(&inner.client));
+            let r = Future::wait(f(inner.get_client()));
             timer.observe_duration();
             r
         };
@@ -191,10 +191,10 @@ fn do_request<F, R>(client: &RpcAsyncClient, f: F) -> Result<R>
             Err(e) => {
                 error!("fail to request: {:?}", e);
                 let mut inner = client.inner.write().unwrap();
-                match try_connect_leader(&inner.members) {
+                match try_connect_leader(inner.get_members()) {
                     Ok((cli, mbrs)) => {
-                        inner.client = cli;
-                        inner.members = mbrs;
+                        inner.set_client(cli);
+                        inner.set_members(mbrs);
                     }
                     Err(e) => {
                         error!("fail to connect to PD leader {:?}", e);
