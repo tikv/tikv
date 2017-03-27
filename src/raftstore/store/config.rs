@@ -59,6 +59,8 @@ const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
 
 const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 9 seconds
 
+const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = false;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     // store capacity.
@@ -125,8 +127,11 @@ pub struct Config {
     pub consistency_check_tick_interval: u64,
 
     pub report_region_flow_interval: u64,
+
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: TimeDuration,
+
+    pub use_sst_file_snapshot: bool,
 }
 
 impl Default for Config {
@@ -163,6 +168,7 @@ impl Default for Config {
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
             raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),
+            use_sst_file_snapshot: DEFAULT_USE_SST_FILE_SNAPSHOT,
         }
     }
 }
