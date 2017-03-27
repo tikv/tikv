@@ -20,7 +20,7 @@ use kvproto::pdpb::*;
 
 use protobuf::{RepeatedField, Message};
 
-use super::Case;
+use super::Mocker;
 use super::Result;
 
 const CLUSTER_ID: u64 = 42;
@@ -70,7 +70,7 @@ impl Service {
 
 // TODO: Check cluster ID.
 // TODO: Support more rpc.
-impl Case for Service {
+impl Mocker for Service {
     fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         Some(Ok(self.member_resp.clone()))
     }

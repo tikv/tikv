@@ -20,7 +20,7 @@ use grpc::error::GrpcError;
 
 use kvproto::pdpb::*;
 
-use super::Case;
+use super::Mocker;
 use super::Result;
 
 pub const LEADER_INTERVAL_SEC: u64 = 2;
@@ -89,7 +89,7 @@ const DEAD_ID: u64 = 1000;
 const DEAD_NAME: &'static str = "walking_dead";
 const DEAD_URL: &'static str = "http://127.0.0.1:65534";
 
-impl Case for LeaderChange {
+impl Mocker for LeaderChange {
     fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut r = self.r.lock().unwrap();
         let now = Instant::now();

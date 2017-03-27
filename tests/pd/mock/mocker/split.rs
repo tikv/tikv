@@ -17,7 +17,7 @@ use protobuf::RepeatedField;
 
 use kvproto::pdpb::{Member, GetMembersRequest, GetMembersResponse, ResponseHeader};
 
-use super::Case;
+use super::Mocker;
 use super::Result;
 
 #[derive(Debug)]
@@ -58,7 +58,7 @@ impl Split {
     }
 }
 
-impl Case for Split {
+impl Mocker for Split {
     fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let idx = self.idx.fetch_add(1, Ordering::SeqCst);
         info!("[Split] GetMembers: {:?}",

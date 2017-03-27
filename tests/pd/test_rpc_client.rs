@@ -19,7 +19,7 @@ use kvproto::metapb;
 
 use tikv::pd::{PdClient, RpcClient, validate_endpoints};
 
-use super::mock::case::*;
+use super::mock::mocker::*;
 use super::mock::Server as MockServer;
 
 #[test]

@@ -29,7 +29,7 @@ pub use self::leader_change::LeaderChange;
 
 pub type Result<T> = result::Result<T, GrpcError>;
 
-pub trait Case {
+pub trait Mocker {
     fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         None
     }
