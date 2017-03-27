@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{CounterVec, HistogramVec, Histogram, exponential_buckets};
+use prometheus::{CounterVec, HistogramVec, Histogram};
 
 lazy_static! {
     pub static ref PD_REQ_COUNTER_VEC: CounterVec =
@@ -73,18 +73,5 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_hash_duration_seconds",
             "Bucketed histogram of raftstore hash compution duration"
-        ).unwrap();
-
-    pub static ref SNAPSHOT_KV_COUNT_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_snapshot_kv_count",
-            "Total number of kv in snapshot",
-             exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
-        ).unwrap();
-    pub static ref SNAPSHOT_SIZE_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_snapshot_size",
-            "Size of snapshot",
-             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 }
