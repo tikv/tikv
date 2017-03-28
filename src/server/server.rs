@@ -16,7 +16,7 @@ use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
 
-use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
+use mio::{Token, Handler, EventLoop, EventLoopConfig, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -47,10 +47,10 @@ pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>
     where T: RaftStoreRouter,
           S: StoreAddrResolver
 {
-    let mut builder = EventLoopBuilder::new();
-    builder.notify_capacity(config.notify_capacity);
-    builder.messages_per_tick(config.messages_per_tick);
-    let el = try!(builder.build());
+    let mut loop_config = EventLoopConfig::new();
+    loop_config.notify_capacity(config.notify_capacity);
+    loop_config.messages_per_tick(config.messages_per_tick);
+    let el = try!(EventLoop::configured(loop_config));
     Ok(el)
 }
 
