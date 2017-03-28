@@ -90,7 +90,8 @@ pub struct Store<T, C: 'static> {
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
-    pending_regions: Vec<metapb::Region>,
+    // the regions with pending snapshots between two mio ticks.
+    pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
@@ -182,7 +183,7 @@ impl<T, C> Store<T, C> {
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
             region_ranges: BTreeMap::new(),
-            pending_regions: vec![],
+            pending_snapshot_regions: vec![],
             trans: trans,
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
@@ -608,9 +609,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(true)
     }
 
-    // Clippy doesn't allow hash_map contains_key followed by insert, and suggests
-    // using entry().or_insert() instead, but we can't use this because creating peer
-    // may fail, so we allow map_entry.
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         if !self.is_raft_msg_valid(&msg) {
@@ -838,7 +836,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(false);
             }
         }
-        for region in &self.pending_regions {
+        for region in &self.pending_snapshot_regions {
             if enc_start_key(region) < enc_end_key(&snap_region) &&
                enc_end_key(region) > enc_start_key(&snap_region) &&
                // Same region can overlap, we will apply the latest version of snapshot.
@@ -847,7 +845,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(false);
             }
         }
-        self.pending_regions.push(snap_region);
+        self.pending_snapshot_regions.push(snap_region);
 
         Ok(true)
     }
@@ -2007,7 +2005,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
         self.poll_apply();
 
-        self.pending_regions.clear();
+        self.pending_snapshot_regions.clear();
     }
 }
 

@@ -154,7 +154,9 @@ impl Simulator for ServerCluster {
         let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
         let simulate_trans = SimulateTransport::new(trans.clone());
         let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
-        let snap_mgr = SnapManager::new(tmp_str, Some(node.get_sendch()));
+        let snap_mgr = SnapManager::new(tmp_str,
+                                        Some(node.get_sendch()),
+                                        cfg.raft_store.use_sst_file_snapshot);
 
         node.start(store_event_loop,
                    engine.clone(),

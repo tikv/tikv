@@ -167,14 +167,6 @@ wal-recovery-mode = 2
 # Same as rocksdb's default value (10 min).
 stats-dump-period-sec = 600
 
-# If true, then the contents of manifest and data files are not synced
-# to stable storage. Their contents remain in the OS buffers till the
-# OS decides to flush them. This option is good for bulk-loading
-# of data. Once the bulk-loading is complete, please issue a
-# sync to the OS to flush all dirty buffers to stable storage.
-# Default false.
-# disable-data-sync = false
-
 # Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
 # If you want to use rocksdb on multi disks or spinning disks, you should set value at
 # least 2MB;

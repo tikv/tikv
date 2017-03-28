@@ -39,6 +39,7 @@ pub mod buf;
 pub mod sockopt;
 pub mod transport;
 pub mod time_monitor;
+pub mod file;
 pub mod file_log;
 pub mod clocktime;
 pub mod metrics;
