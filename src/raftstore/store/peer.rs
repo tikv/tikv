@@ -613,7 +613,8 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   trans: &T,
                                                   metrics: &mut RaftMetrics,
-                                                  worker: &Worker<PdTask>) {
+                                                  worker: &Worker<PdTask>)
+                                                  -> bool {
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -621,7 +622,7 @@ impl Peer {
             // to full message queue under high load.
             debug!("{} still applying snapshot, skip further handling.",
                    self.tag);
-            return;
+            return true;
         }
 
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
@@ -629,17 +630,19 @@ impl Peer {
                    self.tag,
                    self.get_store().applied_index(),
                    self.get_store().committed_index());
-            return;
+            return true;
         }
 
         if self.is_appending_log {
-            debug!("region [{}] is async appending log, skip", self.region_id);
-            return;
+            debug!("region [{}] is async appending log, will handled next time",
+                   self.region_id);
+            return false;
         }
+
         self.is_appending_log = true;
 
         if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
-            return;
+            return true;
         }
 
         debug!("{} handle raft ready", self.tag);
@@ -677,6 +680,8 @@ impl Peer {
                 ctx: invoke_ctx,
             })
             .unwrap();
+
+        true
     }
 
     pub fn post_raft_ready_append<T: Transport>(&mut self,

@@ -889,11 +889,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
+        let mut regions_not_handled = HashSet::default();
         for region_id in self.pending_raft_groups.drain() {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics, &self.pd_worker);
+                if !peer.handle_raft_ready_append(&self.trans,
+                                                  &mut self.raft_metrics,
+                                                  &self.pd_worker) {
+                    regions_not_handled.insert(region_id);
+                }
             }
         }
+        self.pending_raft_groups = regions_not_handled;
 
         let append_res = self.poll_append();
 
