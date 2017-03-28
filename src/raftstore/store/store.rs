@@ -2020,10 +2020,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         let append_res = self.poll_append();
-        let has_append_res = !append_res.is_empty();
 
         // We handle raft ready in event loop.
-        if !self.pending_raft_groups.is_empty() || has_append_res {
+        if !self.pending_raft_groups.is_empty() || !append_res.is_empty() {
             self.on_raft_ready(append_res);
         }
 
