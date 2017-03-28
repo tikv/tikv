@@ -214,31 +214,31 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         // create db when db not exist
-        let mut cfs_opts = HashMap::default();
-        cfs_opts.insert("default", Options::new());
-        let db = check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        drop(db);
+        {
+            let cfs_opts = map!["default" => Options::new()];
+            let db = check_and_open(path_str, Options::new(), cfs_opts).unwrap();
+        }
         column_families_must_eq(path_str, &["default"]);
 
         // add cf1.
-        let mut cfs_opts = HashMap::default();
-        cfs_opts.insert("default", Options::new());
-        cfs_opts.insert("cf1", Options::new());
-        let db = check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        drop(db);
+        {
+            let cfs_opts = map!["default" => Options::new(), "cf1" => Options::new()];
+            let db = check_and_open(path_str, Options::new(), cfs_opts).unwrap();
+        }
         column_families_must_eq(path_str, &["default", "cf1"]);
 
         // drop cf1.
-        let mut cfs_opts = HashMap::default();
-        cfs_opts.insert("default", Options::new());
-        let db = check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        drop(db);
+        {
+            let cfs_opts = map!["default" => Options::new()];
+            let db = check_and_open(path_str, Options::new(), cfs_opts).unwrap();
+        }
         column_families_must_eq(path_str, &["default"]);
 
         // never drop default cf
-        let cfs_opts = HashMap::default();
-        let db = check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        drop(db);
+        {
+            let cfs_opts = HashMap::default();
+            let db = check_and_open(path_str, Options::new(), cfs_opts).unwrap();
+        }
         column_families_must_eq(path_str, &["default"]);
     }
 
