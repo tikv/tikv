@@ -56,7 +56,7 @@ use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
-const LATEST_DURATION: usize = 10;
+const LATEST_DURATION: usize = 2;
 
 struct ReadIndexRequest {
     uuid: Uuid,
