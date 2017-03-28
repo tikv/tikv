@@ -883,7 +883,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self, append_res: Vec<(Ready, InvokeContext)>) {
+    fn on_raft_ready(&mut self, mut append_res: Vec<(Ready, InvokeContext)>) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
@@ -900,6 +900,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         self.pending_raft_groups = regions_not_handled;
+
+        let mut new_res = self.poll_append();
+        append_res.append(&mut new_res);
 
         let mut ready_results = Vec::with_capacity(append_res.len());
         for (mut ready, invoke_ctx) in append_res {
