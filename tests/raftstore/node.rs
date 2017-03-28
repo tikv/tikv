@@ -39,8 +39,8 @@ use super::pd::TestPdClient;
 use super::transport_simulate::*;
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
+    snap_paths: HashMap<u64, (Mutex<SnapManager>, TempDir)>,
+    routers: HashMap<u64, Mutex<SimulateTransport<Msg, ServerRaftStoreRouter>>>,
     snapshot_status_senders: HashMap<u64, Mutex<Sender<SnapshotStatusMsg>>>,
 }
 
@@ -82,24 +82,28 @@ impl Channel<RaftMessage> for ChannelTransport {
             let key = SnapKey::from_snap(snap).unwrap();
             let from = match self.rl().snap_paths.get(&from_store) {
                 Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Sending);
-                    p.0.get_snapshot_for_sending(&key).unwrap()
+                    let mgr = p.0.lock().unwrap().clone();
+                    mgr.register(key.clone(), SnapEntry::Sending);
+                    mgr.get_snapshot_for_sending(&key).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
             let to = match self.rl().snap_paths.get(&to_store) {
                 Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Receiving);
+                    let mgr = p.0.lock().unwrap().clone();
+                    mgr.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
-                    p.0.get_snapshot_for_receiving(&key, data).unwrap()
+                    mgr.get_snapshot_for_receiving(&key, data).unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
 
             defer!({
                 let core = self.rl();
-                core.snap_paths[&from_store].0.deregister(&key, &SnapEntry::Sending);
-                core.snap_paths[&to_store].0.deregister(&key, &SnapEntry::Receiving);
+                let from_mgr = core.snap_paths[&from_store].0.lock().unwrap().clone();
+                from_mgr.deregister(&key, &SnapEntry::Sending);
+                let to_mgr = core.snap_paths[&to_store].0.lock().unwrap().clone();
+                to_mgr.deregister(&key, &SnapEntry::Receiving);
             });
 
             try!(copy_snapshot(from, to));
@@ -107,7 +111,8 @@ impl Channel<RaftMessage> for ChannelTransport {
 
         match self.core.rl().routers.get(&to_store) {
             Some(h) => {
-                try!(h.send_raft_msg(msg));
+                let router = h.lock().unwrap().clone();
+                try!(router.send_raft_msg(msg));
                 if is_snapshot {
                     // should report snapshot finish.
                     let core = self.rl();
@@ -150,8 +155,11 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
+    #[allow(let_and_return)]
     pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<Msg, ServerRaftStoreRouter> {
-        self.trans.rl().routers.get(&node_id).cloned().unwrap()
+        let trans = self.trans.rl();
+        let sim = trans.routers[&node_id].lock().unwrap().clone();
+        sim
     }
 }
 
@@ -174,7 +182,8 @@ impl Simulator for NodeCluster {
         } else {
             let trans = self.trans.rl();
             let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
-            (snap_mgr.clone(), None)
+            let mgr = snap_mgr.lock().unwrap().clone();
+            (mgr, None)
         };
 
         node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone()).unwrap();
@@ -183,12 +192,12 @@ impl Simulator for NodeCluster {
                node_id,
                tmp.as_ref().map(|p| p.path().to_str().unwrap().to_owned()));
         if let Some(tmp) = tmp {
-            self.trans.wl().snap_paths.insert(node.id(), (snap_mgr, tmp));
+            self.trans.wl().snap_paths.insert(node.id(), (Mutex::new(snap_mgr), tmp));
         }
 
         let node_id = node.id();
         let router = ServerRaftStoreRouter::new(node.get_sendch(), node_id);
-        self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
+        self.trans.wl().routers.insert(node_id, Mutex::new(SimulateTransport::new(router)));
         self.trans
             .wl()
             .snapshot_status_senders
@@ -217,13 +226,14 @@ impl Simulator for NodeCluster {
                             request: RaftCmdRequest,
                             timeout: Duration)
                             -> Result<RaftCmdResponse> {
-        if !self.trans.rl().routers.contains_key(&node_id) {
+        let trans = self.trans.rl();
+        if !trans.routers.contains_key(&node_id) {
             return Err(box_err!("missing sender for store {}", node_id));
         }
 
-        let router = self.trans.rl().routers.get(&node_id).cloned().unwrap();
+        let sim = trans.routers[&node_id].lock().unwrap().clone();
         wait_op!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
-                     router.send_command(request, cb).unwrap()
+                     sim.send_command(request, cb).unwrap()
                  },
                  timeout)
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
@@ -243,12 +253,12 @@ impl Simulator for NodeCluster {
 
     fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter) {
         let mut trans = self.trans.wl();
-        trans.routers.get_mut(&node_id).unwrap().add_filter(filter);
+        trans.routers.get_mut(&node_id).unwrap().lock().unwrap().add_filter(filter);
     }
 
     fn clear_recv_filters(&mut self, node_id: u64) {
         let mut trans = self.trans.wl();
-        trans.routers.get_mut(&node_id).unwrap().clear_filters();
+        trans.routers.get_mut(&node_id).unwrap().lock().unwrap().clear_filters();
     }
 
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>> {

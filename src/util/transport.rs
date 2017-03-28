@@ -97,7 +97,6 @@ pub struct RetryableSendCh<T, C: Sender<T>> {
 // We only care about self.ch. When using built-in derive, the T will be
 // also taken into consideration.
 unsafe impl<T, C: Sender<T> + Send> Send for RetryableSendCh<T, C> {}
-unsafe impl<T, C: Sender<T> + Sync> Sync for RetryableSendCh<T, C> {}
 
 impl<T: Debug, C: Sender<T>> RetryableSendCh<T, C> {
     pub fn new(ch: C, name: &'static str) -> RetryableSendCh<T, C> {
