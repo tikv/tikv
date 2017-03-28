@@ -639,7 +639,7 @@ impl Peer {
 
         if self.is_appending_log {
             debug!("region [{}] is async appending log, will handled next time",
-            self.region_id);
+                   self.region_id);
             return false;
         }
         self.is_appending_log = true;

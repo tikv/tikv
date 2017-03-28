@@ -883,7 +883,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self) {
+    fn on_raft_ready(&mut self, append_res: Vec<(Ready, InvokeContext)>) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
@@ -900,8 +900,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         self.pending_raft_groups = regions_not_handled;
-
-        let append_res = self.poll_append();
 
         let mut ready_results = Vec::with_capacity(append_res.len());
         for (mut ready, invoke_ctx) in append_res {
@@ -2021,9 +2019,12 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             return;
         }
 
+        let append_res = self.poll_append();
+        let has_append_res = !append_res.is_empty();
+
         // We handle raft ready in event loop.
-        if !self.pending_raft_groups.is_empty() {
-            self.on_raft_ready();
+        if !self.pending_raft_groups.is_empty() || has_append_res {
+            self.on_raft_ready(append_res);
         }
 
         self.poll_apply();
