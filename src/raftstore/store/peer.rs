@@ -218,6 +218,8 @@ pub struct Peer {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+
+    is_appending_log: bool,
 }
 
 impl Peer {
@@ -311,6 +313,7 @@ impl Peer {
             leader_lease_expired_time: None,
             written_bytes: 0,
             written_keys: 0,
+            is_appending_log: false,
         };
 
         peer.load_all_coprocessors();
@@ -629,6 +632,12 @@ impl Peer {
             return;
         }
 
+        if self.is_appending_log {
+            debug!("region [{}] is async appending log, skip", self.region_id);
+            return;
+        }
+        self.is_appending_log = true;
+
         if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
             return;
         }
@@ -676,6 +685,11 @@ impl Peer {
                                                 ready: &mut Ready,
                                                 invoke_ctx: InvokeContext)
                                                 -> Option<ApplySnapResult> {
+        if !self.is_appending_log {
+            panic!("is appending log should be true");
+        }
+        self.is_appending_log = false;
+
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;

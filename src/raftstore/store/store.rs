@@ -448,6 +448,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
+        handles.push(self.append_worker.stop());
 
         for h in handles {
             if let Some(h) = h {
@@ -1534,7 +1535,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.register_pd_heartbeat_tick(event_loop);
     }
-
 
     fn register_pd_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
