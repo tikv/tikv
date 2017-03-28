@@ -615,7 +615,6 @@ impl Peer {
                                                   metrics: &mut RaftMetrics,
                                                   worker: &Worker<PdTask>)
                                                   -> bool {
-        info!("[handle_raft_ready_append] for region [{}].", self.region_id);
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -690,7 +689,6 @@ impl Peer {
                                                 ready: &mut Ready,
                                                 invoke_ctx: InvokeContext)
                                                 -> Option<ApplySnapResult> {
-        info!("[post_raft_ready_append] for region [{}].", self.region_id);
         if !self.is_appending_log {
             panic!("is appending log should be true");
         }
