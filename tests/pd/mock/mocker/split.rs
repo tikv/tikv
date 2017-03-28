@@ -17,7 +17,7 @@ use protobuf::RepeatedField;
 
 use kvproto::pdpb::{Member, GetMembersRequest, GetMembersResponse, ResponseHeader};
 
-use super::Case;
+use super::Mocker;
 use super::Result;
 
 #[derive(Debug)]
@@ -39,7 +39,7 @@ impl Split {
         }
 
         let mut resps = Vec::with_capacity(eps.len());
-        for (i, _) in (&eps).into_iter().enumerate() {
+        for i in 0..eps.len() {
             let mut resp = GetMembersResponse::new();
             let mut header = ResponseHeader::new();
             header.set_cluster_id(i as u64 + 1); // start from 1.
@@ -58,7 +58,7 @@ impl Split {
     }
 }
 
-impl Case for Split {
+impl Mocker for Split {
     fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let idx = self.idx.fetch_add(1, Ordering::SeqCst);
         info!("[Split] GetMembers: {:?}",

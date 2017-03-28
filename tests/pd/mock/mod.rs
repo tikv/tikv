@@ -12,7 +12,7 @@
 // limitations under the License.
 
 mod server;
-pub mod case;
+pub mod mocker;
 
 pub use self::server::Server;
-pub use self::case::Case;
+pub use self::mocker::Mocker;

@@ -19,15 +19,15 @@ use kvproto::metapb;
 
 use tikv::pd::{PdClient, RpcClient, validate_endpoints};
 
-use super::mock::case::*;
+use super::mock::mocker::*;
 use super::mock::Server as MockServer;
 
 #[test]
 fn test_rpc_client() {
-    let eps = "http://127.0.0.1:3079".to_owned();
+    let eps = "http://127.0.0.1:52729".to_owned();
 
     let se = Arc::new(Service::new(vec![eps.clone()]));
-    let _server = MockServer::run("127.0.0.1:3079", se.clone(), Some(se.clone()));
+    let _server = MockServer::run("127.0.0.1:52729", se.clone(), Some(se.clone()));
 
     thread::sleep(Duration::from_secs(1));
 
@@ -101,7 +101,7 @@ fn test_change_leader() {
 
     let _server_a = MockServer::run("127.0.0.1:43079", se.clone(), Some(lc.clone()));
     let _server_b = MockServer::run("127.0.0.1:53079", se.clone(), Some(lc.clone()));
-    let _server_a = MockServer::run("127.0.0.1:63079", se.clone(), Some(lc.clone()));
+    let _server_c = MockServer::run("127.0.0.1:63079", se.clone(), Some(lc.clone()));
 
     thread::sleep(Duration::from_secs(1));
 

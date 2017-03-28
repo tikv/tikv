@@ -23,9 +23,9 @@ use grpc::futures_grpc::{GrpcFutureSend, GrpcStreamSend};
 use kvproto::pdpb::*;
 use kvproto::pdpb_grpc::{PDAsync, PDAsyncServer};
 
-use super::Case;
-use super::case::Service;
-use super::case::Result;
+use super::Mocker;
+use super::mocker::Service;
+use super::mocker::Result;
 
 pub struct Server {
     _server: PDAsyncServer,
@@ -34,7 +34,7 @@ pub struct Server {
 impl Server {
     pub fn run<A, C>(addr: A, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
         where A: ToSocketAddrs,
-              C: Case + Send + Sync + 'static
+              C: Mocker + Send + Sync + 'static
     {
         let m = Mock {
             handler: handler,
@@ -44,9 +44,9 @@ impl Server {
     }
 }
 
-fn try_takeover<F, R, C: Case>(mock: &Mock<C>, f: F) -> GrpcFutureSend<R>
+fn try_takeover<F, R, C: Mocker>(mock: &Mock<C>, f: F) -> GrpcFutureSend<R>
     where R: Send + 'static,
-          F: Fn(&Case) -> Option<Result<R>>
+          F: Fn(&Mocker) -> Option<Result<R>>
 {
     if let Some(ref case) = mock.case {
         match f(case.as_ref()) {
@@ -64,12 +64,12 @@ fn try_takeover<F, R, C: Case>(mock: &Mock<C>, f: F) -> GrpcFutureSend<R>
 }
 
 #[derive(Debug)]
-struct Mock<C: Case> {
+struct Mock<C: Mocker> {
     handler: Arc<Service>,
     case: Option<Arc<C>>,
 }
 
-impl<C: Case> PDAsync for Mock<C> {
+impl<C: Mocker> PDAsync for Mock<C> {
     fn GetMembers(&self, req: GetMembersRequest) -> GrpcFutureSend<GetMembersResponse> {
         try_takeover(self, |c| c.GetMembers(&req))
     }
