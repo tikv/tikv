@@ -58,8 +58,8 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
+use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
-use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
 const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
@@ -897,8 +897,10 @@ fn main() {
         }
     }
 
-    let pd_client = RpcClient::new(&pd_endpoints).unwrap();
-    let cluster_id = pd_client.cluster_id;
+    let pd_client = RpcClient::new(&pd_endpoints)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let cluster_id = pd_client.get_cluster_id()
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     let total_cpu_num = cpu_num().unwrap();
     // return  memory in KB.
