@@ -156,7 +156,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
 
-    assert!(left != right);
+    assert_ne!(left, right);
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());

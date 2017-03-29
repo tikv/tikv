@@ -216,7 +216,7 @@ impl Cluster {
             // 3) pd is (1, 2), TiKV is (3)
             // 4) pd id (1), TiKV is (2, 3)
 
-            assert!(region_peer_len != cur_region_peer_len);
+            assert_ne!(region_peer_len, cur_region_peer_len);
 
             if cur_region_peer_len > region_peer_len {
                 // must pd is (1, 2), TiKV is (1)
