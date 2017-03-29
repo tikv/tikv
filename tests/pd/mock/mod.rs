@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,5 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod test_rpc_client;
-mod mock;
+mod server;
+pub mod mocker;
+
+pub use self::server::Server;
+pub use self::mocker::Mocker;

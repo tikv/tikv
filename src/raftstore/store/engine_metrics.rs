@@ -175,6 +175,7 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
                engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
             STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[cf, "mem-tables"])
                 .set(mem_table as f64);
+            used_size += mem_table;
         }
 
         // TODO: add cache usage and pinned usage.
