@@ -1548,6 +1548,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
         used_size += self.snap_mgr.get_total_snap_size();
 
+        stats.set_used_size(used_size);
+
         let mut available = if capacity > used_size {
             capacity - used_size
         } else {
