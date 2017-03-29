@@ -58,6 +58,7 @@ getopts = "0.2"
 regex = "0.1"
 fnv = "1.0"
 sys-info = "0.4.1"
+mio = "0.5"
 futures = "0.1"
 
 [target.'cfg(unix)'.dependencies]
@@ -71,9 +72,6 @@ git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
-
-[dependencies.mio]
-git = "https://github.com/carllerche/mio.git"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
