@@ -131,8 +131,8 @@ impl fmt::Debug for RpcAsyncClient {
     }
 }
 
-pub const LEADER_CHANGE_RETRY: usize = 10;
-pub const REQUEST_RETRY: usize = 10;
+const LEADER_CHANGE_RETRY: usize = 10;
+const REQUEST_RETRY: usize = 10;
 
 impl AsyncPdClient for RpcAsyncClient {
     // Get region by region id.
