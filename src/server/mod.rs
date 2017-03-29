@@ -100,8 +100,6 @@ impl Display for ConnData {
             }
             MessageType::CopReq => write!(f, "[{}] coprocessor request", self.msg_id),
             MessageType::CopResp => write!(f, "[{}] coprocessor response", self.msg_id),
-            MessageType::PdReq => write!(f, "[{}] pd request", self.msg_id),
-            MessageType::PdResp => write!(f, "[{}] pd response", self.msg_id),
             MessageType::None => write!(f, "[{}] invalid message", self.msg_id),
         }
     }
