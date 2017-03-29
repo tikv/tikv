@@ -177,7 +177,7 @@ impl AsyncPdClient for RpcAsyncClient {
         self.inner
             .client(2, req, |client, req| {
                 let retry_req = Request::new(10, client, req, |client, req| {
-                    client.RegionHeartbeat(req.clone())
+                    client.RegionHeartbeat(req)
                         .map_err(Error::Grpc)
                         .and_then(|resp| {
                             try!(check_resp_header(resp.get_header()));
@@ -200,7 +200,7 @@ impl AsyncPdClient for RpcAsyncClient {
         self.inner
             .client(2, req, |client, req| {
                 let retry_req = Request::new(10, client, req, |client, req| {
-                    client.AskSplit(req.clone())
+                    client.AskSplit(req)
                         .map_err(Error::Grpc)
                         .and_then(|resp| {
                             try!(check_resp_header(resp.get_header()));
@@ -223,7 +223,7 @@ impl AsyncPdClient for RpcAsyncClient {
         self.inner
             .client(2, req, |client, req| {
                 let retry_req = Request::new(10, client, req, |client, req| {
-                    client.StoreHeartbeat(req.clone())
+                    client.StoreHeartbeat(req)
                         .map_err(Error::Grpc)
                         .and_then(|resp| {
                             try!(check_resp_header(resp.get_header()));
@@ -247,7 +247,7 @@ impl AsyncPdClient for RpcAsyncClient {
         self.inner
             .client(2, req, |client, req| {
                 let retry_req = Request::new(10, client, req, |client, req| {
-                    client.ReportSplit(req.clone())
+                    client.ReportSplit(req)
                         .map_err(Error::Grpc)
                         .and_then(|resp| {
                             try!(check_resp_header(resp.get_header()));
