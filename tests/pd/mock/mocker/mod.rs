@@ -22,10 +22,12 @@ use kvproto::pdpb::*;
 mod service;
 mod split;
 mod leader_change;
+mod retry;
 
 pub use self::service::Service;
 pub use self::split::Split;
 pub use self::leader_change::LeaderChange;
+pub use self::retry::Retry;
 
 pub type Result<T> = result::Result<T, GrpcError>;
 
