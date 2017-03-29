@@ -695,7 +695,7 @@ impl SelectContextCore {
         // set topn
         let mut topn = false;
         let mut desc_can = false;
-        if sel.get_order_by().len() > 0 {
+        if !sel.get_order_by().is_empty() {
             // order by pk,set desc_scan is enough
             if !sel.get_order_by()[0].has_expr() {
                 desc_can = sel.get_order_by().first().map_or(false, |o| o.get_desc());
