@@ -123,8 +123,8 @@ fn connect(addr: &str) -> Result<PDAsyncClient> {
         .map_err(Error::Grpc)
 }
 
-fn try_connect_leader(previous: &GetMembersResponse)
-                      -> Result<(PDAsyncClient, GetMembersResponse)> {
+pub fn try_connect_leader(previous: &GetMembersResponse)
+                          -> Result<(PDAsyncClient, GetMembersResponse)> {
     // Try to connect other members.
     // Randomize endpoints.
     let members = previous.get_members();

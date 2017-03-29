@@ -26,7 +26,7 @@ use tokio_core::reactor::Remote;
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::pdpb_grpc::{PDAsync, PDAsyncClient};
+use kvproto::pdpb_grpc::PDAsync;
 
 use super::super::{Result, Error, PdFuture};
 use super::super::AsyncPdClient;
@@ -38,7 +38,7 @@ use super::util::Request;
 // TODO: revoke pubs.
 pub struct RpcAsyncClient {
     pub cluster_id: u64,
-    pub inner: LeaderClient<PDAsyncClient>,
+    pub inner: LeaderClient,
     remote: Remote,
     _shutdown: Sender<()>,
 }
@@ -131,7 +131,9 @@ impl fmt::Debug for RpcAsyncClient {
     }
 }
 
-// TODO: Leader Change
+pub const LEADER_CHANGE_RETRY: usize = 10;
+pub const REQUEST_RETRY: usize = 10;
+
 impl AsyncPdClient for RpcAsyncClient {
     // Get region by region id.
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
@@ -140,8 +142,8 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_region_id(region_id);
 
         self.inner
-            .client(2, req, |client, req| {
-                let retry_req = Request::new(10, client, req, |client, req| {
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
                     client.GetRegionByID(req)
                         .map_err(Error::Grpc)
                         .and_then(|mut resp| {
@@ -175,8 +177,8 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_pending_peers(RepeatedField::from_vec(pending_peers));
 
         self.inner
-            .client(2, req, |client, req| {
-                let retry_req = Request::new(10, client, req, |client, req| {
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
                     client.RegionHeartbeat(req)
                         .map_err(Error::Grpc)
                         .and_then(|resp| {
@@ -198,8 +200,8 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_region(region);
 
         self.inner
-            .client(2, req, |client, req| {
-                let retry_req = Request::new(10, client, req, |client, req| {
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
                     client.AskSplit(req)
                         .map_err(Error::Grpc)
                         .and_then(|resp| {
@@ -221,8 +223,8 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_stats(stats);
 
         self.inner
-            .client(2, req, |client, req| {
-                let retry_req = Request::new(10, client, req, |client, req| {
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
                     client.StoreHeartbeat(req)
                         .map_err(Error::Grpc)
                         .and_then(|resp| {
@@ -245,8 +247,8 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_right(right);
 
         self.inner
-            .client(2, req, |client, req| {
-                let retry_req = Request::new(10, client, req, |client, req| {
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
                     client.ReportSplit(req)
                         .map_err(Error::Grpc)
                         .and_then(|resp| {

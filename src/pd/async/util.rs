@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::TryLockError;
+use std::time::Instant;
+use std::time::Duration;
+use std::thread;
 
 use futures::Poll;
 use futures::Async;
@@ -10,9 +13,11 @@ use futures::future::{self, loop_fn, Loop};
 
 use kvproto::pdpb::GetMembersResponse;
 use kvproto::pdpb_grpc::PDAsync;
+use kvproto::pdpb_grpc::PDAsyncClient;
 
 use util::HandyRwLock;
 
+use super::sync;
 use super::super::PdFuture;
 use super::super::Result;
 use super::super::Error;
@@ -23,12 +28,12 @@ struct Bundle<C> {
     members: GetMembersResponse,
 }
 
-pub struct LeaderClient<C> {
-    inner: Arc<RwLock<Bundle<C>>>,
+pub struct LeaderClient {
+    inner: Arc<RwLock<Bundle<PDAsyncClient>>>,
 }
 
-impl<C: PDAsync> LeaderClient<C> {
-    pub fn new(client: C, members: GetMembersResponse) -> LeaderClient<C> {
+impl LeaderClient {
+    pub fn new(client: PDAsyncClient, members: GetMembersResponse) -> LeaderClient {
         LeaderClient {
             inner: Arc::new(RwLock::new(Bundle {
                 client: Arc::new(client),
@@ -37,9 +42,9 @@ impl<C: PDAsync> LeaderClient<C> {
         }
     }
 
-    pub fn client<Req, Resp, G>(&self, retry: usize, req: Req, f: G) -> GetClient<C, Req, Resp, G>
+    pub fn client<Req, Resp, G>(&self, retry: usize, req: Req, f: G) -> GetClient<Req, Resp, G>
         where Req: Clone + 'static,
-              G: FnMut(Arc<C>, Req) -> PdFuture<Resp> + Send + 'static
+              G: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
     {
         GetClient {
             need_update: false,
@@ -51,16 +56,16 @@ impl<C: PDAsync> LeaderClient<C> {
         }
     }
 
-    pub fn get_client(&self) -> Arc<C> {
+    pub fn get_client(&self) -> Arc<PDAsyncClient> {
         self.inner.rl().client.clone()
     }
 
-    pub fn set_client(&self, client: C) {
+    pub fn set_client(&self, client: PDAsyncClient) {
         let mut bundle = self.inner.wl();
         bundle.client = Arc::new(client);
     }
 
-    pub fn clone_client(&self) -> Arc<C> {
+    pub fn clone_client(&self) -> Arc<PDAsyncClient> {
         self.inner.rl().client.clone()
     }
 
@@ -74,22 +79,21 @@ impl<C: PDAsync> LeaderClient<C> {
     }
 }
 
-pub struct GetClient<C, Req, Resp, F> {
+pub struct GetClient<Req, Resp, F> {
     need_update: bool,
     retry_count: usize,
-    bundle: Arc<RwLock<Bundle<C>>>,
+    bundle: Arc<RwLock<Bundle<PDAsyncClient>>>,
     req: Req,
     resp: Option<Result<Resp>>,
     func: F,
 }
 
-impl<C, Req, Resp, F> GetClient<C, Req, Resp, F>
-    where C: PDAsync + Send + Sync + 'static,
-          Req: Clone + Send + 'static,
+impl<Req, Resp, F> GetClient<Req, Resp, F>
+    where Req: Clone + Send + 'static,
           Resp: Send + 'static,
-          F: FnMut(Arc<C>, Req) -> PdFuture<Resp> + Send + 'static
+          F: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
 {
-    fn get(self) -> PdFuture<GetClient<C, Req, Resp, F>> {
+    fn get(self) -> PdFuture<GetClient<Req, Resp, F>> {
         debug!("GetLeader get remains: {}", self.retry_count);
 
         let get_read = GetClientRead { inner: Some(self) };
@@ -115,11 +119,35 @@ impl<C, Req, Resp, F> GetClient<C, Req, Resp, F>
             .boxed()
     }
 
-    fn check(self) -> PdFuture<(GetClient<C, Req, Resp, F>, bool)> {
+    fn check(self) -> PdFuture<(GetClient<Req, Resp, F>, bool)> {
         if self.retry_count == 0 || self.resp.is_some() {
             ok((self, true)).boxed()
         } else {
-            // TODO: update client
+            // FIXME: should not block the core.
+            warn!("updating PD client, block the tokio core");
+
+            let start = Instant::now();
+            // Go to sync world.
+            let members = self.bundle.rl().members.clone();
+            match sync::try_connect_leader(&members) {
+                Ok((client, members)) => {
+                    // TODO: check if it is updated.
+                    let mut bundle = self.bundle.wl();
+                    let c: PDAsyncClient = client;
+                    bundle.client = Arc::new(c);
+                    bundle.members = members;
+                    warn!("updating PD client done, spent {:?}", start.elapsed());
+                }
+
+                Err(err) => {
+                    warn!("updating PD client spent {:?}, err {:?}",
+                          start.elapsed(),
+                          err);
+                    // FIXME: use tokio Timeout insead.
+                    thread::sleep(Duration::new(1, 0));
+                }
+            }
+
             ok((self, false)).boxed()
         }
     }
@@ -152,13 +180,13 @@ impl<C, Req, Resp, F> GetClient<C, Req, Resp, F>
     }
 }
 
-struct GetClientRead<C, Req, Resp, F> {
-    inner: Option<GetClient<C, Req, Resp, F>>,
+struct GetClientRead<Req, Resp, F> {
+    inner: Option<GetClient<Req, Resp, F>>,
 }
 
 // TODO: impl Stream instead.
-impl<C, Req, Resp, F> Future for GetClientRead<C, Req, Resp, F> {
-    type Item = (GetClient<C, Req, Resp, F>, Arc<C>);
+impl<Req, Resp, F> Future for GetClientRead<Req, Resp, F> {
+    type Item = (GetClient<Req, Resp, F>, Arc<PDAsyncClient>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -201,7 +229,7 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
     }
 
     fn send(mut self) -> PdFuture<Request<C, Req, Resp, F>> {
-        debug!("request retry remains: {}", self.retry_count);
+        debug!("Request retry remains: {}", self.retry_count);
         let r = self.req.clone();
         let req = (self.func)(self.client.as_ref(), r);
         req.then(|resp| {
