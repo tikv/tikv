@@ -2,10 +2,11 @@ FROM centos:6.6
 
 MAINTAINER Jay Lee [jay@pingcap.com]
 
-RUN yum update -y && \
-    yum install -y tar wget git which cmake file centos-release-scl && \
-    yum install -y devtoolset-4-gcc-c++ python27 && \
-    yum clean all
+RUN yum update -y
+RUN yum install -y tar wget git which cmake file centos-release-scl openssl-devel
+RUN yum update -y
+RUN yum install -y devtoolset-4-gcc-c++ python27
+RUN yum clean all
 
 RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s -- --date=2017-03-28 --disable-sudo -y --channel=nightly
 
