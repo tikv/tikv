@@ -160,7 +160,7 @@ impl<T: PdClient> Runner<T> {
                           change_peer.get_change_type(),
                           change_peer.get_peer(),
                           region);
-                    let req = new_change_peer_request(change_peer.get_change_type(),
+                    let req = new_change_peer_request(change_peer.get_change_type().into(),
                                                       change_peer.take_peer());
                     self.send_admin_request(region, peer, req);
                 } else if resp.has_transfer_leader() {
@@ -285,7 +285,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
 fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::ChangePeer);
-    req.mut_change_peer().set_change_type(change_type);
+    req.mut_change_peer().set_change_type(change_type.into());
     req.mut_change_peer().set_peer(peer);
     req
 }
