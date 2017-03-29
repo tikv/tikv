@@ -479,7 +479,7 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         r1 = engine.get_msg(key).unwrap().unwrap();
         r2 = snap.get_msg(key).unwrap().unwrap();
-        assert!(r1 != r2);
+        assert_ne!(r1, r2);
 
         let b: Option<Region> = engine.get_msg(b"missing_key").unwrap();
         assert!(b.is_none());
