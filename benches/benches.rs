@@ -16,6 +16,10 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
+// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
+#![allow(never_loop)]
+#![allow(needless_pass_by_value)]
+
 extern crate log;
 extern crate test;
 extern crate mio;
