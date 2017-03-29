@@ -34,7 +34,6 @@ use super::super::{Result, Error, PdClient};
 use super::super::metrics::*;
 use super::RpcAsyncClient;
 
-
 pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
@@ -50,16 +49,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMem
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let client = match connect(ep) {
-            Ok(c) => c,
-            // Ignore failed PD node.
-            Err(e) => {
-                error!("PD endpoint {} is down: {:?}", ep, e);
-                continue;
-            }
-        };
-
-        let resp = match Future::wait(client.GetMembers(pdpb::GetMembersRequest::new())) {
+        let (_, resp) = match connect(ep) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -96,27 +86,21 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMem
     }
 }
 
-fn connect(addr: &str) -> Result<PDAsyncClient> {
+fn connect(addr: &str) -> Result<(PDAsyncClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
     let ep = box_try!(Url::parse(addr));
-    let host = match ep.host_str() {
-        Some(h) => h.to_owned(),
-        None => return Err(box_err!("unkown host, please specify the host")),
-    };
-    let port = match ep.port() {
-        Some(p) => p,
-        None => return Err(box_err!("unkown port, please specify the port")),
-    };
+    let host = ep.host_str().unwrap();
+    let port = ep.port().unwrap();
 
     let mut conf: grpc::client::GrpcClientConf = Default::default();
     conf.http.no_delay = Some(true);
 
     // TODO: It seems that `new` always return an Ok(_).
-    PDAsyncClient::new(&host, port, false, conf)
+    PDAsyncClient::new(host, port, false, conf)
         .and_then(|client| {
             // try request.
             match Future::wait(client.GetMembers(pdpb::GetMembersRequest::new())) {
-                Ok(_) => Ok(client),
+                Ok(resp) => Ok((client, resp)),
                 Err(e) => Err(e),
             }
         })
@@ -135,17 +119,9 @@ pub fn try_connect_leader(previous: &GetMembersResponse)
     'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
-                Ok(c) => {
-                    match Future::wait(c.GetMembers(pdpb::GetMembersRequest::new())) {
-                        Ok(r) => {
-                            resp = Some(r);
-                            break 'outer;
-                        }
-                        Err(e) => {
-                            error!("PD endpoint {} failed to respond: {:?}", ep, e);
-                            continue;
-                        }
-                    };
+                Ok((_, r)) => {
+                    resp = Some(r);
+                    break 'outer;
                 }
                 Err(e) => {
                     error!("failed to connect to {}, {:?}", ep, e);
@@ -159,7 +135,7 @@ pub fn try_connect_leader(previous: &GetMembersResponse)
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok(client) = connect(ep.as_str()) {
+            if let Ok((client, _)) = connect(ep.as_str()) {
                 info!("connect to PD leader {:?}", ep);
                 return Ok((client, resp));
             }

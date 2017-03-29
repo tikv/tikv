@@ -1,6 +1,5 @@
 mod client;
 mod sync;
-#[allow(dead_code)]
 mod util;
 
 pub use self::client::RpcAsyncClient;

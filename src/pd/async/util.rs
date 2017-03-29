@@ -23,13 +23,13 @@ use super::super::Result;
 use super::super::Error;
 
 #[derive(Debug)]
-struct Bundle<C> {
-    client: Arc<C>,
-    members: GetMembersResponse,
+struct Bundle<C, M> {
+    client: C,
+    members: M,
 }
 
 pub struct LeaderClient {
-    inner: Arc<RwLock<Bundle<PDAsyncClient>>>,
+    inner: Arc<RwLock<Bundle<Arc<PDAsyncClient>, GetMembersResponse>>>,
 }
 
 impl LeaderClient {
@@ -47,7 +47,6 @@ impl LeaderClient {
               G: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
     {
         GetClient {
-            need_update: false,
             retry_count: retry,
             bundle: self.inner.clone(),
             req: req,
@@ -80,9 +79,8 @@ impl LeaderClient {
 }
 
 pub struct GetClient<Req, Resp, F> {
-    need_update: bool,
     retry_count: usize,
-    bundle: Arc<RwLock<Bundle<PDAsyncClient>>>,
+    bundle: Arc<RwLock<Bundle<Arc<PDAsyncClient>, GetMembersResponse>>>,
     req: Req,
     resp: Option<Result<Resp>>,
     func: F,
@@ -93,8 +91,9 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
           Resp: Send + 'static,
           F: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
 {
-    fn get(self) -> PdFuture<GetClient<Req, Resp, F>> {
-        debug!("GetLeader get remains: {}", self.retry_count);
+    fn get(mut self) -> PdFuture<GetClient<Req, Resp, F>> {
+        debug!("GetClient get remains: {}", self.retry_count);
+        self.retry_count -= 1;
 
         let get_read = GetClientRead { inner: Some(self) };
 
@@ -110,7 +109,6 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
                 match resp {
                     Ok(resp) => this.resp = Some(Ok(resp)),
                     Err(err) => {
-                        this.retry_count -= 1;
                         error!("leader request failed: {:?}", err);
                     }
                 };
@@ -120,36 +118,41 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
     }
 
     fn check(self) -> PdFuture<(GetClient<Req, Resp, F>, bool)> {
-        if self.retry_count == 0 || self.resp.is_some() {
-            ok((self, true)).boxed()
-        } else {
-            // FIXME: should not block the core.
-            warn!("updating PD client, block the tokio core");
+        if self.retry_count == 0 {
+            return ok((self, true)).boxed();
+        }
 
-            let start = Instant::now();
-            // Go to sync world.
-            let members = self.bundle.rl().members.clone();
-            match sync::try_connect_leader(&members) {
-                Ok((client, members)) => {
-                    // TODO: check if it is updated.
-                    let mut bundle = self.bundle.wl();
-                    let c: PDAsyncClient = client;
-                    bundle.client = Arc::new(c);
+        if self.resp.as_ref().map_or(false, |ret| ret.is_ok()) {
+            debug!("GetClient get Some(Ok(_))");
+            return ok((self, true)).boxed();
+        }
+
+        // FIXME: should not block the core.
+        warn!("updating PD client, block the tokio core");
+
+        let start = Instant::now();
+        // Go to sync world.
+        let members = self.bundle.rl().members.clone();
+        match sync::try_connect_leader(&members) {
+            Ok((client, members)) => {
+                let mut bundle = self.bundle.wl();
+                if members != bundle.members {
+                    bundle.client = Arc::new(client);
                     bundle.members = members;
-                    warn!("updating PD client done, spent {:?}", start.elapsed());
                 }
-
-                Err(err) => {
-                    warn!("updating PD client spent {:?}, err {:?}",
-                          start.elapsed(),
-                          err);
-                    // FIXME: use tokio Timeout insead.
-                    thread::sleep(Duration::new(1, 0));
-                }
+                warn!("updating PD client done, spent {:?}", start.elapsed());
             }
 
-            ok((self, false)).boxed()
+            Err(err) => {
+                warn!("updating PD client spent {:?}, err {:?}",
+                      start.elapsed(),
+                      err);
+                // FIXME: use tokio-timer instead.
+                thread::sleep(Duration::from_secs(1));
+            }
         }
+
+        ok((self, false)).boxed()
     }
 
     fn get_resp(self) -> Option<Result<Resp>> {
@@ -173,7 +176,7 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
                 match req.unwrap().get_resp() {
                     Some(Ok(resp)) => future::ok(resp),
                     Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
+                    None => future::err(box_err!("GetClient fail to request")),
                 }
             })
             .boxed()
@@ -230,13 +233,13 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
 
     fn send(mut self) -> PdFuture<Request<C, Req, Resp, F>> {
         debug!("Request retry remains: {}", self.retry_count);
+        self.retry_count -= 1;
         let r = self.req.clone();
         let req = (self.func)(self.client.as_ref(), r);
         req.then(|resp| {
                 match resp {
                     Ok(resp) => self.resp = Some(Ok(resp)),
                     Err(err) => {
-                        self.retry_count -= 1;
                         error!("request failed: {:?}", err);
                     }
                 };
@@ -271,7 +274,7 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
                 match req.unwrap().get_resp() {
                     Some(Ok(resp)) => future::ok(resp),
                     Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
+                    None => future::err(box_err!("Request fail to request")),
                 }
             })
             .boxed()

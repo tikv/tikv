@@ -58,7 +58,7 @@ impl RpcAsyncClient {
         let (tx, rx) = std_channel();
 
         // TODO: move it out.
-        thread::Builder::new().name("PdClient".to_owned())
+        thread::Builder::new().name("pd_client".to_owned())
             .spawn(move || {
                 let mut core = match Core::new() {
                     Ok(core) => core,
