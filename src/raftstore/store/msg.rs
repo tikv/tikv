@@ -24,7 +24,7 @@ use util::escape;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Tick {
     Raft,
     RaftLogGc,
