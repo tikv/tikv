@@ -177,9 +177,8 @@ fn do_request<F, R>(client: &RpcAsyncClient, f: F) -> Result<R>
 {
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
-            let inner = client.inner.read().unwrap();
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = Future::wait(f(inner.get_client()));
+            let r = Future::wait(f(&client.inner.get_client()));
             timer.observe_duration();
             r
         };
@@ -190,11 +189,10 @@ fn do_request<F, R>(client: &RpcAsyncClient, f: F) -> Result<R>
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                let mut inner = client.inner.write().unwrap();
-                match try_connect_leader(inner.get_members()) {
+                match try_connect_leader(&client.inner.clone_members()) {
                     Ok((cli, mbrs)) => {
-                        inner.set_client(cli);
-                        inner.set_members(mbrs);
+                        client.inner.set_client(cli);
+                        client.inner.set_members(mbrs);
                     }
                     Err(e) => {
                         error!("fail to connect to PD leader {:?}", e);

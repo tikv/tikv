@@ -13,12 +13,11 @@
 
 use std::fmt;
 use std::thread;
-use std::sync::RwLock;
 use std::sync::mpsc::channel as std_channel;
 
 use protobuf::RepeatedField;
 
-use futures::future::{self, loop_fn, Loop};
+use futures::future;
 use futures::Future;
 use futures::sync::oneshot::{channel, Sender};
 
@@ -39,7 +38,7 @@ use super::util::Request;
 // TODO: revoke pubs.
 pub struct RpcAsyncClient {
     pub cluster_id: u64,
-    pub inner: RwLock<LeaderClient<PDAsyncClient>>,
+    pub inner: LeaderClient<PDAsyncClient>,
     remote: Remote,
     _shutdown: Sender<()>,
 }
@@ -88,7 +87,7 @@ impl RpcAsyncClient {
 
         Ok(RpcAsyncClient {
             cluster_id: members.get_header().get_cluster_id(),
-            inner: RwLock::new(LeaderClient::new(client, members)),
+            inner: LeaderClient::new(client, members),
             remote: remote,
             _shutdown: shutdown_tx,
         })
@@ -111,8 +110,7 @@ impl RpcAsyncClient {
 
     // For tests
     pub fn get_leader(&self) -> Member {
-        let inner = self.inner.read().unwrap();
-        inner.get_members().get_leader().clone()
+        self.inner.clone_members().take_leader()
     }
 }
 
@@ -133,7 +131,6 @@ impl fmt::Debug for RpcAsyncClient {
     }
 }
 
-// TODO: Retry
 // TODO: Leader Change
 impl AsyncPdClient for RpcAsyncClient {
     // Get region by region id.
@@ -142,40 +139,25 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let client = self.inner.read().unwrap().clone_client();
-        let retry_req = Request::new(10, client, move |client| {
-            client.GetRegionByID(req.clone())
-                .map_err(Error::Grpc)
-                .and_then(|mut resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    if resp.has_region() {
-                        Ok(Some(resp.take_region()))
-                    } else {
-                        Ok(None)
-                    }
-                })
-                .boxed()
-        });
+        self.inner
+            .client(2, req, |client, req| {
+                let retry_req = Request::new(10, client, req, |client, req| {
+                    client.GetRegionByID(req)
+                        .map_err(Error::Grpc)
+                        .and_then(|mut resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            if resp.has_region() {
+                                Ok(Some(resp.take_region()))
+                            } else {
+                                Ok(None)
+                            }
+                        })
+                        .boxed()
+                });
 
-        loop_fn(retry_req, |retry_req| {
-                retry_req.send()
-                    .and_then(|retry_req| retry_req.receive())
-                    .and_then(|(retry_req, done)| {
-                        if done {
-                            Ok(Loop::Break(retry_req))
-                        } else {
-                            Ok(Loop::Continue(retry_req))
-                        }
-                    })
+                retry_req.retry()
             })
-            .then(|req| {
-                match req.unwrap().get_resp() {
-                    Some(Ok(resp)) => future::ok(resp),
-                    Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
-                }
-            })
-            .boxed()
+            .retry()
     }
 
     // Leader for a region will use this to heartbeat Pd.
@@ -192,36 +174,21 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_down_peers(RepeatedField::from_vec(down_peers));
         req.set_pending_peers(RepeatedField::from_vec(pending_peers));
 
-        let client = self.inner.read().unwrap().clone_client();
-        let retry_req = Request::new(10, client, move |client| {
-            client.RegionHeartbeat(req.clone())
-                .map_err(Error::Grpc)
-                .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    Ok(resp)
-                })
-                .boxed()
-        });
+        self.inner
+            .client(2, req, |client, req| {
+                let retry_req = Request::new(10, client, req, |client, req| {
+                    client.RegionHeartbeat(req.clone())
+                        .map_err(Error::Grpc)
+                        .and_then(|resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(resp)
+                        })
+                        .boxed()
+                });
 
-        loop_fn(retry_req, |retry_req| {
-                retry_req.send()
-                    .and_then(|retry_req| retry_req.receive())
-                    .and_then(|(retry_req, done)| {
-                        if done {
-                            Ok(Loop::Break(retry_req))
-                        } else {
-                            Ok(Loop::Continue(retry_req))
-                        }
-                    })
+                retry_req.retry()
             })
-            .then(|req| {
-                match req.unwrap().get_resp() {
-                    Some(Ok(resp)) => future::ok(resp),
-                    Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
-                }
-            })
-            .boxed()
+            .retry()
     }
 
     // Ask pd for split, pd will returns the new split region id.
@@ -230,36 +197,21 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_header(self.header());
         req.set_region(region);
 
-        let client = self.inner.read().unwrap().clone_client();
-        let retry_req = Request::new(10, client, move |client| {
-            client.AskSplit(req.clone())
-                .map_err(Error::Grpc)
-                .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    Ok(resp)
-                })
-                .boxed()
-        });
+        self.inner
+            .client(2, req, |client, req| {
+                let retry_req = Request::new(10, client, req, |client, req| {
+                    client.AskSplit(req.clone())
+                        .map_err(Error::Grpc)
+                        .and_then(|resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(resp)
+                        })
+                        .boxed()
+                });
 
-        loop_fn(retry_req, |retry_req| {
-                retry_req.send()
-                    .and_then(|retry_req| retry_req.receive())
-                    .and_then(|(retry_req, done)| {
-                        if done {
-                            Ok(Loop::Break(retry_req))
-                        } else {
-                            Ok(Loop::Continue(retry_req))
-                        }
-                    })
+                retry_req.retry()
             })
-            .then(|req| {
-                match req.unwrap().get_resp() {
-                    Some(Ok(resp)) => future::ok(resp),
-                    Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
-                }
-            })
-            .boxed()
+            .retry()
     }
 
     // Send store statistics regularly.
@@ -268,36 +220,21 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_header(self.header());
         req.set_stats(stats);
 
-        let client = self.inner.read().unwrap().clone_client();
-        let retry_req = Request::new(10, client, move |client| {
-            client.StoreHeartbeat(req.clone())
-                .map_err(Error::Grpc)
-                .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    Ok(())
-                })
-                .boxed()
-        });
+        self.inner
+            .client(2, req, |client, req| {
+                let retry_req = Request::new(10, client, req, |client, req| {
+                    client.StoreHeartbeat(req.clone())
+                        .map_err(Error::Grpc)
+                        .and_then(|resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(())
+                        })
+                        .boxed()
+                });
 
-        loop_fn(retry_req, |retry_req| {
-                retry_req.send()
-                    .and_then(|retry_req| retry_req.receive())
-                    .and_then(|(retry_req, done)| {
-                        if done {
-                            Ok(Loop::Break(retry_req))
-                        } else {
-                            Ok(Loop::Continue(retry_req))
-                        }
-                    })
+                retry_req.retry()
             })
-            .then(|req| {
-                match req.unwrap().get_resp() {
-                    Some(Ok(resp)) => future::ok(resp),
-                    Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
-                }
-            })
-            .boxed()
+            .retry()
     }
 
     // Report pd the split region.
@@ -307,36 +244,21 @@ impl AsyncPdClient for RpcAsyncClient {
         req.set_left(left);
         req.set_right(right);
 
-        let client = self.inner.read().unwrap().clone_client();
-        let retry_req = Request::new(10, client, move |client| {
-            client.ReportSplit(req.clone())
-                .map_err(Error::Grpc)
-                .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    Ok(())
-                })
-                .boxed()
-        });
+        self.inner
+            .client(2, req, |client, req| {
+                let retry_req = Request::new(10, client, req, |client, req| {
+                    client.ReportSplit(req.clone())
+                        .map_err(Error::Grpc)
+                        .and_then(|resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(())
+                        })
+                        .boxed()
+                });
 
-        loop_fn(retry_req, |retry_req| {
-                retry_req.send()
-                    .and_then(|retry_req| retry_req.receive())
-                    .and_then(|(retry_req, done)| {
-                        if done {
-                            Ok(Loop::Break(retry_req))
-                        } else {
-                            Ok(Loop::Continue(retry_req))
-                        }
-                    })
+                retry_req.retry()
             })
-            .then(|req| {
-                match req.unwrap().get_resp() {
-                    Some(Ok(resp)) => future::ok(resp),
-                    Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
-                }
-            })
-            .boxed()
+            .retry()
     }
 
     fn resolve(&self, future: Box<Future<Item = (), Error = ()> + Send + 'static>) {
