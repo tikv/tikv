@@ -19,25 +19,31 @@ use super::keys;
 use super::engine::{Iterable, Mutable};
 use super::peer_storage::write_initial_state;
 use util::rocksdb;
-use storage::CF_RAFT;
+use storage::{CF_DEFAULT, CF_RAFT};
 
 const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
+
+// check no any data in range [start_key, end_key)
+fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
+    let mut count: u32 = 0;
+    try!(engine.scan_cf(cf,
+                        start_key,
+                        end_key,
+                        false,
+                        &mut |_, _| {
+                            count += 1;
+                            Ok(false)
+                        }));
+
+    Ok(count > 0)
+}
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
 pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::new();
 
-    let mut count: u32 = 0;
-    try!(engine.scan(keys::MIN_KEY,
-                     keys::MAX_KEY,
-                     false,
-                     &mut |_, _| {
-                         count += 1;
-                         Ok(false)
-                     }));
-
-    if count > 0 {
+    if try!(is_range_empty(engine, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)) {
         return Err(box_err!("store is not empty and has already had data."));
     }
 
@@ -108,7 +114,7 @@ mod tests {
     use util::rocksdb;
     use raftstore::store::engine::Peekable;
     use raftstore::store::keys;
-    use storage::CF_RAFT;
+    use storage::{CF_DEFAULT, CF_RAFT};
 
     #[test]
     fn test_bootstrap() {
@@ -124,8 +130,15 @@ mod tests {
         assert!(engine.get_value_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().is_some());
 
         assert!(clear_region(&engine, 1).is_ok());
-        assert!(engine.get_value(&keys::region_state_key(1)).unwrap().is_none());
-        assert!(engine.get_value_cf(CF_RAFT, &keys::raft_state_key(1)).unwrap().is_none());
-        assert!(engine.get_value_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().is_none());
+        assert!(!is_range_empty(&engine,
+                                CF_DEFAULT,
+                                &keys::region_meta_prefix(1),
+                                &keys::region_meta_prefix(2))
+            .unwrap());
+        assert!(!is_range_empty(&engine,
+                                CF_RAFT,
+                                &keys::region_raft_prefix(1),
+                                &keys::region_raft_prefix(2))
+            .unwrap());
     }
 }
