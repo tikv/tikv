@@ -12,17 +12,10 @@
 // limitations under the License.
 
 use std::fmt;
-use std::thread;
-use std::sync::mpsc::channel as std_channel;
 
 use protobuf::RepeatedField;
 
-use futures::future;
 use futures::Future;
-use futures::sync::oneshot::{channel, Sender};
-
-use tokio_core::reactor::Core;
-use tokio_core::reactor::Remote;
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
@@ -39,8 +32,6 @@ use super::util::Request;
 pub struct RpcAsyncClient {
     pub cluster_id: u64,
     pub inner: LeaderClient,
-    remote: Remote,
-    _shutdown: Sender<()>,
 }
 
 impl RpcAsyncClient {
@@ -55,50 +46,9 @@ impl RpcAsyncClient {
 
         let (client, members) = try!(validate_endpoints(&endpoints));
 
-        let (tx, rx) = std_channel();
-
-        // TODO: move it out.
-        thread::Builder::new().name("pd_client".to_owned())
-            .spawn(move || {
-                let mut core = match Core::new() {
-                    Ok(core) => core,
-                    Err(err) => {
-                        tx.send(Err(err)).ok();
-                        return;
-                    }
-                };
-
-                let handle = core.remote();
-                let (shutdown_tx, shutdown_rx) = channel::<()>();
-
-                // The shutdown future will be resolved once the Sender is been dropped.
-                // and this thread returns.
-                let shutdown = shutdown_rx.then(|_| {
-                    debug!("PD client shutdown");
-                    future::ok::<(), ()>(())
-                });
-
-                tx.send(Ok((shutdown_tx, handle))).ok();
-
-                core.run(shutdown).ok();
-            })?;
-
-        let (shutdown_tx, remote) = try!(rx.recv().unwrap());
-
         Ok(RpcAsyncClient {
             cluster_id: members.get_header().get_cluster_id(),
             inner: LeaderClient::new(client, members),
-            remote: remote,
-            _shutdown: shutdown_tx,
-        })
-    }
-
-    pub fn spawn<F>(&self, f: F)
-        where F: Future<Item = (), Error = ()> + Send + 'static
-    {
-        self.remote.spawn(|h| {
-            h.spawn(f);
-            Ok(())
         })
     }
 
@@ -159,7 +109,7 @@ impl AsyncPdClient for RpcAsyncClient {
 
                 retry_req.retry()
             })
-            .retry()
+            .reconnect()
     }
 
     // Leader for a region will use this to heartbeat Pd.
@@ -190,7 +140,7 @@ impl AsyncPdClient for RpcAsyncClient {
 
                 retry_req.retry()
             })
-            .retry()
+            .reconnect()
     }
 
     // Ask pd for split, pd will returns the new split region id.
@@ -213,7 +163,7 @@ impl AsyncPdClient for RpcAsyncClient {
 
                 retry_req.retry()
             })
-            .retry()
+            .reconnect()
     }
 
     // Send store statistics regularly.
@@ -236,7 +186,7 @@ impl AsyncPdClient for RpcAsyncClient {
 
                 retry_req.retry()
             })
-            .retry()
+            .reconnect()
     }
 
     // Report pd the split region.
@@ -260,10 +210,6 @@ impl AsyncPdClient for RpcAsyncClient {
 
                 retry_req.retry()
             })
-            .retry()
-    }
-
-    fn resolve(&self, future: Box<Future<Item = (), Error = ()> + Send + 'static>) {
-        self.spawn(future);
+            .reconnect()
     }
 }

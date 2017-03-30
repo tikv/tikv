@@ -654,10 +654,5 @@ mod async {
                 Err(err) => future::err(err).boxed(),
             }
         }
-
-        // Resolve a future in the client.
-        fn resolve(&self, f: Box<Future<Item = (), Error = ()> + Send + 'static>) {
-            Future::wait(f).ok();
-        }
     }
 }

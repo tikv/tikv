@@ -172,7 +172,7 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
         self.resp
     }
 
-    pub fn retry(self) -> PdFuture<Resp> {
+    pub fn reconnect(self) -> PdFuture<Resp> {
         let this = self;
         loop_fn(this, |this| {
                 this.get()

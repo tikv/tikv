@@ -156,14 +156,16 @@ impl<T: AsyncPdClient> Runner<T> {
                                                        resp.get_new_region_id(),
                                                        resp.take_new_peer_ids());
                     send_admin_request(&ch, region, peer, req);
+                    future::ok::<(), ()>(())
                 }
-                Err(e) => debug!("[region {}] failed to ask split: {:?}", region.get_id(), e),
+                Err(e) => {
+                    debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
+                    future::err::<(), ()>(())
+                }
             }
-
-            future::ok(())
         });
 
-        self.pd_client.resolve(f.boxed());
+        Future::wait(f.boxed()).ok();
     }
 
     fn handle_heartbeat(&self,
@@ -203,34 +205,34 @@ impl<T: AsyncPdClient> Runner<T> {
                                   peer,
                                   transfer_leader.get_peer());
                             let req = new_transfer_leader_request(transfer_leader.take_peer());
-                            send_admin_request(&ch, region, peer, req)
+                            send_admin_request(&ch, region, peer, req);
                         }
+                        future::ok::<(), ()>(())
                     }
                     Err(e) => {
                         debug!("[region {}] failed to send heartbeat: {:?}",
                                region.get_id(),
-                               e)
+                               e);
+                        future::err::<(), ()>(())
                     }
                 }
-
-                future::ok(())
             });
 
-        self.pd_client.resolve(f.boxed());
+        Future::wait(f.boxed()).ok();
     }
 
     fn handle_store_heartbeat(&self, stats: pdpb::StoreStats) {
         let f = self.pd_client.store_heartbeat(stats).then(|res| {
             match res {
-                Ok(()) => future::ok(()),
+                Ok(()) => future::ok::<(), ()>(()),
                 Err(err) => {
                     error!("store heartbeat failed {:?}", err);
-                    future::err(())
+                    future::err::<(), ()>(())
                 }
             }
         });
 
-        self.pd_client.resolve(f.boxed());
+        Future::wait(f.boxed()).ok();
     }
 
     fn handle_report_split(&self, left: metapb::Region, right: metapb::Region) {
@@ -240,16 +242,16 @@ impl<T: AsyncPdClient> Runner<T> {
             match res {
                 Ok(()) => {
                     PD_REQ_COUNTER_VEC.with_label_values(&["report split", "success"]).inc();
-                    future::ok(())
+                    future::ok::<(), ()>(())
                 }
                 Err(err) => {
                     error!("report split failed {:?}", err);
-                    future::err(())
+                    future::err::<(), ()>(())
                 }
             }
         });
 
-        self.pd_client.resolve(f.boxed());
+        Future::wait(f.boxed()).ok();
     }
 
     fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
@@ -273,7 +275,7 @@ impl<T: AsyncPdClient> Runner<T> {
                                pd_region.get_region_epoch());
                         PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region epoch error"])
                             .inc();
-                        return future::ok(());
+                        return future::ok::<(), ()>(());
                     }
 
                     if pd_region.get_peers().into_iter().all(|p| p != &peer) {
@@ -286,28 +288,28 @@ impl<T: AsyncPdClient> Runner<T> {
                               pd_region);
                         PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer stale"]).inc();
                         send_destroy_peer_message(&ch, local_region, peer, pd_region);
-                        return future::ok(());
+                        return future::ok::<(), ()>(());
                     }
                     info!("[region {}] {} is still valid in region {:?}",
                           local_region.get_id(),
                           peer.get_id(),
                           pd_region);
                     PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer valid"]).inc();
-                    future::ok(())
+                    future::ok::<(), ()>(())
                 }
                 Ok(None) => {
                     // split region has not yet report to pd.
                     // TODO: handle merge
-                    future::ok(())
+                    future::ok::<(), ()>(())
                 }
                 Err(err) => {
                     error!("get region failed {:?}", err);
-                    future::ok(())
+                    future::ok::<(), ()>(())
                 }
             }
         });
 
-        self.pd_client.resolve(f.boxed());
+        Future::wait(f.boxed()).ok();
     }
 }
 
