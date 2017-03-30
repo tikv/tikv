@@ -14,12 +14,12 @@
 use std::thread;
 use std::boxed::FnBox;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::sync::mpsc::{self, Receiver};
 use std::error;
 use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;
-use mio::{EventLoop, EventLoopBuilder};
 use self::metrics::*;
 
 pub mod engine;
@@ -297,7 +297,7 @@ impl Command {
     }
 }
 
-use util::transport::SendCh;
+use util::transport::SyncSendCh;
 
 #[derive(Default)]
 pub struct Options {
@@ -318,20 +318,19 @@ impl Options {
 
 struct StorageHandle {
     handle: Option<thread::JoinHandle<()>>,
-    event_loop: Option<EventLoop<Scheduler>>,
+    receiver: Option<Receiver<Msg>>,
 }
 
 pub struct Storage {
     engine: Box<Engine>,
-    sendch: SendCh<Msg>,
+    sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
 }
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
-        let event_loop = try!(create_event_loop(config.sched_notify_capacity,
-                                                config.sched_msg_per_tick));
-        let sendch = SendCh::new(event_loop.channel(), "kv-storage");
+        let (tx, rx) = mpsc::sync_channel(config.sched_notify_capacity);
+        let sendch = SyncSendCh::new(tx, "kv-storage");
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
@@ -339,7 +338,7 @@ impl Storage {
             sendch: sendch,
             handle: Arc::new(Mutex::new(StorageHandle {
                 handle: None,
-                event_loop: Some(event_loop),
+                receiver: Some(rx),
             })),
         })
     }
@@ -357,7 +356,7 @@ impl Storage {
 
         let engine = self.engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
-        let mut el = handle.event_loop.take().unwrap();
+        let rx = handle.receiver.take().unwrap();
         let sched_concurrency = config.sched_concurrency;
         let sched_worker_pool_size = config.sched_worker_pool_size;
         let sched_too_busy_threshold = config.sched_too_busy_threshold;
@@ -368,7 +367,7 @@ impl Storage {
                                            sched_concurrency,
                                            sched_worker_pool_size,
                                            sched_too_busy_threshold);
-            if let Err(e) = el.run(&mut sched) {
+            if let Err(e) = sched.run(rx) {
                 panic!("scheduler run err:{:?}", e);
             }
             info!("scheduler stopped");
@@ -672,16 +671,6 @@ quick_error! {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
-
-pub fn create_event_loop(notify_capacity: usize,
-                         messages_per_tick: usize)
-                         -> Result<EventLoop<Scheduler>> {
-    let mut builder = EventLoopBuilder::new();
-    builder.notify_capacity(notify_capacity);
-    builder.messages_per_tick(messages_per_tick);
-    let el = try!(builder.build());
-    Ok(el)
-}
 
 pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     if header.has_not_leader() {

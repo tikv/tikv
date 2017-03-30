@@ -633,6 +633,18 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_error_illegal_tso() {
+        let err = StorageError::from(txn::Error::InvalidTxnTso {
+            start_ts: 5,
+            commit_ts: 4,
+        });
+        let key_error = extract_key_error(&err);
+        assert!(key_error.has_abort());
+        assert!(!key_error.has_locked());
+        assert!(!key_error.has_retryable());
+    }
+
+    #[test]
     fn test_cleanup_done_ok() {
         let resp = build_resp(Ok(()), StoreHandler::cmd_cleanup_done);
         assert_eq!(MessageType::CmdCleanup, resp.get_field_type());

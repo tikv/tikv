@@ -25,7 +25,6 @@ use kvproto::metapb::{self, Region};
 use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
-use util::HandyRwLock;
 use util::worker::Scheduler;
 use util::rocksdb;
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
@@ -35,7 +34,7 @@ use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::peer::ReadyContext;
 use super::metrics::*;
-use super::{SnapKey, SnapEntry, SnapManager};
+use super::{SnapshotStatistics, SnapKey, SnapEntry, SnapManager};
 use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -862,8 +861,8 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     let key = SnapKey::new(region_id, term, idx);
 
-    mgr.wl().register(key.clone(), SnapEntry::Generating);
-    defer!(mgr.wl().deregister(&key, &SnapEntry::Generating));
+    mgr.register(key.clone(), SnapEntry::Generating);
+    defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
     let state: RegionLocalState = try!(snap.get_msg(&keys::region_state_key(key.region_id))
         .and_then(|res| {
@@ -890,15 +889,18 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = try!(mgr.rl().get_snapshot_to_build(&key));
-
+    let mut s = try!(mgr.get_snapshot_for_building(&key, snap));
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
-    try!(s.build(snap, state.get_region(), &mut snap_data));
+    let mut stat = SnapshotStatistics::new();
+    try!(s.build(snap, state.get_region(), &mut snap_data, &mut stat));
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
     snapshot.set_data(v);
+
+    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
+    SNAPSHOT_SIZE_HISTOGRAM.observe(stat.size as f64);
 
     Ok(snapshot)
 }
@@ -973,20 +975,19 @@ mod test {
     use raft::{StorageError, Error as RaftError};
     use tempdir::*;
     use protobuf;
-    use raftstore::store::{bootstrap, new_snap_mgr, SnapKey, copy_snapshot};
+    use raftstore::store::{bootstrap, SnapKey, copy_snapshot};
     use raftstore::store::worker::RegionRunner;
     use raftstore::store::worker::RegionTask;
     use util::worker::{Worker, Scheduler};
-    use util::HandyRwLock;
     use util::rocksdb::new_engine;
-    use storage::{CF_DEFAULT, CF_RAFT};
+    use storage::ALL_CFS;
     use kvproto::eraftpb::HardState;
     use rocksdb::WriteBatch;
 
     use super::*;
 
     fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
@@ -1118,14 +1119,25 @@ mod test {
     }
 
     #[test]
-    fn test_storage_create_snapshot() {
+    fn test_storage_create_snapshot_with_plain_format() {
+        test_storage_create_snapshot(false);
+    }
+
+    #[test]
+    fn test_storage_create_snapshot_with_sst_format() {
+        test_storage_create_snapshot(true);
+    }
+
+    fn test_storage_create_snapshot(use_sst_file_snapshot: bool) {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
+                                   None,
+                                   use_sst_file_snapshot);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1268,14 +1280,25 @@ mod test {
     }
 
     #[test]
-    fn test_storage_apply_snapshot() {
+    fn test_storage_apply_snapshot_with_old_format() {
+        test_storage_apply_snapshot(false);
+    }
+
+    #[test]
+    fn test_storage_apply_snapshot_with_sst_file_format() {
+        test_storage_apply_snapshot(true);
+    }
+
+    fn test_storage_apply_snapshot(use_sst_file_snapshot: bool) {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td1 = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap").unwrap();
-        let mgr = new_snap_mgr(snap_dir.path().to_str().unwrap(), None);
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
+                                   None,
+                                   use_sst_file_snapshot);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
@@ -1290,15 +1313,15 @@ mod test {
         assert_eq!(s1.truncated_term(), 3);
 
         let key = SnapKey::from_snap(&snap1).unwrap();
-        let from = mgr.rl().get_snapshot_for_sending(&key).unwrap();
-        let to = mgr.rl().get_snapshot_for_receiving(&key, b"").unwrap();
+        let from = mgr.get_snapshot_for_sending(&key).unwrap();
+        let to = mgr.get_snapshot_for_receiving(&key, b"").unwrap();
         copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
         let s2 = new_storage(sched, &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
-        assert!(ctx.last_term != snap1.get_metadata().get_term());
+        assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut wb = WriteBatch::new();
         s2.apply_snapshot(&mut ctx, &snap1, &mut wb).unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());

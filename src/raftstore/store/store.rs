@@ -23,7 +23,7 @@ use std::thread;
 use std::u64;
 
 use rocksdb::DB;
-use mio::{self, EventLoop, EventLoopBuilder, Sender};
+use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
 use uuid::Uuid;
@@ -33,7 +33,7 @@ use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, 
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
-use util::{HandyRwLock, SlowTimer, duration_to_sec, escape};
+use util::{SlowTimer, duration_to_sec, escape};
 use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
@@ -43,7 +43,7 @@ use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
 use util::transport::SendCh;
-use util::{rocksdb, HashMap, HashSet};
+use util::{rocksdb, HashMap, HashSet, RingQueue};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -68,6 +68,7 @@ use prometheus::local::LocalHistogram;
 type Key = Vec<u8>;
 
 const MIO_TICK_RATIO: u64 = 10;
+const PENDING_VOTES_CAP: usize = 20;
 
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
@@ -89,7 +90,8 @@ pub struct Store<T, C: 'static> {
     pending_raft_groups: HashSet<u64>,
     // region end key -> region id
     region_ranges: BTreeMap<Key, u64>,
-    pending_regions: Vec<metapb::Region>,
+    // the regions with pending snapshots between two mio ticks.
+    pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
@@ -114,6 +116,8 @@ pub struct Store<T, C: 'static> {
     start_time: Timespec,
     is_busy: bool,
 
+    pending_votes: RingQueue<RaftMessage>,
+
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
     lock_cf_written_bytes: u64,
@@ -123,12 +127,12 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     where T: Transport,
           C: PdClient
 {
-    let mut builder = EventLoopBuilder::new();
+    let mut config = EventLoopConfig::new();
     // To make raft base tick more accurate, timer tick should be small enough.
-    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval / MIO_TICK_RATIO));
-    builder.notify_capacity(cfg.notify_capacity);
-    builder.messages_per_tick(cfg.messages_per_tick);
-    let event_loop = try!(builder.build());
+    config.timer_tick_ms(cfg.raft_base_tick_interval / MIO_TICK_RATIO);
+    config.notify_capacity(cfg.notify_capacity);
+    config.messages_per_tick(cfg.messages_per_tick);
+    let event_loop = try!(EventLoop::configured(config));
     Ok(event_loop)
 }
 
@@ -179,12 +183,13 @@ impl<T, C> Store<T, C> {
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
             region_ranges: BTreeMap::new(),
-            pending_regions: vec![],
+            pending_snapshot_regions: vec![],
             trans: trans,
             pd_client: pd_client,
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
+            pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
@@ -368,7 +373,7 @@ impl<T, C> Store<T, C> {
 
 impl<T: Transport, C: PdClient> Store<T, C> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        try!(self.snap_mgr.wl().init());
+        try!(self.snap_mgr.init());
 
         self.register_raft_base_tick(event_loop);
         self.register_raft_gc_log_tick(event_loop);
@@ -417,7 +422,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // Applying snapshot may take an unexpected long time.
         for peer in self.region_peers.values_mut() {
-            peer.mut_store().cancel_applying_snap();
+            peer.stop();
         }
 
         // Wait all workers finish.
@@ -589,9 +594,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
-                debug!("msg {:?} is overlapped with region {:?}, ignored",
-                       msg,
-                       exist_region);
+                debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
+                if util::is_first_vote_msg(msg) {
+                    self.pending_votes.push(msg.to_owned());
+                }
                 return Ok(false);
             }
         }
@@ -603,9 +609,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(true)
     }
 
-    // Clippy doesn't allow hash_map contains_key followed by insert, and suggests
-    // using entry().or_insert() instead, but we can't use this because creating peer
-    // may fail, so we allow map_entry.
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
         if !self.is_raft_msg_valid(&msg) {
@@ -618,7 +621,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        if try!(self.is_msg_stale(&msg)) {
+        if try!(self.check_msg(&msg)) {
             return Ok(());
         }
 
@@ -670,7 +673,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         true
     }
 
-    fn is_msg_stale(&self, msg: &RaftMessage) -> Result<bool> {
+    fn check_msg(&mut self, msg: &RaftMessage) -> Result<bool> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
         let is_vote_msg = msg.get_message().get_msg_type() == MessageType::MsgRequestVote;
@@ -713,6 +716,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
+                if util::is_first_vote_msg(msg) {
+                    self.pending_votes.push(msg.to_owned());
+                }
                 return Err(box_err!("[region {}] region not exist but not tombstone: {:?}",
                                     region_id,
                                     local_state));
@@ -830,7 +836,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(false);
             }
         }
-        for region in &self.pending_regions {
+        for region in &self.pending_snapshot_regions {
             if enc_start_key(region) < enc_end_key(&snap_region) &&
                enc_end_key(region) > enc_start_key(&snap_region) &&
                // Same region can overlap, we will apply the latest version of snapshot.
@@ -839,7 +845,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(false);
             }
         }
-        self.pending_regions.push(snap_region);
+        self.pending_snapshot_regions.push(snap_region);
 
         Ok(true)
     }
@@ -1048,6 +1054,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        let mut campaigned = false;
+        let peer;
         match Peer::create(self, &right) {
             Err(e) => {
                 // peer information is already written into db, can't recover.
@@ -1055,26 +1063,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("create new split region {:?} err {:?}", right, e);
             }
             Ok(mut new_peer) => {
-                // If this peer is the leader of the region before split, it's intuitional for
-                // it to become the leader of new split region.
-                // The ticks are accelerated here, so that the peer for the new split region
-                // comes to campaign earlier than the other follower peers. And then it's more
-                // likely for this peer to become the leader of the new split region.
-                // If the other follower peers applies logs too slowly, they may fail to vote the
-                // `MsgRequestVote` from this peer on its campaign.
-                // In this worst case scenario, the new split raft group will not be available
-                // since there is no leader established during one election timeout after the split.
-                let is_leader = self.region_peers[&region_id].is_leader();
-                if is_leader && right.get_peers().len() > 1 {
-                    for _ in 0..new_peer.accelerate_campaign_ticks() {
-                        new_peer.raft_group.tick();
-                    }
-                }
+                peer = new_peer.peer.clone();
+                if let Some(left) = self.region_peers.get(&region_id) {
+                    campaigned = new_peer.maybe_campaign(left, &mut self.pending_raft_groups);
 
-                if is_leader {
-                    // Notify pd immediately to let it update the region meta.
-                    let left = &self.region_peers[&region_id];
-                    self.report_split_pd(left, &new_peer);
+                    if left.is_leader() {
+                        // Notify pd immediately to let it update the region meta.
+                        self.report_split_pd(left, &new_peer);
+                    }
                 }
 
                 // Insert new regions and validation
@@ -1092,6 +1088,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
                 self.region_peers.insert(new_region_id, new_peer);
+            }
+        }
+
+        if !campaigned {
+            if let Some(pos) = self.pending_votes
+                .iter()
+                .rev()
+                .position(|m| m.get_to_peer() == &peer) {
+                let msg = self.pending_votes.swap_remove_front(pos).unwrap();
+                let _ = self.on_raft_message(msg);
             }
         }
     }
@@ -1293,6 +1299,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             self.region_written_bytes.observe(peer.written_bytes as f64);
             self.region_written_keys.observe(peer.written_keys as f64);
+            peer.last_written_bytes = peer.written_bytes;
             peer.written_bytes = 0;
             peer.written_keys = 0;
         }
@@ -1540,7 +1547,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_capacity(capacity);
 
         let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
-        used_size += self.snap_mgr.rl().get_total_snap_size();
+        used_size += self.snap_mgr.get_total_snap_size();
+
+        stats.set_used_size(used_size);
 
         let mut available = if capacity > used_size {
             capacity - used_size
@@ -1559,7 +1568,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_available(available);
         stats.set_region_count(self.region_peers.len() as u32);
 
-        let snap_stats = self.snap_mgr.rl().stats();
+        let snap_stats = self.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
 
@@ -1612,7 +1621,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        let mut snap_keys = try!(self.snap_mgr.wl().list_snap());
+        let mut snap_keys = try!(self.snap_mgr.list_snap());
         if snap_keys.is_empty() {
             return Ok(());
         }
@@ -1620,7 +1629,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         let mut is_applying_snap = false;
         for (key, is_sending) in snap_keys {
-            if self.snap_mgr.rl().has_registered(&key) {
+            if self.snap_mgr.has_registered(&key) {
                 continue;
             }
             if last_region_id != key.region_id {
@@ -1642,7 +1651,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
 
             if is_sending {
-                let s = try!(self.snap_mgr.rl().get_snapshot_for_sending(&key));
+                let s = try!(self.snap_mgr.get_snapshot_for_sending(&key));
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
@@ -1664,7 +1673,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 info!("[region {}] snap file {} has been applied, delete.",
                       key.region_id,
                       key);
-                let a = try!(self.snap_mgr.rl().get_snapshot_for_applying(&key));
+                let a = try!(self.snap_mgr.get_snapshot_for_applying(&key));
                 a.delete();
             }
         }
@@ -1910,7 +1919,12 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
         // 0 delay means turn off the timer.
         return Ok(());
     }
-    box_try!(event_loop.timeout(tick, Duration::from_millis(delay)));
+    if let Err(e) = event_loop.timeout_ms(tick, delay) {
+        return Err(box_err!("failed to register timeout [{:?}, delay: {:?}ms]: {:?}",
+                            tick,
+                            delay,
+                            e));
+    }
     Ok(())
 }
 
@@ -1996,7 +2010,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
 
         self.poll_apply();
 
-        self.pending_regions.clear();
+        self.pending_snapshot_regions.clear();
     }
 }
 

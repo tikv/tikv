@@ -695,7 +695,7 @@ impl SelectContextCore {
         // set topn
         let mut topn = false;
         let mut desc_can = false;
-        if sel.get_order_by().len() > 0 {
+        if !sel.get_order_by().is_empty() {
             // order by pk,set desc_scan is enough
             if !sel.get_order_by()[0].has_expr() {
                 desc_can = sel.get_order_by().first().map_or(false, |o| o.get_desc());
@@ -1023,7 +1023,7 @@ impl<'a> SelectContext<'a> {
                     Some((key, value)) => (box_try!(key.raw()), value),
                     None => break,
                 };
-                if range.get_start() > &key || range.get_end() <= &key {
+                if range.get_start() > key.as_slice() || range.get_end() <= key.as_slice() {
                     debug!("key: {} out of range [{}, {})",
                            escape(&key),
                            escape(range.get_start()),
@@ -1097,7 +1097,7 @@ impl<'a> SelectContext<'a> {
                 Some((key, val)) => (box_try!(key.raw()), val),
                 None => break,
             };
-            if r.get_start() > &key || r.get_end() <= &key {
+            if r.get_start() > key.as_slice() || r.get_end() <= key.as_slice() {
                 debug!("key: {} out of range [{}, {})",
                        escape(&key),
                        escape(r.get_start()),

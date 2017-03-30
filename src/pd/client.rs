@@ -11,247 +11,385 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::Write;
-use std::net::TcpStream;
-use std::time::Duration;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::fmt;
+use std::result;
 use std::thread;
+use std::sync::RwLock;
+use std::time::Duration;
 use std::collections::HashSet;
-use util::codec::rpc;
-use util::make_std_tcp_conn;
+
+use grpc;
+
+use protobuf::RepeatedField;
+
+use url::Url;
 
 use rand::{self, Rng};
 
-use kvproto::pdpb::{self, Request, Response};
-use kvproto::msgpb::{Message, MessageType};
+use kvproto::metapb;
+use kvproto::pdpb::{self, GetMembersResponse, Member};
+use kvproto::pdpb_grpc::{PD, PDClient};
 
-use super::{Result, protocol};
+use util::HandyRwLock;
+use super::{Result, Error, PdClient};
 use super::metrics::*;
 
-const MAX_PD_SEND_RETRY_COUNT: usize = 100;
-const SOCKET_READ_TIMEOUT: u64 = 3;
-const SOCKET_WRITE_TIMEOUT: u64 = 3;
-
-const PD_RPC_PREFIX: &'static str = "/pd/rpc";
-
-// Only for `validate_endpoints`.
-const VALIDATE_MSG_ID: u64 = 0;
-const VALIDATE_CLUSTER_ID: u64 = 0;
-
-#[derive(Debug)]
-struct RpcClientCore {
-    endpoints: Vec<String>,
-    stream: Option<TcpStream>,
+struct Inner {
+    members: GetMembersResponse,
+    client: PDClient,
 }
 
-fn send_msg(stream: &mut TcpStream, msg_id: u64, message: &Request) -> Result<(u64, Response)> {
-    let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-
-    let mut req = Message::new();
-
-    req.set_msg_type(MessageType::PdReq);
-    // TODO: optimize clone later in HTTP refactor.
-    req.set_pd_req(message.clone());
-
-    try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-    try!(rpc::encode_msg(stream, msg_id, &req));
-
-    try!(stream.set_read_timeout(Some(Duration::from_secs(SOCKET_READ_TIMEOUT))));
-    let mut resp = Message::new();
-    let id = try!(rpc::decode_msg(stream, &mut resp));
-    if resp.get_msg_type() != MessageType::PdResp {
-        return Err(box_err!("invalid pd response type {:?}", resp.get_msg_type()));
-    }
-    timer.observe_duration();
-
-    Ok((id, resp.take_pd_resp()))
-}
-
-fn rpc_connect(endpoint: &str) -> Result<TcpStream> {
-    let mut stream = try!(make_std_tcp_conn(endpoint));
-    try!(stream.set_write_timeout(Some(Duration::from_secs(SOCKET_WRITE_TIMEOUT))));
-
-    // Send a HTTP header to tell PD to hijack this connection for RPC.
-    let header_str = format!("GET {} HTTP/1.0\r\n\r\n", PD_RPC_PREFIX);
-    let header = header_str.as_bytes();
-    match stream.write_all(header) {
-        Ok(_) => Ok(stream),
-        Err(err) => Err(box_err!("failed to connect to {} error: {:?}", endpoint, err)),
-    }
-}
-
-impl RpcClientCore {
-    fn new(endpoints: Vec<String>) -> RpcClientCore {
-        RpcClientCore {
-            endpoints: endpoints,
-            stream: None,
-        }
-    }
-
-    fn try_connect(&mut self) -> Result<()> {
-        // Randomize endpoints.
-        let len = self.endpoints.len();
-        let mut indexes: Vec<usize> = (0..len).collect();
-        rand::thread_rng().shuffle(&mut indexes);
-
-        for i in indexes {
-            let ep = &self.endpoints[i];
-            match rpc_connect(ep.as_str()) {
-                Ok(stream) => {
-                    info!("PD client connects to {}", ep);
-                    self.stream = Some(stream);
-                    return Ok(());
-                }
-
-                Err(_) => {
-                    error!("failed to connect to {}, try next", ep);
-                    continue;
-                }
-            }
-        }
-
-        Err(box_err!("failed to connect to {:?}", self.endpoints))
-    }
-
-    fn send(&mut self, msg_id: u64, req: &Request) -> Result<Response> {
-        // If we post failed, we should retry.
-        for _ in 0..MAX_PD_SEND_RETRY_COUNT {
-            // If no stream, try connect first.
-            if self.stream.is_none() && self.try_connect().is_err() {
-                // TODO: figure out a better way to do backoff
-                thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-
-            let mut stream = self.stream.take().unwrap();
-            // We may send message to a not leader pd, retry.
-
-            let (id, resp) = match send_msg(&mut stream, msg_id, req) {
-                Err(e) => {
-                    warn!("send message to pd failed {:?}", e);
-                    // TODO: figure out a better way to do backoff
-                    thread::sleep(Duration::from_millis(50));
-                    continue;
-                }
-                Ok((id, resp)) => (id, resp),
-            };
-
-            if id != msg_id {
-                return Err(box_err!("pd response msg_id not match, want {}, got {}", msg_id, id));
-            }
-
-            self.stream = Some(stream);
-
-            return Ok(resp);
-        }
-
-        Err(box_err!("send message to pd failed"))
-    }
-}
-
-#[derive(Debug)]
 pub struct RpcClient {
-    msg_id: AtomicUsize,
-    core: Mutex<RpcClientCore>,
-    pub cluster_id: u64,
+    cluster_id: u64,
+    inner: RwLock<Inner>,
 }
 
 impl RpcClient {
     pub fn new(endpoints: &str) -> Result<RpcClient> {
-        let endpoints: Vec<String> = endpoints.split(',')
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty())
+        let endpoints: Vec<_> = endpoints.split(',')
+            .map(|s| if !s.starts_with("http://") {
+                format!("http://{}", s)
+            } else {
+                s.to_owned()
+            })
             .collect();
 
-        let mut cluster_id = VALIDATE_CLUSTER_ID;
-        for _ in 0..MAX_PD_SEND_RETRY_COUNT {
-            match Self::validate_endpoints(&endpoints) {
-                Ok(id) => {
-                    cluster_id = id;
-                    break;
-                }
-                Err(e) => {
-                    warn!("failed to get cluster id from pd: {:?}", e);
-                    thread::sleep(Duration::from_secs(1));
-                }
-            }
-        }
-
-        if cluster_id == VALIDATE_CLUSTER_ID {
-            return Err(box_err!("failed to get cluster id from pd"));
-        }
-
+        let (client, members) = try!(validate_endpoints(&endpoints));
         Ok(RpcClient {
-            msg_id: AtomicUsize::new(0),
-            core: Mutex::new(RpcClientCore::new(endpoints)),
-            cluster_id: cluster_id,
+            cluster_id: members.get_header().get_cluster_id(),
+            inner: RwLock::new(Inner {
+                members: members,
+                client: client,
+            }),
         })
     }
 
-    pub fn send(&self, req: &Request) -> Result<Response> {
-        let msg_id = self.alloc_msg_id();
-        let resp = try!(self.core.lock().unwrap().send(msg_id, req));
+    fn header(&self) -> pdpb::RequestHeader {
+        let mut header = pdpb::RequestHeader::new();
+        header.set_cluster_id(self.cluster_id);
+        header
+    }
+
+    // For tests
+    pub fn get_leader(&self) -> Member {
+        let inner = self.inner.rl();
+        inner.members.get_leader().clone()
+    }
+}
+
+
+pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersResponse)> {
+    if endpoints.is_empty() {
+        return Err(box_err!("empty PD endpoints"));
+    }
+
+    let len = endpoints.len();
+    let mut endpoints_set = HashSet::with_capacity(len);
+
+    let mut members = None;
+    let mut cluster_id = None;
+    for ep in endpoints {
+        if !endpoints_set.insert(ep) {
+            return Err(box_err!("duplicate PD endpoint {}", ep));
+        }
+
+        let (_, resp) = match connect(ep) {
+            Ok(resp) => resp,
+            // Ignore failed PD node.
+            Err(e) => {
+                error!("PD endpoint {} failed to respond: {:?}", ep, e);
+                continue;
+            }
+        };
+
+        // Check cluster ID.
+        let cid = resp.get_header().get_cluster_id();
+        if let Some(sample) = cluster_id {
+            if sample != cid {
+                return Err(box_err!("PD response cluster_id mismatch, want {}, got {}",
+                                    sample,
+                                    cid));
+            }
+        } else {
+            cluster_id = Some(cid);
+        }
+        // TODO: check all fields later?
+
+        if members.is_none() {
+            members = Some(resp);
+        }
+    }
+
+    match members {
+        Some(members) => {
+            let (client, members) = try!(try_connect_leader(&members));
+            info!("All PD endpoints are consistent: {:?}", endpoints);
+            Ok((client, members))
+        }
+        _ => Err(box_err!("PD cluster failed to respond")),
+    }
+}
+
+fn connect(addr: &str) -> Result<(PDClient, GetMembersResponse)> {
+    debug!("connect to PD endpoint: {:?}", addr);
+    let ep = box_try!(Url::parse(addr));
+    let host = ep.host_str().unwrap();
+    let port = ep.port().unwrap();
+
+    let mut conf: grpc::client::GrpcClientConf = Default::default();
+    conf.http.no_delay = Some(true);
+
+    // TODO: It seems that `new` always return an Ok(_).
+    PDClient::new(host, port, false, conf)
+        .and_then(|client| {
+            // try request.
+            match client.GetMembers(pdpb::GetMembersRequest::new()) {
+                Ok(resp) => Ok((client, resp)),
+                Err(e) => Err(e),
+            }
+        })
+        .map_err(Error::Grpc)
+}
+
+fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMembersResponse)> {
+    // Try to connect other members.
+    // Randomize endpoints.
+    let members = previous.get_members();
+    let mut indexes: Vec<usize> = (0..members.len()).collect();
+    rand::thread_rng().shuffle(&mut indexes);
+
+    let mut resp = None;
+    'outer: for i in indexes {
+        for ep in members[i].get_client_urls() {
+            match connect(ep.as_str()) {
+                Ok((_, r)) => {
+                    resp = Some(r);
+                    break 'outer;
+                }
+                Err(e) => {
+                    error!("failed to connect to {}, {:?}", ep, e);
+                    continue;
+                }
+            }
+        }
+    }
+
+    // Then try to connect the PD cluster leader.
+    if let Some(resp) = resp {
+        let leader = resp.get_leader().clone();
+        for ep in leader.get_client_urls() {
+            if let Ok((client, _)) = connect(ep.as_str()) {
+                info!("connect to PD leader {:?}", ep);
+                return Ok((client, resp));
+            }
+        }
+    }
+
+    Err(box_err!("failed to connect to {:?}", members))
+}
+
+const MAX_RETRY_COUNT: usize = 100;
+const RETRY_INTERVAL: u64 = 1;
+
+fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
+    where F: Fn(&PDClient) -> result::Result<R, grpc::error::GrpcError>
+{
+    for _ in 0..MAX_RETRY_COUNT {
+        let r = {
+            let inner = client.inner.rl();
+            let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
+            let r = f(&inner.client);
+            timer.observe_duration();
+            r
+        };
+
+        match r {
+            Ok(r) => {
+                return Ok(r);
+            }
+            Err(e) => {
+                error!("fail to request: {:?}", e);
+                let mut inner = client.inner.wl();
+                match try_connect_leader(&inner.members) {
+                    Ok((cli, mbrs)) => {
+                        inner.client = cli;
+                        inner.members = mbrs;
+                    }
+                    Err(e) => {
+                        error!("fail to connect to PD leader {:?}", e);
+                        thread::sleep(Duration::from_secs(RETRY_INTERVAL));
+                    }
+                }
+            }
+        }
+    }
+
+    Err(box_err!("fail to request"))
+}
+
+fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
+    if !header.has_error() {
+        return Ok(());
+    }
+    // TODO: translate more error types
+    let err = header.get_error();
+    Err(box_err!(err.get_message()))
+}
+
+impl fmt::Debug for RpcClient {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt,
+               "PD gRPC Client connects to cluster {:?}",
+               self.cluster_id)
+    }
+}
+
+impl PdClient for RpcClient {
+    fn get_cluster_id(&self) -> Result<u64> {
+        Ok(self.cluster_id)
+    }
+
+    fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()> {
+        let mut req = pdpb::BootstrapRequest::new();
+        req.set_header(self.header());
+        req.set_store(stores);
+        req.set_region(region);
+
+        let resp = try!(do_request(self, |client| client.Bootstrap(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+        Ok(())
+    }
+
+    fn is_cluster_bootstrapped(&self) -> Result<bool> {
+        let mut req = pdpb::IsBootstrappedRequest::new();
+        req.set_header(self.header());
+
+        let resp = try!(do_request(self, |client| client.IsBootstrapped(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
+        Ok(resp.get_bootstrapped())
+    }
+
+    fn alloc_id(&self) -> Result<u64> {
+        let mut req = pdpb::AllocIDRequest::new();
+        req.set_header(self.header());
+
+        let resp = try!(do_request(self, |client| client.AllocID(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
+        Ok(resp.get_id())
+    }
+
+    fn put_store(&self, store: metapb::Store) -> Result<()> {
+        let mut req = pdpb::PutStoreRequest::new();
+        req.set_header(self.header());
+        req.set_store(store);
+
+        let resp = try!(do_request(self, |client| client.PutStore(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
+        Ok(())
+    }
+
+    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
+        let mut req = pdpb::GetStoreRequest::new();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+
+        let mut resp = try!(do_request(self, |client| client.GetStore(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
+        Ok(resp.take_store())
+    }
+
+    fn get_cluster_config(&self) -> Result<metapb::Cluster> {
+        let mut req = pdpb::GetClusterConfigRequest::new();
+        req.set_header(self.header());
+
+        let mut resp = try!(do_request(self, |client| client.GetClusterConfig(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
+        Ok(resp.take_cluster())
+    }
+
+    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+        let mut req = pdpb::GetRegionRequest::new();
+        req.set_header(self.header());
+        req.set_region_key(key.to_vec());
+
+        let mut resp = try!(do_request(self, |client| client.GetRegion(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
+        Ok(resp.take_region())
+    }
+
+    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
+        let mut req = pdpb::GetRegionByIDRequest::new();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let mut resp = try!(do_request(self, |client| client.GetRegionByID(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
+        if resp.has_region() {
+            Ok(Some(resp.take_region()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn region_heartbeat(&self,
+                        region: metapb::Region,
+                        leader: metapb::Peer,
+                        down_peers: Vec<pdpb::PeerStats>,
+                        pending_peers: Vec<metapb::Peer>,
+                        written_bytes: u64)
+                        -> Result<pdpb::RegionHeartbeatResponse> {
+        let mut req = pdpb::RegionHeartbeatRequest::new();
+        req.set_header(self.header());
+        req.set_region(region);
+        req.set_leader(leader);
+        req.set_down_peers(RepeatedField::from_vec(down_peers));
+        req.set_pending_peers(RepeatedField::from_vec(pending_peers));
+        req.set_bytes_written(written_bytes);
+
+        let resp = try!(do_request(self, |client| client.RegionHeartbeat(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
         Ok(resp)
     }
 
-    fn alloc_msg_id(&self) -> u64 {
-        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
+    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
+        let mut req = pdpb::AskSplitRequest::new();
+        req.set_header(self.header());
+        req.set_region(region);
+
+        let resp = try!(do_request(self, |client| client.AskSplit(req.clone())));
+        try!(check_resp_header(resp.get_header()));
+
+        Ok(resp)
     }
 
-    /// `validate_endpoints` validates pd members, make sure they are in the same cluster.
-    /// It returns a cluster ID.
-    /// Notice that it ignores failed pd nodes.
-    /// Export for tests.
-    pub fn validate_endpoints(endpoints: &[String]) -> Result<u64> {
-        if endpoints.is_empty() {
-            return Err(box_err!("empty PD endpoints"));
-        }
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
+        let mut req = pdpb::StoreHeartbeatRequest::new();
+        req.set_header(self.header());
+        req.set_stats(stats);
 
-        let len = endpoints.len();
-        let mut endpoints_set = HashSet::with_capacity(len);
+        let resp = try!(do_request(self, |client| client.StoreHeartbeat(req.clone())));
+        try!(check_resp_header(resp.get_header()));
 
-        let mut cluster_id = None;
-        for ep in endpoints {
-            if !endpoints_set.insert(ep) {
-                return Err(box_err!("a duplicate PD url {}", ep));
-            }
+        Ok(())
+    }
 
-            let mut stream = match rpc_connect(ep.as_str()) {
-                Ok(stream) => stream,
-                // Ignore failed pd node.
-                Err(_) => continue,
-            };
+    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()> {
+        let mut req = pdpb::ReportSplitRequest::new();
+        req.set_header(self.header());
+        req.set_left(left);
+        req.set_right(right);
 
-            let mut req = protocol::new_request(VALIDATE_CLUSTER_ID,
-                                                pdpb::CommandType::GetPDMembers);
-            req.set_get_pd_members(pdpb::GetPDMembersRequest::new());
-            let (mid, resp) = match send_msg(&mut stream, VALIDATE_MSG_ID, &req) {
-                Ok((mid, resp)) => (mid, resp),
-                // Ignore failed pd node.
-                Err(_) => continue,
-            };
+        let resp = try!(do_request(self, |client| client.ReportSplit(req.clone())));
+        try!(check_resp_header(resp.get_header()));
 
-            if mid != VALIDATE_MSG_ID {
-                return Err(box_err!("PD response msg_id mismatch, want {}, got {}",
-                                    VALIDATE_MSG_ID,
-                                    mid));
-            }
-
-            // Check cluster ID.
-            let cid = resp.get_header().get_cluster_id();
-            if let Some(sample) = cluster_id {
-                if sample != cid {
-                    return Err(box_err!("PD response cluster_id mismatch, want {}, got {}",
-                                        sample,
-                                        cid));
-                }
-            } else {
-                cluster_id = Some(cid);
-            }
-            // TODO: check all fields later?
-        }
-
-        cluster_id.ok_or(box_err!("PD cluster stop responding"))
+        Ok(())
     }
 }
