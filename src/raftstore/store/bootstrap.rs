@@ -36,14 +36,14 @@ fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Re
                             Ok(false)
                         }));
 
-    Ok(count > 0)
+    Ok(count == 0)
 }
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
 pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::new();
 
-    if try!(is_range_empty(engine, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)) {
+    if !try!(is_range_empty(engine, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)) {
         return Err(box_err!("store is not empty and has already had data."));
     }
 
@@ -130,15 +130,15 @@ mod tests {
         assert!(engine.get_value_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().is_some());
 
         assert!(clear_region(&engine, 1).is_ok());
-        assert!(!is_range_empty(&engine,
-                                CF_DEFAULT,
-                                &keys::region_meta_prefix(1),
-                                &keys::region_meta_prefix(2))
+        assert!(is_range_empty(&engine,
+                               CF_DEFAULT,
+                               &keys::region_meta_prefix(1),
+                               &keys::region_meta_prefix(2))
             .unwrap());
-        assert!(!is_range_empty(&engine,
-                                CF_RAFT,
-                                &keys::region_raft_prefix(1),
-                                &keys::region_raft_prefix(2))
+        assert!(is_range_empty(&engine,
+                               CF_RAFT,
+                               &keys::region_raft_prefix(1),
+                               &keys::region_raft_prefix(2))
             .unwrap());
     }
 }
