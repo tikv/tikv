@@ -11,16 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::io;
-use std::{slice, thread};
+use std::ops::{Deref, DerefMut, Range};
+use std::{io, slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use std::collections::vec_deque::{Iter, VecDeque};
+use std::collections::vec_deque::{Iter, VecDeque, Drain};
 
 use prometheus;
 use rand::{self, ThreadRng};
@@ -449,6 +447,36 @@ impl<T> RingQueue<T> {
         }
     }
 
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    #[inline]
+    pub fn front(&self) -> Option<&T> {
+        self.buf.front()
+    }
+
+    #[inline]
+    pub fn back(&self) -> Option<&T> {
+        self.buf.back()
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.buf.clear()
+    }
+
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        self.buf.truncate(len)
+    }
+
+    #[inline]
+    pub fn drain(&mut self, range: Range<usize>) -> Drain<T> {
+        self.buf.drain(range)
+    }
+
     pub fn push(&mut self, t: T) {
         if self.len() == self.cap {
             self.buf.pop_front();
@@ -462,6 +490,49 @@ impl<T> RingQueue<T> {
 
     pub fn swap_remove_front(&mut self, pos: usize) -> Option<T> {
         self.buf.swap_remove_front(pos)
+    }
+}
+
+impl<T: Clone> RingQueue<T> {
+    pub fn to_vec(&self, range: Range<usize>) -> Vec<T> {
+        let (part1, part2) = self.buf.as_slices();
+        if range.start > part1.len() {
+            part2[range.start - part1.len()..range.end - part1.len()].to_vec()
+        } else if range.end <= part1.len() {
+            part1[range.start..range.end].to_vec()
+        } else {
+            let mut vec = Vec::with_capacity(range.end - range.start);
+            vec.extend_from_slice(&part1[range.start..]);
+            vec.extend_from_slice(&part2[..range.end - part1.len()]);
+            vec
+        }
+    }
+
+    pub fn extend_from_slice(&mut self, other: &[T]) {
+        let available = self.cap - self.buf.len();
+        let mut needed = other.len();
+        for p in other.into_iter().take(available) {
+            self.buf.push_back(p.to_owned());
+        }
+        if needed <= available {
+            return;
+        }
+        needed -= available;
+        let start_idx = if needed > self.cap {
+            needed = self.cap;
+            other.len() - self.cap
+        } else {
+            available
+        };
+        let (part1, part2) = self.buf.as_mut_slices();
+        let part1_len = part1.len();
+        if needed < part1_len {
+            part1[..needed].clone_from_slice(&other[start_idx..start_idx + needed]);
+            return;
+        }
+        part1.clone_from_slice(&other[start_idx..start_idx + part1_len]);
+        part2[..needed - part1_len]
+            .clone_from_slice(&other[start_idx + part1_len..start_idx + needed]);
     }
 }
 

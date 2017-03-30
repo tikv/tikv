@@ -15,7 +15,7 @@ use std::sync::{self, Arc};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use util::RingQueue;
 use std::error;
 use std::time::Instant;
 
@@ -27,7 +27,7 @@ use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
 use util::worker::Scheduler;
-use util::{self, rocksdb, HandyRwLock};
+use util::{self, rocksdb};
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::RegionTask;
@@ -115,7 +115,7 @@ pub struct PeerStorage {
     pub applied_index_term: u64,
     pub last_term: u64,
 
-    cache: VecDeque<Entry>,
+    cache: RingQueue<Entry>,
 
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
@@ -262,7 +262,7 @@ impl PeerStorage {
             region: region.clone(),
             raft_state: raft_state,
             apply_state: apply_state,
-            cache: VecDeque::with_capacity(DEFAULT_CACHE_SIZE),
+            cache: RingQueue::with_capacity(DEFAULT_CACHE_SIZE),
             snap_state: RefCell::new(SnapState::Relax),
             region_sched: region_sched,
             snap_tried_cnt: RefCell::new(0),
@@ -329,24 +329,11 @@ impl PeerStorage {
             return self.entries_from_db(low, high, max_size);
         }
 
-        let entries =
-            self.cache.iter().skip((low - first_index) as usize).take((high - low) as usize);
-        let limit = util::get_limit_at_size(entries, max_size) as u64;
-        let exp_high = low + limit;
-        let (first, second) = self.cache.as_slices();
-        // second's first index
-        let delimiter = first_index + first.len() as u64;
-        if low >= delimiter {
-            return Ok(second[(low - delimiter) as usize..(exp_high - delimiter) as usize].to_vec());
-        }
-        if exp_high <= delimiter {
-            return Ok(first[(low - first_index) as usize..(exp_high - first_index) as usize]
-                .to_vec());
-        }
-        let mut buf = Vec::with_capacity(limit as usize);
-        buf.extend_from_slice(&first[(low - first_index) as usize..]);
-        buf.extend_from_slice(&second[..(exp_high - delimiter) as usize]);
-        Ok(buf)
+        let start_idx = (low - first_index) as usize;
+        let entries = self.cache.iter().skip(start_idx).take((high - low) as usize);
+        let limit = util::get_limit_at_size(entries, max_size);
+        let end_idx = start_idx + limit;
+        Ok(self.cache.to_vec(start_idx..end_idx))
     }
 
     fn entries_from_db(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
@@ -605,19 +592,7 @@ impl PeerStorage {
                 }
             }
         }
-        if entries.len() > DEFAULT_CACHE_SIZE {
-            self.cache.clear();
-            for e in &entries[entries.len() - DEFAULT_CACHE_SIZE..] {
-                self.cache.push_back(e.to_owned());
-            }
-        } else {
-            if self.cache.len() + entries.len() > DEFAULT_CACHE_SIZE {
-                self.cache.drain(..DEFAULT_CACHE_SIZE - entries.len());
-            }
-            for e in entries {
-                self.cache.push_back(e.to_owned());
-            }
-        }
+        self.cache.extend_from_slice(entries);
 
         ctx.raft_state.set_last_index(last_index);
         ctx.last_term = last_term;
@@ -636,7 +611,7 @@ impl PeerStorage {
         if self.cache.back().map_or(false, |e| e.get_index() < idx) {
             self.cache.clear();
         } else {
-            self.cache.drain(..(idx - first_index) as usize);
+            self.cache.drain(0..(idx - first_index) as usize);
         }
     }
 
