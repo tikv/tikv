@@ -13,6 +13,11 @@
 
 #![feature(plugin)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
+#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
+
+// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
+#![allow(never_loop)]
+#![allow(needless_pass_by_value)]
 
 extern crate tikv;
 extern crate getopts;
@@ -28,6 +33,7 @@ extern crate signal;
 #[cfg(unix)]
 extern crate nix;
 extern crate prometheus;
+extern crate sys_info;
 
 mod signal_handler;
 
@@ -44,8 +50,9 @@ use getopts::{Options, Matches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
+use sys_info::{cpu_num, mem_info};
 
-use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
+use tikv::storage::{Storage, TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
@@ -56,9 +63,30 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
+use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
-use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
+
+const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
+const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
+const KB: u64 = 1024;
+const MB: u64 = KB * 1024;
+const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
+
+fn sanitize_memory_usage() -> bool {
+    let mut ratio = 0.0;
+    for v in DEFAULT_BLOCK_CACHE_RATIO {
+        ratio = ratio + v;
+    }
+    if ratio > 1.0 {
+        return false;
+    }
+    true
+}
+
+fn align_to_mb(n: u64) -> u64 {
+    n & 0xFFFFFFFFFFF00000
+}
 
 fn print_usage(program: &str, opts: &Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -254,6 +282,19 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
+    let wal_dir = get_toml_string(config, "rocksdb.wal-dir", Some("".to_owned()));
+    if !wal_dir.is_empty() {
+        opts.set_wal_dir(&wal_dir)
+    };
+
+    let wal_ttl_seconds = get_toml_int(config, "rocksdb.wal-ttl-seconds", Some(0));
+    opts.set_wal_ttl_seconds(wal_ttl_seconds as u64);
+
+    let wal_size_limit = get_toml_int(config, "rocksdb.wal-size-limit", Some(0));
+    // return size in MB
+    let wal_size_limit_mb = align_to_mb(wal_size_limit as u64) / MB;
+    opts.set_wal_size_limit_mb(wal_size_limit_mb as u64);
+
     let max_total_wal_size = get_toml_int(config,
                                           "rocksdb.max-total-wal-size",
                                           Some(4 * 1024 * 1024 * 1024));
@@ -274,13 +315,10 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let create_if_missing = get_toml_boolean(config, "rocksdb.create-if-missing", Some(true));
     opts.create_if_missing(create_if_missing);
 
-    let disable_data_sync = get_toml_boolean(config, "rocksdb.disable-data-sync", Some(false));
-    opts.set_disable_data_sync(disable_data_sync);
-
     let max_open_files = get_toml_int(config, "rocksdb.max-open-files", Some(40960));
     opts.set_max_open_files(max_open_files as i32);
 
-    let enable_statistics = get_toml_boolean(config, "rocksdb.enable-statistics", Some(false));
+    let enable_statistics = get_toml_boolean(config, "rocksdb.enable-statistics", Some(true));
     if enable_statistics {
         opts.enable_statistics();
         let stats_dump_period_sec =
@@ -289,7 +327,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     }
 
     let compaction_readahead_size =
-        get_toml_int(config, "rocksdb.compaction_readahead_size", Some(0));
+        get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
     opts
@@ -297,7 +335,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
 
 fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
-                         block_cache_default: i64,
+                         block_cache_default: u64,
                          use_bloom_filter: bool,
                          whole_key_filtering: bool)
                          -> RocksdbOptions {
@@ -310,7 +348,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     block_base_opts.set_block_size(block_size as usize);
     let block_cache_size = get_toml_int(config,
                                         (prefix.clone() + "block-cache-size").as_str(),
-                                        Some(block_cache_default));
+                                        Some(block_cache_default as i64));
     block_base_opts.set_lru_cache(block_cache_size as usize);
 
     let cache_index_and_filter =
@@ -371,29 +409,33 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let level_zero_slowdown_writes_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-slowdown-writes-trigger").as_str(),
-                     Some(12));
+                     Some(20));
     opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
 
     let level_zero_stop_writes_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-stop-writes-trigger").as_str(),
-                     Some(16));
+                     Some(36));
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
     opts
 }
 
-fn get_rocksdb_default_cf_option(config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
     // Default column family uses bloom filter.
+    let default_block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64);
     get_rocksdb_cf_option(config,
                           "defaultcf",
-                          1024 * 1024 * 1024,
+                          default_block_cache_size,
                           true, // bloom filter
                           true /* whole key filtering */)
 }
 
-fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
-    let mut opt = get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, true, false);
+fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+    let default_block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64);
+    let mut opt = get_rocksdb_cf_option(config, "writecf", default_block_cache_size, true, false);
     // prefix extractor(trim the timestamp at tail) for write cf.
     opt.set_prefix_extractor("FixedSuffixSliceTransform",
                               Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
@@ -403,50 +445,103 @@ fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
     opt
 }
 
-fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
-    let mut opt = get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, false);
+fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+    let mut default_block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
+    if default_block_cache_size < RAFTCF_MIN_MEM {
+        default_block_cache_size = RAFTCF_MIN_MEM;
+    }
+    if default_block_cache_size > RAFTCF_MAX_MEM {
+        default_block_cache_size = RAFTCF_MAX_MEM;
+    }
+    let mut opt = get_rocksdb_cf_option(config, "raftcf", default_block_cache_size, false, false);
     opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
             Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
         .unwrap();
     opt
 }
 
-fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
+fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(16 * 1024);
-    block_base_opts.set_lru_cache(64 * 1024 * 1024);
+
+    let block_cache_size = get_toml_int(config,
+                                        "rocksdb.lockcf.block-cache-size",
+                                        Some(64 * 1024 * 1024));
+    block_base_opts.set_lru_cache(block_cache_size as usize);
+
     block_base_opts.set_bloom_filter(10, false);
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = "no:no:no:no:no:no:no".to_owned();
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
-    opts.set_write_buffer_size(64 * 1024 * 1024);
-    opts.set_max_write_buffer_number(5);
-    opts.set_max_bytes_for_level_base(64 * 1024 * 1024);
+
+    let write_buffer_size = get_toml_int(config,
+                                         "rocksdb.lockcf.write-buffer-size",
+                                         Some(64 * 1024 * 1024));
+    opts.set_write_buffer_size(write_buffer_size as u64);
+
+    let max_write_buffer_number =
+        get_toml_int(config, "rocksdb.lockcf.max-write-buffer-number", Some(5));
+    opts.set_max_write_buffer_number(max_write_buffer_number as i32);
+
+    let max_bytes_for_level_base = get_toml_int(config,
+                                                "rocksdb.lockcf.max-bytes-for-level-base",
+                                                Some(64 * 1024 * 1024));
+    opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
     opts.set_target_file_size_base(32 * 1024 * 1024);
 
     // set level0_file_num_compaction_trigger = 1 is very important,
     // this will result in fewer sst files in lock cf.
     opts.set_level_zero_file_num_compaction_trigger(1);
 
+    let level_zero_slowdown_writes_trigger = get_toml_int(config,
+                                                          "rocksdb.lockcf.\
+                                                           level0-slowdown-writes-trigger",
+                                                          Some(20));
+    opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
+
+    let level_zero_stop_writes_trigger = get_toml_int(config,
+                                                      "rocksdb.lockcf.level0-stop-writes-trigger",
+                                                      Some(36));
+    opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
+
     opts
 }
 
+fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
+    if total_cpu_num >= 8 {
+        (total_cpu_num as f32 * 0.8) as usize
+    } else {
+        4
+    }
+}
+
+fn adjust_sched_workers_by_cpu_num(total_cpu_num: usize) -> usize {
+    if total_cpu_num >= 16 { 8 } else { 4 }
+}
 
 // TODO: merge this function with Config::new
 // Currently, to add a new option, we will define three default value
 // in config.rs, this file and config-template.toml respectively. It may be more
 // maintainable to keep things in one place.
-fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: String) -> Config {
+fn build_cfg(matches: &Matches,
+             config: &toml::Value,
+             cluster_id: u64,
+             addr: String,
+             total_cpu_num: usize)
+             -> Config {
     let mut cfg = Config::new();
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
     cfg_usize(&mut cfg.notify_capacity, config, "server.notify-capacity");
-    cfg_usize(&mut cfg.end_point_concurrency,
-              config,
-              "server.end-point-concurrency");
+    if !cfg_usize(&mut cfg.end_point_concurrency,
+                  config,
+                  "server.end-point-concurrency") {
+        cfg.end_point_concurrency = adjust_end_points_by_cpu_num(total_cpu_num);
+    }
     cfg_usize(&mut cfg.messages_per_tick,
               config,
               "server.messages-per-tick");
@@ -517,6 +612,9 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
+    cfg_u64(&mut cfg.raft_store.lock_cf_compact_threshold,
+            config,
+            "raftstore.lock-cf-compact-threshold");
     cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
             config,
             "raftstore.raft-entry-max-size");
@@ -532,6 +630,8 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_u64(&mut cfg.raft_store.consistency_check_tick_interval,
             config,
             "raftstore.consistency-check-interval");
+    cfg.raft_store.use_sst_file_snapshot =
+        get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(false));
     cfg_usize(&mut cfg.storage.sched_notify_capacity,
               config,
               "storage.scheduler-notify-capacity");
@@ -541,9 +641,14 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
     cfg_usize(&mut cfg.storage.sched_concurrency,
               config,
               "storage.scheduler-concurrency");
-    cfg_usize(&mut cfg.storage.sched_worker_pool_size,
+    if !cfg_usize(&mut cfg.storage.sched_worker_pool_size,
+                  config,
+                  "storage.scheduler-worker-pool-size") {
+        cfg.storage.sched_worker_pool_size = adjust_sched_workers_by_cpu_num(total_cpu_num);
+    }
+    cfg_usize(&mut cfg.storage.sched_too_busy_threshold,
               config,
-              "storage.scheduler-worker-pool-size");
+              "storage.scheduler-too-busy-threshold");
 
     cfg
 }
@@ -551,19 +656,21 @@ fn build_cfg(matches: &Matches, config: &toml::Value, cluster_id: u64, addr: Str
 fn build_raftkv(config: &toml::Value,
                 ch: SendCh<Msg>,
                 pd_client: Arc<RpcClient>,
-                cfg: &Config)
+                cfg: &Config,
+                total_mem: u64)
                 -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
-    let opts = get_rocksdb_db_option(config);
-    let cfs_opts = vec![get_rocksdb_default_cf_option(config),
-                        get_rocksdb_lock_cf_option(),
-                        get_rocksdb_write_cf_option(config),
-                        get_rocksdb_raftlog_cf_option(config)];
+    let db_opts = get_rocksdb_db_option(config);
+    let mut cfs_opts = HashMap::default();
+    cfs_opts.insert(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem));
+    cfs_opts.insert(CF_LOCK, get_rocksdb_lock_cf_option(config));
+    cfs_opts.insert(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem));
+    cfs_opts.insert(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem));
     let mut db_path = path.clone();
     db_path.push("db");
     let engine =
-        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), ALL_CFS, cfs_opts)
+        Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), db_opts, cfs_opts)
             .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
@@ -572,7 +679,9 @@ fn build_raftkv(config: &toml::Value,
     let mut snap_path = path.clone();
     snap_path.push("snap");
     let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = store::new_snap_mgr(snap_path, Some(node.get_sendch()));
+    let snap_mgr = SnapManager::new(snap_path,
+                                    Some(node.get_sendch()),
+                                    cfg.raft_store.use_sst_file_snapshot);
 
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
@@ -645,7 +754,11 @@ fn start_server<T, S>(mut server: Server<T, S>,
     h.join().unwrap();
 }
 
-fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config: &toml::Value) {
+fn run_raft_server(pd_client: RpcClient,
+                   cfg: Config,
+                   backup_path: &str,
+                   config: &toml::Value,
+                   total_mem: u64) {
     let mut event_loop = create_event_loop(&cfg).unwrap();
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
@@ -661,7 +774,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: Config, backup_path: &str, config:
     }
 
     let (mut node, mut store, raft_router, snap_mgr, engine) =
-        build_raftkv(config, ch.clone(), pd_client, &cfg);
+        build_raftkv(config, ch.clone(), pd_client, &cfg, total_mem);
     info!("tikv server config: {:?}", cfg);
 
     initial_metric(config, Some(node.id()));
@@ -790,10 +903,20 @@ fn main() {
         }
     }
 
-    let pd_client = RpcClient::new(&pd_endpoints).unwrap();
-    let cluster_id = pd_client.cluster_id;
+    let pd_client = RpcClient::new(&pd_endpoints)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let cluster_id = pd_client.get_cluster_id()
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
-    let mut cfg = build_cfg(&matches, &config, cluster_id, addr);
+    let total_cpu_num = cpu_num().unwrap();
+    // return  memory in KB.
+    let mem = mem_info().unwrap();
+    let total_mem = mem.total * KB;
+    if !sanitize_memory_usage() {
+        panic!("default block cache size over total memory.");
+    }
+
+    let mut cfg = build_cfg(&matches, &config, cluster_id, addr, total_cpu_num as usize);
     cfg.labels = get_store_labels(&matches, &config);
     let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
     cfg.storage.path = store_path;
@@ -802,5 +925,5 @@ fn main() {
         panic!("in raftkv, cluster_id must greater than 0");
     }
     let _m = TimeMonitor::default();
-    run_raft_server(pd_client, cfg, &backup_path, &config);
+    run_raft_server(pd_client, cfg, &backup_path, &config, total_mem);
 }

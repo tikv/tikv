@@ -16,7 +16,7 @@ use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
 
-use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
+use mio::{Token, Handler, EventLoop, EventLoopConfig, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -47,10 +47,10 @@ pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>
     where T: RaftStoreRouter,
           S: StoreAddrResolver
 {
-    let mut builder = EventLoopBuilder::new();
-    builder.notify_capacity(config.notify_capacity);
-    builder.messages_per_tick(config.messages_per_tick);
-    let el = try!(builder.build());
+    let mut loop_config = EventLoopConfig::new();
+    loop_config.notify_capacity(config.notify_capacity);
+    loop_config.messages_per_tick(config.messages_per_tick);
+    let el = try!(EventLoop::configured(loop_config));
     Ok(el)
 }
 
@@ -658,7 +658,7 @@ mod tests {
     use kvproto::msgpb::{Message, MessageType};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
-    use raftstore::store::{self, Msg as StoreMsg};
+    use raftstore::store::Msg as StoreMsg;
 
     struct MockResolver {
         addr: SocketAddr,
@@ -726,14 +726,15 @@ mod tests {
             raft_router: router,
             snapshot_status_sender: snapshot_status_sender,
         };
-        let mut server = Server::new(&mut event_loop,
-                                     &cfg,
-                                     listener,
-                                     storage,
-                                     ch,
-                                     resolver,
-                                     store::new_snap_mgr("", None))
-            .unwrap();
+        let mut server =
+            Server::new(&mut event_loop,
+                        &cfg,
+                        listener,
+                        storage,
+                        ch,
+                        resolver,
+                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
+                .unwrap();
 
         for i in 0..10 {
             let mut msg = Message::new();

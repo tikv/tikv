@@ -92,13 +92,6 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref STORE_ENGINE_SIZE_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
-            "tikv_engine_size_bytes",
-            "Sizes of each column families.",
-            &["type"]
-        ).unwrap();
-
     pub static ref PEER_PROPOSE_LOG_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_propose_log_size",
@@ -122,19 +115,7 @@ lazy_static! {
                     512.0, 1024.0, 5120.0, 10240.0]
         ).unwrap();
 
-    pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: GaugeVec =
-        register_gauge_vec!(
-            "tikv_engine_memory_bytes",
-            "Sizes of each column families.",
-            &["cf", "type"]
-        ).unwrap();
 
-    pub static ref STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC: GaugeVec =
-        register_gauge_vec!(
-            "tikv_engine_estimate_num_keys",
-            "Estimate num keys of each column families.",
-            &["cf"]
-        ).unwrap();
 
     pub static ref REGION_WRITTEN_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
@@ -161,5 +142,42 @@ lazy_static! {
         register_counter!(
             "tikv_raftstore_gc_raft_log_total",
             "Total number of GC raft log."
+        ).unwrap();
+
+    pub static ref SNAPSHOT_CF_KV_COUNT: HistogramVec =
+        register_histogram_vec!(
+            "tikv_snapshot_cf_kv_count",
+            "Total number of kv in each cf file of snapshot",
+            &["type"],
+            exponential_buckets(100.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref SNAPSHOT_CF_SIZE: HistogramVec =
+        register_histogram_vec!(
+            "tikv_snapshot_cf_size",
+            "Total size of each cf file of snapshot",
+            &["type"],
+            exponential_buckets(1024.0, 2.0, 22).unwrap()
+        ).unwrap();
+
+    pub static ref SNAPSHOT_BUILD_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_snapshot_build_time_duration_secs",
+            "Bucketed histogram of snapshot build time duration.",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref SNAPSHOT_KV_COUNT_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_snapshot_kv_count",
+            "Total number of kv in snapshot",
+             exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
+        ).unwrap();
+
+    pub static ref SNAPSHOT_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_snapshot_size",
+            "Size of snapshot",
+             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 }

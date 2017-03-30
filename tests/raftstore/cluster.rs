@@ -242,7 +242,7 @@ impl<T: Simulator> Cluster<T> {
             .map(|region| region.get_peers().into_iter().map(|p| p.get_store_id()).collect())
     }
 
-    fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
+    pub fn query_leader(&self, store_id: u64, region_id: u64) -> Option<metapb::Peer> {
         // To get region leader, we don't care real peer id, so use 0 instead.
         let peer = new_peer(store_id, 0);
         let find_leader = new_status_request(region_id, peer, new_region_leader_cmd());
@@ -569,7 +569,7 @@ impl<T: Simulator> Cluster<T> {
         let peer = new_peer(peer_id, peer_id);
         let req = new_status_request(region_id, peer, status_cmd);
         let resp = self.call_command(req, Duration::from_secs(5));
-        assert!(resp.is_ok(), format!("{:?}", resp));
+        assert!(resp.is_ok(), "{:?}", resp);
 
         let mut resp = resp.unwrap();
         assert!(resp.has_status_response());
@@ -593,8 +593,10 @@ impl<T: Simulator> Cluster<T> {
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
         let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
-        assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
-                format!("{:?}", resp));
+        assert_eq!(resp.get_admin_response().get_cmd_type(),
+                   AdminCmdType::TransferLeader,
+                   "{:?}",
+                   resp);
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {

@@ -85,7 +85,11 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut state: RegionLocalState =
         engine_3.get_msg(&keys::region_state_key(r1)).unwrap().unwrap();
     state.set_state(PeerState::Tombstone);
-    assert_eq!(state.write_to_bytes().unwrap(), existing_kvs[1].1);
+    if state.write_to_bytes().unwrap() != existing_kvs[1].1 {
+        let mut existing_state = RegionLocalState::new();
+        existing_state.merge_from_bytes(&existing_kvs[1].1).unwrap();
+        panic!("{:?} != {:?}", state, existing_state);
+    }
 
     // Send a stale raft message to peer (2, 2)
     let mut raft_msg = raft_serverpb::RaftMessage::new();
@@ -103,7 +107,8 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let region_status = new_status_request(r1, new_peer(2, 2), new_region_leader_cmd());
     let resp = cluster.call_command(region_status, Duration::from_secs(5)).unwrap();
     assert!(resp.get_header().get_error().has_region_not_found(),
-            format!("region must not found, but got {:?}", resp));
+            "region must not found, but got {:?}",
+            resp);
 }
 
 #[test]

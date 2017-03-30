@@ -23,11 +23,6 @@ quick_error!{
             cause(err)
             description(err.description())
         }
-        Codec(err: ::util::codec::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
         ClusterBootstrapped(cluster_id: u64) {
             description("cluster bootstrap error")
             display("cluster {} is already bootstrapped", cluster_id)
@@ -35,6 +30,11 @@ quick_error!{
         ClusterNotBootstrapped(cluster_id: u64) {
             description("cluster not bootstrap error")
             display("cluster {} is not bootstrapped", cluster_id)
+        }
+        Grpc(err: ::grpc::error::GrpcError) {
+            from()
+            cause(err)
+            description(err.description())
         }
         Other(err: Box<error::Error + Sync + Send>) {
             from()

@@ -26,6 +26,7 @@ mod peer_storage;
 mod snap;
 mod worker;
 mod metrics;
+mod engine_metrics;
 mod local_metrics;
 
 pub use self::msg::{Msg, Callback, Tick, SnapshotStatusMsg};
@@ -37,5 +38,5 @@ pub use self::bootstrap::{bootstrap_store, bootstrap_region, write_region, clear
 pub use self::engine::{Peekable, Iterable, Mutable};
 pub use self::peer_storage::{PeerStorage, do_snapshot, SnapState, RAFT_INIT_LOG_TERM,
                              RAFT_INIT_LOG_INDEX};
-pub use self::snap::{SnapKey, Snapshot, ApplyContext, SnapEntry, SnapManager, new_snap_mgr,
+pub use self::snap::{SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, SnapEntry, SnapManager,
                      check_abort, copy_snapshot};

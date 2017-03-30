@@ -70,9 +70,10 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
                                     false);
         debug!("requesting {:?}", get);
         let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
-        assert!(resp.get_header().has_error(), format!("{:?}", resp));
+        assert!(resp.get_header().has_error(), "{:?}", resp);
         assert!(resp.get_header().get_error().has_key_not_in_region(),
-                format!("{:?}", resp));
+                "{:?}",
+                resp);
 
     }
 }
@@ -155,7 +156,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
 
-    assert!(left != right);
+    assert_ne!(left, right);
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(right.get_start_key(), left.get_end_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
@@ -546,4 +547,43 @@ fn test_server_split_stale_epoch() {
 fn test_node_split_stale_epoch() {
     let mut cluster = new_node_cluster(0, 3);
     test_split_stale_epoch(&mut cluster);
+}
+
+
+// For the peer which is the leader of the region before split,
+// it should campaigns immediately. and then this peer may take the leadership earlier.
+// `test_quick_election_after_split` is a helper function for testing this feature.
+fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
+    // Calculate the reserved time before a new campaign after split.
+    let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval * 2);
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let region = cluster.get_region(b"k1");
+    let old_leader = cluster.leader_of_region(region.get_id()).unwrap();
+
+    cluster.must_split(&region, b"k2");
+
+    // Wait for the peer of new region to start campaign.
+    thread::sleep(reserved_time);
+
+    // The campaign should always succeeds in the ideal test environment.
+    let new_region = cluster.get_region(b"k3");
+    // Ensure the new leader is established for the newly split region, and it shares the
+    // same store with the leader of old region.
+    let new_leader = cluster.query_leader(old_leader.get_store_id(), new_region.get_id());
+    assert!(new_leader.is_some());
+}
+
+#[test]
+fn test_node_quick_election_after_split() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_quick_election_after_split(&mut cluster);
+}
+
+#[test]
+fn test_server_quick_election_after_split() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_quick_election_after_split(&mut cluster);
 }

@@ -335,6 +335,16 @@ impl<T: Storage> Raft<T> {
         self.raft_log.get_unstable().snapshot.as_ref()
     }
 
+    #[inline]
+    pub fn pending_read_count(&self) -> usize {
+        self.read_only.pending_read_count()
+    }
+
+    #[inline]
+    pub fn ready_read_count(&self) -> usize {
+        self.read_states.len()
+    }
+
     pub fn soft_state(&self) -> SoftState {
         SoftState {
             leader_id: self.leader_id,
@@ -369,6 +379,10 @@ impl<T: Storage> Raft<T> {
 
     pub fn get_heartbeat_timeout(&self) -> usize {
         self.heartbeat_timeout
+    }
+
+    pub fn get_randomized_election_timeout(&self) -> usize {
+        self.randomized_election_timeout
     }
 
     pub fn nodes(&self) -> Vec<u64> {
@@ -669,8 +683,9 @@ impl<T: Storage> Raft<T> {
 
     // TODO: revoke pub when there is a better way to test.
     pub fn become_candidate(&mut self) {
-        assert!(self.state != StateRole::Leader,
-                "invalid transition [leader -> candidate]");
+        assert_ne!(self.state,
+                   StateRole::Leader,
+                   "invalid transition [leader -> candidate]");
         let term = self.term + 1;
         self.reset(term);
         let id = self.id;
@@ -680,8 +695,9 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn become_pre_candidate(&mut self) {
-        assert!(self.state != StateRole::Leader,
-                "invalid transition [leader -> pre-candidate]");
+        assert_ne!(self.state,
+                   StateRole::Leader,
+                   "invalid transition [leader -> pre-candidate]");
         // Becoming a pre-candidate changes our state.
         // but doesn't change anything else. In particular it does not increase
         // self.term or change self.vote.
@@ -691,8 +707,9 @@ impl<T: Storage> Raft<T> {
 
     // TODO: revoke pub when there is a better way to test.
     pub fn become_leader(&mut self) {
-        assert!(self.state != StateRole::Follower,
-                "invalid transition [follower -> leader]");
+        assert_ne!(self.state,
+                   StateRole::Follower,
+                   "invalid transition [follower -> leader]");
         let term = self.term;
         self.reset(term);
         self.leader_id = self.id;
@@ -1232,6 +1249,12 @@ impl<T: Storage> Raft<T> {
                 return;
             }
             MessageType::MsgReadIndex => {
+                if self.raft_log.term(self.raft_log.committed).unwrap_or(0) != self.term {
+                    // Reject read only request when this leader has not committed any log entry
+                    // it its term.
+                    return;
+                }
+
                 if self.quorum() > 1 {
                     // thinking: use an interally defined context instead of the user given context.
                     // We can express this in terms of the term and index instead of

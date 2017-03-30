@@ -107,7 +107,10 @@ impl Cluster {
     }
 
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
-        Ok(self.stores[&store_id].store.clone())
+        match self.stores.get(&store_id) {
+            None => Err(box_err!("store {} not found", store_id)),
+            Some(s) => Ok(s.store.clone()),
+        }
     }
 
     fn get_region(&self, key: Vec<u8>) -> Option<metapb::Region> {
@@ -213,7 +216,7 @@ impl Cluster {
             // 3) pd is (1, 2), TiKV is (3)
             // 4) pd id (1), TiKV is (2, 3)
 
-            assert!(region_peer_len != cur_region_peer_len);
+            assert_ne!(region_peer_len, cur_region_peer_len);
 
             if cur_region_peer_len > region_peer_len {
                 // must pd is (1, 2), TiKV is (1)
@@ -252,7 +255,7 @@ impl Cluster {
             for store_id in self.stores.keys() {
                 if region.get_peers().iter().all(|x| x.get_store_id() != *store_id) {
                     let peer = new_peer(*store_id, self.alloc_id().unwrap());
-                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode);
+                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode.into());
                     change_peer.set_peer(peer.clone());
                     resp.set_change_peer(change_peer);
                     break;
@@ -265,7 +268,7 @@ impl Cluster {
                 .position(|x| x.get_store_id() != leader.get_store_id())
                 .unwrap();
 
-            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode);
+            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode.into());
             change_peer.set_peer(region.get_peers()[pos].clone());
             resp.set_change_peer(change_peer);
 

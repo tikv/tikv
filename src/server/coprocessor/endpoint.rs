@@ -31,7 +31,7 @@ use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
 
-use storage::{self, Engine, SnapshotStore, ScanMetrics, engine, Snapshot, Key, ScanMode};
+use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
 use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
@@ -108,10 +108,10 @@ pub struct RequestTask {
     req: Request,
     start_ts: Option<u64>,
     wait_time: Option<f64>,
-    scan_metrics: ScanMetrics,
     timer: Instant,
     // The deadline before which the task should be responded.
     deadline: Instant,
+    statistics: Statistics,
     on_resp: OnResponse,
 }
 
@@ -123,9 +123,9 @@ impl RequestTask {
             req: req,
             start_ts: None,
             wait_time: None,
-            scan_metrics: Default::default(),
             timer: timer,
             deadline: deadline,
+            statistics: Default::default(),
             on_resp: on_resp,
         }
     }
@@ -155,10 +155,10 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME.with_label_values(&["select", type_str])
             .observe(handle_time - wait_time);
 
-        let scanned_keys = self.scan_metrics.scanned_keys as f64;
+        let scanned_keys = self.statistics.total_op_count() as f64;
         COPR_SCAN_KEYS.with_label_values(&["select", type_str]).observe(scanned_keys);
-        let efficiency = self.scan_metrics.efficiency();
-        COPR_SCAN_EFFICIENCY.with_label_values(&["select", type_str]).observe(efficiency);
+        let inefficiency = self.statistics.inefficiency();
+        COPR_SCAN_INEFFICIENCY.with_label_values(&["select", type_str]).observe(inefficiency);
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
@@ -168,8 +168,8 @@ impl RequestTask {
                   type_str,
                   handle_time,
                   wait_time,
-                  self.scan_metrics.scanned_keys,
-                  efficiency,
+                  scanned_keys,
+                  inefficiency,
                   self.req.get_ranges().len(),
                   self.req.get_ranges().get(0));
         }
@@ -360,7 +360,7 @@ impl TiDbEndPoint {
 
     pub fn handle_select(&self, t: &mut RequestTask, sel: SelectRequest) -> Result<Response> {
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
-        let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.scan_metrics));
+        let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let mut range = t.req.get_ranges().to_vec();
         debug!("scanning range: {:?}", range);
         if ctx.core.desc_scan {
@@ -457,6 +457,10 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                 e.insert(v);
             } else {
                 let value = match values.get(col_id) {
+                    None if col.has_default_val() => {
+                        // TODO: optimize it to decode default value only once.
+                        box_try!(col.get_default_val().decode_col_value(ctx, col))
+                    }
                     None if mysql::has_not_null_flag(col.get_flag() as u64) => {
                         return Err(box_err!("column {} of {} is missing", col_id, h));
                     }
@@ -691,7 +695,7 @@ impl SelectContextCore {
         // set topn
         let mut topn = false;
         let mut desc_can = false;
-        if sel.get_order_by().len() > 0 {
+        if !sel.get_order_by().is_empty() {
             // order by pk,set desc_scan is enough
             if !sel.get_order_by()[0].has_expr() {
                 desc_can = sel.get_order_by().first().map_or(false, |o| o.get_desc());
@@ -803,6 +807,8 @@ impl SelectContextCore {
             }
             if col.get_pk_handle() {
                 box_try!(datum::encode_to(chunk.mut_rows_data(), &[get_pk(col, h)], false));
+            } else if col.has_default_val() {
+                chunk.mut_rows_data().extend_from_slice(col.get_default_val());
             } else if mysql::has_not_null_flag(col.get_flag() as u64) {
                 return Err(box_err!("column {} of {} is missing", col_id, h));
             } else {
@@ -922,7 +928,7 @@ fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
 
 pub struct SelectContext<'a> {
     snap: SnapshotStore<'a>,
-    scan_metrics: &'a mut ScanMetrics,
+    statistics: &'a mut Statistics,
     core: SelectContextCore,
     deadline: Instant,
 }
@@ -931,13 +937,13 @@ impl<'a> SelectContext<'a> {
     fn new(sel: SelectRequest,
            snap: SnapshotStore<'a>,
            deadline: Instant,
-           scan_metrics: &'a mut ScanMetrics)
+           statistics: &'a mut Statistics)
            -> Result<SelectContext<'a>> {
         Ok(SelectContext {
             core: try!(SelectContextCore::new(sel)),
             snap: snap,
             deadline: deadline,
-            scan_metrics: scan_metrics,
+            statistics: statistics,
         })
     }
 
@@ -974,8 +980,8 @@ impl<'a> SelectContext<'a> {
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
-            self.scan_metrics.scanned_keys += 1;
-            let value = match try!(self.snap.get(&Key::from_raw(range.get_start()))) {
+            let value = match try!(self.snap
+                .get(&Key::from_raw(range.get_start()), &mut self.statistics)) {
                 None => return Ok(0),
                 Some(v) => v,
             };
@@ -1002,21 +1008,22 @@ impl<'a> SelectContext<'a> {
                                                          ScanMode::Forward
                                                      },
                                                      self.key_only(),
-                                                     upper_bound));
+                                                     upper_bound,
+                                                     self.statistics));
             while self.core.limit > row_count {
                 if row_count & REQUEST_CHECKPOINT == 0 {
                     try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
                 }
                 let kv = if self.core.desc_scan {
-                    try!(scanner.reverse_seek(Key::from_raw(&seek_key), self.scan_metrics))
+                    try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
                 } else {
-                    try!(scanner.seek(Key::from_raw(&seek_key), self.scan_metrics))
+                    try!(scanner.seek(Key::from_raw(&seek_key)))
                 };
                 let (key, value) = match kv {
                     Some((key, value)) => (box_try!(key.raw()), value),
                     None => break,
                 };
-                if range.get_start() > &key || range.get_end() <= &key {
+                if range.get_start() > key.as_slice() || range.get_end() <= key.as_slice() {
                     debug!("key: {} out of range [{}, {})",
                            escape(&key),
                            escape(range.get_start()),
@@ -1075,21 +1082,22 @@ impl<'a> SelectContext<'a> {
                                                      ScanMode::Forward
                                                  },
                                                  self.key_only(),
-                                                 upper_bound));
+                                                 upper_bound,
+                                                 self.statistics));
         while row_cnt < self.core.limit {
             if row_cnt & REQUEST_CHECKPOINT == 0 {
                 try!(check_if_outdated(self.deadline, REQ_TYPE_SELECT));
             }
             let nk = if self.core.desc_scan {
-                try!(scanner.reverse_seek(Key::from_raw(&seek_key), self.scan_metrics))
+                try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
             } else {
-                try!(scanner.seek(Key::from_raw(&seek_key), self.scan_metrics))
+                try!(scanner.seek(Key::from_raw(&seek_key)))
             };
             let (key, val) = match nk {
                 Some((key, val)) => (box_try!(key.raw()), val),
                 None => break,
             };
-            if r.get_start() > &key || r.get_end() <= &key {
+            if r.get_start() > key.as_slice() || r.get_end() <= key.as_slice() {
                 debug!("key: {} out of range [{}, {})",
                        escape(&key),
                        escape(r.get_start()),

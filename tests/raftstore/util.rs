@@ -89,6 +89,7 @@ pub fn new_store_cfg() -> Config {
         max_leader_missing_duration: Duration::from_secs(3),
         report_region_flow_interval: 100, // 100ms
         raft_store_max_leader_lease: TimeDuration::milliseconds(25 * 10),
+        use_sst_file_snapshot: true,
         ..Config::default()
     }
 }
@@ -205,13 +206,6 @@ pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     cmd
 }
 
-pub fn new_compact_log_cmd(index: u64) -> AdminRequest {
-    let mut cmd = AdminRequest::new();
-    cmd.set_cmd_type(AdminCmdType::CompactLog);
-    cmd.mut_compact_log().set_compact_index(index);
-    cmd
-}
-
 pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::new();
     peer.set_store_id(store_id);
@@ -240,7 +234,7 @@ pub fn new_pd_change_peer(change_type: ConfChangeType,
                           peer: metapb::Peer)
                           -> RegionHeartbeatResponse {
     let mut change_peer = ChangePeer::new();
-    change_peer.set_change_type(change_type);
+    change_peer.set_change_type(change_type.into());
     change_peer.set_peer(peer);
 
     let mut resp = RegionHeartbeatResponse::new();

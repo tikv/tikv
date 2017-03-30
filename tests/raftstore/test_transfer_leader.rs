@@ -18,17 +18,27 @@ use super::node::new_node_cluster;
 use super::server::new_server_cluster;
 use kvproto::eraftpb::MessageType;
 use std::time::Duration;
+use std::thread;
 
-fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+    let reserved_time = Duration::from_millis(cluster.cfg.raft_store.raft_base_tick_interval *
+                                              cluster.cfg.raft_store.raft_heartbeat_ticks as u64);
     cluster.run();
 
     // transfer leader to (2, 2)
     cluster.must_transfer_leader(1, new_peer(2, 2));
 
-    // transfer leader to (3, 3)
-    cluster.must_transfer_leader(1, new_peer(3, 3));
-
     let mut region = cluster.get_region(b"k3");
+
+    // check if transfer leader is fast enough.
+    let admin_req = new_transfer_leader_cmd(new_peer(3, 3));
+    let mut req = new_admin_request(1, region.get_region_epoch(), admin_req);
+    req.mut_header().set_peer(new_peer(2, 2));
+    cluster.call_command(req, Duration::from_secs(3)).unwrap();
+    thread::sleep(reserved_time);
+    assert_eq!(cluster.query_leader(3, 1), Some(new_peer(3, 3)));
+
     let mut req = new_request(region.get_id(),
                               region.take_region_epoch(),
                               vec![new_put_cmd(b"k3", b"v3")],
@@ -42,15 +52,15 @@ fn test_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_server_transfer_leader() {
+fn test_server_basic_transfer_leader() {
     let mut cluster = new_server_cluster(0, 5);
-    test_transfer_leader(&mut cluster);
+    test_basic_transfer_leader(&mut cluster);
 }
 
 #[test]
-fn test_node_transfer_leader() {
+fn test_node_basic_transfer_leader() {
     let mut cluster = new_node_cluster(0, 5);
-    test_transfer_leader(&mut cluster);
+    test_basic_transfer_leader(&mut cluster);
 }
 
 fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -95,7 +105,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
         req.mut_header().set_peer(new_peer(id, id));
         debug!("requesting {:?}", req);
         let resp = cluster.call_command(req.clone(), Duration::from_secs(5)).unwrap();
-        assert!(!resp.get_header().has_error(), format!("{:?}", resp));
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v");
     }
 }
@@ -148,7 +158,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     cluster.transfer_leader(r1, new_peer(2, 2));
     let resp = cluster.call_command_on_leader(put, Duration::from_secs(5));
     // if it's transfering leader, resp will timeout.
-    assert!(resp.is_ok(), format!("{:?}", resp));
+    assert!(resp.is_ok(), "{:?}", resp);
 }
 
 #[test]

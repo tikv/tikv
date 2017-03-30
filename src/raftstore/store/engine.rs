@@ -77,6 +77,10 @@ impl Snapshot {
     pub fn cf_handle(&self, cf: &str) -> Result<&CFHandle> {
         rocksdb::get_cf_handle(&self.db, cf).map_err(Error::from)
     }
+
+    pub fn get_db(&self) -> Arc<DB> {
+        self.db.clone()
+    }
 }
 
 impl Debug for Snapshot {
@@ -151,33 +155,43 @@ pub trait Peekable {
     }
 }
 
-#[derive(Clone)]
-pub enum SeekMode {
-    TotalOrderSeek,
-    PrefixSeek,
+#[derive(Clone, PartialEq)]
+enum SeekMode {
+    TotalOrder,
+    Prefix,
 }
 
-#[derive(Clone)]
 pub struct IterOption {
-    pub upper_bound: Option<Vec<u8>>,
-    pub fill_cache: bool,
-    pub seek_mode: SeekMode,
+    upper_bound: Option<Vec<u8>>,
+    fill_cache: bool,
+    seek_mode: SeekMode,
 }
 
 impl IterOption {
-    pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool, seek_mode: SeekMode) -> IterOption {
+    pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool) -> IterOption {
         IterOption {
             upper_bound: upper_bound,
             fill_cache: fill_cache,
-            seek_mode: seek_mode,
+            seek_mode: SeekMode::TotalOrder,
         }
     }
 
+    pub fn use_prefix_seek(mut self) -> IterOption {
+        self.seek_mode = SeekMode::Prefix;
+        self
+    }
+
     pub fn total_order_seek_used(&self) -> bool {
-        match self.seek_mode {
-            SeekMode::TotalOrderSeek => true,
-            _ => false,
-        }
+        self.seek_mode == SeekMode::TotalOrder
+    }
+
+    pub fn upper_bound(&self) -> Option<&[u8]> {
+        self.upper_bound.as_ref().map(|v| v.as_slice())
+    }
+
+    pub fn set_upper_bound(mut self, bound: Vec<u8>) -> IterOption {
+        self.upper_bound = Some(bound);
+        self
     }
 }
 
@@ -186,7 +200,7 @@ impl Default for IterOption {
         IterOption {
             upper_bound: None,
             fill_cache: true,
-            seek_mode: SeekMode::TotalOrderSeek,
+            seek_mode: SeekMode::TotalOrder,
         }
     }
 }
@@ -201,11 +215,8 @@ pub trait Iterable {
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(self.new_iterator(IterOption::new(Some(end_key.to_vec()),
-                                                    fill_cache,
-                                                    SeekMode::TotalOrderSeek)),
-                  start_key,
-                  f)
+        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        scan_impl(self.new_iterator(iter_opt), start_key, f)
     }
 
     // like `scan`, only on a specific column family.
@@ -218,12 +229,8 @@ pub trait Iterable {
                   -> Result<()>
         where F: FnMut(&[u8], &[u8]) -> Result<bool>
     {
-        scan_impl(try!(self.new_iterator_cf(cf,
-                                            IterOption::new(Some(end_key.to_vec()),
-                                                            fill_cache,
-                                                            SeekMode::TotalOrderSeek))),
-                  start_key,
-                  f)
+        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        scan_impl(try!(self.new_iterator_cf(cf, iter_opt)), start_key, f)
     }
 
     // Seek the first key >= given key, if no found, return None.
@@ -399,10 +406,8 @@ pub fn delete_in_range_cf(db: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -
     let handle = try!(rocksdb::get_cf_handle(db, cf));
     try!(db.delete_file_in_range_cf(handle, start_key, end_key));
 
-    let mut it = try!(db.new_iterator_cf(cf,
-                                         IterOption::new(Some(end_key.to_vec()),
-                                                         false,
-                                                         SeekMode::TotalOrderSeek)));
+    let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
+    let mut it = try!(db.new_iterator_cf(cf, iter_opt));
 
     let mut wb = WriteBatch::new();
     it.seek(start_key.into());
@@ -442,7 +447,7 @@ mod tests {
 
     use super::*;
     use kvproto::metapb::Region;
-    use util::rocksdb;
+    use util::{rocksdb, HashMap};
 
     #[test]
     fn test_base() {
@@ -474,7 +479,7 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         r1 = engine.get_msg(key).unwrap().unwrap();
         r2 = snap.get_msg(key).unwrap().unwrap();
-        assert!(r1 != r2);
+        assert_ne!(r1, r2);
 
         let b: Option<Region> = engine.get_msg(b"missing_key").unwrap();
         assert!(b.is_none());
@@ -592,14 +597,15 @@ mod tests {
     #[test]
     fn test_delete_all_in_range() {
         let path = TempDir::new("var").unwrap();
-        let mut opt = Options::new();
-        opt.set_target_file_size_base(1024 * 1024);
-        opt.set_write_buffer_size(1024);
-        opt.compression(DBCompressionType::DBNo);
+        let mut db_opt = Options::new();
+        db_opt.set_target_file_size_base(1024 * 1024);
+        db_opt.set_write_buffer_size(1024);
+        db_opt.compression(DBCompressionType::DBNo);
 
-        let engine =
-            Arc::new(rocksdb::new_engine_opt(opt, path.path().to_str().unwrap(), &[], vec![])
-                .unwrap());
+        let engine = Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(),
+                                                      db_opt,
+                                                      HashMap::default())
+            .unwrap());
 
         let value = vec![0;1024];
         for i in 0..10 {
