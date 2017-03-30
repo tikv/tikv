@@ -55,7 +55,7 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // We should turn on this only in our tests.
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
-const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
+const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 60000; // 60 seconds
 
 const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 9 seconds
 

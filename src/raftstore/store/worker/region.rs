@@ -233,8 +233,8 @@ impl Runner {
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
-                assert!(status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst) ==
-                        JOB_STATUS_CANCELLING);
+                assert_eq!(status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
+                           JOB_STATUS_CANCELLING);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"]).inc();
             }
             Err(e) => {
