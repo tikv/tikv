@@ -28,7 +28,7 @@ use util::{escape, rocksdb};
 use raftstore::store::engine::{Mutable, Snapshot, Iterable, IterOption};
 use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, JOB_STATUS_FAILED,
                                      JOB_STATUS_CANCELLING, JOB_STATUS_PENDING, JOB_STATUS_RUNNING};
-use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyContext, keys,
+use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyOptions, keys,
                        Peekable};
 use raftstore::store::snap::{Error, Result};
 use storage::CF_RAFT;
@@ -204,17 +204,13 @@ impl Runner {
         }
         try!(check_abort(&abort));
         let timer = Instant::now();
-        let mut apply_context = ApplyContext {
+        let options = ApplyOptions {
             db: self.db.clone(),
             region: region.clone(),
             abort: abort.clone(),
             write_batch_size: self.batch_size,
-            snapshot_size: 0,
-            snapshot_kv_count: 0,
         };
-        try!(s.apply(&mut apply_context));
-        SNAPSHOT_KV_COUNT_HISTOGRAM.observe(apply_context.snapshot_kv_count as f64);
-        SNAPSHOT_SIZE_HISTOGRAM.observe(apply_context.snapshot_size as f64);
+        try!(s.apply(options));
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
         s.delete();
@@ -237,8 +233,8 @@ impl Runner {
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot for region {} is aborted.", region_id);
-                assert!(status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst) ==
-                        JOB_STATUS_CANCELLING);
+                assert_eq!(status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
+                           JOB_STATUS_CANCELLING);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "abort"]).inc();
             }
             Err(e) => {

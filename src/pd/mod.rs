@@ -14,12 +14,12 @@
 use std::vec::Vec;
 
 mod client;
-mod protocol;
 mod metrics;
 
 pub mod errors;
 pub use self::errors::{Result, Error};
 pub use self::client::RpcClient;
+pub use self::client::validate_endpoints;
 
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -89,7 +89,8 @@ pub trait PdClient: Send + Sync {
                         region: metapb::Region,
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>)
+                        pending_peers: Vec<metapb::Peer>,
+                        written_bytes: u64)
                         -> Result<pdpb::RegionHeartbeatResponse>;
 
     // Ask pd for split, pd will returns the new split region id.

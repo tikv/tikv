@@ -218,6 +218,7 @@ pub struct Peer {
 
     pub written_bytes: u64,
     pub written_keys: u64,
+    pub last_written_bytes: u64,
 
     is_appending_log: bool,
 }
@@ -313,6 +314,7 @@ impl Peer {
             leader_lease_expired_time: None,
             written_bytes: 0,
             written_keys: 0,
+            last_written_bytes: 0,
             is_appending_log: false,
         };
 
@@ -1415,6 +1417,7 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration),
             pending_peers: self.collect_pending_peers(),
+            written_bytes: self.last_written_bytes,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

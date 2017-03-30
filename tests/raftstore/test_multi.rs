@@ -77,7 +77,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     sleep_ms(800);
     cluster.reset_leader_of_region(1);
     let new_leader = cluster.leader_of_region(1).expect("leader should be elected.");
-    assert!(new_leader != last_leader);
+    assert_ne!(new_leader, last_leader);
 
     assert_eq!(cluster.get(key1), Some(value1.to_vec()));
 
