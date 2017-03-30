@@ -77,6 +77,10 @@ impl Snapshot {
     pub fn cf_handle(&self, cf: &str) -> Result<&CFHandle> {
         rocksdb::get_cf_handle(&self.db, cf).map_err(Error::from)
     }
+
+    pub fn get_db(&self) -> Arc<DB> {
+        self.db.clone()
+    }
 }
 
 impl Debug for Snapshot {
@@ -475,7 +479,7 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         r1 = engine.get_msg(key).unwrap().unwrap();
         r2 = snap.get_msg(key).unwrap().unwrap();
-        assert!(r1 != r2);
+        assert_ne!(r1, r2);
 
         let b: Option<Region> = engine.get_msg(b"missing_key").unwrap();
         assert!(b.is_none());
