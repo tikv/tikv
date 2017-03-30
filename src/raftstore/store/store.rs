@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::DB;
+use rocksdb::{DB, DBStatisticsTickerType as TickerType};
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
@@ -121,6 +121,8 @@ pub struct Store<T, C: 'static> {
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
     lock_cf_written_bytes: u64,
+
+    bytes_written: u64,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -196,6 +198,7 @@ impl<T, C> Store<T, C> {
             region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
             lock_cf_written_bytes: 0,
+            bytes_written: 0,
         };
         try!(s.init());
         Ok(s)
@@ -1592,6 +1595,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .set(apply_snapshot_count as f64);
 
         stats.set_start_time(self.start_time.sec as u32);
+
+        // report store write flow to pd
+        let bytes_written = self.engine.get_statistics_ticker_count(TickerType::BytesWritten);
+        let delta = bytes_written - self.bytes_written;
+        self.bytes_written = bytes_written;
+        stats.set_bytes_written(delta);
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
