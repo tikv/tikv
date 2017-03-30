@@ -203,7 +203,8 @@ mod tests {
                             _: metapb::Region,
                             _: metapb::Peer,
                             _: Vec<pdpb::PeerStats>,
-                            _: Vec<metapb::Peer>)
+                            _: Vec<metapb::Peer>,
+                            _: u64)
                             -> Result<pdpb::RegionHeartbeatResponse> {
             unimplemented!();
         }

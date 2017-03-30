@@ -1273,7 +1273,7 @@ mod v2 {
 
     impl Read for Snap {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            if buf.len() == 0 {
+            if buf.is_empty() {
                 return Ok(0);
             }
             while self.cf_index < self.cf_files.len() {
@@ -1299,7 +1299,7 @@ mod v2 {
 
     impl Write for Snap {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            if buf.len() == 0 {
+            if buf.is_empty() {
                 return Ok(0);
             }
 
@@ -1498,7 +1498,7 @@ mod v2 {
             let key = SnapKey::new(1, 1, 1);
             let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
             let display_path = Snap::get_display_path(&dir.into_path(), &prefix);
-            assert!(display_path != "");
+            assert_ne!(display_path, "");
         }
 
         #[test]

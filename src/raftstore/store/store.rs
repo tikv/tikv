@@ -23,7 +23,7 @@ use std::thread;
 use std::u64;
 
 use rocksdb::DB;
-use mio::{self, EventLoop, EventLoopBuilder, Sender};
+use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
 use uuid::Uuid;
@@ -127,12 +127,12 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     where T: Transport,
           C: AsyncPdClient
 {
-    let mut builder = EventLoopBuilder::new();
+    let mut config = EventLoopConfig::new();
     // To make raft base tick more accurate, timer tick should be small enough.
-    builder.timer_tick(Duration::from_millis(cfg.raft_base_tick_interval / MIO_TICK_RATIO));
-    builder.notify_capacity(cfg.notify_capacity);
-    builder.messages_per_tick(cfg.messages_per_tick);
-    let event_loop = try!(builder.build());
+    config.timer_tick_ms(cfg.raft_base_tick_interval / MIO_TICK_RATIO);
+    config.notify_capacity(cfg.notify_capacity);
+    config.messages_per_tick(cfg.messages_per_tick);
+    let event_loop = try!(EventLoop::configured(config));
     Ok(event_loop)
 }
 
@@ -1299,6 +1299,7 @@ impl<T: Transport, C: AsyncPdClient> Store<T, C> {
 
             self.region_written_bytes.observe(peer.written_bytes as f64);
             self.region_written_keys.observe(peer.written_keys as f64);
+            peer.last_written_bytes = peer.written_bytes;
             peer.written_bytes = 0;
             peer.written_keys = 0;
         }
@@ -1547,6 +1548,8 @@ impl<T: Transport, C: AsyncPdClient> Store<T, C> {
 
         let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
         used_size += self.snap_mgr.get_total_snap_size();
+
+        stats.set_used_size(used_size);
 
         let mut available = if capacity > used_size {
             capacity - used_size
@@ -1916,7 +1919,12 @@ fn register_timer<T: Transport, C: AsyncPdClient>(event_loop: &mut EventLoop<Sto
         // 0 delay means turn off the timer.
         return Ok(());
     }
-    box_try!(event_loop.timeout(tick, Duration::from_millis(delay)));
+    if let Err(e) = event_loop.timeout_ms(tick, delay) {
+        return Err(box_err!("failed to register timeout [{:?}, delay: {:?}ms]: {:?}",
+                            tick,
+                            delay,
+                            e));
+    }
     Ok(())
 }
 

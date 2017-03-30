@@ -44,6 +44,7 @@ pub enum Task {
         peer: metapb::Peer,
         down_peers: Vec<pdpb::PeerStats>,
         pending_peers: Vec<metapb::Peer>,
+        written_bytes: u64,
     },
     StoreHeartbeat { stats: pdpb::StoreStats },
     ReportSplit {
@@ -143,12 +144,17 @@ impl<T: AsyncPdClient> Runner<T> {
                         region: metapb::Region,
                         peer: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>) {
+                        pending_peers: Vec<metapb::Peer>,
+                        written_bytes: u64) {
         PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
 
         // Now we use put region protocol for heartbeat.
         match self.pd_client
-            .region_heartbeat(region.clone(), peer.clone(), down_peers, pending_peers)
+            .region_heartbeat(region.clone(),
+                              peer.clone(),
+                              down_peers,
+                              pending_peers,
+                              written_bytes)
             .wait() {
             Ok(mut resp) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
@@ -274,8 +280,8 @@ impl<T: AsyncPdClient> Runnable<Task> for Runner<T> {
             Task::AskSplit { region, split_key, peer } => {
                 self.handle_ask_split(region, split_key, peer)
             }
-            Task::Heartbeat { region, peer, down_peers, pending_peers } => {
-                self.handle_heartbeat(region, peer, down_peers, pending_peers)
+            Task::Heartbeat { region, peer, down_peers, pending_peers, written_bytes } => {
+                self.handle_heartbeat(region, peer, down_peers, pending_peers, written_bytes)
             }
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
             Task::ReportSplit { left, right } => self.handle_report_split(left, right),

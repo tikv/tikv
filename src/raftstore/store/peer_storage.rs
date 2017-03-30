@@ -1321,7 +1321,7 @@ mod test {
         let s2 = new_storage(sched, &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
-        assert!(ctx.last_term != snap1.get_metadata().get_term());
+        assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut wb = WriteBatch::new();
         s2.apply_snapshot(&mut ctx, &snap1, &mut wb).unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());

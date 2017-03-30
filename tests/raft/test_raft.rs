@@ -328,7 +328,7 @@ impl Network {
                     return false;
                 }
                 // hups never go over the network, so don't drop them but panic
-                assert!(m.get_msg_type() != MessageType::MsgHup, "unexpected msgHup");
+                assert_ne!(m.get_msg_type(), MessageType::MsgHup, "unexpected msgHup");
                 let perc = self.dropm
                     .get(&Connem {
                         from: m.get_from(),
@@ -2242,7 +2242,7 @@ fn test_bcast_beat() {
             }
             want_commit_map.remove(&m.get_to());
         }
-        if m.get_entries().len() != 0 {
+        if !m.get_entries().is_empty() {
             panic!("#{}: entries count = {}, want 0", i, m.get_entries().len());
         }
     }

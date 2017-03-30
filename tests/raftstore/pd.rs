@@ -216,7 +216,7 @@ impl Cluster {
             // 3) pd is (1, 2), TiKV is (3)
             // 4) pd id (1), TiKV is (2, 3)
 
-            assert!(region_peer_len != cur_region_peer_len);
+            assert_ne!(region_peer_len, cur_region_peer_len);
 
             if cur_region_peer_len > region_peer_len {
                 // must pd is (1, 2), TiKV is (1)
@@ -281,7 +281,8 @@ impl Cluster {
                         region: metapb::Region,
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>)
+                        pending_peers: Vec<metapb::Peer>,
+                        _: u64 /* written_bytes */)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in region.get_peers() {
             self.down_peers.remove(&peer.get_id());
@@ -558,10 +559,13 @@ mod sync {
                             region: metapb::Region,
                             leader: metapb::Peer,
                             down_peers: Vec<pdpb::PeerStats>,
-                            pending_peers: Vec<metapb::Peer>)
+                            pending_peers: Vec<metapb::Peer>,
+                            written_bytes: u64)
                             -> Result<pdpb::RegionHeartbeatResponse> {
             try!(self.check_bootstrap());
-            self.cluster.wl().region_heartbeat(region, leader, down_peers, pending_peers)
+            self.cluster
+                .wl()
+                .region_heartbeat(region, leader, down_peers, pending_peers, written_bytes)
         }
 
         fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
@@ -623,9 +627,15 @@ mod async {
                             region: metapb::Region,
                             leader: metapb::Peer,
                             down_peers: Vec<pdpb::PeerStats>,
-                            pending_peers: Vec<metapb::Peer>)
+                            pending_peers: Vec<metapb::Peer>,
+                            written_bytes: u64)
                             -> PdFuture<pdpb::RegionHeartbeatResponse> {
-            match PdClient::region_heartbeat(self, region, leader, down_peers, pending_peers) {
+            match PdClient::region_heartbeat(self,
+                                             region,
+                                             leader,
+                                             down_peers,
+                                             pending_peers,
+                                             written_bytes) {
                 Ok(ret) => future::ok(ret).boxed(),
                 Err(err) => future::err(err).boxed(),
             }

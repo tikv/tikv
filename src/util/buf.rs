@@ -52,7 +52,7 @@ impl PipeBuffer {
     }
 
     #[inline]
-    unsafe fn buf_as_slice_mut(&self) -> &mut [u8] {
+    unsafe fn buf_as_slice_mut(&mut self) -> &mut [u8] {
         slice::from_raw_parts_mut(self.buf.ptr(), self.buf.cap())
     }
 
@@ -67,6 +67,7 @@ impl PipeBuffer {
     }
 
     #[inline]
+    #[allow(len_zero)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -381,14 +382,14 @@ mod tests {
                     assert_eq!(s, &expected[0..l]);
                     input = &expected[l..];
                     assert_eq!(len - l, s.read_from(&mut input).unwrap());
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
                     assert_eq!(s, expected.as_slice());
 
                     input = padding.as_slice();
                     assert_eq!(cap - len, s.read_from(&mut input).unwrap());
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
                     let mut exp = expected.clone();
                     exp.extend_from_slice(&padding[..cap - len]);
                     assert_eq!(s, exp.as_slice());
@@ -417,16 +418,16 @@ mod tests {
                     {
                         let mut buf = w.as_mut_slice();
                         assert_eq!(l, s.write_to(&mut buf).unwrap());
-                        assert!(s.start != s.buf.cap());
-                        assert!(s.end != s.buf.cap());
+                        assert_ne!(s.start, s.buf.cap());
+                        assert_ne!(s.end, s.buf.cap());
                     }
                     assert_eq!(w, &expected[..l]);
                     assert_eq!(s, &expected[l..]);
 
                     let mut w = vec![0; cap];
                     assert_eq!(len - l, s.read(&mut w).unwrap());
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
                     assert_eq!(&w[..len - l], &expected[l..]);
                 }
             }
@@ -482,8 +483,8 @@ mod tests {
                     let mut input = expect.as_slice();
                     assert_eq!(l, s.read_from(&mut input).unwrap());
                     s.shrink_to(shrink);
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
 
                     assert_eq!(shrink, s.capacity());
                     if shrink > l {
@@ -513,8 +514,8 @@ mod tests {
                     assert_eq!(init, s.read_from(&mut input).unwrap());
                     assert_eq!(s, example.as_slice());
                     s.ensure(init + l);
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
                     assert_eq!(s, example.as_slice());
                     input = expect.as_slice();
 

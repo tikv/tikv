@@ -289,7 +289,8 @@ impl PdClient for RpcAsyncClient {
                         region: metapb::Region,
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>)
+                        pending_peers: Vec<metapb::Peer>,
+                        written_bytes: u64)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         let mut req = pdpb::RegionHeartbeatRequest::new();
         req.set_header(self.header());
@@ -297,6 +298,7 @@ impl PdClient for RpcAsyncClient {
         req.set_leader(leader);
         req.set_down_peers(RepeatedField::from_vec(down_peers));
         req.set_pending_peers(RepeatedField::from_vec(pending_peers));
+        req.set_bytes_written(written_bytes);
 
         let resp = try!(do_request(self, |client| client.RegionHeartbeat(req.clone())));
         try!(check_resp_header(resp.get_header()));
