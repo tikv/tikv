@@ -67,7 +67,7 @@ pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
 
     try!(wb.delete(&keys::region_state_key(region_id)));
 
-    // should clear raft initial state too. 
+    // should clear raft initial state too.
     let raft_cf = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
     try!(wb.delete_cf(raft_cf, &keys::raft_state_key(region_id)));
     try!(wb.delete_cf(raft_cf, &keys::apply_state_key(region_id)));
