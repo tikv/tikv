@@ -15,7 +15,7 @@ use std::usize;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
-use std::thread::Builder;
+use std::thread::{Builder, panicking};
 use std::result::Result;
 use std::boxed::FnBox;
 use super::HashMap;
@@ -51,9 +51,9 @@ struct GroupTaskPoolMeta {
     running_thread_num: usize,
     running_tasks_num: usize,
     waiting_tasks_num: usize,
-    // group_id=>count
+    // group_id => count
     running_tasks: HashMap<u64, usize>,
-    // group_id=> tasks array
+    // group_id => tasks array
     waiting_tasks: HashMap<u64, Vec<TaskMeta<'static>>>,
     stop_finished_sender: Sender<bool>, // send stop when running_thread_num turns 0
 }
@@ -102,9 +102,9 @@ impl GroupTaskPoolMeta {
     // is stopped. when all threads in the pool is stopped, it
     // would send out a message in stop_finished_sender. It always
     // happen in func Drop of GroupTaskPool
-    fn one_thread_stopped(&mut self) {
+    fn one_thread_stopped(&mut self, from_panic: bool) {
         self.running_thread_num -= 1;
-        if self.running_thread_num == 0 {
+        if !from_panic && self.running_thread_num == 0 {
             self.stop_finished_sender.send(true).unwrap();
         }
     }
@@ -193,6 +193,63 @@ impl GroupTaskPoolMeta {
     }
 }
 
+struct Sentinel<'a> {
+    name: Option<String>,
+    receiver: &'a Arc<Mutex<Receiver<bool>>>,
+    pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>,
+}
+
+impl<'a> Sentinel<'a> {
+    fn new(name: Option<String>,
+           receiver: &'a Arc<Mutex<Receiver<bool>>>,
+           pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>)
+           -> Sentinel<'a> {
+        {
+            let mut meta = pool_meta.lock().unwrap();
+            meta.new_thread_started().unwrap();
+        }
+        Sentinel {
+            name: name,
+            receiver: receiver,
+            pool_meta: pool_meta,
+        }
+    }
+
+    // wait to receive info from job_receiver,
+    // return false when get stop msg
+    fn wait(&self) -> bool {
+        // try to receive notify
+        let job_receiver = self.receiver.lock().unwrap();
+        job_receiver.recv().unwrap()
+    }
+
+    fn get_next_task(&mut self) -> Option<TaskMeta> {
+        // try to get task
+        let mut meta = self.pool_meta.lock().unwrap();
+        meta.pop_next_task()
+    }
+}
+
+impl<'a> Drop for Sentinel<'a> {
+    fn drop(&mut self) {
+        let is_panick = panicking();
+        // clear info from pool_meta.
+        {
+            let mut meta = self.pool_meta.lock().unwrap();
+            meta.one_thread_stopped(is_panick);
+        }
+
+        // Since in `tikv` any panic would be cached and make the
+        // `tikv` down. This block seems would never be covered in
+        // the product environment.
+        if is_panick {
+            spawn_in_pool(self.name.clone(),
+                          self.receiver.clone(),
+                          self.pool_meta.clone());
+        }
+    }
+}
+
 /// A group task pool used to execute tasks in parallel.
 /// Spawns `concurrency` threads to process tasks.
 /// each task would be pushed into the pool,and when a thread
@@ -214,6 +271,12 @@ impl GroupTaskPoolMeta {
 /// task cost the same time.
 ///
 /// ```
+/// extern crate tikv;
+/// use tikv::util::group_pool::GroupTaskPool;
+/// use std::thread::sleep;
+/// use std::time::Duration;
+/// use std::sync::mpsc::{Sender, Receiver, channel};
+///
 /// let concurrency = 2;
 /// let mut task_pool = GroupTaskPool::new(concurrency);
 /// let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
@@ -333,44 +396,20 @@ fn spawn_in_pool(name: Option<String>,
     }
 
     builder.spawn(move || {
+            let mut sentinel = Sentinel::new(name, &receiver, &tasks);
             // start new thread.
-            {
-                let mut meta = tasks.lock().unwrap();
-                meta.new_thread_started().unwrap();
-            }
             loop {
-                // try to receive notify
-                {
-                    let job_receiver = receiver.lock().unwrap();
-                    let job = job_receiver.recv().unwrap();
-                    if !job {
-                        break;
-                    }
+                if !sentinel.wait() {
+                    break;
                 }
-
-                // try to get task
-                let task = {
-                    let mut meta = tasks.lock().unwrap();
-                    meta.pop_next_task()
-                };
-
                 // handle task
-                // TODO:when a task is panic,the number of thread would
+                // when a task is panic,the number of thread would
                 // be less of one, a new thread should begin.
-                // Since in `tikv` any panic would be cached and make the
-                // `tikv` down. This work seems would never be covered, we
-                // would like support it in the future.
-                if let Some(task_meta) = task {
+                if let Some(task_meta) = sentinel.get_next_task() {
                     task_meta.task.call_box(());
                     let mut meta = tasks.lock().unwrap();
                     meta.finished_task(task_meta.group_id);
                 }
-            }
-
-            // clear current thread in meta pool
-            {
-                let mut meta = tasks.lock().unwrap();
-                meta.one_thread_stopped();
             }
         })
         .unwrap();
@@ -451,21 +490,20 @@ mod test {
         // make sure the big task is running.
         sleep(sleep_duration / 4);
 
-        // push 10 tasks of group_with_big_task's job into pool.
-        for _ in 0..10 {
-            let sender = jtx.clone();
-            task_pool.execute(group_with_big_task, move || {
-                sleep(sleep_duration);
-                sender.send(group_with_big_task).unwrap();
-            });
-        }
-
         // push 1 task for each group_id in [0..10) into pool.
         for group_id in 0..10 {
             let sender = jtx.clone();
             task_pool.execute(group_id, move || {
                 sleep(sleep_duration);
                 sender.send(group_id).unwrap();
+            });
+        }
+        // push 10 tasks of group_with_big_task's job into pool.
+        for _ in 0..10 {
+            let sender = jtx.clone();
+            task_pool.execute(group_with_big_task, move || {
+                sleep(sleep_duration);
+                sender.send(group_with_big_task).unwrap();
             });
         }
 
