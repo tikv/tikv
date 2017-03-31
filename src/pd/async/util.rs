@@ -35,15 +35,14 @@ use super::super::Result;
 use super::super::Error;
 use super::client::try_connect_leader;
 
-#[derive(Debug)]
-struct Bundle<C, M> {
-    client: C,
-    members: M,
+struct Bundle {
+    client: Arc<PDAsyncClient>,
+    members: GetMembersResponse,
 }
 
 /// Get a leader client asynchronous.
 pub struct LeaderClient {
-    inner: Arc<RwLock<Bundle<Arc<PDAsyncClient>, GetMembersResponse>>>,
+    inner: Arc<RwLock<Bundle>>,
 }
 
 impl LeaderClient {
@@ -78,11 +77,7 @@ impl LeaderClient {
         bundle.client = Arc::new(client);
     }
 
-    pub fn clone_client(&self) -> Arc<PDAsyncClient> {
-        self.inner.rl().client.clone()
-    }
-
-    pub fn clone_members(&self) -> GetMembersResponse {
+    pub fn get_members(&self) -> GetMembersResponse {
         self.inner.rl().members.clone()
     }
 
@@ -94,7 +89,7 @@ impl LeaderClient {
 
 pub struct GetClient<Req, Resp, F> {
     retry_count: usize,
-    bundle: Arc<RwLock<Bundle<Arc<PDAsyncClient>, GetMembersResponse>>>,
+    bundle: Arc<RwLock<Bundle>>,
     req: Req,
     resp: Option<Result<Resp>>,
     func: F,

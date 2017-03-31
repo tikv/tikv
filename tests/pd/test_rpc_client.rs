@@ -25,8 +25,6 @@ use super::mock::Server as MockServer;
 
 #[test]
 fn test_rpc_client() {
-    use tikv::pd::PdClient;
-
     let eps = "http://127.0.0.1:52729".to_owned();
 
     let se = Arc::new(Service::new(vec![eps.clone()]));
@@ -108,7 +106,7 @@ fn test_retry_async() {
 
     for _ in 0..5 {
         let region = client.get_region_by_id_async(1);
-        Future::wait(region).unwrap();
+        region.wait().unwrap();
     }
 }
 
@@ -134,7 +132,7 @@ fn test_change_leader_async() {
 
     for _ in 0..5 {
         let region = client.get_region_by_id_async(1);
-        Future::wait(region).ok();
+        region.wait().ok();
 
         let new = client.get_leader();
         if new != leader {

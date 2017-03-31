@@ -67,7 +67,7 @@ impl RpcClient {
 
     // For tests
     pub fn get_leader(&self) -> Member {
-        self.inner.clone_members().take_leader()
+        self.inner.get_members().take_leader()
     }
 }
 
@@ -136,7 +136,7 @@ fn connect(addr: &str) -> Result<(PDAsyncClient, GetMembersResponse)> {
     PDAsyncClient::new(host, port, false, conf)
         .and_then(|client| {
             // try request.
-            match Future::wait(client.GetMembers(GetMembersRequest::new())) {
+            match client.GetMembers(GetMembersRequest::new()).wait() {
                 Ok(resp) => Ok((client, resp)),
                 Err(e) => Err(e),
             }
@@ -191,7 +191,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = Future::wait(f(&client.inner.get_client()));
+            let r = f(&client.inner.get_client()).wait();
             timer.observe_duration();
             r
         };
@@ -202,7 +202,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                match try_connect_leader(&client.inner.clone_members()) {
+                match try_connect_leader(&client.inner.get_members()) {
                     Ok((cli, mbrs)) => {
                         client.inner.set_client(cli);
                         client.inner.set_members(mbrs);

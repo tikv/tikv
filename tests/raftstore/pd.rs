@@ -539,7 +539,6 @@ impl PdClient for TestPdClient {
 
     fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
         try!(self.check_bootstrap());
-
         self.cluster.rl().get_region_by_id(region_id)
     }
 
