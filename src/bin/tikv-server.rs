@@ -13,6 +13,11 @@
 
 #![feature(plugin)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
+#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
+
+// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
+#![allow(never_loop)]
+#![allow(needless_pass_by_value)]
 
 extern crate tikv;
 extern crate getopts;
@@ -47,7 +52,7 @@ use mio::EventLoop;
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
-use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
+use tikv::storage::{Storage, TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
@@ -58,8 +63,8 @@ use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
 use tikv::raftstore::store::{self, SnapManager};
+use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
-use tikv::pd::RpcClient;
 use tikv::util::time_monitor::TimeMonitor;
 
 const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
@@ -625,6 +630,8 @@ fn build_cfg(matches: &Matches,
     cfg_u64(&mut cfg.raft_store.consistency_check_tick_interval,
             config,
             "raftstore.consistency-check-interval");
+    cfg.raft_store.use_sst_file_snapshot =
+        get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(false));
     cfg_usize(&mut cfg.storage.sched_notify_capacity,
               config,
               "storage.scheduler-notify-capacity");
@@ -654,15 +661,16 @@ fn build_raftkv(config: &toml::Value,
                 -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
-    let opts = get_rocksdb_db_option(config);
-    let cfs_opts = vec![get_rocksdb_default_cf_option(config, total_mem),
-                        get_rocksdb_lock_cf_option(config),
-                        get_rocksdb_write_cf_option(config, total_mem),
-                        get_rocksdb_raftlog_cf_option(config, total_mem)];
+    let db_opts = get_rocksdb_db_option(config);
+    let mut cfs_opts = HashMap::default();
+    cfs_opts.insert(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem));
+    cfs_opts.insert(CF_LOCK, get_rocksdb_lock_cf_option(config));
+    cfs_opts.insert(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem));
+    cfs_opts.insert(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem));
     let mut db_path = path.clone();
     db_path.push("db");
     let engine =
-        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), ALL_CFS, cfs_opts)
+        Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), db_opts, cfs_opts)
             .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
@@ -671,7 +679,9 @@ fn build_raftkv(config: &toml::Value,
     let mut snap_path = path.clone();
     snap_path.push("snap");
     let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = SnapManager::new(snap_path, Some(node.get_sendch()));
+    let snap_mgr = SnapManager::new(snap_path,
+                                    Some(node.get_sendch()),
+                                    cfg.raft_store.use_sst_file_snapshot);
 
     node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
@@ -893,8 +903,10 @@ fn main() {
         }
     }
 
-    let pd_client = RpcClient::new(&pd_endpoints).unwrap();
-    let cluster_id = pd_client.cluster_id;
+    let pd_client = RpcClient::new(&pd_endpoints)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let cluster_id = pd_client.get_cluster_id()
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     let total_cpu_num = cpu_num().unwrap();
     // return  memory in KB.

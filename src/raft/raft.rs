@@ -683,8 +683,9 @@ impl<T: Storage> Raft<T> {
 
     // TODO: revoke pub when there is a better way to test.
     pub fn become_candidate(&mut self) {
-        assert!(self.state != StateRole::Leader,
-                "invalid transition [leader -> candidate]");
+        assert_ne!(self.state,
+                   StateRole::Leader,
+                   "invalid transition [leader -> candidate]");
         let term = self.term + 1;
         self.reset(term);
         let id = self.id;
@@ -694,8 +695,9 @@ impl<T: Storage> Raft<T> {
     }
 
     pub fn become_pre_candidate(&mut self) {
-        assert!(self.state != StateRole::Leader,
-                "invalid transition [leader -> pre-candidate]");
+        assert_ne!(self.state,
+                   StateRole::Leader,
+                   "invalid transition [leader -> pre-candidate]");
         // Becoming a pre-candidate changes our state.
         // but doesn't change anything else. In particular it does not increase
         // self.term or change self.vote.
@@ -705,8 +707,9 @@ impl<T: Storage> Raft<T> {
 
     // TODO: revoke pub when there is a better way to test.
     pub fn become_leader(&mut self) {
-        assert!(self.state != StateRole::Follower,
-                "invalid transition [follower -> leader]");
+        assert_ne!(self.state,
+                   StateRole::Follower,
+                   "invalid transition [follower -> leader]");
         let term = self.term;
         self.reset(term);
         self.leader_id = self.id;
