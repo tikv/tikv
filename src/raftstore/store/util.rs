@@ -99,8 +99,11 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
 #[cfg(test)]
 mod tests {
     use kvproto::metapb;
+    use kvproto::raft_serverpb::RaftMessage;
+    use kvproto::eraftpb::{Message, ConfChangeType, MessageType};
 
     use super::*;
+    use raftstore::store::peer_storage;
 
     // Tests the util function `check_key_in_region`.
     #[test]
@@ -138,5 +141,46 @@ mod tests {
         assert!(remove_peer(&mut region, 1).is_none());
         assert!(find_peer(&region, 1).is_none());
 
+    }
+
+    #[test]
+    fn test_first_vote_msg() {
+        let tbl = vec![(MessageType::MsgRequestVote, peer_storage::RAFT_INIT_LOG_TERM + 1, true),
+                       (MessageType::MsgRequestVote, peer_storage::RAFT_INIT_LOG_TERM, false),
+                       (MessageType::MsgHup, peer_storage::RAFT_INIT_LOG_TERM + 1, false)];
+
+        for (msg_type, term, is_vote) in tbl {
+            let mut msg = Message::new();
+            msg.set_msg_type(msg_type);
+            msg.set_term(term);
+
+            let mut m = RaftMessage::new();
+            m.set_message(msg);
+            assert_eq!(is_first_vote_msg(&m), is_vote);
+        }
+    }
+
+    #[test]
+    fn test_conf_change_type_str() {
+        assert_eq!(conf_change_type_str(&ConfChangeType::AddNode),
+                   STR_CONF_CHANGE_ADD_NODE);
+        assert_eq!(conf_change_type_str(&ConfChangeType::RemoveNode),
+                   STR_CONF_CHANGE_REMOVE_NODE);
+    }
+
+    #[test]
+    fn test_epoch_stale() {
+        let mut epoch = metapb::RegionEpoch::new();
+        epoch.set_version(10);
+        epoch.set_conf_ver(10);
+
+        let tbl = vec![(11, 10, true), (10, 11, true), (10, 10, false), (10, 9, false)];
+
+        for (version, conf_version, is_stale) in tbl {
+            let mut check_epoch = metapb::RegionEpoch::new();
+            check_epoch.set_version(version);
+            check_epoch.set_conf_ver(conf_version);
+            assert_eq!(is_epoch_stale(&epoch, &check_epoch), is_stale);
+        }
     }
 }
