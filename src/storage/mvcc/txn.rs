@@ -177,7 +177,9 @@ impl<'a> MvccTxn<'a> {
                         Err(Error::TxnLockNotFound)
                     }
                     // Committed by concurrent transaction.
-                    _ => Ok(()),
+                    Some((_, WriteType::Put)) |
+                    Some((_, WriteType::Delete)) |
+                    Some((_, WriteType::Lock)) => Ok(()),
                 };
             }
         };
