@@ -17,20 +17,23 @@ use std::sync::TryLockError;
 use std::time::Instant;
 use std::time::Duration;
 use std::thread;
+use std::collections::HashSet;
 
+use grpc;
+use url::Url;
+use rand::{self, Rng};
 use futures::Poll;
 use futures::Async;
 use futures::Future;
 use futures::future::ok;
 use futures::future::{self, loop_fn, Loop};
 
-use kvproto::pdpb::GetMembersResponse;
+use kvproto::pdpb::{GetMembersRequest, GetMembersResponse};
 use kvproto::pdpb_grpc::PDAsync;
 use kvproto::pdpb_grpc::PDAsyncClient;
 
 use util::HandyRwLock;
 
-use super::sync;
 use super::super::PdFuture;
 use super::super::Result;
 use super::super::Error;
@@ -41,6 +44,7 @@ struct Bundle<C, M> {
     members: M,
 }
 
+/// Get a leader client asynchronous.
 pub struct LeaderClient {
     inner: Arc<RwLock<Bundle<Arc<PDAsyncClient>, GetMembersResponse>>>,
 }
@@ -146,7 +150,7 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
         let start = Instant::now();
         // Go to sync world.
         let members = self.bundle.rl().members.clone();
-        match sync::try_connect_leader(&members) {
+        match try_connect_leader(&members) {
             Ok((client, members)) => {
                 let mut bundle = self.bundle.wl();
                 if members != bundle.members {
@@ -172,6 +176,8 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
         self.resp
     }
 
+    /// Returns a Future, it is resolves once a future returned by the closure
+    /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn reconnect(self) -> PdFuture<Resp> {
         let this = self;
         loop_fn(this, |this| {
@@ -220,6 +226,7 @@ impl<Req, Resp, F> Future for GetClientRead<Req, Resp, F> {
 
 // TODO: GetClientWrite
 
+/// Retry a request asynchronous.
 pub struct Request<C, Req, Resp, F> {
     retry_count: usize,
     client: Arc<C>,
@@ -270,6 +277,8 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
         self.resp
     }
 
+    /// Returns a Future, it is resolves once a future returned by the closure
+    /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn retry(self) -> PdFuture<Resp> {
         let retry_req = self;
         loop_fn(retry_req, |retry_req| {
@@ -292,4 +301,115 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
             })
             .boxed()
     }
+}
+
+pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMembersResponse)> {
+    if endpoints.is_empty() {
+        return Err(box_err!("empty PD endpoints"));
+    }
+
+    let len = endpoints.len();
+    let mut endpoints_set = HashSet::with_capacity(len);
+
+    let mut members = None;
+    let mut cluster_id = None;
+    for ep in endpoints {
+        if !endpoints_set.insert(ep) {
+            return Err(box_err!("duplicate PD endpoint {}", ep));
+        }
+
+        let (_, resp) = match connect(ep) {
+            Ok(resp) => resp,
+            // Ignore failed PD node.
+            Err(e) => {
+                error!("PD endpoint {} failed to respond: {:?}", ep, e);
+                continue;
+            }
+        };
+
+        // Check cluster ID.
+        let cid = resp.get_header().get_cluster_id();
+        if let Some(sample) = cluster_id {
+            if sample != cid {
+                return Err(box_err!("PD response cluster_id mismatch, want {}, got {}",
+                                    sample,
+                                    cid));
+            }
+        } else {
+            cluster_id = Some(cid);
+        }
+        // TODO: check all fields later?
+
+        if members.is_none() {
+            members = Some(resp);
+        }
+    }
+
+    match members {
+        Some(members) => {
+            let (client, members) = try!(try_connect_leader(&members));
+            info!("All PD endpoints are consistent: {:?}", endpoints);
+            Ok((client, members))
+        }
+        _ => Err(box_err!("PD cluster failed to respond")),
+    }
+}
+
+fn connect(addr: &str) -> Result<(PDAsyncClient, GetMembersResponse)> {
+    debug!("connect to PD endpoint: {:?}", addr);
+    let ep = box_try!(Url::parse(addr));
+    let host = ep.host_str().unwrap();
+    let port = ep.port().unwrap();
+
+    let mut conf: grpc::client::GrpcClientConf = Default::default();
+    conf.http.no_delay = Some(true);
+
+    // TODO: It seems that `new` always return an Ok(_).
+    PDAsyncClient::new(host, port, false, conf)
+        .and_then(|client| {
+            // try request.
+            match Future::wait(client.GetMembers(GetMembersRequest::new())) {
+                Ok(resp) => Ok((client, resp)),
+                Err(e) => Err(e),
+            }
+        })
+        .map_err(Error::Grpc)
+}
+
+pub fn try_connect_leader(previous: &GetMembersResponse)
+                          -> Result<(PDAsyncClient, GetMembersResponse)> {
+    // Try to connect other members.
+    // Randomize endpoints.
+    let members = previous.get_members();
+    let mut indexes: Vec<usize> = (0..members.len()).collect();
+    rand::thread_rng().shuffle(&mut indexes);
+
+    let mut resp = None;
+    'outer: for i in indexes {
+        for ep in members[i].get_client_urls() {
+            match connect(ep.as_str()) {
+                Ok((_, r)) => {
+                    resp = Some(r);
+                    break 'outer;
+                }
+                Err(e) => {
+                    error!("failed to connect to {}, {:?}", ep, e);
+                    continue;
+                }
+            }
+        }
+    }
+
+    // Then try to connect the PD cluster leader.
+    if let Some(resp) = resp {
+        let leader = resp.get_leader().clone();
+        for ep in leader.get_client_urls() {
+            if let Ok((client, _)) = connect(ep.as_str()) {
+                info!("connect to PD leader {:?}", ep);
+                return Ok((client, resp));
+            }
+        }
+    }
+
+    Err(box_err!("failed to connect to {:?}", members))
 }

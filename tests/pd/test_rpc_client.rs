@@ -18,7 +18,7 @@ use std::time::Duration;
 use futures::Future;
 use kvproto::metapb;
 
-use tikv::pd::{RpcClient, validate_endpoints};
+use tikv::pd::{PdClient, RpcClient, validate_endpoints};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -92,43 +92,7 @@ fn test_validate_endpoints() {
 }
 
 #[test]
-fn test_change_leader_sync() {
-    use tikv::pd::PdClient;
-
-    let mut eps = vec![
-        "http://127.0.0.1:43079".to_owned(),
-        "http://127.0.0.1:53079".to_owned(),
-        "http://127.0.0.1:63079".to_owned(),
-    ];
-
-    let se = Arc::new(Service::new(eps.clone()));
-    let lc = Arc::new(LeaderChange::new(eps.clone()));
-
-    let _server_a = MockServer::run("127.0.0.1:43079", se.clone(), Some(lc.clone()));
-    let _server_b = MockServer::run("127.0.0.1:53079", se.clone(), Some(lc.clone()));
-    let _server_c = MockServer::run("127.0.0.1:63079", se.clone(), Some(lc.clone()));
-
-    thread::sleep(Duration::from_secs(1));
-
-    let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
-    let leader = client.get_leader();
-
-    for _ in 0..5 {
-        client.is_cluster_bootstrapped().unwrap();
-        let new = client.get_leader();
-        if new != leader {
-            return;
-        }
-        thread::sleep(LeaderChange::get_leader_interval());
-    }
-
-    panic!("failed, leader should changed");
-}
-
-#[test]
 fn test_retry_async() {
-    use tikv::pd::AsyncPdClient;
-
     let mut eps = vec![
         "http://127.0.0.1:63080".to_owned(),
     ];
@@ -143,15 +107,13 @@ fn test_retry_async() {
     let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
 
     for _ in 0..5 {
-        let region = client.get_region_by_id(1);
+        let region = client.get_region_by_id_async(1);
         Future::wait(region).unwrap();
     }
 }
 
 #[test]
 fn test_change_leader_async() {
-    use tikv::pd::AsyncPdClient;
-
     let mut eps = vec![
         "http://127.0.0.1:42979".to_owned(),
         "http://127.0.0.1:52979".to_owned(),
@@ -171,7 +133,7 @@ fn test_change_leader_async() {
     let leader = client.get_leader();
 
     for _ in 0..5 {
-        let region = client.get_region_by_id(1);
+        let region = client.get_region_by_id_async(1);
         Future::wait(region).ok();
 
         let new = client.get_leader();

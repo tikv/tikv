@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 
 use uuid::Uuid;
-use futures::Future;
 
 use kvproto::metapb;
 use kvproto::eraftpb::ConfChangeType;
@@ -26,7 +25,7 @@ use kvproto::pdpb;
 use util::worker::Runnable;
 use util::escape;
 use util::transport::SendCh;
-use pd::AsyncPdClient;
+use pd::PdClient;
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
 
@@ -84,12 +83,12 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<T: AsyncPdClient> {
+pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
 }
 
-impl<T: AsyncPdClient> Runner<T> {
+impl<T: PdClient> Runner<T> {
     pub fn new(pd_client: Arc<T>, ch: SendCh<Msg>) -> Runner<T> {
         Runner {
             pd_client: pd_client,
@@ -123,7 +122,7 @@ impl<T: AsyncPdClient> Runner<T> {
     fn handle_ask_split(&self, region: metapb::Region, split_key: Vec<u8>, peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "all"]).inc();
 
-        match self.pd_client.ask_split(region.clone()).wait() {
+        match self.pd_client.ask_split(region.clone()) {
             Ok(mut resp) => {
                 info!("[region {}] try to split with new region id {} for region {:?}",
                       region.get_id(),
@@ -154,8 +153,7 @@ impl<T: AsyncPdClient> Runner<T> {
                               peer.clone(),
                               down_peers,
                               pending_peers,
-                              written_bytes)
-            .wait() {
+                              written_bytes) {
             Ok(mut resp) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
 
@@ -192,7 +190,7 @@ impl<T: AsyncPdClient> Runner<T> {
     }
 
     fn handle_store_heartbeat(&self, stats: pdpb::StoreStats) {
-        if let Err(e) = self.pd_client.store_heartbeat(stats).wait() {
+        if let Err(e) = self.pd_client.store_heartbeat(stats) {
             error!("store heartbeat failed {:?}", e);
         }
     }
@@ -200,7 +198,7 @@ impl<T: AsyncPdClient> Runner<T> {
     fn handle_report_split(&self, left: metapb::Region, right: metapb::Region) {
         PD_REQ_COUNTER_VEC.with_label_values(&["report split", "all"]).inc();
 
-        if let Err(e) = self.pd_client.report_split(left, right).wait() {
+        if let Err(e) = self.pd_client.report_split(left, right) {
             error!("report split failed {:?}", e);
         }
         PD_REQ_COUNTER_VEC.with_label_values(&["report split", "success"]).inc();
@@ -226,7 +224,7 @@ impl<T: AsyncPdClient> Runner<T> {
 
     fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["get region", "all"]).inc();
-        match self.pd_client.get_region_by_id(local_region.get_id()).wait() {
+        match self.pd_client.get_region_by_id(local_region.get_id()) {
             Ok(Some(pd_region)) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["get region", "success"]).inc();
                 if is_epoch_stale(pd_region.get_region_epoch(),
@@ -272,7 +270,7 @@ impl<T: AsyncPdClient> Runner<T> {
     }
 }
 
-impl<T: AsyncPdClient> Runnable<Task> for Runner<T> {
+impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         debug!("executing task {}", task);
 

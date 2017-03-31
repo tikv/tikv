@@ -12,8 +12,7 @@
 // limitations under the License.
 
 mod client;
-mod sync;
 mod util;
 
-pub use self::client::RpcAsyncClient;
-pub use self::sync::validate_endpoints;
+pub use self::client::RpcClient;
+pub use self::util::validate_endpoints;

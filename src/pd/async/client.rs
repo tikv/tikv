@@ -14,28 +14,26 @@
 use std::fmt;
 
 use protobuf::RepeatedField;
-
 use futures::Future;
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::pdpb_grpc::PDAsync;
 
-use super::super::{Result, Error, PdFuture};
-use super::super::AsyncPdClient;
-use super::validate_endpoints;
-
+use super::super::PdFuture;
+use super::super::{Result, Error, PdClient};
 use super::util::LeaderClient;
 use super::util::Request;
+use super::util::validate_endpoints;
 
 // TODO: revoke pubs.
-pub struct RpcAsyncClient {
+pub struct RpcClient {
     pub cluster_id: u64,
     pub inner: LeaderClient,
 }
 
-impl RpcAsyncClient {
-    pub fn new(endpoints: &str) -> Result<RpcAsyncClient> {
+impl RpcClient {
+    pub fn new(endpoints: &str) -> Result<RpcClient> {
         let endpoints: Vec<_> = endpoints.split(',')
             .map(|s| if !s.starts_with("http://") {
                 format!("http://{}", s)
@@ -46,7 +44,7 @@ impl RpcAsyncClient {
 
         let (client, members) = try!(validate_endpoints(&endpoints));
 
-        Ok(RpcAsyncClient {
+        Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
             inner: LeaderClient::new(client, members),
         })
@@ -73,7 +71,7 @@ fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
     Err(box_err!(err.get_message()))
 }
 
-impl fmt::Debug for RpcAsyncClient {
+impl fmt::Debug for RpcClient {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt,
                "PD gRPC Client connects to cluster {:?}",
@@ -84,9 +82,172 @@ impl fmt::Debug for RpcAsyncClient {
 const LEADER_CHANGE_RETRY: usize = 10;
 const REQUEST_RETRY: usize = 10;
 
-impl AsyncPdClient for RpcAsyncClient {
+impl PdClient for RpcClient {
+    fn get_cluster_id(&self) -> Result<u64> {
+        Ok(self.cluster_id)
+    }
+
+    fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()> {
+        let mut req = pdpb::BootstrapRequest::new();
+        req.set_header(self.header());
+        req.set_store(stores);
+        req.set_region(region);
+
+        self.inner
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
+                    client.Bootstrap(req)
+                        .map_err(Error::Grpc)
+                        .and_then(|resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(())
+                        })
+                        .boxed()
+                });
+
+                retry_req.retry()
+            })
+            .reconnect()
+            .wait()
+    }
+
+    fn is_cluster_bootstrapped(&self) -> Result<bool> {
+        let mut req = pdpb::IsBootstrappedRequest::new();
+        req.set_header(self.header());
+
+        self.inner
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
+                    client.IsBootstrapped(req)
+                        .map_err(Error::Grpc)
+                        .and_then(|resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(resp.get_bootstrapped())
+                        })
+                        .boxed()
+                });
+
+                retry_req.retry()
+            })
+            .reconnect()
+            .wait()
+    }
+
+    fn alloc_id(&self) -> Result<u64> {
+        let mut req = pdpb::AllocIDRequest::new();
+        req.set_header(self.header());
+
+        self.inner
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
+                    client.AllocID(req)
+                        .map_err(Error::Grpc)
+                        .and_then(|resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(resp.get_id())
+                        })
+                        .boxed()
+                });
+
+                retry_req.retry()
+            })
+            .reconnect()
+            .wait()
+    }
+
+    fn put_store(&self, store: metapb::Store) -> Result<()> {
+        let mut req = pdpb::PutStoreRequest::new();
+        req.set_header(self.header());
+        req.set_store(store);
+
+        self.inner
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
+                    client.PutStore(req)
+                        .map_err(Error::Grpc)
+                        .and_then(|resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(())
+                        })
+                        .boxed()
+                });
+
+                retry_req.retry()
+            })
+            .reconnect()
+            .wait()
+    }
+
+    fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
+        let mut req = pdpb::GetStoreRequest::new();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+
+        self.inner
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
+                    client.GetStore(req)
+                        .map_err(Error::Grpc)
+                        .and_then(|mut resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(resp.take_store())
+                        })
+                        .boxed()
+                });
+
+                retry_req.retry()
+            })
+            .reconnect()
+            .wait()
+    }
+
+    fn get_cluster_config(&self) -> Result<metapb::Cluster> {
+        let mut req = pdpb::GetClusterConfigRequest::new();
+        req.set_header(self.header());
+
+        self.inner
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
+                    client.GetClusterConfig(req)
+                        .map_err(Error::Grpc)
+                        .and_then(|mut resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(resp.take_cluster())
+                        })
+                        .boxed()
+                });
+
+                retry_req.retry()
+            })
+            .reconnect()
+            .wait()
+    }
+
+    fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
+        let mut req = pdpb::GetRegionRequest::new();
+        req.set_header(self.header());
+        req.set_region_key(key.to_vec());
+
+        self.inner
+            .client(LEADER_CHANGE_RETRY, req, |client, req| {
+                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
+                    client.GetRegion(req)
+                        .map_err(Error::Grpc)
+                        .and_then(|mut resp| {
+                            try!(check_resp_header(resp.get_header()));
+                            Ok(resp.take_region())
+                        })
+                        .boxed()
+                });
+
+                retry_req.retry()
+            })
+            .reconnect()
+            .wait()
+    }
+
     // Get region by region id.
-    fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
+    fn get_region_by_id_async(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         let mut req = pdpb::GetRegionByIDRequest::new();
         req.set_header(self.header());
         req.set_region_id(region_id);
@@ -113,13 +274,13 @@ impl AsyncPdClient for RpcAsyncClient {
     }
 
     // Leader for a region will use this to heartbeat Pd.
-    fn region_heartbeat(&self,
-                        region: metapb::Region,
-                        leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
-                        -> PdFuture<pdpb::RegionHeartbeatResponse> {
+    fn region_heartbeat_async(&self,
+                              region: metapb::Region,
+                              leader: metapb::Peer,
+                              down_peers: Vec<pdpb::PeerStats>,
+                              pending_peers: Vec<metapb::Peer>,
+                              written_bytes: u64)
+                              -> PdFuture<pdpb::RegionHeartbeatResponse> {
         let mut req = pdpb::RegionHeartbeatRequest::new();
         req.set_header(self.header());
         req.set_region(region);
@@ -146,7 +307,7 @@ impl AsyncPdClient for RpcAsyncClient {
     }
 
     // Ask pd for split, pd will returns the new split region id.
-    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+    fn ask_split_async(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
         let mut req = pdpb::AskSplitRequest::new();
         req.set_header(self.header());
         req.set_region(region);
@@ -169,7 +330,7 @@ impl AsyncPdClient for RpcAsyncClient {
     }
 
     // Send store statistics regularly.
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat_async(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
         let mut req = pdpb::StoreHeartbeatRequest::new();
         req.set_header(self.header());
         req.set_stats(stats);
@@ -192,7 +353,7 @@ impl AsyncPdClient for RpcAsyncClient {
     }
 
     // Report pd the split region.
-    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()> {
+    fn report_split_async(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()> {
         let mut req = pdpb::ReportSplitRequest::new();
         req.set_header(self.header());
         req.set_left(left);
