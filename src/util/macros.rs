@@ -35,7 +35,7 @@ macro_rules! count_args {
     ($head:expr $(, $tail:expr)*) => { 1 + count_args!($($tail),*) };
 }
 
-/// Initial a HashMap with specify key-value pairs.
+/// Initial a `HashMap` with specify key-value pairs.
 ///
 /// # Examples
 ///
@@ -105,10 +105,11 @@ macro_rules! box_err {
     });
 }
 
+#[allow(doc_markdown)]
 /// Recover from panicable closure.
 ///
-/// Please note that this macro assume the closure is able to be forced to implement `RecoverSafe`.
-/// Also see https://doc.rust-lang.org/nightly/std/panic/trait.RecoverSafe.html
+/// Please note that this macro assume the closure is able to be forced to implement `UnwindSafe`.
+/// Also see https://doc.rust-lang.org/std/panic/struct.AssertUnwindSafe.html
 // Maybe we should define a recover macro too.
 #[macro_export]
 macro_rules! recover_safe {

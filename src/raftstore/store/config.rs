@@ -53,7 +53,7 @@ const DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE: usize = 1024 * 1024 * 10; // 10m
 // We should turn on this only in our tests.
 const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
-const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 30000; // 30 seconds
+const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 60000; // 60 seconds
 
 const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 9 seconds
 
@@ -210,5 +210,47 @@ impl Config {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::Duration as TimeDuration;
+
+    #[test]
+    fn test_config_validate() {
+        let mut cfg = Config::new();
+        assert!(cfg.validate().is_ok());
+
+        cfg.raft_heartbeat_ticks = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_election_timeout_ticks = 10;
+        cfg.raft_heartbeat_ticks = 10;
+        assert!(cfg.validate().is_err());
+
+        cfg.raft_heartbeat_ticks = 11;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_log_gc_threshold = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_log_gc_size_limit = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.region_max_size = 10;
+        cfg.region_split_size = 20;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_base_tick_interval = 1000;
+        cfg.raft_election_timeout_ticks = 10;
+        cfg.raft_store_max_leader_lease = TimeDuration::seconds(20);
+        assert!(cfg.validate().is_err());
     }
 }

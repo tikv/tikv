@@ -159,7 +159,7 @@ pub struct RawNode<T: Storage> {
 impl<T: Storage> RawNode<T> {
     // NewRawNode returns a new RawNode given configuration and a list of raft peers.
     pub fn new(config: &Config, store: T, peers: &[Peer]) -> Result<RawNode<T>> {
-        assert!(config.id != 0, "config.id must not be zero");
+        assert_ne!(config.id, 0, "config.id must not be zero");
         let r = Raft::new(config, store);
         let mut rn = RawNode {
             raft: r,

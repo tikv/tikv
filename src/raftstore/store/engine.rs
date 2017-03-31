@@ -447,7 +447,7 @@ mod tests {
 
     use super::*;
     use kvproto::metapb::Region;
-    use util::rocksdb;
+    use util::{rocksdb, HashMap};
 
     #[test]
     fn test_base() {
@@ -479,7 +479,7 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         r1 = engine.get_msg(key).unwrap().unwrap();
         r2 = snap.get_msg(key).unwrap().unwrap();
-        assert!(r1 != r2);
+        assert_ne!(r1, r2);
 
         let b: Option<Region> = engine.get_msg(b"missing_key").unwrap();
         assert!(b.is_none());
@@ -597,14 +597,15 @@ mod tests {
     #[test]
     fn test_delete_all_in_range() {
         let path = TempDir::new("var").unwrap();
-        let mut opt = Options::new();
-        opt.set_target_file_size_base(1024 * 1024);
-        opt.set_write_buffer_size(1024);
-        opt.compression(DBCompressionType::DBNo);
+        let mut db_opt = Options::new();
+        db_opt.set_target_file_size_base(1024 * 1024);
+        db_opt.set_write_buffer_size(1024);
+        db_opt.compression(DBCompressionType::DBNo);
 
-        let engine =
-            Arc::new(rocksdb::new_engine_opt(opt, path.path().to_str().unwrap(), &[], vec![])
-                .unwrap());
+        let engine = Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(),
+                                                      db_opt,
+                                                      HashMap::default())
+            .unwrap());
 
         let value = vec![0;1024];
         for i in 0..10 {

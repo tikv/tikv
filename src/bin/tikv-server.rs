@@ -13,6 +13,11 @@
 
 #![feature(plugin)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
+#![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
+
+// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
+#![allow(never_loop)]
+#![allow(needless_pass_by_value)]
 
 extern crate tikv;
 extern crate getopts;
@@ -47,7 +52,7 @@ use mio::EventLoop;
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
-use tikv::storage::{Storage, TEMP_DIR, ALL_CFS};
+use tikv::storage::{Storage, TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
@@ -671,15 +676,16 @@ fn build_raftkv(config: &toml::Value,
                 -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
-    let opts = get_rocksdb_db_option(config);
-    let cfs_opts = vec![get_rocksdb_default_cf_option(config, total_mem),
-                        get_rocksdb_lock_cf_option(config),
-                        get_rocksdb_write_cf_option(config, total_mem),
-                        get_rocksdb_raftlog_cf_option(config, total_mem)];
+    let db_opts = get_rocksdb_db_option(config);
+    let mut cfs_opts = HashMap::default();
+    cfs_opts.insert(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem));
+    cfs_opts.insert(CF_LOCK, get_rocksdb_lock_cf_option(config));
+    cfs_opts.insert(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem));
+    cfs_opts.insert(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem));
     let mut db_path = path.clone();
     db_path.push("db");
     let engine =
-        Arc::new(rocksdb_util::new_engine_opt(opts, db_path.to_str().unwrap(), ALL_CFS, cfs_opts)
+        Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), db_opts, cfs_opts)
             .unwrap());
 
     let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
