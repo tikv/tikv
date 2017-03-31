@@ -70,13 +70,13 @@ mod unix {
             let mio_s1 = socket.send_buffer_size().unwrap();
             socket.set_send_buffer_size(8192).unwrap();
             let mio_s2 = socket.send_buffer_size().unwrap();
-            assert!(mio_s2 != mio_s1, "{} should not equal {}", mio_s2, mio_s1);
+            assert_ne!(mio_s2, mio_s1, "{} should not equal {}", mio_s2, mio_s1);
 
             socket.set_recv_buffer_size(4096).unwrap();
             let mio_r1 = socket.recv_buffer_size().unwrap();
             socket.set_recv_buffer_size(8192).unwrap();
             let mio_r2 = socket.recv_buffer_size().unwrap();
-            assert!(mio_r2 != mio_r1, "{} should not equal {}", mio_r2, mio_r1);
+            assert_ne!(mio_r2, mio_r1, "{} should not equal {}", mio_r2, mio_r1);
         }
 
         #[cfg(unix)]
