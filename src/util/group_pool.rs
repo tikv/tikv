@@ -197,7 +197,7 @@ impl GroupTaskPoolMeta {
 /// Spawns `concurrency` threads to process tasks.
 /// each task would be pushed into the pool,and when a thread
 /// is ready to process a task, it get a task from the waiting queue
-/// ordering the following rules:
+/// according the following rules:
 ///
 /// ## Choose one group
 /// 1. Choose the groups with least running tasks.
