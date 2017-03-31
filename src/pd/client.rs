@@ -227,13 +227,21 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
     Err(box_err!("fail to request"))
 }
 
+const BOOTSTRAPPED: &'static str = "already bootstrapped";
+
 fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
     if !header.has_error() {
         return Ok(());
     }
     // TODO: translate more error types
     let err = header.get_error();
-    Err(box_err!(err.get_message()))
+    let msg = err.get_message();
+
+    if msg.contains(BOOTSTRAPPED) {
+        Err(Error::ClusterBootstrapped(header.get_cluster_id()))
+    } else {
+        Err(box_err!(msg))
+    }
 }
 
 impl fmt::Debug for RpcClient {
