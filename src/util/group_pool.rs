@@ -271,12 +271,12 @@ impl<'a> Drop for Sentinel<'a> {
 /// task cost the same time.
 ///
 /// ```
-/// extern crate tikv;
+/// # extern crate tikv;
 /// use tikv::util::group_pool::GroupTaskPool;
 /// use std::thread::sleep;
 /// use std::time::Duration;
 /// use std::sync::mpsc::{Sender, Receiver, channel};
-///
+/// # fn main(){
 /// let concurrency = 2;
 /// let mut task_pool = GroupTaskPool::new(concurrency);
 /// let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
@@ -325,6 +325,7 @@ impl<'a> Drop for Sentinel<'a> {
 ///     let second = jrx.recv().unwrap();
 ///     assert_eq!(second, group_with_many_tasks);
 /// }
+/// # }
 /// ```
 pub struct GroupTaskPool {
     tasks: Arc<Mutex<GroupTaskPoolMeta>>,
