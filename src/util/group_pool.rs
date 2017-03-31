@@ -24,7 +24,11 @@ use super::HashMap;
 type Thunk<'a> = Box<FnBox() + Send + 'a>;
 
 struct TaskMeta<'a> {
+    // the task's number in the pool.
+    // each task has a unique number,
+    // and it's always bigger than precedes one.
     id: u64,
+    // the task's group_id.
     group_id: u64,
     task: Thunk<'a>,
 }
@@ -68,6 +72,7 @@ impl GroupTaskPoolMeta {
         }
     }
 
+    // push_task pushes a new task into pool.
     fn push_task<F>(&mut self, group_id: u64, job: F)
         where F: FnOnce() + Send + 'static
     {
@@ -93,6 +98,10 @@ impl GroupTaskPoolMeta {
         Ok(())
     }
 
+    // one_thread_stopped is called when one thread in the pool
+    // is stopped. when all threads in the pool is stopped, it
+    // would send out a message in stop_finished_sender. It always
+    // happen in func Drop of GroupTaskPool
     fn one_thread_stopped(&mut self) {
         self.running_thread_num -= 1;
         if self.running_thread_num == 0 {
@@ -100,7 +109,9 @@ impl GroupTaskPoolMeta {
         }
     }
 
-
+    // finished_task is called when one task is finished in the
+    // thread. It will clean up the remaining information of the
+    // task in the pool.
     fn finished_task(&mut self, group_id: u64) {
         self.running_tasks_num -= 1;
         // sub 1 in running tasks for group_id.
@@ -112,6 +123,11 @@ impl GroupTaskPoolMeta {
         }
     }
 
+    // get_next_group returns the next task's group_id.
+    // we choose the group according to the following rules:
+    // 1. Choose the groups with least running tasks.
+    // 2. If more than one groups has the least running tasks,
+    //    choose the one whose task comes first(with the minum task's ID)
     fn get_next_group(&self) -> Option<u64> {
         let mut next_group = None; //(group_id,count,task_id)
         for (group_id, tasks) in &self.waiting_tasks {
@@ -133,7 +149,7 @@ impl GroupTaskPoolMeta {
                 continue;
             }
 
-            if pre_count == count && pre_task_id < front_task_id {
+            if pre_count == count && pre_task_id > front_task_id {
                 next_group = Some((group_id, count, front_task_id));
             }
 
@@ -147,6 +163,11 @@ impl GroupTaskPoolMeta {
         None
     }
 
+    // pop_next_task pops a task to running next.
+    // we choose the task according to the following rules:
+    // 1. Choose one group to run with func `get_next_group()`.
+    // 2. For the tasks in the selected group, choose the first
+    // one in the queue(which means comes first).
     fn pop_next_task(&mut self) -> Option<(TaskMeta<'static>)> {
         if let Some(group_id) = self.get_next_group() {
             // running tasks for group add 1.
@@ -172,6 +193,76 @@ impl GroupTaskPoolMeta {
     }
 }
 
+/// A group task pool used to execute tasks in parallel.
+/// Spawns `concurrency` threads to process tasks.
+/// each task would be pushed into the pool,and when a thread
+/// is ready to process a task, it get a task from the waiting queue
+/// ordering the following rules:
+///
+/// ## Choose one group
+/// 1. Choose the groups with least running tasks.
+/// 2. If more than one groups has the least running tasks,
+///    choose the one whose task comes first(with the minum task's ID)
+///
+/// ## Chose a task in selected group.
+/// For the tasks in the selected group, choose the first
+/// one in the queue(which means comes first).
+///
+/// # Example
+///
+/// One group with 10 tasks, and 10 groups with 1 task each. Every
+/// task cost the same time.
+///
+/// ```
+/// let concurrency = 2;
+/// let mut task_pool = GroupTaskPool::new(concurrency);
+/// let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
+/// let group_with_many_tasks = 1001 as u64;
+/// // all tasks cost the same time.
+/// let sleep_duration = Duration::from_millis(100);
+///
+/// // push tasks of group_with_many_tasks's job to make all thread in pool busy.
+/// // in order to make sure the thread would be free in sequence,
+/// // these tasks should run in sequence.
+/// for _ in 0..concurrency {
+///     task_pool.execute(group_with_many_tasks, move || {
+///         sleep(sleep_duration);
+///     });
+///     // make sure the pre task is running now.
+///     sleep(sleep_duration / 4);
+/// }
+///
+/// // push 10 tasks of group_with_many_tasks's job into pool.
+/// for _ in 0..10 {
+///     let sender = jtx.clone();
+///     task_pool.execute(group_with_many_tasks, move || {
+///         sleep(sleep_duration);
+///         sender.send(group_with_many_tasks).unwrap();
+///     });
+/// }
+///
+/// // push 1 task for each group_id in [0..10) into pool.
+/// for group_id in 0..10 {
+///     let sender = jtx.clone();
+///     task_pool.execute(group_id, move || {
+///         sleep(sleep_duration);
+///         sender.send(group_id).unwrap();
+///     });
+/// }
+/// // when first thread is free, since there would be another
+/// // thread running group_with_many_tasks's task,and the first task which
+/// // is not belong to group_with_many_tasks in the waitting queue would run first.
+/// // when the second thread is free, since there is group_with_many_tasks's task
+/// // is running, and the first task in the waiting queue is the
+/// // group_with_many_tasks's task,so it would run. Similarly when the first is
+/// // free again,it would run the task in front of the queue..
+/// for id in 0..10 {
+///     let first = jrx.recv().unwrap();
+///     assert_eq!(first, id);
+///     let second = jrx.recv().unwrap();
+///     assert_eq!(second, group_with_many_tasks);
+/// }
+/// ```
 pub struct GroupTaskPool {
     tasks: Arc<Mutex<GroupTaskPoolMeta>>,
     job_sender: Sender<bool>,
@@ -264,6 +355,11 @@ fn spawn_in_pool(name: Option<String>,
                 };
 
                 // handle task
+                // TODO:when a task is panic,the number of thread would
+                // be less of one, a new thread should begin.
+                // Since in `tikv` any panic would be cached and make the
+                // `tikv` down. This work seems would never be covered, we
+                // would like support it in the future.
                 if let Some(task_meta) = task {
                     task_meta.task.call_box(());
                     let mut meta = tasks.lock().unwrap();
@@ -278,4 +374,111 @@ fn spawn_in_pool(name: Option<String>,
             }
         })
         .unwrap();
+}
+
+#[cfg(test)]
+mod test {
+    use super::GroupTaskPool;
+    use std::thread::sleep;
+    use std::time::Duration;
+    use std::sync::mpsc::{Sender, Receiver, channel};
+
+    #[test]
+    fn test_tasks_with_same_cost() {
+        let concurrency = 2;
+        let mut task_pool = GroupTaskPool::new(concurrency);
+        let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
+        let group_with_many_tasks = 1001 as u64;
+        // all tasks cost the same time.
+        let sleep_duration = Duration::from_millis(100);
+
+        // push tasks of group_with_many_tasks's job to make all thread in pool busy.
+        // in order to make sure the thread would be free in sequence,
+        // these tasks should run in sequence.
+        for _ in 0..concurrency {
+            task_pool.execute(group_with_many_tasks, move || {
+                sleep(sleep_duration);
+            });
+            // make sure the pre task is running now.
+            sleep(sleep_duration / 4);
+        }
+
+        // push 10 tasks of group_with_many_tasks's job into pool.
+        for _ in 0..10 {
+            let sender = jtx.clone();
+            task_pool.execute(group_with_many_tasks, move || {
+                sleep(sleep_duration);
+                sender.send(group_with_many_tasks).unwrap();
+            });
+        }
+
+        // push 1 task for each group_id in [0..10) into pool.
+        for group_id in 0..10 {
+            let sender = jtx.clone();
+            task_pool.execute(group_id, move || {
+                sleep(sleep_duration);
+                sender.send(group_id).unwrap();
+            });
+        }
+        // when first thread is free, since there would be another
+        // thread running group_with_many_tasks's task,and the first task which
+        // is not belong to group_with_many_tasks in the waitting queue would run first.
+        // when the second thread is free, since there is group_with_many_tasks's task
+        // is running, and the first task in the waiting queue is the
+        // group_with_many_tasks's task,so it would run. Similarly when the first is
+        // free again,it would run the task in front of the queue..
+        for id in 0..10 {
+            let first = jrx.recv().unwrap();
+            assert_eq!(first, id);
+            let second = jrx.recv().unwrap();
+            assert_eq!(second, group_with_many_tasks);
+        }
+    }
+
+
+    #[test]
+    fn test_tasks_with_different_cost() {
+        let concurrency = 2;
+        let mut task_pool = GroupTaskPool::new(concurrency);
+        let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
+        let group_with_big_task = 1001 as u64;
+        let sleep_duration = Duration::from_millis(100);
+
+        // push big task into pool.
+        task_pool.execute(group_with_big_task, move || {
+            sleep(sleep_duration * 10);
+        });
+        // make sure the big task is running.
+        sleep(sleep_duration / 4);
+
+        // push 10 tasks of group_with_big_task's job into pool.
+        for _ in 0..10 {
+            let sender = jtx.clone();
+            task_pool.execute(group_with_big_task, move || {
+                sleep(sleep_duration);
+                sender.send(group_with_big_task).unwrap();
+            });
+        }
+
+        // push 1 task for each group_id in [0..10) into pool.
+        for group_id in 0..10 {
+            let sender = jtx.clone();
+            task_pool.execute(group_id, move || {
+                sleep(sleep_duration);
+                sender.send(group_id).unwrap();
+            });
+        }
+
+        // since there exist a long task of group_with_big_task is runnging,
+        // the other thread would always run other group's tasks in sequence.
+        for id in 0..10 {
+            let group_id = jrx.recv().unwrap();
+            assert_eq!(group_id, id);
+        }
+
+        for _ in 0..10 {
+            let second = jrx.recv().unwrap();
+            assert_eq!(second, group_with_big_task);
+        }
+    }
 }
