@@ -615,7 +615,8 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   trans: &T,
                                                   metrics: &mut RaftMetrics,
-                                                  worker: &Worker<PdTask>)
+                                                  worker: &Worker<PdTask>,
+                                                  append_res: &mut Vec<(Ready, InvokeContext)>)
                                                   -> bool {
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
@@ -674,13 +675,17 @@ impl Peer {
             }
         };
 
-        self.append_scheduler
-            .schedule(AppendTask {
-                wb: wb,
-                ready: ready,
-                ctx: invoke_ctx,
-            })
-            .unwrap();
+        if !wb.is_empty() {
+            self.append_scheduler
+                .schedule(AppendTask {
+                    wb: wb,
+                    ready: ready,
+                    ctx: invoke_ctx,
+                })
+                .unwrap();
+        } else {
+            append_res.push((ready, invoke_ctx));
+        }
 
         true
     }

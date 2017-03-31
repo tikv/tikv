@@ -894,7 +894,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if let Some(peer) = self.region_peers.get_mut(&region_id) {
                 if !peer.handle_raft_ready_append(&self.trans,
                                                   &mut self.raft_metrics,
-                                                  &self.pd_worker) {
+                                                  &self.pd_worker,
+                                                  &mut append_res) {
                     regions_not_handled.insert(region_id);
                 }
             }
