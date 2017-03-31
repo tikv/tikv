@@ -15,4 +15,4 @@ mod client;
 mod util;
 
 pub use self::client::RpcClient;
-pub use self::util::validate_endpoints;
+pub use self::client::validate_endpoints;

@@ -18,13 +18,10 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::future;
-use futures::Future;
-
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::eraftpb;
-use tikv::pd::{PdClient, Result, Error, Key, PdFuture};
+use tikv::pd::{PdClient, Result, Error, Key};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
@@ -540,12 +537,10 @@ impl PdClient for TestPdClient {
         Err(box_err!("no region contains key {:?}", escape(key)))
     }
 
-    fn get_region_by_id_async(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        if let Err(err) = self.check_bootstrap() {
-            return future::err(err).boxed();
-        }
+    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
+        try!(self.check_bootstrap());
 
-        future::result(self.cluster.rl().get_region_by_id(region_id)).boxed()
+        self.cluster.rl().get_region_by_id(region_id)
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
@@ -554,33 +549,23 @@ impl PdClient for TestPdClient {
     }
 
 
-    fn region_heartbeat_async(&self,
-                              region: metapb::Region,
-                              leader: metapb::Peer,
-                              down_peers: Vec<pdpb::PeerStats>,
-                              pending_peers: Vec<metapb::Peer>,
-                              written_bytes: u64)
-                              -> PdFuture<pdpb::RegionHeartbeatResponse> {
-        if let Err(err) = self.check_bootstrap() {
-            return future::err(err).boxed();
-        }
-
-        future::result(self.cluster
-                .wl()
-                .region_heartbeat(region, leader, down_peers, pending_peers, written_bytes))
-            .boxed()
+    fn region_heartbeat(&self,
+                        region: metapb::Region,
+                        leader: metapb::Peer,
+                        down_peers: Vec<pdpb::PeerStats>,
+                        pending_peers: Vec<metapb::Peer>,
+                        written_bytes: u64)
+                        -> Result<pdpb::RegionHeartbeatResponse> {
+        try!(self.check_bootstrap());
+        self.cluster.wl().region_heartbeat(region, leader, down_peers, pending_peers, written_bytes)
     }
 
-    fn ask_split_async(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
-        if let Err(err) = self.check_bootstrap() {
-            return future::err(err).boxed();
-        }
+    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
+        try!(self.check_bootstrap());
 
         // Must ConfVer and Version be same?
         let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap().unwrap();
-        if let Err(err) = check_stale_region(&cur_region, &region) {
-            return future::err(err).boxed();
-        }
+        try!(check_stale_region(&cur_region, &region));
 
         let mut resp = pdpb::AskSplitResponse::new();
         resp.set_new_region_id(self.alloc_id().unwrap());
@@ -589,28 +574,24 @@ impl PdClient for TestPdClient {
             peer_ids.push(self.alloc_id().unwrap());
         }
         resp.set_new_peer_ids(peer_ids);
-        future::ok(resp).boxed()
+
+        Ok(resp)
     }
 
-    fn store_heartbeat_async(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
-        if let Err(err) = self.check_bootstrap() {
-            return future::err(err).boxed();
-        }
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
+        try!(self.check_bootstrap());
 
         // Cache it directly now.
         let store_id = stats.get_store_id();
         self.cluster.wl().store_stats.insert(store_id, stats);
 
-        future::ok(()).boxed()
+        Ok(())
     }
 
-    fn report_split_async(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
+    fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
         // pd just uses this for history show, so here we just count it.
-        if let Err(err) = self.check_bootstrap() {
-            return future::err(err).boxed();
-        }
-
+        try!(self.check_bootstrap());
         self.cluster.wl().split_count += 1;
-        future::ok(()).boxed()
+        Ok(())
     }
 }
