@@ -17,6 +17,7 @@ use std::io;
 use std::{slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
+use time::{self, Timespec};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -306,6 +307,13 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     let nanos = d.subsec_nanos() as u64;
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000_000_000 + nanos
+}
+
+pub fn strftimespec(t: Timespec) -> String {
+    let tm = time::at(t);
+    let mut s = time::strftime("%Y/%m/%d %H:%M:%S", &tm).unwrap();
+    s += &format!(".{:03}", t.nsec / 1_000_000);
+    s
 }
 
 pub fn get_tag_from_thread_name() -> Option<String> {
