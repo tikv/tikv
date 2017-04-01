@@ -27,6 +27,7 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
+extern crate alloc_tcmalloc;
 #[macro_use]
 extern crate log;
 extern crate protobuf;

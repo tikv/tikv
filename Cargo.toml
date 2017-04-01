@@ -13,7 +13,6 @@ dev = ["clippy"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
-mem-profiling = ["jemallocator/profiling"]
 
 [lib]
 name = "tikv"
@@ -82,11 +81,8 @@ features = ["nightly", "push"]
 [dependencies.grpc]
 git = "https://github.com/stepancheg/grpc-rust.git"
 
-[dependencies.jemallocator]
-git = "https://github.com/alexcrichton/jemallocator.git"
-
-[replace]
-"libc:0.2.21" = { git = "https://github.com/busyjay/libc.git"}
+[dependencies.alloc-tcmalloc]
+git = "https://github.com/busyjay/alloc-tcmalloc.git"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
