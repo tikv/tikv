@@ -18,15 +18,15 @@ use super::Result;
 use super::DEFAULT_CLUSTER_ID;
 
 #[derive(Debug)]
-pub struct Bootstrap {}
+pub struct AlreadyBootstrap {}
 
-impl Bootstrap {
-    pub fn new() -> Bootstrap {
-        Bootstrap {}
+impl AlreadyBootstrap {
+    pub fn new() -> AlreadyBootstrap {
+        AlreadyBootstrap {}
     }
 }
 
-impl Mocker for Bootstrap {
+impl Mocker for AlreadyBootstrap {
     fn Bootstrap(&self, _: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
         let mut err = Error::new();
         err.set_field_type(ErrorType::ALREADY_BOOTSTRAPPED);

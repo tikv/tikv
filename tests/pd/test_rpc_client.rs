@@ -75,7 +75,7 @@ fn test_reboot() {
     ];
 
     let se = Arc::new(Service::new(eps.clone()));
-    let lc = Arc::new(Bootstrap::new());
+    let lc = Arc::new(AlreadyBootstrap::new());
 
     let _server = MockServer::run("127.0.0.1:52730", se.clone(), Some(lc.clone()));
     thread::sleep(Duration::from_secs(1));

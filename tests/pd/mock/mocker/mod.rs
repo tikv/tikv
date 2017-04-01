@@ -26,7 +26,7 @@ mod leader_change;
 
 pub use self::service::Service;
 pub use self::split::Split;
-pub use self::bootstrap::Bootstrap;
+pub use self::bootstrap::AlreadyBootstrap;
 pub use self::leader_change::LeaderChange;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 42;
