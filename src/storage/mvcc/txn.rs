@@ -905,7 +905,7 @@ mod tests {
         let mut reader = MvccReader::new(snapshot.as_ref(), &mut statistics, None, true, None);
         let (ts, write_type) =
             reader.get_txn_commit_info(&make_key(key), start_ts).unwrap().unwrap();
-        assert!(write_type != WriteType::Rollback);
+        assert_ne!(write_type, WriteType::Rollback);
         assert_eq!(ts, commit_ts);
     }
 
