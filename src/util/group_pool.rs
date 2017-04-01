@@ -168,7 +168,7 @@ impl GroupTaskPoolMeta {
     // 1. Choose one group to run with func `get_next_group()`.
     // 2. For the tasks in the selected group, choose the first
     // one in the queue(which means comes first).
-    fn pop_next_task(&mut self) -> Option<(TaskMeta<'static>)> {
+    fn pop_next_task(&mut self) -> Option<(u64, TaskMeta<'static>)> {
         if let Some(group_id) = self.get_next_group() {
             // running tasks for group add 1.
             self.running_tasks.entry(group_id).or_insert(0 as usize);
@@ -187,7 +187,7 @@ impl GroupTaskPoolMeta {
 
             self.waiting_tasks_num -= 1;
             self.running_tasks_num += 1;
-            return Some(task);
+            return Some((group_id, task));
         }
         None
     }
@@ -197,6 +197,7 @@ struct Sentinel<'a> {
     name: Option<String>,
     receiver: &'a Arc<Mutex<Receiver<bool>>>,
     pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>,
+    running_task_group: Option<u64>,
 }
 
 impl<'a> Sentinel<'a> {
@@ -212,6 +213,7 @@ impl<'a> Sentinel<'a> {
             name: name,
             receiver: receiver,
             pool_meta: pool_meta,
+            running_task_group: None,
         }
     }
 
@@ -226,7 +228,16 @@ impl<'a> Sentinel<'a> {
     fn get_next_task(&mut self) -> Option<TaskMeta> {
         // try to get task
         let mut meta = self.pool_meta.lock().unwrap();
-        meta.pop_next_task()
+        match meta.pop_next_task() {
+            Some((group_id, task)) => {
+                self.running_task_group = Some(group_id);
+                Some(task)
+            }
+            None => {
+                self.running_task_group = None;
+                None
+            }
+        }
     }
 }
 
@@ -237,6 +248,9 @@ impl<'a> Drop for Sentinel<'a> {
         {
             let mut meta = self.pool_meta.lock().unwrap();
             meta.one_thread_stopped(is_panick);
+            if is_panick && self.running_task_group.is_some() {
+                meta.finished_task(self.running_task_group.unwrap());
+            }
         }
 
         // Since in `tikv` any panic would be cached and make the
@@ -278,7 +292,8 @@ impl<'a> Drop for Sentinel<'a> {
 /// use std::sync::mpsc::{Sender, Receiver, channel};
 /// # fn main(){
 /// let concurrency = 2;
-/// let mut task_pool = GroupTaskPool::new(concurrency);
+/// let name = Some(thd_name!("sample"));
+/// let mut task_pool = GroupTaskPool::new(name,concurrency);
 /// let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
 /// let group_with_many_tasks = 1001 as u64;
 /// // all tasks cost the same time.
@@ -335,9 +350,8 @@ pub struct GroupTaskPool {
 }
 
 impl GroupTaskPool {
-    pub fn new(num_threads: usize) -> GroupTaskPool {
+    pub fn new(name: Option<String>, num_threads: usize) -> GroupTaskPool {
         assert!(num_threads >= 1);
-        let name = Some(thd_name!("endpoint-pool"));
         let (jtx, jrx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
         let jrx = Arc::new(Mutex::new(jrx));
         let (stx, srx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
@@ -425,8 +439,9 @@ mod test {
 
     #[test]
     fn test_tasks_with_same_cost() {
+        let name = Some(thd_name!("test_tasks_with_same_cost"));
         let concurrency = 2;
-        let mut task_pool = GroupTaskPool::new(concurrency);
+        let mut task_pool = GroupTaskPool::new(name, concurrency);
         let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
         let group_with_many_tasks = 1001 as u64;
         // all tasks cost the same time.
@@ -478,8 +493,9 @@ mod test {
 
     #[test]
     fn test_tasks_with_different_cost() {
+        let name = Some(thd_name!("test_tasks_with_different_cost"));
         let concurrency = 2;
-        let mut task_pool = GroupTaskPool::new(concurrency);
+        let mut task_pool = GroupTaskPool::new(name, concurrency);
         let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
         let group_with_big_task = 1001 as u64;
         let sleep_duration = Duration::from_millis(100);
@@ -518,6 +534,33 @@ mod test {
         for _ in 0..10 {
             let second = jrx.recv().unwrap();
             assert_eq!(second, group_with_big_task);
+        }
+    }
+
+    #[test]
+    fn test_should_not_panic_on_drop_if_subtasks_panic_after_drop() {
+        let name = Some(thd_name!("test_should_not_panic_on_drop_if_subtasks_panic_after_drop"));
+        let task_num = 2;
+        let group_id = 1;
+        let mut pool = GroupTaskPool::new(name, task_num);
+        let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
+
+        // Panic all the existing threads in a bit.
+        for _ in 0..task_num {
+            pool.execute(group_id, move || {
+                panic!("Ignore this panic, it should!");
+            });
+        }
+
+        for id in 0..task_num {
+            let sender = jtx.clone();
+            pool.execute(group_id, move || {
+                sender.send(id as u64).unwrap();
+            });
+        }
+
+        for _ in 0..task_num {
+            jrx.recv().unwrap();
         }
     }
 }

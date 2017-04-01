@@ -79,7 +79,7 @@ impl Host {
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: GroupTaskPool::new(concurrency),
+            pool: GroupTaskPool::new(Some(thd_name!("endpoint-pool")), concurrency),
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
         }
     }
