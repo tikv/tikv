@@ -40,7 +40,7 @@ use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{Worker, Scheduler};
-use raftstore::store::worker::{ApplyTask, ApplyRes};
+use raftstore::store::worker::{ApplyTask, ApplyRes, AppendTask};
 use util::{clocktime, Either, HashMap, HashSet};
 
 use pd::INVALID_ID;
@@ -137,24 +137,6 @@ impl ProposalQueue {
     }
 }
 
-pub struct ReadyContext<'a, T: 'a> {
-    pub wb: WriteBatch,
-    pub metrics: &'a mut RaftMetrics,
-    pub trans: &'a T,
-    pub ready_res: Vec<(Ready, InvokeContext)>,
-}
-
-impl<'a, T> ReadyContext<'a, T> {
-    pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
-        ReadyContext {
-            wb: WriteBatch::new(),
-            metrics: metrics,
-            trans: t,
-            ready_res: Vec::with_capacity(cap),
-        }
-    }
-}
-
 // TODO: make sure received entries are not corrupted
 // If this happens, TiKV will panic and can't recover without extra effort.
 #[inline]
@@ -210,6 +192,7 @@ pub struct Peer {
     pub raft_entry_max_size: u64,
 
     apply_scheduler: Scheduler<ApplyTask>,
+    append_scheduler: Scheduler<AppendTask>,
 
     marked_to_be_checked: bool,
 
@@ -236,6 +219,8 @@ pub struct Peer {
     pub written_bytes: u64,
     pub written_keys: u64,
     pub last_written_bytes: u64,
+
+    is_appending_log: bool,
 }
 
 impl Peer {
@@ -312,6 +297,7 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             apply_scheduler: store.apply_scheduler(),
+            append_scheduler: store.append_scheduler(),
             marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
@@ -329,6 +315,7 @@ impl Peer {
             written_bytes: 0,
             written_keys: 0,
             last_written_bytes: 0,
+            is_appending_log: false,
         };
 
         peer.load_all_coprocessors();
@@ -626,8 +613,11 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
-                                                  ctx: &mut ReadyContext<T>,
-                                                  worker: &Worker<PdTask>) {
+                                                  trans: &T,
+                                                  metrics: &mut RaftMetrics,
+                                                  worker: &Worker<PdTask>,
+                                                  append_res: &mut Vec<(Ready, InvokeContext)>)
+                                                  -> bool {
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -635,7 +625,7 @@ impl Peer {
             // to full message queue under high load.
             debug!("{} still applying snapshot, skip further handling.",
                    self.tag);
-            return;
+            return true;
         }
 
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
@@ -643,12 +633,19 @@ impl Peer {
                    self.tag,
                    self.get_store().applied_index(),
                    self.get_store().committed_index());
-            return;
+            return true;
         }
 
         if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
-            return;
+            return true;
         }
+
+        if self.is_appending_log {
+            debug!("region [{}] is async appending log, will handled next time",
+                   self.region_id);
+            return false;
+        }
+        self.is_appending_log = true;
 
         debug!("{} handle raft ready", self.tag);
 
@@ -656,19 +653,20 @@ impl Peer {
 
         self.on_role_changed(&ready, worker);
 
-        self.add_ready_metric(&ready, &mut ctx.metrics.ready);
+        self.add_ready_metric(&ready, &mut metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
             let msgs = ready.messages.drain(..);
-            self.send(ctx.trans, msgs, &mut ctx.metrics.message).unwrap_or_else(|e| {
+            self.send(trans, msgs, &mut metrics.message).unwrap_or_else(|e| {
                 // We don't care that the message is sent failed, so here just log this error.
                 warn!("{} leader send messages err {:?}", self.tag, e);
             });
         }
 
-        let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
+        let mut wb = WriteBatch::new();
+        let invoke_ctx = match self.mut_store().handle_raft_ready(&mut wb, &ready) {
             Ok(r) => r,
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
@@ -677,7 +675,19 @@ impl Peer {
             }
         };
 
-        ctx.ready_res.push((ready, invoke_ctx));
+        if !wb.is_empty() {
+            self.append_scheduler
+                .schedule(AppendTask {
+                    wb: wb,
+                    ready: ready,
+                    ctx: invoke_ctx,
+                })
+                .unwrap();
+        } else {
+            append_res.push((ready, invoke_ctx));
+        }
+
+        true
     }
 
     pub fn post_raft_ready_append<T: Transport>(&mut self,
@@ -686,6 +696,11 @@ impl Peer {
                                                 ready: &mut Ready,
                                                 invoke_ctx: InvokeContext)
                                                 -> Option<ApplySnapResult> {
+        if !self.is_appending_log {
+            panic!("is appending log should be true");
+        }
+        self.is_appending_log = false;
+
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
