@@ -22,8 +22,7 @@ use protobuf::{RepeatedField, Message};
 
 use super::Mocker;
 use super::Result;
-
-const CLUSTER_ID: u64 = 42;
+use super::DEFAULT_CLUSTER_ID as CLUSTER_ID;
 
 #[derive(Debug)]
 pub struct Service {
