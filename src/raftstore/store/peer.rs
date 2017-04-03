@@ -41,7 +41,7 @@ use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes};
-use util::{clocktime, Either, HashMap, HashSet};
+use util::{clocktime, Either, HashMap, HashSet, strftimespec};
 
 use pd::INVALID_ID;
 
@@ -596,11 +596,11 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    self.leader_lease_expired_time =
-                        Some(Either::Left(self.next_lease_expired_time(clocktime::raw_now())));
+                    let next_expired_time = self.next_lease_expired_time(clocktime::raw_now());
+                    self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
-                           self.leader_lease_expired_time);
+                           strftimespec(next_expired_time));
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
@@ -851,8 +851,8 @@ impl Peer {
             if current_expired_time < next_expired_time {
                 debug!("{} update leader lease expired time from {:?} to {:?}",
                        self.tag,
-                       current_expired_time,
-                       next_expired_time);
+                       strftimespec(current_expired_time),
+                       strftimespec(next_expired_time));
                 self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
             }
         } else if self.is_leader() {
@@ -862,7 +862,7 @@ impl Peer {
             let next_expired_time = self.next_lease_expired_time(propose_time);
             debug!("{} update leader lease expired time from None to {:?}",
                    self.tag,
-                   self.leader_lease_expired_time);
+                   strftimespec(next_expired_time));
             self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
         }
     }
@@ -1035,7 +1035,7 @@ impl Peer {
 
             debug!("{} leader lease expired time {:?} is outdated",
                    self.tag,
-                   self.leader_lease_expired_time);
+                   strftimespec(safe_expired_time));
             // Reset leader lease expiring time.
             self.leader_lease_expired_time = None;
         }
