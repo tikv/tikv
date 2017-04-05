@@ -74,7 +74,11 @@ impl BlockEngine {
     }
 }
 
-fn try_to_send(sender: Arc<Mutex<Option<Sender<bool>>>>) {
+// try_to_notify tries to send message when block status = true && sender is not none.
+fn try_to_notify(block: Arc<AtomicBool>, sender: Arc<Mutex<Option<Sender<bool>>>>) {
+    if !block.load(Ordering::SeqCst) {
+        return;
+    }
     if let Some(s) = sender.lock().unwrap().as_ref() {
         s.send(true).unwrap();
     }
@@ -88,9 +92,7 @@ impl Engine for BlockEngine {
                                 batch,
                                 box move |res| {
             thread::spawn(move || {
-                if block_write.load(Ordering::SeqCst) {
-                    try_to_send(sender);
-                }
+                try_to_notify(block_write.clone(), sender);
                 while block_write.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
                 }
@@ -105,9 +107,7 @@ impl Engine for BlockEngine {
         self.engine.async_snapshot(ctx,
                                    box move |res| {
             thread::spawn(move || {
-                if block_snapshot.load(Ordering::SeqCst) {
-                    try_to_send(sender);
-                }
+                try_to_notify(block_snapshot.clone(), sender);
                 while block_snapshot.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
                 }
