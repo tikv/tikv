@@ -40,7 +40,7 @@ struct Bundle {
     members: GetMembersResponse,
 }
 
-/// Get a leader client asynchronous.
+/// A leader client doing requests asynchronous.
 pub struct LeaderClient {
     inner: Arc<RwLock<Bundle>>,
 }
@@ -50,16 +50,16 @@ impl LeaderClient {
         LeaderClient {
             inner: Arc::new(RwLock::new(Bundle {
                 client: Arc::new(client),
-                members: members.clone(),
+                members: members,
             })),
         }
     }
 
-    pub fn client<Req, Resp, G>(&self, retry: usize, req: Req, f: G) -> GetClient<Req, Resp, G>
+    pub fn client<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Client<Req, Resp, F>
         where Req: Clone + 'static,
-              G: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
+              F: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
     {
-        GetClient {
+        Client {
             retry_count: retry,
             bundle: self.inner.clone(),
             req: req,
@@ -87,7 +87,8 @@ impl LeaderClient {
     }
 }
 
-pub struct GetClient<Req, Resp, F> {
+/// The context of using and updating a client.
+pub struct Client<Req, Resp, F> {
     retry_count: usize,
     bundle: Arc<RwLock<Bundle>>,
     req: Req,
@@ -95,12 +96,12 @@ pub struct GetClient<Req, Resp, F> {
     func: F,
 }
 
-impl<Req, Resp, F> GetClient<Req, Resp, F>
+impl<Req, Resp, F> Client<Req, Resp, F>
     where Req: Clone + Send + 'static,
           Resp: Send + 'static,
           F: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
 {
-    fn get(mut self) -> PdFuture<GetClient<Req, Resp, F>> {
+    fn get(mut self) -> PdFuture<Client<Req, Resp, F>> {
         debug!("GetClient get remains: {}", self.retry_count);
         self.retry_count -= 1;
 
@@ -126,7 +127,7 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
             .boxed()
     }
 
-    fn check(self) -> PdFuture<(GetClient<Req, Resp, F>, bool)> {
+    fn check(self) -> PdFuture<(Client<Req, Resp, F>, bool)> {
         if self.retry_count == 0 {
             return ok((self, true)).boxed();
         }
@@ -170,19 +171,21 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
 
     /// Returns a Future, it is resolves once a future returned by the closure
     /// is resolved successfully, otherwise it repeats `retry` times.
-    pub fn reconnect(self) -> PdFuture<Resp> {
+    pub fn execute(self) -> PdFuture<Resp> {
         let this = self;
-        loop_fn(this, |this| {
-                this.get()
-                    .and_then(|this| this.check())
-                    .and_then(|(this, done)| {
-                        if done {
-                            Ok(Loop::Break(this))
-                        } else {
-                            Ok(Loop::Continue(this))
-                        }
-                    })
-            })
+        let get_client = |this: Self| {
+            this.get()
+                .and_then(|this| this.check())
+                .and_then(|(this, done)| {
+                    if done {
+                        Ok(Loop::Break(this))
+                    } else {
+                        Ok(Loop::Continue(this))
+                    }
+                })
+        };
+
+        loop_fn(this, get_client)
             .then(|req| {
                 match req.unwrap().get_resp() {
                     Some(Ok(resp)) => future::ok(resp),
@@ -195,12 +198,12 @@ impl<Req, Resp, F> GetClient<Req, Resp, F>
 }
 
 struct GetClientRead<Req, Resp, F> {
-    inner: Option<GetClient<Req, Resp, F>>,
+    inner: Option<Client<Req, Resp, F>>,
 }
 
 // TODO: impl Stream instead.
 impl<Req, Resp, F> Future for GetClientRead<Req, Resp, F> {
-    type Item = (GetClient<Req, Resp, F>, Arc<PDAsyncClient>);
+    type Item = (Client<Req, Resp, F>, Arc<PDAsyncClient>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -218,7 +221,7 @@ impl<Req, Resp, F> Future for GetClientRead<Req, Resp, F> {
 
 // TODO: GetClientWrite
 
-/// Retry a request asynchronous.
+/// The context of sending requets.
 pub struct Request<C, Req, Resp, F> {
     retry_count: usize,
     client: Arc<C>,
@@ -233,7 +236,7 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
           Resp: Send + 'static,
           F: FnMut(&C, Req) -> PdFuture<Resp> + Send + 'static
 {
-    pub fn new(retry: usize, client: Arc<C>, req: Req, f: F) -> Request<C, Req, Resp, F> {
+    pub fn new(client: Arc<C>, req: Req, f: F, retry: usize) -> Request<C, Req, Resp, F> {
         Request {
             retry_count: retry,
             client: client,
@@ -271,7 +274,7 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
 
     /// Returns a Future, it is resolves once a future returned by the closure
     /// is resolved successfully, otherwise it repeats `retry` times.
-    pub fn retry(self) -> PdFuture<Resp> {
+    pub fn execute(self) -> PdFuture<Resp> {
         let retry_req = self;
         loop_fn(retry_req, |retry_req| {
                 retry_req.send()

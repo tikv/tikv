@@ -105,7 +105,7 @@ fn test_retry_async() {
     let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
 
     for _ in 0..5 {
-        let region = client.get_region_by_id_async(1);
+        let region = client.async_get_region_by_id(1);
         region.wait().unwrap();
     }
 }
@@ -131,7 +131,7 @@ fn test_change_leader_async() {
     let leader = client.get_leader();
 
     for _ in 0..5 {
-        let region = client.get_region_by_id_async(1);
+        let region = client.async_get_region_by_id(1);
         region.wait().ok();
 
         let new = client.get_leader();

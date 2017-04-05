@@ -109,7 +109,7 @@ pub trait PdClient: Send + Sync {
 
     // Get region by region id.
     // For tests.
-    fn get_region_by_id_async(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
+    fn async_get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
         futures::empty().boxed()
     }
 }

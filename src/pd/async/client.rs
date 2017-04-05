@@ -15,6 +15,7 @@ use std::fmt;
 use std::time::Duration;
 use std::thread;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use grpc;
 use grpc::futures_grpc::GrpcFutureSend;
@@ -38,7 +39,7 @@ use super::super:: metrics::*;
 // TODO: revoke pubs.
 pub struct RpcClient {
     pub cluster_id: u64,
-    pub inner: LeaderClient,
+    pub leader_client: LeaderClient,
 }
 
 impl RpcClient {
@@ -55,7 +56,7 @@ impl RpcClient {
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
-            inner: LeaderClient::new(client, members),
+            leader_client: LeaderClient::new(client, members),
         })
     }
 
@@ -67,7 +68,7 @@ impl RpcClient {
 
     // For tests
     pub fn get_leader(&self) -> Member {
-        self.inner.get_members().take_leader()
+        self.leader_client.get_members().take_leader()
     }
 }
 
@@ -191,7 +192,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = f(&client.inner.get_client()).wait();
+            let r = f(&client.leader_client.get_client()).wait();
             timer.observe_duration();
             r
         };
@@ -202,10 +203,10 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                match try_connect_leader(&client.inner.get_members()) {
+                match try_connect_leader(&client.leader_client.get_members()) {
                     Ok((cli, mbrs)) => {
-                        client.inner.set_client(cli);
-                        client.inner.set_members(mbrs);
+                        client.leader_client.set_client(cli);
+                        client.leader_client.set_members(mbrs);
                     }
                     Err(e) => {
                         error!("fail to connect to PD leader {:?}", e);
@@ -389,29 +390,31 @@ impl PdClient for RpcClient {
     }
 
     // For tests.
-    fn get_region_by_id_async(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
+    fn async_get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         let mut req = pdpb::GetRegionByIDRequest::new();
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        self.inner
-            .client(LEADER_CHANGE_RETRY, req, |client, req| {
-                let retry_req = Request::new(REQUEST_RETRY, client, req, |client, req| {
-                    client.GetRegionByID(req)
-                        .map_err(Error::Grpc)
-                        .and_then(|mut resp| {
-                            try!(check_resp_header(resp.get_header()));
-                            if resp.has_region() {
-                                Ok(Some(resp.take_region()))
-                            } else {
-                                Ok(None)
-                            }
-                        })
-                        .boxed()
-                });
+        let client_factory = |client: Arc<PDAsyncClient>, req: pdpb::GetRegionByIDRequest| {
+            let request_factory = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
+                client.GetRegionByID(req)
+                    .map_err(Error::Grpc)
+                    .and_then(|mut resp| {
+                        try!(check_resp_header(resp.get_header()));
+                        if resp.has_region() {
+                            Ok(Some(resp.take_region()))
+                        } else {
+                            Ok(None)
+                        }
+                    })
+                    .boxed()
+            };
 
-                retry_req.retry()
-            })
-            .reconnect()
+            Request::new(client, req, request_factory, REQUEST_RETRY).execute()
+        };
+
+        self.leader_client
+            .client(req, client_factory, LEADER_CHANGE_RETRY)
+            .execute()
     }
 }
