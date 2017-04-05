@@ -72,6 +72,7 @@ const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
 const KB: u64 = 1024;
 const MB: u64 = KB * 1024;
 const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
+const SEC_TO_MS: i64 = 1000;
 
 fn sanitize_memory_usage() -> bool {
     let mut ratio = 0.0;
@@ -329,6 +330,20 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let compaction_readahead_size =
         get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
+
+    let max_file_size = get_toml_int(config, "rocksdb.info-log-max-size", Some(0));
+    opts.set_max_log_file_size(max_file_size as u64);
+
+    // RocksDB needs seconds, but here we will get milliseconds.
+    let roll_time_secs = get_toml_int(config, "rocksdb.info-log-roll-time", Some(0)) / SEC_TO_MS;
+    opts.set_log_file_time_to_roll(roll_time_secs as u64);
+
+    let info_log_dir = get_toml_string(config, "rocksdb.info-log-dir", Some("".to_owned()));
+    if !info_log_dir.is_empty() {
+        opts.create_info_log(&info_log_dir).unwrap_or_else(|e| {
+            panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
+        })
+    }
 
     let rate_bytes_per_sec = get_toml_int(config, "rocksdb.rate-bytes-per-sec", Some(0));
     if rate_bytes_per_sec > 0 {

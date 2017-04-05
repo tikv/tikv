@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use kvproto::metapb;
 
-use tikv::pd::{PdClient, RpcClient, validate_endpoints};
+use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -65,6 +65,30 @@ fn test_rpc_client() {
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
+    }
+}
+
+#[test]
+fn test_reboot() {
+    let mut eps = vec![
+    "http://127.0.0.1:52730".to_owned(),
+    ];
+
+    let se = Arc::new(Service::new(eps.clone()));
+    let lc = Arc::new(AlreadyBootstrap::new());
+
+    let _server = MockServer::run("127.0.0.1:52730", se.clone(), Some(lc.clone()));
+    thread::sleep(Duration::from_secs(1));
+
+    let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
+
+    assert_eq!(client.is_cluster_bootstrapped().unwrap(), false);
+
+    match client.bootstrap_cluster(metapb::Store::new(), metapb::Region::new()) {
+        Err(PdError::ClusterBootstrapped(_)) => (),
+        _ => {
+            panic!("failed, should return ClusterBootstrapped");
+        }
     }
 }
 

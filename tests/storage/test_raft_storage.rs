@@ -15,7 +15,7 @@ use std::sync::mpsc::{Sender, Receiver, channel};
 use std::time::Duration;
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
-use tikv::storage::{txn, engine};
+use tikv::storage::{txn, engine, mvcc};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
@@ -51,6 +51,25 @@ fn test_raft_storage() {
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(storage.scan(ctx.clone(), key.clone(), 1, false, 20).is_err());
     assert!(storage.scan_lock(ctx.clone(), 20).is_err());
+}
+
+#[test]
+fn test_raft_storage_rollback_before_prewrite() {
+    let (_cluster, storage, ctx) = new_raft_storage();
+    let ret = storage.rollback(ctx.clone(), vec![make_key(b"key")], 10);
+    assert!(ret.is_ok());
+    let ret = storage.prewrite(ctx.clone(),
+                               vec![Mutation::Put((make_key(b"key"), b"value".to_vec()))],
+                               b"key".to_vec(),
+                               10);
+    assert!(ret.is_err());
+    let err = ret.unwrap_err();
+    match err {
+        storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict)) => {}
+        _ => {
+            panic!("expect WriteConflict error, but got {:?}", err);
+        }
+    }
 }
 
 #[test]
