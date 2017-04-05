@@ -40,7 +40,7 @@ use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{Worker, Scheduler};
-use raftstore::store::worker::{ApplyTask, ApplyRes, AppendTask};
+use raftstore::store::worker::{ApplyTask, ApplyRes};
 use util::{clocktime, Either, HashMap, HashSet};
 
 use pd::INVALID_ID;
@@ -137,6 +137,24 @@ impl ProposalQueue {
     }
 }
 
+pub struct ReadyContext<'a, T: 'a> {
+    pub wb: WriteBatch,
+    pub metrics: &'a mut RaftMetrics,
+    pub trans: &'a T,
+    pub ready_res: Vec<(Ready, InvokeContext)>,
+}
+
+impl<'a, T> ReadyContext<'a, T> {
+    pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
+        ReadyContext {
+            wb: WriteBatch::new(),
+            metrics: metrics,
+            trans: t,
+            ready_res: Vec::with_capacity(cap),
+        }
+    }
+}
+
 // TODO: make sure received entries are not corrupted
 // If this happens, TiKV will panic and can't recover without extra effort.
 #[inline]
@@ -192,7 +210,6 @@ pub struct Peer {
     pub raft_entry_max_size: u64,
 
     apply_scheduler: Scheduler<ApplyTask>,
-    append_scheduler: Scheduler<AppendTask>,
 
     marked_to_be_checked: bool,
 
@@ -297,7 +314,6 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             apply_scheduler: store.apply_scheduler(),
-            append_scheduler: store.append_scheduler(),
             marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
@@ -613,10 +629,9 @@ impl Peer {
     }
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
-                                                  trans: &T,
-                                                  metrics: &mut RaftMetrics,
+                                                  ctx: &mut ReadyContext<T>,
                                                   worker: &Worker<PdTask>,
-                                                  append_res: &mut Vec<(Ready, InvokeContext)>)
+                                                  ready_res: &mut Vec<(Ready, InvokeContext)>)
                                                   -> bool {
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
@@ -653,20 +668,20 @@ impl Peer {
 
         self.on_role_changed(&ready, worker);
 
-        self.add_ready_metric(&ready, &mut metrics.ready);
+        self.add_ready_metric(&ready, &mut ctx.metrics.ready);
 
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
             let msgs = ready.messages.drain(..);
-            self.send(trans, msgs, &mut metrics.message).unwrap_or_else(|e| {
+            self.send(ctx.trans, msgs, &mut ctx.metrics.message).unwrap_or_else(|e| {
                 // We don't care that the message is sent failed, so here just log this error.
                 warn!("{} leader send messages err {:?}", self.tag, e);
             });
         }
 
-        let mut wb = WriteBatch::new();
-        let invoke_ctx = match self.mut_store().handle_raft_ready(&mut wb, &ready) {
+        let wb_old_size = ctx.wb.data_size();
+        let invoke_ctx = match self.mut_store().handle_raft_ready(&mut ctx.wb, &ready) {
             Ok(r) => r,
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
@@ -675,16 +690,11 @@ impl Peer {
             }
         };
 
-        if !wb.is_empty() {
-            self.append_scheduler
-                .schedule(AppendTask {
-                    wb: wb,
-                    ready: ready,
-                    ctx: invoke_ctx,
-                })
-                .unwrap();
+        // this ready write something.
+        if ctx.wb.data_size() > wb_old_size {
+            ctx.ready_res.push((ready, invoke_ctx));
         } else {
-            append_res.push((ready, invoke_ctx));
+            ready_res.push((ready, invoke_ctx));
         }
 
         true

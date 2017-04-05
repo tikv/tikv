@@ -22,18 +22,16 @@ use raftstore::store::peer_storage::InvokeContext;
 
 pub struct Task {
     pub wb: WriteBatch,
-    pub ready: Ready,
-    pub ctx: InvokeContext,
+    pub ready_res: Vec<(Ready, InvokeContext)>,
 }
 
 pub struct TaskRes {
-    pub ready: Ready,
-    pub ctx: InvokeContext,
+    pub ready_res: Vec<(Ready, InvokeContext)>,
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "[region {}] async append", self.ctx.region_id)
+        write!(f, "async append, write batch size {}", self.wb.data_size())
     }
 }
 
@@ -53,17 +51,16 @@ impl Runner {
     }
 
     fn handle_append(&mut self, task: Task) {
-        if !task.wb.is_empty() {
-            self.db.write(task.wb).unwrap_or_else(|e| {
-                panic!("{} failed to save append result: {:?}", self.tag, e);
-            });
+        if task.wb.is_empty() {
+            panic!("{} write batch should not empty", self.tag);
         }
 
+        self.db.write(task.wb).unwrap_or_else(|e| {
+            panic!("{} failed to save append result: {:?}", self.tag, e);
+        });
+
         self.notifier
-            .send(TaskRes {
-                ready: task.ready,
-                ctx: task.ctx,
-            })
+            .send(TaskRes { ready_res: task.ready_res })
             .unwrap();
     }
 }

@@ -55,7 +55,7 @@ use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState};
+use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::{ApplySnapResult, InvokeContext};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
@@ -544,18 +544,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn poll_append(&mut self) -> Vec<(Ready, InvokeContext)> {
-        let mut res = vec![];
+    fn poll_append(&self) -> Vec<(Ready, InvokeContext)> {
+        let mut ready_res = vec![];
         loop {
             match self.append_res_receiver.as_ref().unwrap().try_recv() {
-                Ok(append_res) => {
-                    res.push((append_res.ready, append_res.ctx));
+                Ok(mut res) => {
+                    ready_res.append(&mut res.ready_res);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexcepted error {:?}", e),
             }
         }
-        res
+        ready_res
     }
 
     /// If target peer doesn't exist, create it.
@@ -883,30 +883,40 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self, mut append_res: Vec<(Ready, InvokeContext)>) {
+    fn on_raft_ready(&mut self, mut ready_res: Vec<(Ready, InvokeContext)>) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
-        let mut regions_not_handled = HashSet::default();
-        for region_id in self.pending_raft_groups.drain() {
-            if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                if !peer.handle_raft_ready_append(&self.trans,
-                                                  &mut self.raft_metrics,
-                                                  &self.pd_worker,
-                                                  &mut append_res) {
-                    regions_not_handled.insert(region_id);
+        {
+            let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
+            let mut regions_not_handled = HashSet::default();
+            for region_id in self.pending_raft_groups.drain() {
+                if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                    if !peer.handle_raft_ready_append(&mut ctx, &self.pd_worker, &mut ready_res) {
+                        regions_not_handled.insert(region_id);
+                    }
                 }
             }
+            self.pending_raft_groups = regions_not_handled;
+
+            let need_schedule_append = !ctx.ready_res.is_empty();
+            if need_schedule_append {
+                self.append_worker
+                    .schedule(AppendTask {
+                        wb: ctx.wb,
+                        ready_res: ctx.ready_res,
+                    })
+                    .unwrap();
+            }
         }
-        self.pending_raft_groups = regions_not_handled;
 
         let mut new_res = self.poll_append();
-        append_res.append(&mut new_res);
+        ready_res.append(&mut new_res);
 
-        let mut ready_results = Vec::with_capacity(append_res.len());
-        for (mut ready, invoke_ctx) in append_res {
+        let mut ready_results = Vec::with_capacity(ready_res.len());
+        for (mut ready, invoke_ctx) in ready_res {
             let region_id = invoke_ctx.region_id;
             let res = self.region_peers
                 .get_mut(&region_id)
@@ -2031,11 +2041,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             return;
         }
 
-        let append_res = self.poll_append();
+        let ready_res = self.poll_append();
 
         // We handle raft ready in event loop.
-        if !self.pending_raft_groups.is_empty() || !append_res.is_empty() {
-            self.on_raft_ready(append_res);
+        if !self.pending_raft_groups.is_empty() || !ready_res.is_empty() {
+            self.on_raft_ready(ready_res);
         }
 
         self.poll_apply();
