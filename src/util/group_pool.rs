@@ -193,23 +193,23 @@ impl GroupTaskPoolMeta {
     }
 }
 
-struct Sentinel<'a> {
+struct Worker<'a> {
     name: Option<String>,
     receiver: &'a Arc<Mutex<Receiver<bool>>>,
     pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>,
     running_task_group: Option<u64>,
 }
 
-impl<'a> Sentinel<'a> {
+impl<'a> Worker<'a> {
     fn new(name: Option<String>,
            receiver: &'a Arc<Mutex<Receiver<bool>>>,
            pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>)
-           -> Sentinel<'a> {
+           -> Worker<'a> {
         {
             let mut meta = pool_meta.lock().unwrap();
             meta.new_thread_started().unwrap();
         }
-        Sentinel {
+        Worker {
             name: name,
             receiver: receiver,
             pool_meta: pool_meta,
@@ -239,9 +239,18 @@ impl<'a> Sentinel<'a> {
             }
         }
     }
+
+    fn process_one_task(&mut self) {
+        if let Some(task) = self.get_next_task() {
+            task.task.call_box(());
+            let mut meta = self.pool_meta.lock().unwrap();
+            meta.finished_task(task.group_id);
+        }
+        self.running_task_group = None;
+    }
 }
 
-impl<'a> Drop for Sentinel<'a> {
+impl<'a> Drop for Worker<'a> {
     fn drop(&mut self) {
         let is_panick = panicking();
         // clear info from pool_meta.
@@ -292,7 +301,7 @@ impl<'a> Drop for Sentinel<'a> {
 /// use std::sync::mpsc::{Sender, Receiver, channel};
 /// # fn main(){
 /// let concurrency = 2;
-/// let name = Some(thd_name!("sample"));
+/// let name = Some(String::from("sample"));
 /// let mut task_pool = GroupTaskPool::new(name,concurrency);
 /// let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
 /// let group_with_many_tasks = 1001 as u64;
@@ -411,20 +420,16 @@ fn spawn_in_pool(name: Option<String>,
     }
 
     builder.spawn(move || {
-            let mut sentinel = Sentinel::new(name, &receiver, &tasks);
+            let mut worker = Worker::new(name, &receiver, &tasks);
             // start new thread.
             loop {
-                if !sentinel.wait() {
+                if !worker.wait() {
                     break;
                 }
                 // handle task
                 // when a task is panic,the number of thread would
                 // be less of one, a new thread should begin.
-                if let Some(task_meta) = sentinel.get_next_task() {
-                    task_meta.task.call_box(());
-                    let mut meta = tasks.lock().unwrap();
-                    meta.finished_task(task_meta.group_id);
-                }
+                worker.process_one_task();
             }
         })
         .unwrap();
