@@ -52,4 +52,4 @@ cover_linux cover_osx:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
 	export RUST_TEST_THREADS=2 && \
-	grep " Running " tests.out | sed -e 's/Running//g' | xargs -n 1 -i ${LOCAL_DIR}/bin/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src --exclude-pattern tikv/src/bin --strip-path `pwd`/ target/kcov {} --nocapture
+	grep " Running " tests.out | sed -e 's/Running//g' | xargs -n 1 -I {} ${LOCAL_DIR}/bin/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src --exclude-pattern tikv/src/bin --strip-path `pwd`/ target/kcov {} --nocapture
