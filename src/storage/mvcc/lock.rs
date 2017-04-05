@@ -139,50 +139,51 @@ mod tests {
     #[test]
     fn test_lock_type() {
         let (key, value) = (b"key", b"value");
-        let tests = vec![(Mutation::Put((make_key(key), value.to_vec())), LockType::Put, FLAG_PUT),
-                         (Mutation::Delete(make_key(key)), LockType::Delete, FLAG_DELETE),
-                         (Mutation::Lock(make_key(key)), LockType::Lock, FLAG_LOCK)];
-        for (i, t) in tests.iter().enumerate() {
-            let lock_type = LockType::from_mutation(&t.0);
-            if lock_type != t.1 {
+        let mut tests =
+            vec![(Mutation::Put((make_key(key), value.to_vec())), LockType::Put, FLAG_PUT),
+                 (Mutation::Delete(make_key(key)), LockType::Delete, FLAG_DELETE),
+                 (Mutation::Lock(make_key(key)), LockType::Lock, FLAG_LOCK)];
+        for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
+            let lt = LockType::from_mutation(&mutation);
+            if lt != lock_type {
                 panic!("#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
                        i,
-                       t.0,
-                       t.1,
-                       lock_type);
+                       mutation,
+                       lock_type,
+                       lt);
             }
-            let f = t.1.to_u8();
-            if f != t.2 {
-                panic!("#{}, expect to_u8({:?}) returns {:?}, but got {:?}",
+            let f = lock_type.to_u8();
+            if f != flag {
+                panic!("#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
                        i,
-                       t.1,
-                       t.2,
+                       lock_type,
+                       flag,
                        f);
             }
-            let lock_type = LockType::from_u8(t.2).unwrap();
-            if lock_type != t.1 {
-                panic!("#{}, expect from_u8({:?} returns {:?}, but got {:?})",
+            let lt = LockType::from_u8(flag).unwrap();
+            if lt != lock_type {
+                panic!("#{}, expect from_u8({:?}) returns {:?}, but got {:?})",
                        i,
-                       t.2,
-                       t.1,
-                       lock_type);
+                       flag,
+                       lock_type,
+                       lt);
             }
         }
     }
 
     #[test]
     fn test_lock() {
-        let locks = vec![Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None),
-                         Lock::new(LockType::Delete,
-                                   b"pk".to_vec(),
-                                   1,
-                                   10,
-                                   Some(b"short".to_vec()))];
-        for (i, lock) in locks.iter().enumerate() {
+        let mut locks = vec![Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None),
+                             Lock::new(LockType::Delete,
+                                       b"pk".to_vec(),
+                                       1,
+                                       10,
+                                       Some(b"short".to_vec()))];
+        for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
             match Lock::parse(&v[..]) {
                 Ok(l) => {
-                    if l != *lock {
+                    if l != lock {
                         panic!("#{} expect {:?}, but got {:?}", i, lock, l);
                     }
                 }
