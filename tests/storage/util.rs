@@ -15,6 +15,8 @@ use std::time::Duration;
 use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
+use std::sync::Mutex;
 use tikv::storage::{Engine, Snapshot, Modify, ALL_CFS};
 use tikv::storage::engine::{Callback, Result};
 use tikv::storage::config::Config;
@@ -30,6 +32,7 @@ pub struct BlockEngine {
     engine: Box<Engine>,
     block_write: Arc<AtomicBool>,
     block_snapshot: Arc<AtomicBool>,
+    sender: Arc<Mutex<Option<Sender<bool>>>>,
 }
 
 impl BlockEngine {
@@ -38,35 +41,51 @@ impl BlockEngine {
             engine: engine,
             block_write: Arc::new(AtomicBool::new(false)),
             block_snapshot: Arc::new(AtomicBool::new(false)),
+            sender: Arc::new(Mutex::new(None)),
         }
     }
 
     #[allow(dead_code)]
-    pub fn block_write(&self) {
-        self.block_write.store(true, Ordering::SeqCst);
+    fn set_sender(&mut self, sender: Option<Sender<bool>>) {
+        let mut data = self.sender.lock().unwrap();
+        *data = sender;
     }
 
     #[allow(dead_code)]
-    pub fn unblock_write(&self) {
+    pub fn block_write(&mut self, sender: Sender<bool>) {
+        self.block_write.store(true, Ordering::SeqCst);
+        self.set_sender(Some(sender));
+    }
+
+    #[allow(dead_code)]
+    pub fn unblock_write(&mut self) {
         self.block_write.store(false, Ordering::SeqCst);
+        self.set_sender(None);
     }
 
-    pub fn block_snapshot(&self) {
+    pub fn block_snapshot(&mut self, sender: Sender<bool>) {
         self.block_snapshot.store(true, Ordering::SeqCst);
+        let mut data = self.sender.lock().unwrap();
+        *data = Some(sender);
     }
 
-    pub fn unblock_snapshot(&self) {
+    pub fn unblock_snapshot(&mut self) {
         self.block_snapshot.store(false, Ordering::SeqCst);
+        self.set_sender(None);
     }
 }
 
 impl Engine for BlockEngine {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()> {
         let block_write = self.block_write.clone();
+        let sender = self.sender.clone();
         self.engine.async_write(ctx,
                                 batch,
                                 box move |res| {
             thread::spawn(move || {
+                if block_write.load(Ordering::SeqCst) {
+                    sender.lock().unwrap().as_ref().unwrap().send(true).unwrap();
+                }
                 while block_write.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
                 }
@@ -77,9 +96,13 @@ impl Engine for BlockEngine {
 
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()> {
         let block_snapshot = self.block_snapshot.clone();
+        let sender = self.sender.clone();
         self.engine.async_snapshot(ctx,
                                    box move |res| {
             thread::spawn(move || {
+                if block_snapshot.load(Ordering::SeqCst) {
+                    sender.lock().unwrap().as_ref().unwrap().send(true).unwrap();
+                }
                 while block_snapshot.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
                 }
@@ -93,6 +116,7 @@ impl Engine for BlockEngine {
             engine: self.engine.clone(),
             block_write: self.block_write.clone(),
             block_snapshot: self.block_snapshot.clone(),
+            sender: self.sender.clone(),
         }
     }
 }

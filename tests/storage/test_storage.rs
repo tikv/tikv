@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 use std::thread;
 use rand::random;
@@ -675,12 +675,12 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 }
 
 fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
-    let engine = util::BlockEngine::new(engine);
+    let mut engine = util::BlockEngine::new(engine);
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
-
-    engine.block_snapshot();
+    let (stx, srx): (Sender<bool>, Receiver<bool>) = channel();
+    engine.block_snapshot(stx);
     let (tx1, rx1) = channel();
     storage.async_gc(ctx.clone(),
                   1,
@@ -703,6 +703,7 @@ fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
         })
         .unwrap();
 
+    srx.recv().unwrap();
     rx2.recv().unwrap();
     engine.unblock_snapshot();
     rx1.recv().unwrap();
