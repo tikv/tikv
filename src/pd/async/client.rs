@@ -25,8 +25,8 @@ use protobuf::RepeatedField;
 use futures::Future;
 
 use kvproto::metapb;
-use kvproto::pdpb::{self, Member};
-use kvproto::pdpb::{GetMembersRequest, GetMembersResponse};
+use kvproto::pdpb::{self, ErrorType};
+use kvproto::pdpb::{GetMembersRequest, GetMembersResponse, Member};
 use kvproto::pdpb_grpc::PDAsync;
 use kvproto::pdpb_grpc::PDAsyncClient;
 
@@ -226,7 +226,11 @@ fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
     }
     // TODO: translate more error types
     let err = header.get_error();
-    Err(box_err!(err.get_message()))
+    match err.get_field_type() {
+        ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
+        ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
+        _ => Err(box_err!(err.get_message())),
+    }
 }
 
 impl fmt::Debug for RpcClient {
