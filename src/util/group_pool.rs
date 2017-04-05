@@ -421,11 +421,9 @@ fn spawn_in_pool(name: Option<String>,
 
     builder.spawn(move || {
             let mut worker = Worker::new(name, &receiver, &tasks);
-            // start new thread.
-            loop {
-                if !worker.wait() {
-                    break;
-                }
+            // start the worker.
+            // loop break on receive stop message.
+            while worker.wait() {
                 // handle task
                 // when a task is panic,the number of thread would
                 // be less of one, a new thread should begin.
