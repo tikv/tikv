@@ -84,7 +84,9 @@ impl Engine for BlockEngine {
                                 box move |res| {
             thread::spawn(move || {
                 if block_write.load(Ordering::SeqCst) {
-                    sender.lock().unwrap().as_ref().unwrap().send(true).unwrap();
+                    if let Some(s) = sender.lock().unwrap().as_ref() {
+                        s.send(true).unwrap();
+                    }
                 }
                 while block_write.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
@@ -101,7 +103,9 @@ impl Engine for BlockEngine {
                                    box move |res| {
             thread::spawn(move || {
                 if block_snapshot.load(Ordering::SeqCst) {
-                    sender.lock().unwrap().as_ref().unwrap().send(true).unwrap();
+                    if let Some(s) = sender.lock().unwrap().as_ref() {
+                        s.send(true).unwrap();
+                    }
                 }
                 while block_snapshot.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
