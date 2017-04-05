@@ -28,9 +28,15 @@ ${LOCAL_DIR}/bin/kcov:
 	curl -L https://github.com/SimonKagstrom/kcov/archive/v33.tar.gz -o kcov.tar.gz && \
 	tar xf kcov.tar.gz && \
 	cd kcov-33 && \
-	cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_DIR} . && \
-	make && \
-	make install
+	if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then \
+	    cmake -G Xcode . && \
+		xcodebuild -configuration Release && \
+		cp src/Release/kcov ${LOCAL_DIR}/bin/kcov; \
+	else \
+	    cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_DIR} . && \
+		make && \
+		make install; \
+	fi
 
 prepare-rustfmt:
 	curl -L https://github.com/tennix/rustfmt/releases/download/v0.6/rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -o rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz && \
@@ -43,7 +49,7 @@ prepare_brew:
 	brew update && \
 	brew install gflags snappy rocksdb
 
-prepare_osx: prepare_brew
+prepare_osx: prepare_brew ${LOCAL_DIR}/bin/kcov
 
 test_linux test_osx:
 	export CI=true && ${CI_BUILD_DIR}/test.sh
