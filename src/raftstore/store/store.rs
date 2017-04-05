@@ -38,7 +38,7 @@ use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
-use raft::{self, SnapshotStatus, INVALID_INDEX, Ready};
+use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler};
@@ -56,7 +56,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState};
-use super::peer_storage::{ApplySnapResult, InvokeContext};
+use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -76,7 +76,7 @@ pub struct StoreChannel {
     pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
 }
 
-pub struct Store<T, C: 'static> {
+pub struct Store<T: 'static, C: 'static> {
     cfg: Rc<Config>,
     engine: Arc<DB>,
     store: metapb::Store,
@@ -423,7 +423,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.apply_worker.start(apply_runner));
 
         let (tx, rx) = mpsc::channel();
-        let append_runner = AppendRunner::new(self.tag.clone(), self.engine.clone(), tx);
+        let append_runner = AppendRunner::new(self.tag.clone(),
+                                              self.engine.clone(),
+                                              tx,
+                                              self.trans.clone());
         self.append_res_receiver = Some(rx);
         box_try!(self.append_worker.start(append_runner));
 
@@ -544,12 +547,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn poll_append(&mut self) -> Vec<(Ready, InvokeContext)> {
+    fn poll_append(&mut self) -> Vec<AppendTaskRes> {
         let mut res = vec![];
         loop {
             match self.append_res_receiver.as_ref().unwrap().try_recv() {
                 Ok(append_res) => {
-                    res.push((append_res.ready, append_res.ctx));
+                    res.push(append_res);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexcepted error {:?}", e),
@@ -883,7 +886,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self, mut append_res: Vec<(Ready, InvokeContext)>) {
+    fn on_raft_ready(&mut self, mut append_res: Vec<AppendTaskRes>) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
@@ -906,16 +909,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         append_res.append(&mut new_res);
 
         let mut ready_results = Vec::with_capacity(append_res.len());
-        for (mut ready, invoke_ctx) in append_res {
-            let region_id = invoke_ctx.region_id;
-            let res = self.region_peers
+        for mut res in append_res {
+            let region_id = res.ctx.as_mut().unwrap().region_id;
+            let post_res = self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .post_raft_ready_append(&mut self.raft_metrics,
-                                        &self.trans,
-                                        &mut ready,
-                                        invoke_ctx);
-            ready_results.push((region_id, ready, res));
+                .post_raft_ready_append(&mut self.raft_metrics, &self.trans, &mut res);
+            ready_results.push((region_id, res.ready.take().unwrap(), post_res));
         }
 
         self.raft_metrics.append_log.observe(duration_to_sec(t.elapsed()) as f64);

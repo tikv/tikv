@@ -40,13 +40,13 @@ use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{Worker, Scheduler};
-use raftstore::store::worker::{ApplyTask, ApplyRes, AppendTask};
+use raftstore::store::worker::{ApplyTask, ApplyRes, AppendTask, AppendTaskRes};
 use util::{clocktime, Either, HashMap, HashSet};
 
 use pd::INVALID_ID;
 
 use super::store::Store;
-use super::peer_storage::{PeerStorage, ApplySnapResult, write_peer_state, InvokeContext};
+use super::peer_storage::{PeerStorage, ApplySnapResult, write_peer_state};
 use super::util;
 use super::msg::Callback;
 use super::cmd_resp;
@@ -616,7 +616,7 @@ impl Peer {
                                                   trans: &T,
                                                   metrics: &mut RaftMetrics,
                                                   worker: &Worker<PdTask>,
-                                                  append_res: &mut Vec<(Ready, InvokeContext)>)
+                                                  append_res: &mut Vec<AppendTaskRes>)
                                                   -> bool {
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
@@ -678,13 +678,24 @@ impl Peer {
         if !wb.is_empty() {
             self.append_scheduler
                 .schedule(AppendTask {
-                    wb: wb,
-                    ready: ready,
-                    ctx: invoke_ctx,
+                    wb: Some(wb),
+                    ready: Some(ready),
+                    ctx: Some(invoke_ctx),
+                    region: self.region().clone(),
+                    peer: self.peer.clone(),
+                    tag: self.tag.clone(),
+                    is_leader: self.is_leader(),
+                    is_initialized: self.is_initialized(),
                 })
                 .unwrap();
         } else {
-            append_res.push((ready, invoke_ctx));
+            append_res.push(AppendTaskRes {
+                ready: Some(ready),
+                ctx: Some(invoke_ctx),
+                send_to_quorum_ts: None,
+                msg_unreachable_peers: None,
+                snap_unreachable_peers: None,
+            });
         }
 
         true
@@ -693,13 +704,14 @@ impl Peer {
     pub fn post_raft_ready_append<T: Transport>(&mut self,
                                                 metrics: &mut RaftMetrics,
                                                 trans: &T,
-                                                ready: &mut Ready,
-                                                invoke_ctx: InvokeContext)
+                                                append_res: &mut AppendTaskRes)
                                                 -> Option<ApplySnapResult> {
         if !self.is_appending_log {
             panic!("is appending log should be true");
         }
         self.is_appending_log = false;
+
+        let invoke_ctx = append_res.ctx.take().unwrap();
 
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
@@ -709,9 +721,29 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
 
         if !self.is_leader() {
-            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
-                warn!("{} follower send messages err {:?}", self.tag, e);
-            });
+            self.send(trans,
+                      append_res.ready.as_mut().unwrap().messages.drain(..),
+                      &mut metrics.message)
+                .unwrap_or_else(|e| {
+                    warn!("{} follower send messages err {:?}", self.tag, e);
+                });
+        }
+
+        if append_res.send_to_quorum_ts.is_some() {
+            self.leader_lease_expired_time =
+            Some(Either::Right(self.next_lease_expired_time(append_res.send_to_quorum_ts.take().unwrap())));
+        }
+
+        if append_res.msg_unreachable_peers.is_some() {
+            for to_peer_id in append_res.msg_unreachable_peers.as_ref().unwrap() {
+                self.raft_group.report_unreachable(*to_peer_id);
+            }
+        }
+
+        if append_res.snap_unreachable_peers.is_some() {
+            for to_peer_id in append_res.snap_unreachable_peers.as_ref().unwrap() {
+                self.raft_group.report_snapshot(*to_peer_id, SnapshotStatus::Failure);
+            }
         }
 
         if apply_snap_result.is_some() {
