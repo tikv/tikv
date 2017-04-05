@@ -65,8 +65,7 @@ impl BlockEngine {
 
     pub fn block_snapshot(&mut self, sender: Sender<bool>) {
         self.block_snapshot.store(true, Ordering::SeqCst);
-        let mut data = self.sender.lock().unwrap();
-        *data = Some(sender);
+        self.set_sender(Some(sender));
     }
 
     pub fn unblock_snapshot(&mut self) {

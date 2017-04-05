@@ -177,7 +177,7 @@ fn test_scheduler_leader_change_twice() {
         })
         .unwrap();
     // wait for the message, the prewrite should be blocked at snapshot stage.
-    srx.recv().unwrap();
+    srx.recv_timeout(Duration::from_secs(2)).unwrap();
     // Transfer leader twice, then unblock snapshot.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());

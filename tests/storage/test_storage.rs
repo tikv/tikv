@@ -703,7 +703,7 @@ fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
         })
         .unwrap();
 
-    srx.recv().unwrap();
+    srx.recv_timeout(Duration::from_secs(2)).unwrap();
     rx2.recv().unwrap();
     engine.unblock_snapshot();
     rx1.recv().unwrap();
