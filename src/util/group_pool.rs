@@ -13,15 +13,10 @@
 
 use std::usize;
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::mpsc;
-use std::thread::{Builder, panicking};
-use std::result::Result;
+use std::sync::mpsc::{channel, Sender, Receiver};
+use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
 use super::HashMap;
-
-
-type Thunk<'a> = Box<FnBox() + Send + 'a>;
 
 struct TaskMeta<'a> {
     // the task's number in the pool.
@@ -30,7 +25,7 @@ struct TaskMeta<'a> {
     id: u64,
     // the task's group_id.
     group_id: u64,
-    task: Thunk<'a>,
+    task: Box<FnBox() + Send + 'a>,
 }
 
 impl<'a> TaskMeta<'a> {
@@ -47,28 +42,22 @@ impl<'a> TaskMeta<'a> {
 
 struct GroupTaskPoolMeta {
     total_tasks_num: u64,
-    concurrency: usize,
-    running_thread_num: usize,
     running_tasks_num: usize,
     waiting_tasks_num: usize,
     // group_id => count
     running_tasks: HashMap<u64, usize>,
     // group_id => tasks array
     waiting_tasks: HashMap<u64, Vec<TaskMeta<'static>>>,
-    stop_finished_sender: Sender<bool>, // send stop when running_thread_num turns 0
 }
 
 impl GroupTaskPoolMeta {
-    fn new(concurrency: usize, stop_finished_sender: Sender<bool>) -> GroupTaskPoolMeta {
+    fn new() -> GroupTaskPoolMeta {
         GroupTaskPoolMeta {
             total_tasks_num: 0,
             running_tasks_num: 0,
-            running_thread_num: 0,
             waiting_tasks_num: 0,
             running_tasks: HashMap::default(),
             waiting_tasks: HashMap::default(),
-            stop_finished_sender: stop_finished_sender,
-            concurrency: concurrency,
         }
     }
 
@@ -88,25 +77,6 @@ impl GroupTaskPoolMeta {
 
     fn total_task_num(&self) -> usize {
         self.waiting_tasks_num + self.running_tasks_num
-    }
-
-    fn new_thread_started(&mut self) -> Result<(), &str> {
-        if self.running_thread_num >= self.concurrency {
-            return Err("too many thread");
-        }
-        self.running_thread_num += 1;
-        Ok(())
-    }
-
-    // one_thread_stopped is called when one thread in the pool
-    // is stopped. when all threads in the pool is stopped, it
-    // would send out a message in stop_finished_sender. It always
-    // happen in func Drop of GroupTaskPool
-    fn one_thread_stopped(&mut self, from_panic: bool) {
-        self.running_thread_num -= 1;
-        if !from_panic && self.running_thread_num == 0 {
-            self.stop_finished_sender.send(true).unwrap();
-        }
     }
 
     // finished_task is called when one task is finished in the
@@ -194,23 +164,16 @@ impl GroupTaskPoolMeta {
 }
 
 struct Worker<'a> {
-    name: Option<String>,
     receiver: &'a Arc<Mutex<Receiver<bool>>>,
     pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>,
     running_task_group: Option<u64>,
 }
 
 impl<'a> Worker<'a> {
-    fn new(name: Option<String>,
-           receiver: &'a Arc<Mutex<Receiver<bool>>>,
+    fn new(receiver: &'a Arc<Mutex<Receiver<bool>>>,
            pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>)
            -> Worker<'a> {
-        {
-            let mut meta = pool_meta.lock().unwrap();
-            meta.new_thread_started().unwrap();
-        }
         Worker {
-            name: name,
             receiver: receiver,
             pool_meta: pool_meta,
             running_task_group: None,
@@ -250,28 +213,6 @@ impl<'a> Worker<'a> {
     }
 }
 
-impl<'a> Drop for Worker<'a> {
-    fn drop(&mut self) {
-        let is_panick = panicking();
-        // clear info from pool_meta.
-        {
-            let mut meta = self.pool_meta.lock().unwrap();
-            meta.one_thread_stopped(is_panick);
-            if is_panick && self.running_task_group.is_some() {
-                meta.finished_task(self.running_task_group.unwrap());
-            }
-        }
-
-        // Since in `tikv` any panic would be cached and make the
-        // `tikv` down. This block seems would never be covered in
-        // the product environment.
-        if is_panick {
-            spawn_in_pool(self.name.clone(),
-                          self.receiver.clone(),
-                          self.pool_meta.clone());
-        }
-    }
-}
 
 /// A group task pool used to execute tasks in parallel.
 /// Spawns `concurrency` threads to process tasks.
@@ -354,28 +295,28 @@ impl<'a> Drop for Worker<'a> {
 pub struct GroupTaskPool {
     tasks: Arc<Mutex<GroupTaskPoolMeta>>,
     job_sender: Sender<bool>,
-    stop_finished_receiver: Receiver<bool>,
     concurrency: usize,
+    threads: Vec<JoinHandle<()>>,
 }
 
 impl GroupTaskPool {
     pub fn new(name: Option<String>, num_threads: usize) -> GroupTaskPool {
         assert!(num_threads >= 1);
-        let (jtx, jrx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
+        let (jtx, jrx) = channel();
         let jrx = Arc::new(Mutex::new(jrx));
-        let (stx, srx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
-        let tasks = Arc::new(Mutex::new(GroupTaskPoolMeta::new(num_threads, stx)));
+        let tasks = Arc::new(Mutex::new(GroupTaskPoolMeta::new()));
 
+        let mut threads = Vec::new();
         // Threadpool threads
         for _ in 0..num_threads {
-            spawn_in_pool(name.clone(), jrx.clone(), tasks.clone());
+            threads.push(new_thread(name.clone(), jrx.clone(), tasks.clone()));
         }
 
         GroupTaskPool {
             tasks: tasks.clone(),
             job_sender: jtx,
-            stop_finished_receiver: srx,
             concurrency: num_threads,
+            threads: threads,
         }
     }
 
@@ -391,46 +332,48 @@ impl GroupTaskPool {
         self.job_sender.send(true).unwrap();
     }
 
-    fn stop(&mut self) {
-        for _ in 0..self.concurrency {
-            self.job_sender.send(false).unwrap();
-        }
-        self.stop_finished_receiver.recv().unwrap();
-    }
-
     pub fn get_tasks_num(&self) -> usize {
         let lock = self.tasks.clone();
         let meta = lock.lock().unwrap();
         meta.total_task_num()
     }
-}
 
-impl Drop for GroupTaskPool {
-    fn drop(&mut self) {
-        self.stop();
+    pub fn stop(&mut self) -> Result<(), String> {
+        for _ in 0..self.concurrency {
+            if let Err(e) = self.job_sender.send(false) {
+                return Err(format!("{:?}", e));
+            }
+        }
+        while let Some(t) = self.threads.pop() {
+            if let Err(e) = t.join() {
+                return Err(format!("{:?}", e));
+            }
+        }
+        Ok(())
     }
 }
 
-fn spawn_in_pool(name: Option<String>,
-                 receiver: Arc<Mutex<Receiver<bool>>>,
-                 tasks: Arc<Mutex<GroupTaskPoolMeta>>) {
+fn new_thread(name: Option<String>,
+              receiver: Arc<Mutex<Receiver<bool>>>,
+              tasks: Arc<Mutex<GroupTaskPoolMeta>>)
+              -> JoinHandle<()> {
     let mut builder = Builder::new();
     if let Some(ref name) = name {
         builder = builder.name(name.clone());
     }
 
     builder.spawn(move || {
-            let mut worker = Worker::new(name, &receiver, &tasks);
+            let mut worker = Worker::new(&receiver, &tasks);
             // start the worker.
             // loop break on receive stop message.
             while worker.wait() {
                 // handle task
-                // when a task is panic,the number of thread would
-                // be less of one, a new thread should begin.
+                // since `tikv` would be down on any panic happens,
+                // we needn't process panic case here.
                 worker.process_one_task();
             }
         })
-        .unwrap();
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -491,6 +434,7 @@ mod test {
             let second = jrx.recv().unwrap();
             assert_eq!(second, group_with_many_tasks);
         }
+        task_pool.stop().unwrap();
     }
 
 
@@ -538,32 +482,6 @@ mod test {
             let second = jrx.recv().unwrap();
             assert_eq!(second, group_with_big_task);
         }
-    }
-
-    #[test]
-    fn test_should_not_panic_on_drop_if_subtasks_panic_after_drop() {
-        let name = Some(thd_name!("test_should_not_panic_on_drop_if_subtasks_panic_after_drop"));
-        let task_num = 2;
-        let group_id = 1;
-        let mut pool = GroupTaskPool::new(name, task_num);
-        let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
-
-        // Panic all the existing threads in a bit.
-        for _ in 0..task_num {
-            pool.execute(group_id, move || {
-                panic!("Ignore this panic, it should!");
-            });
-        }
-
-        for id in 0..task_num {
-            let sender = jtx.clone();
-            pool.execute(group_id, move || {
-                sender.send(id as u64).unwrap();
-            });
-        }
-
-        for _ in 0..task_num {
-            jrx.recv().unwrap();
-        }
+        task_pool.stop().unwrap();
     }
 }

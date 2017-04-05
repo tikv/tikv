@@ -267,6 +267,10 @@ impl BatchRunnable<Task> for Host {
             self.reqs.insert(id, reqs);
         }
     }
+
+    fn shutdown(&mut self) {
+        self.pool.stop().unwrap();
+    }
 }
 
 fn err_resp(e: Error) -> Response {
