@@ -211,15 +211,13 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn get_txn_commit_ts(&mut self, key: &Key, start_ts: u64) -> Result<Option<u64>> {
+    pub fn get_txn_commit_info(&mut self,
+                               key: &Key,
+                               start_ts: u64)
+                               -> Result<Option<(u64, WriteType)>> {
         if let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, start_ts)) {
             if write.start_ts == start_ts {
-                match write.write_type {
-                    WriteType::Put | WriteType::Delete | WriteType::Lock => {
-                        return Ok(Some(commit_ts))
-                    }
-                    WriteType::Rollback => {}
-                }
+                return Ok(Some((commit_ts, write.write_type)));
             }
         }
         Ok(None)
