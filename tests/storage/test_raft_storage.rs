@@ -140,10 +140,7 @@ fn test_scheduler_leader_change_twice() {
     ctx.set_peer(peers[0].clone());
     let (tx, rx) = channel();
     let (stx, srx): (Sender<bool>, Receiver<bool>) = channel();
-    // engine.set_sender(Some(stx.clone()));
-
     engine.block_snapshot(stx.clone());
-
     storage.async_prewrite(ctx.clone(),
                         vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
                         b"k".to_vec(),
