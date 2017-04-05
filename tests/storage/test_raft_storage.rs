@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::mpsc::{Sender, Receiver, channel};
+use std::sync::mpsc::channel;
 use std::time::Duration;
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
@@ -158,7 +158,7 @@ fn test_scheduler_leader_change_twice() {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peers[0].clone());
     let (tx, rx) = channel();
-    let (stx, srx): (Sender<bool>, Receiver<bool>) = channel();
+    let (stx, srx) = channel();
     engine.block_snapshot(stx.clone());
     storage.async_prewrite(ctx.clone(),
                         vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],

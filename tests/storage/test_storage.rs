@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::thread;
 use rand::random;
@@ -679,7 +679,7 @@ fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
-    let (stx, srx): (Sender<bool>, Receiver<bool>) = channel();
+    let (stx, srx) = channel();
     engine.block_snapshot(stx);
     let (tx1, rx1) = channel();
     storage.async_gc(ctx.clone(),

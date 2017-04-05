@@ -74,6 +74,12 @@ impl BlockEngine {
     }
 }
 
+fn try_to_send(sender: Arc<Mutex<Option<Sender<bool>>>>) {
+    if let Some(s) = sender.lock().unwrap().as_ref() {
+        s.send(true).unwrap();
+    }
+}
+
 impl Engine for BlockEngine {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()> {
         let block_write = self.block_write.clone();
@@ -83,9 +89,7 @@ impl Engine for BlockEngine {
                                 box move |res| {
             thread::spawn(move || {
                 if block_write.load(Ordering::SeqCst) {
-                    if let Some(s) = sender.lock().unwrap().as_ref() {
-                        s.send(true).unwrap();
-                    }
+                    try_to_send(sender);
                 }
                 while block_write.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
@@ -102,9 +106,7 @@ impl Engine for BlockEngine {
                                    box move |res| {
             thread::spawn(move || {
                 if block_snapshot.load(Ordering::SeqCst) {
-                    if let Some(s) = sender.lock().unwrap().as_ref() {
-                        s.send(true).unwrap();
-                    }
+                    try_to_send(sender);
                 }
                 while block_snapshot.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
