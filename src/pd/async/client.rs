@@ -15,7 +15,6 @@ use std::fmt;
 use std::time::Duration;
 use std::thread;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use grpc;
 use grpc::futures_grpc::GrpcFutureSend;
@@ -33,7 +32,6 @@ use kvproto::pdpb_grpc::PDAsyncClient;
 use super::super::PdFuture;
 use super::super::{Result, Error, PdClient};
 use super::util::LeaderClient;
-use super::util::Request;
 use super::super:: metrics::*;
 
 // TODO: revoke pubs.
@@ -242,7 +240,6 @@ impl fmt::Debug for RpcClient {
 }
 
 const LEADER_CHANGE_RETRY: usize = 10;
-const REQUEST_RETRY: usize = 10;
 
 impl PdClient for RpcClient {
     fn get_cluster_id(&self) -> Result<u64> {
@@ -399,26 +396,22 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let client_factory = |client: Arc<PDAsyncClient>, req: pdpb::GetRegionByIDRequest| {
-            let request_factory = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
-                client.GetRegionByID(req)
-                    .map_err(Error::Grpc)
-                    .and_then(|mut resp| {
-                        try!(check_resp_header(resp.get_header()));
-                        if resp.has_region() {
-                            Ok(Some(resp.take_region()))
-                        } else {
-                            Ok(None)
-                        }
-                    })
-                    .boxed()
-            };
-
-            Request::new(client, req, request_factory, REQUEST_RETRY).execute()
+        let request_factory = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
+            client.GetRegionByID(req)
+                .map_err(Error::Grpc)
+                .and_then(|mut resp| {
+                    try!(check_resp_header(resp.get_header()));
+                    if resp.has_region() {
+                        Ok(Some(resp.take_region()))
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .boxed()
         };
 
         self.leader_client
-            .client(req, client_factory, LEADER_CHANGE_RETRY)
+            .client(req, request_factory, LEADER_CHANGE_RETRY)
             .execute()
     }
 }

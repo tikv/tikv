@@ -25,7 +25,6 @@ use futures::future::ok;
 use futures::future::{self, loop_fn, Loop};
 
 use kvproto::pdpb::GetMembersResponse;
-use kvproto::pdpb_grpc::PDAsync;
 use kvproto::pdpb_grpc::PDAsyncClient;
 
 use util::HandyRwLock;
@@ -55,15 +54,17 @@ impl LeaderClient {
         }
     }
 
-    pub fn client<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Client<Req, Resp, F>
+    pub fn client<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
         where Req: Clone + 'static,
-              F: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
+              F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
     {
-        Client {
-            retry_count: retry,
+        Request {
+            reconnect_count: retry,
+            request_sent: 0,
             bundle: self.inner.clone(),
             req: req,
             resp: None,
+            client: None,
             func: f,
         }
     }
@@ -87,55 +88,68 @@ impl LeaderClient {
     }
 }
 
-/// The context of using and updating a client.
-pub struct Client<Req, Resp, F> {
-    retry_count: usize,
+struct BundleRead {
+    inner: Option<Arc<RwLock<Bundle>>>,
+}
+
+impl Future for BundleRead {
+    type Item = Arc<PDAsyncClient>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let inner = self.inner.take().expect("BundleRead cannot poll twice");
+        let read = inner.try_read();
+        match read {
+            Ok(bundle) => Ok(Async::Ready(bundle.client.clone())),
+            Err(TryLockError::WouldBlock) => Ok(Async::NotReady),
+            // TODO: handle `PoisonError`.
+            Err(err) => panic!("{:?}", err),
+        }
+    }
+}
+
+/// The context of sending requets.
+pub struct Request<Req, Resp, F> {
+    reconnect_count: usize,
+    request_sent: usize,
+
     bundle: Arc<RwLock<Bundle>>,
+
     req: Req,
     resp: Option<Result<Resp>>,
+    client: Option<Arc<PDAsyncClient>>,
     func: F,
 }
 
-impl<Req, Resp, F> Client<Req, Resp, F>
+const RECONNECT_THD: usize = 5;
+
+impl<Req, Resp, F> Request<Req, Resp, F>
     where Req: Clone + Send + 'static,
           Resp: Send + 'static,
-          F: FnMut(Arc<PDAsyncClient>, Req) -> PdFuture<Resp> + Send + 'static
+          F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
 {
-    fn get(mut self) -> PdFuture<Client<Req, Resp, F>> {
-        debug!("GetClient get remains: {}", self.retry_count);
-        self.retry_count -= 1;
+    fn reconnect_if_needed(mut self) -> PdFuture<Self> {
+        debug!("reconnect remains: {}", self.reconnect_count);
 
-        let get_read = GetClientRead { inner: Some(self) };
-
-        let ctx = get_read.map(|(mut this, client)| {
-                let r = this.req.clone();
-                let req = (this.func)(client, r);
-                req.then(|resp| ok((this, resp)))
-            })
-            .flatten();
-
-        ctx.map(|ctx| {
-                let (mut this, resp) = ctx;
-                match resp {
-                    Ok(resp) => this.resp = Some(Ok(resp)),
-                    Err(err) => {
-                        error!("leader request failed: {:?}", err);
-                    }
-                };
-                this
-            })
-            .boxed()
-    }
-
-    fn check(self) -> PdFuture<(Client<Req, Resp, F>, bool)> {
-        if self.retry_count == 0 {
-            return ok((self, true)).boxed();
+        if self.request_sent == 0 {
+            let bundle = BundleRead { inner: Some(self.bundle.clone()) };
+            return bundle.map(|client| {
+                    self.client = Some(client);
+                    ok(self)
+                })
+                .flatten()
+                .boxed();
         }
 
-        if self.resp.as_ref().map_or(false, |ret| ret.is_ok()) {
-            debug!("GetClient get Some(Ok(_))");
-            return ok((self, true)).boxed();
+        if self.request_sent < RECONNECT_THD {
+            debug!("retry on the same client");
+            return ok(self).boxed();
         }
+
+        // Updating client.
+
+        self.request_sent = 0;
+        self.reconnect_count -= 1;
 
         // FIXME: should not block the core.
         warn!("updating PD client, block the tokio core");
@@ -162,95 +176,14 @@ impl<Req, Resp, F> Client<Req, Resp, F>
             }
         }
 
-        ok((self, false)).boxed()
+        ok(self).boxed()
     }
 
-    fn get_resp(self) -> Option<Result<Resp>> {
-        self.resp
-    }
-
-    /// Returns a Future, it is resolves once a future returned by the closure
-    /// is resolved successfully, otherwise it repeats `retry` times.
-    pub fn execute(self) -> PdFuture<Resp> {
-        let this = self;
-        let get_client = |this: Self| {
-            this.get()
-                .and_then(|this| this.check())
-                .and_then(|(this, done)| {
-                    if done {
-                        Ok(Loop::Break(this))
-                    } else {
-                        Ok(Loop::Continue(this))
-                    }
-                })
-        };
-
-        loop_fn(this, get_client)
-            .then(|req| {
-                match req.unwrap().get_resp() {
-                    Some(Ok(resp)) => future::ok(resp),
-                    Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("GetClient fail to request")),
-                }
-            })
-            .boxed()
-    }
-}
-
-struct GetClientRead<Req, Resp, F> {
-    inner: Option<Client<Req, Resp, F>>,
-}
-
-// TODO: impl Stream instead.
-impl<Req, Resp, F> Future for GetClientRead<Req, Resp, F> {
-    type Item = (Client<Req, Resp, F>, Arc<PDAsyncClient>);
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let inner = self.inner.take().expect("GetClientRead cannot poll twice");
-        let ret = match inner.bundle.try_read() {
-            Ok(bundle) => Ok(Async::Ready(bundle.client.clone())),
-            Err(TryLockError::WouldBlock) => Ok(Async::NotReady),
-            // TODO: handle `PoisonError`.
-            Err(err) => panic!("{:?}", err),
-        };
-
-        ret.map(|async| async.map(|client| (inner, client)))
-    }
-}
-
-// TODO: GetClientWrite
-
-/// The context of sending requets.
-pub struct Request<C, Req, Resp, F> {
-    retry_count: usize,
-    client: Arc<C>,
-    req: Req,
-    resp: Option<Result<Resp>>,
-    func: F,
-}
-
-impl<C, Req, Resp, F> Request<C, Req, Resp, F>
-    where C: PDAsync + Send + Sync + 'static,
-          Req: Clone + Send + 'static,
-          Resp: Send + 'static,
-          F: FnMut(&C, Req) -> PdFuture<Resp> + Send + 'static
-{
-    pub fn new(client: Arc<C>, req: Req, f: F, retry: usize) -> Request<C, Req, Resp, F> {
-        Request {
-            retry_count: retry,
-            client: client,
-            req: req,
-            resp: None,
-            func: f,
-        }
-    }
-
-    fn send(mut self) -> PdFuture<Request<C, Req, Resp, F>> {
-        debug!("Request retry remains: {}", self.retry_count);
-        self.retry_count -= 1;
+    fn send(mut self) -> PdFuture<Self> {
+        self.request_sent += 1;
+        debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
-        let req = (self.func)(self.client.as_ref(), r);
+        let req = (self.func)(self.client.as_ref().unwrap(), r);
         req.then(|resp| {
                 match resp {
                     Ok(resp) => self.resp = Some(Ok(resp)),
@@ -263,8 +196,8 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
             .boxed()
     }
 
-    fn receive(self) -> PdFuture<(Request<C, Req, Resp, F>, bool)> {
-        let done = self.retry_count == 0 || self.resp.is_some();
+    fn receive(self) -> PdFuture<(Self, bool)> {
+        let done = self.reconnect_count == 0 || self.resp.is_some();
         ok((self, done)).boxed()
     }
 
@@ -275,15 +208,16 @@ impl<C, Req, Resp, F> Request<C, Req, Resp, F>
     /// Returns a Future, it is resolves once a future returned by the closure
     /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn execute(self) -> PdFuture<Resp> {
-        let retry_req = self;
-        loop_fn(retry_req, |retry_req| {
-                retry_req.send()
-                    .and_then(|retry_req| retry_req.receive())
-                    .and_then(|(retry_req, done)| {
+        let ctx = self;
+        loop_fn(ctx, |ctx| {
+                ctx.reconnect_if_needed()
+                    .and_then(|ctx| ctx.send())
+                    .and_then(|ctx| ctx.receive())
+                    .and_then(|(ctx, done)| {
                         if done {
-                            Ok(Loop::Break(retry_req))
+                            Ok(Loop::Break(ctx))
                         } else {
-                            Ok(Loop::Continue(retry_req))
+                            Ok(Loop::Continue(ctx))
                         }
                     })
             })
