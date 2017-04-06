@@ -15,7 +15,6 @@ use std::fmt;
 use std::time::Duration;
 use std::thread;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use grpc;
 use grpc::futures_grpc::GrpcFutureSend;
@@ -192,7 +191,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = f(client.leader_client.inner.rl().client.as_ref()).wait();
+            let r = f(&client.leader_client.inner.rl().client).wait();
             timer.observe_duration();
             r
         };
@@ -206,7 +205,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
                 match try_connect_leader(&client.leader_client.inner.rl().members) {
                     Ok((cli, mbrs)) => {
                         let mut inner = client.leader_client.inner.wl();
-                        inner.client = Arc::new(cli);
+                        inner.client = cli;
                         inner.members = mbrs;
                     }
                     Err(e) => {

@@ -31,7 +31,7 @@ use super::super::Result;
 use super::client::try_connect_leader;
 
 pub struct Inner {
-    pub client: Arc<PDAsyncClient>,
+    pub client: PDAsyncClient,
     pub members: GetMembersResponse,
 }
 
@@ -44,7 +44,7 @@ impl LeaderClient {
     pub fn new(client: PDAsyncClient, members: GetMembersResponse) -> LeaderClient {
         LeaderClient {
             inner: Arc::new(RwLock::new(Inner {
-                client: Arc::new(client),
+                client: client,
                 members: members,
             })),
         }
@@ -111,7 +111,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
             Ok((client, members)) => {
                 let mut inner = self.inner.wl();
                 if members != inner.members {
-                    inner.client = Arc::new(client);
+                    inner.client = client;
                     inner.members = members;
                 }
                 warn!("updating PD client done, spent {:?}", start.elapsed());
@@ -133,7 +133,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
-        let req = (self.func)(self.inner.rl().client.as_ref(), r);
+        let req = (self.func)(&self.inner.rl().client, r);
         req.then(|resp| {
                 match resp {
                     Ok(resp) => self.resp = Some(Ok(resp)),
