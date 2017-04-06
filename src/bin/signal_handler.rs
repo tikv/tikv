@@ -29,7 +29,12 @@ mod imp {
 
     const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
+    // null pointer, using the default file name.
     const DUMP_FILE_NAME: *const c_char = 0 as *const c_char;
+    const PROFILE_SLEEP_SEC: u64 = 30;
+    // c string should end with a '\0'.
+    const PROFILE_ACTIVE: &'static [u8] = b"prof.active\0";
+    const PROFILE_DUMP: &'static [u8] = b"prof.dump\0";
 
     pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
@@ -82,11 +87,11 @@ mod imp {
             return;
         }
         unsafe {
-            if let Err(e) = jemallocator::mallctl_set(b"prof.dump\0", DUMP_FILE_NAME) {
+            if let Err(e) = jemallocator::mallctl_set(PROFILE_DUMP, DUMP_FILE_NAME) {
                 error!("failed to dump the first profile: {}", e);
                 return;
             }
-            if let Err(e) = jemallocator::mallctl_set(b"prof.active\0", true) {
+            if let Err(e) = jemallocator::mallctl_set(PROFILE_ACTIVE, true) {
                 error!("failed to activate profiling: {}", e);
                 return;
             }
@@ -94,15 +99,16 @@ mod imp {
         flag.store(true, Ordering::SeqCst);
         let flag2 = flag.clone();
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(30));
+            // sleep some time to get the diff between two dumping.
+            thread::sleep(Duration::from_secs(PROFILE_SLEEP_SEC));
             unsafe {
-                if let Err(e) = jemallocator::mallctl_set(b"prof.active\0", false) {
+                if let Err(e) = jemallocator::mallctl_set(PROFILE_ACTIVE, false) {
                     panic!("failed to deactivate profiling: {}", e);
                 }
             }
-            thread::sleep(Duration::from_secs(30));
+            thread::sleep(Duration::from_secs(PROFILE_SLEEP_SEC));
             unsafe {
-                if let Err(e) = jemallocator::mallctl_set(b"prof.dump\0", DUMP_FILE_NAME) {
+                if let Err(e) = jemallocator::mallctl_set(PROFILE_DUMP, DUMP_FILE_NAME) {
                     error!("failed to dump the second profile: {}", e);
                     flag2.store(false, Ordering::SeqCst);
                     return;
