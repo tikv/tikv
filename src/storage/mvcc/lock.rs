@@ -173,16 +173,28 @@ mod tests {
 
     #[test]
     fn test_lock() {
+        // Test `Lock::to_bytes()` and `Lock::parse()` works as a pair.
         let mut locks = vec![Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None),
                              Lock::new(LockType::Delete,
                                        b"pk".to_vec(),
                                        1,
                                        10,
-                                       Some(b"short".to_vec()))];
+                                       Some(b"short_value".to_vec()))];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
             let l = Lock::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
             assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
         }
+
+        // Test `Lock::parse()` handles incorrect input.
+        assert!(Lock::parse(b"").is_err());
+
+        let lock = Lock::new(LockType::Lock,
+                             b"pk".to_vec(),
+                             1,
+                             10,
+                             Some(b"short_value".to_vec()));
+        let v = lock.to_bytes();
+        assert!(Lock::parse(&v[..4]).is_err());
     }
 }

@@ -157,12 +157,20 @@ mod tests {
 
     #[test]
     fn test_write() {
+        // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
         let mut writes = vec![Write::new(WriteType::Put, 0, None),
-                              Write::new(WriteType::Delete, 0, Some(b"short".to_vec()))];
+                              Write::new(WriteType::Delete, 0, Some(b"short_value".to_vec()))];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.to_bytes();
             let w = Write::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
             assert_eq!(w, write, "#{} expect {:?}, but got {:?}", i, write, w);
         }
+
+        // Test `Write::parse()` handles incorrect input.
+        assert!(Write::parse(b"").is_err());
+
+        let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
+        let v = lock.to_bytes();
+        assert!(Write::parse(&v[..1]).is_err());
     }
 }
