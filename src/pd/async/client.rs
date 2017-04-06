@@ -68,7 +68,7 @@ impl RpcClient {
 
     // For tests
     pub fn get_leader(&self) -> Member {
-        self.leader_client.get_members().take_leader()
+        self.leader_client.inner.rl().members.get_leader().clone()
     }
 }
 
@@ -192,7 +192,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = f(&client.leader_client.get_client()).wait();
+            let r = f(client.leader_client.inner.rl().client.as_ref()).wait();
             timer.observe_duration();
             r
         };
@@ -203,7 +203,7 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                match try_connect_leader(&client.leader_client.get_members()) {
+                match try_connect_leader(&client.leader_client.inner.rl().members) {
                     Ok((cli, mbrs)) => {
                         let mut inner = client.leader_client.inner.wl();
                         inner.client = Arc::new(cli);

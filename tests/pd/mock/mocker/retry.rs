@@ -40,7 +40,7 @@ impl Retry {
 impl Mocker for Retry {
     fn GetRegionByID(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         let count = self.count.fetch_add(1, Ordering::SeqCst);
-        if count % self.retry == 0 {
+        if count != 0 && count % self.retry == 0 {
             info!("[Retry] return Ok(_)");
             Some(Ok(GetRegionResponse::new()))
         } else {

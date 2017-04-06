@@ -120,6 +120,7 @@ fn test_retry_async() {
     ];
 
     let se = Arc::new(Service::new(eps.clone()));
+    // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
     let lc = Arc::new(Retry::new(3));
 
     let _server_a = MockServer::run("127.0.0.1:63080", se.clone(), Some(lc.clone()));

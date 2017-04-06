@@ -60,17 +60,8 @@ impl LeaderClient {
             inner: self.inner.clone(),
             req: req,
             resp: None,
-            client: None,
             func: f,
         }
-    }
-
-    pub fn get_client(&self) -> Arc<PDAsyncClient> {
-        self.inner.rl().client.clone()
-    }
-
-    pub fn get_members(&self) -> GetMembersResponse {
-        self.inner.rl().members.clone()
     }
 }
 
@@ -83,7 +74,6 @@ pub struct Request<Req, Resp, F> {
 
     req: Req,
     resp: Option<Result<Resp>>,
-    client: Option<Arc<PDAsyncClient>>,
     func: F,
 }
 
@@ -99,8 +89,6 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         debug!("reconnect remains: {}", self.reconnect_count);
 
         if self.request_sent == 0 {
-            let client = self.inner.rl().client.clone();
-            self.client = Some(client);
             return ok(self).boxed();
         }
 
@@ -145,7 +133,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
-        let req = (self.func)(self.client.as_ref().unwrap(), r);
+        let req = (self.func)(self.inner.rl().client.as_ref(), r);
         req.then(|resp| {
                 match resp {
                     Ok(resp) => self.resp = Some(Ok(resp)),
