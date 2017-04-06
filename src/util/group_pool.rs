@@ -379,17 +379,18 @@ mod test {
     use super::GroupTaskPool;
     use std::thread::sleep;
     use std::time::Duration;
-    use std::sync::mpsc::{Sender, Receiver, channel};
+    use std::sync::mpsc::channel;
 
     #[test]
     fn test_tasks_with_same_cost() {
         let name = Some(thd_name!("test_tasks_with_same_cost"));
         let concurrency = 2;
         let mut task_pool = GroupTaskPool::new(name, concurrency);
-        let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
+        let (jtx, jrx) = channel();
         let group_with_many_tasks = 1001 as u64;
         // all tasks cost the same time.
-        let sleep_duration = Duration::from_millis(100);
+        let sleep_duration = Duration::from_millis(50);
+        let recv_timeout_duration = Duration::from_secs(2);
 
         // push tasks of group_with_many_tasks's job to make all thread in pool busy.
         // in order to make sure the thread would be free in sequence,
@@ -427,9 +428,9 @@ mod test {
         // group_with_many_tasks's task,so it would run. Similarly when the first is
         // free again,it would run the task in front of the queue..
         for id in 0..10 {
-            let first = jrx.recv().unwrap();
+            let first = jrx.recv_timeout(recv_timeout_duration).unwrap();
             assert_eq!(first, id);
-            let second = jrx.recv().unwrap();
+            let second = jrx.recv_timeout(recv_timeout_duration).unwrap();
             assert_eq!(second, group_with_many_tasks);
         }
         task_pool.stop().unwrap();
@@ -441,9 +442,10 @@ mod test {
         let name = Some(thd_name!("test_tasks_with_different_cost"));
         let concurrency = 2;
         let mut task_pool = GroupTaskPool::new(name, concurrency);
-        let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
+        let (jtx, jrx) = channel();
         let group_with_big_task = 1001 as u64;
-        let sleep_duration = Duration::from_millis(100);
+        let sleep_duration = Duration::from_millis(50);
+        let recv_timeout_duration = Duration::from_secs(2);
 
         // push big task into pool.
         task_pool.execute(group_with_big_task, move || {
@@ -472,12 +474,12 @@ mod test {
         // since there exist a long task of group_with_big_task is runnging,
         // the other thread would always run other group's tasks in sequence.
         for id in 0..10 {
-            let group_id = jrx.recv().unwrap();
+            let group_id = jrx.recv_timeout(recv_timeout_duration).unwrap();
             assert_eq!(group_id, id);
         }
 
         for _ in 0..10 {
-            let second = jrx.recv().unwrap();
+            let second = jrx.recv_timeout(recv_timeout_duration).unwrap();
             assert_eq!(second, group_with_big_task);
         }
         task_pool.stop().unwrap();
