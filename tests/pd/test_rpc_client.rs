@@ -71,7 +71,7 @@ fn test_rpc_client() {
 #[test]
 fn test_reboot() {
     let mut eps = vec![
-    "http://127.0.0.1:52730".to_owned(),
+        "http://127.0.0.1:52730".to_owned(),
     ];
 
     let se = Arc::new(Service::new(eps.clone()));
@@ -82,7 +82,7 @@ fn test_reboot() {
 
     let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
 
-    assert_eq!(client.is_cluster_bootstrapped().unwrap(), false);
+    assert!(!client.is_cluster_bootstrapped().unwrap());
 
     match client.bootstrap_cluster(metapb::Store::new(), metapb::Region::new()) {
         Err(PdError::ClusterBootstrapped(_)) => (),
