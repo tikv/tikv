@@ -14,9 +14,14 @@
 
 #[cfg(unix)]
 mod imp {
+    use std::thread;
+    use std::time::Duration;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use rocksdb::DB;
+    use jemallocator;
+    use libc::c_char;
 
     use tikv::server::Msg;
     use tikv::util::transport::SendCh;
@@ -24,11 +29,13 @@ mod imp {
 
     const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
+    const DUMP_FILE_NAME: *const c_char = 0 as *const c_char;
 
-    pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
+    pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
+        let profiling_memory = Arc::new(AtomicBool::new(false));
         for sig in trap {
             match sig {
                 SIGTERM | SIGINT => {
@@ -62,22 +69,47 @@ mod imp {
                         info!("{}", v)
                     }
                 }
-                SIGUSR2 => {
-                    if backup_path.is_empty() {
-                        info!("empty backup path, backup is disabled");
-                        continue;
-                    }
-
-                    info!("backup db to {}", backup_path);
-                    if let Err(e) = engine.backup_at(backup_path) {
-                        error!("fail to backup: {}", e);
-                    }
-                    info!("backup done");
-                }
+                SIGUSR2 => profile_memory(&profiling_memory),
                 // TODO: handle more signal
                 _ => unreachable!(),
             }
         }
+    }
+
+    fn profile_memory(flag: &Arc<AtomicBool>) {
+        if flag.load(Ordering::SeqCst) {
+            warn!("last memory profiling has not finished yet.");
+            return;
+        }
+        unsafe {
+            if let Err(e) = jemallocator::mallctl_set(b"prof.dump\0", DUMP_FILE_NAME) {
+                error!("failed to dump the first profile: {}", e);
+                return;
+            }
+            if let Err(e) = jemallocator::mallctl_set(b"prof.active\0", true) {
+                error!("failed to activate profiling: {}", e);
+                return;
+            }
+        }
+        flag.store(true, Ordering::SeqCst);
+        let flag2 = flag.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(30));
+            unsafe {
+                if let Err(e) = jemallocator::mallctl_set(b"prof.active\0", false) {
+                    panic!("failed to deactivate profiling: {}", e);
+                }
+            }
+            thread::sleep(Duration::from_secs(30));
+            unsafe {
+                if let Err(e) = jemallocator::mallctl_set(b"prof.dump\0", DUMP_FILE_NAME) {
+                    error!("failed to dump the second profile: {}", e);
+                    flag2.store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
+            flag2.store(false, Ordering::SeqCst);
+        });
     }
 }
 

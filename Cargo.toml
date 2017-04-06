@@ -81,8 +81,10 @@ features = ["nightly", "push"]
 [dependencies.grpc]
 git = "https://github.com/stepancheg/grpc-rust.git"
 
-[dependencies.alloc-tcmalloc]
-git = "https://github.com/busyjay/alloc-tcmalloc.git"
+[dependencies.jemallocator]
+git = "https://github.com/busyjay/jemallocator.git"
+branch = "dev"
+features = ["profiling"]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

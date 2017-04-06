@@ -19,7 +19,7 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
-extern crate alloc_tcmalloc;
+extern crate jemallocator;
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
