@@ -711,19 +711,19 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, 5, None);
-        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
+        assert!(txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
                       key,
                       &Options::default())
-            .is_err();
+            .is_err());
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, 5, None);
-        txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
-                      key,
-                      &Options::default())
-            .is_ok();
+        let mut opt = Options::default();
+        opt.skip_constraint_check = true;
+        assert!(txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), key, &opt)
+            .is_ok());
     }
 
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
