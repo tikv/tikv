@@ -927,7 +927,7 @@ fn main() {
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let cluster_id = pd_client.get_cluster_id()
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    info!("connects to PD cluster {}", cluster_id);
+    info!("connect to PD cluster {}", cluster_id);
 
     let total_cpu_num = cpu_num().unwrap();
     // return  memory in KB.
