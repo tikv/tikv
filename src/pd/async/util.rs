@@ -87,7 +87,7 @@ pub struct Request<Req, Resp, F> {
     func: F,
 }
 
-const RECONNECT_THD: usize = 5;
+const MAX_REQUEST_COUNT: usize = 5;
 
 impl<Req, Resp, F> Request<Req, Resp, F>
     where Req: Clone + Send + 'static,
@@ -104,7 +104,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
             return ok(self).boxed();
         }
 
-        if self.request_sent < RECONNECT_THD {
+        if self.request_sent < MAX_REQUEST_COUNT {
             debug!("retry on the same client");
             return ok(self).boxed();
         }
