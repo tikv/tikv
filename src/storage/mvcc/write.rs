@@ -128,30 +128,30 @@ mod tests {
         for (i, (lock_type, write_type, flag)) in tests.drain(..).enumerate() {
             if lock_type.is_some() {
                 let wt = WriteType::from_lock_type(lock_type.unwrap());
-                if wt != write_type {
-                    panic!("#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",
+                assert_eq!(wt,
+                           write_type,
+                           "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",
                            i,
                            lock_type,
                            write_type,
                            wt);
-                }
             }
             let f = write_type.to_u8();
-            if f != flag {
-                panic!("#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
+            assert_eq!(f,
+                       flag,
+                       "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
                        i,
                        write_type,
                        flag,
                        f);
-            }
             let wt = WriteType::from_u8(flag).unwrap();
-            if wt != write_type {
-                panic!("#{}, expect from_u8({:?}) returns {:?}, but got {:?}",
+            assert_eq!(wt,
+                       write_type,
+                       "#{}, expect from_u8({:?}) returns {:?}, but got {:?}",
                        i,
                        flag,
                        write_type,
                        wt);
-            }
         }
     }
 
@@ -161,16 +161,8 @@ mod tests {
                               Write::new(WriteType::Delete, 0, Some(b"short".to_vec()))];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.to_bytes();
-            match Write::parse(&v[..]) {
-                Ok(w) => {
-                    if w != write {
-                        panic!("#{} expect {:?}, but got {:?}", i, write, w);
-                    }
-                }
-                Err(e) => {
-                    panic!("#{} parse() err: {:?}", i, e);
-                }
-            }
+            let w = Write::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
+            assert_eq!(w, write, "#{} expect {:?}, but got {:?}", i, write, w);
         }
     }
 }

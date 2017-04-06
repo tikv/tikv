@@ -145,29 +145,29 @@ mod tests {
                  (Mutation::Lock(make_key(key)), LockType::Lock, FLAG_LOCK)];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
             let lt = LockType::from_mutation(&mutation);
-            if lt != lock_type {
-                panic!("#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
+            assert_eq!(lt,
+                       lock_type,
+                       "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
                        i,
                        mutation,
                        lock_type,
                        lt);
-            }
             let f = lock_type.to_u8();
-            if f != flag {
-                panic!("#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
+            assert_eq!(f,
+                       flag,
+                       "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
                        i,
                        lock_type,
                        flag,
                        f);
-            }
             let lt = LockType::from_u8(flag).unwrap();
-            if lt != lock_type {
-                panic!("#{}, expect from_u8({:?}) returns {:?}, but got {:?})",
+            assert_eq!(lt,
+                       lock_type,
+                       "#{}, expect from_u8({:?}) returns {:?}, but got {:?})",
                        i,
                        flag,
                        lock_type,
                        lt);
-            }
         }
     }
 
@@ -181,16 +181,8 @@ mod tests {
                                        Some(b"short".to_vec()))];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
-            match Lock::parse(&v[..]) {
-                Ok(l) => {
-                    if l != lock {
-                        panic!("#{} expect {:?}, but got {:?}", i, lock, l);
-                    }
-                }
-                Err(e) => {
-                    panic!("#{} parse() err: {:?}", i, e);
-                }
-            }
+            let l = Lock::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
+            assert_eq!(l, lock, "#{} expect {:?}, but got {:?}", i, lock, l);
         }
     }
 }
