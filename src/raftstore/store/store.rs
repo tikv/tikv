@@ -396,7 +396,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
-        let raftlog_gc_runner = RaftlogGcRunner;
+        let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(self.engine.clone());
