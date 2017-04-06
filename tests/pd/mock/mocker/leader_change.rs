@@ -104,18 +104,16 @@ impl Mocker for LeaderChange {
         Some(Ok(self.resps[r.idx % self.resps.len()].clone()))
     }
 
-    fn IsBootstrapped(&self, _: &IsBootstrappedRequest) -> Option<Result<IsBootstrappedResponse>> {
-        let mut resp = IsBootstrappedResponse::new();
-        resp.set_bootstrapped(false);
-
+    fn GetRegionByID(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         let mut r = self.r.lock().unwrap();
         let now = Instant::now();
         if now.duration_since(r.ts) > LeaderChange::get_leader_interval() {
             r.idx += 1;
             r.ts = now;
-            return Some(Err(GrpcError::Other("not leader")));
+            debug!("[LeaderChange] change leader to {:?}",
+                   self.resps[r.idx % self.resps.len()].get_leader());
         }
 
-        Some(Ok(resp))
+        Some(Err(GrpcError::Other("not leader")))
     }
 }
