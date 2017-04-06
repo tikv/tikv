@@ -30,14 +30,14 @@ use super::super::PdFuture;
 use super::super::Result;
 use super::client::try_connect_leader;
 
-struct Inner {
-    client: Arc<PDAsyncClient>,
-    members: GetMembersResponse,
+pub struct Inner {
+    pub client: Arc<PDAsyncClient>,
+    pub members: GetMembersResponse,
 }
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
-    inner: Arc<RwLock<Inner>>,
+    pub inner: Arc<RwLock<Inner>>,
 }
 
 impl LeaderClient {
@@ -69,18 +69,8 @@ impl LeaderClient {
         self.inner.rl().client.clone()
     }
 
-    pub fn set_client(&self, client: PDAsyncClient) {
-        let mut inner = self.inner.wl();
-        inner.client = Arc::new(client);
-    }
-
     pub fn get_members(&self) -> GetMembersResponse {
         self.inner.rl().members.clone()
-    }
-
-    pub fn set_members(&self, members: GetMembersResponse) {
-        let mut inner = self.inner.wl();
-        inner.members = members;
     }
 }
 
@@ -168,15 +158,6 @@ impl<Req, Resp, F> Request<Req, Resp, F>
             .boxed()
     }
 
-    fn receive(self) -> PdFuture<(Self, bool)> {
-        let done = self.reconnect_count == 0 || self.resp.is_some();
-        ok((self, done)).boxed()
-    }
-
-    fn get_resp(self) -> Option<Result<Resp>> {
-        self.resp
-    }
-
     /// Returns a Future, it is resolves once a future returned by the closure
     /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn execute(self) -> PdFuture<Resp> {
@@ -184,8 +165,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         loop_fn(ctx, |ctx| {
                 ctx.reconnect_if_needed()
                     .and_then(|ctx| ctx.send())
-                    .and_then(|ctx| ctx.receive())
-                    .and_then(|(ctx, done)| {
+                    .and_then(|ctx| {
+                        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
                         if done {
                             Ok(Loop::Break(ctx))
                         } else {
@@ -193,11 +174,12 @@ impl<Req, Resp, F> Request<Req, Resp, F>
                         }
                     })
             })
-            .then(|req| {
-                match req.unwrap().get_resp() {
+            .then(|ctx| {
+                let ctx = ctx.expect("end loop with Ok(_)");
+                match ctx.resp {
                     Some(Ok(resp)) => future::ok(resp),
                     Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("Request fail to request")),
+                    None => future::err(box_err!("fail to request")),
                 }
             })
             .boxed()

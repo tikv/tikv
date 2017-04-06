@@ -15,6 +15,7 @@ use std::fmt;
 use std::time::Duration;
 use std::thread;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use grpc;
 use grpc::futures_grpc::GrpcFutureSend;
@@ -28,6 +29,8 @@ use kvproto::pdpb::{self, ErrorType};
 use kvproto::pdpb::{GetMembersRequest, GetMembersResponse, Member};
 use kvproto::pdpb_grpc::PDAsync;
 use kvproto::pdpb_grpc::PDAsyncClient;
+
+use util::HandyRwLock;
 
 use super::super::PdFuture;
 use super::super::{Result, Error, PdClient};
@@ -202,8 +205,9 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
                 error!("fail to request: {:?}", e);
                 match try_connect_leader(&client.leader_client.get_members()) {
                     Ok((cli, mbrs)) => {
-                        client.leader_client.set_client(cli);
-                        client.leader_client.set_members(mbrs);
+                        let mut inner = client.leader_client.inner.wl();
+                        inner.client = Arc::new(cli);
+                        inner.members = mbrs;
                     }
                     Err(e) => {
                         error!("fail to connect to PD leader {:?}", e);
