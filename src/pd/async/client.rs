@@ -34,10 +34,9 @@ use super::super::{Result, Error, PdClient};
 use super::util::LeaderClient;
 use super::super:: metrics::*;
 
-// TODO: revoke pubs.
 pub struct RpcClient {
-    pub cluster_id: u64,
-    pub leader_client: LeaderClient,
+    cluster_id: u64,
+    leader_client: LeaderClient,
 }
 
 impl RpcClient {
@@ -58,7 +57,7 @@ impl RpcClient {
         })
     }
 
-    pub fn header(&self) -> pdpb::RequestHeader {
+    fn header(&self) -> pdpb::RequestHeader {
         let mut header = pdpb::RequestHeader::new();
         header.set_cluster_id(self.cluster_id);
         header
@@ -411,7 +410,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .client(req, request_factory, LEADER_CHANGE_RETRY)
+            .request(req, request_factory, LEADER_CHANGE_RETRY)
             .execute()
     }
 }

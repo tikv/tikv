@@ -13,13 +13,10 @@
 
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::TryLockError;
 use std::time::Instant;
 use std::time::Duration;
 use std::thread;
 
-use futures::Poll;
-use futures::Async;
 use futures::Future;
 use futures::future::ok;
 use futures::future::{self, loop_fn, Loop};
@@ -31,37 +28,36 @@ use util::HandyRwLock;
 
 use super::super::PdFuture;
 use super::super::Result;
-use super::super::Error;
 use super::client::try_connect_leader;
 
-struct Bundle {
+struct Inner {
     client: Arc<PDAsyncClient>,
     members: GetMembersResponse,
 }
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
-    inner: Arc<RwLock<Bundle>>,
+    inner: Arc<RwLock<Inner>>,
 }
 
 impl LeaderClient {
     pub fn new(client: PDAsyncClient, members: GetMembersResponse) -> LeaderClient {
         LeaderClient {
-            inner: Arc::new(RwLock::new(Bundle {
+            inner: Arc::new(RwLock::new(Inner {
                 client: Arc::new(client),
                 members: members,
             })),
         }
     }
 
-    pub fn client<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
+    pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
         where Req: Clone + 'static,
               F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
     {
         Request {
             reconnect_count: retry,
             request_sent: 0,
-            bundle: self.inner.clone(),
+            inner: self.inner.clone(),
             req: req,
             resp: None,
             client: None,
@@ -74,8 +70,8 @@ impl LeaderClient {
     }
 
     pub fn set_client(&self, client: PDAsyncClient) {
-        let mut bundle = self.inner.wl();
-        bundle.client = Arc::new(client);
+        let mut inner = self.inner.wl();
+        inner.client = Arc::new(client);
     }
 
     pub fn get_members(&self) -> GetMembersResponse {
@@ -88,32 +84,12 @@ impl LeaderClient {
     }
 }
 
-struct BundleRead {
-    inner: Option<Arc<RwLock<Bundle>>>,
-}
-
-impl Future for BundleRead {
-    type Item = Arc<PDAsyncClient>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let inner = self.inner.take().expect("BundleRead cannot poll twice");
-        let read = inner.try_read();
-        match read {
-            Ok(bundle) => Ok(Async::Ready(bundle.client.clone())),
-            Err(TryLockError::WouldBlock) => Ok(Async::NotReady),
-            // TODO: handle `PoisonError`.
-            Err(err) => panic!("{:?}", err),
-        }
-    }
-}
-
 /// The context of sending requets.
 pub struct Request<Req, Resp, F> {
     reconnect_count: usize,
     request_sent: usize,
 
-    bundle: Arc<RwLock<Bundle>>,
+    inner: Arc<RwLock<Inner>>,
 
     req: Req,
     resp: Option<Result<Resp>>,
@@ -128,17 +104,14 @@ impl<Req, Resp, F> Request<Req, Resp, F>
           Resp: Send + 'static,
           F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
 {
+    // Re-establish connection with PD leader in synchronized fashion.
     fn reconnect_if_needed(mut self) -> PdFuture<Self> {
         debug!("reconnect remains: {}", self.reconnect_count);
 
         if self.request_sent == 0 {
-            let bundle = BundleRead { inner: Some(self.bundle.clone()) };
-            return bundle.map(|client| {
-                    self.client = Some(client);
-                    ok(self)
-                })
-                .flatten()
-                .boxed();
+            let client = self.inner.rl().client.clone();
+            self.client = Some(client);
+            return ok(self).boxed();
         }
 
         if self.request_sent < RECONNECT_THD {
@@ -155,14 +128,13 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         warn!("updating PD client, block the tokio core");
 
         let start = Instant::now();
-        // Go to sync world.
-        let members = self.bundle.rl().members.clone();
+        let members = self.inner.rl().members.clone();
         match try_connect_leader(&members) {
             Ok((client, members)) => {
-                let mut bundle = self.bundle.wl();
-                if members != bundle.members {
-                    bundle.client = Arc::new(client);
-                    bundle.members = members;
+                let mut inner = self.inner.wl();
+                if members != inner.members {
+                    inner.client = Arc::new(client);
+                    inner.members = members;
                 }
                 warn!("updating PD client done, spent {:?}", start.elapsed());
             }
