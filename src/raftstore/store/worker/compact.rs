@@ -17,6 +17,7 @@ use util::escape;
 
 use rocksdb::DB;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use super::metrics::COMPACT_RANGE_CF;
@@ -26,6 +27,8 @@ pub struct Task {
     pub start_key: Option<Vec<u8>>, // None means smallest key
     pub end_key: Option<Vec<u8>>, // None means largest key
 }
+
+pub struct TaskRes;
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -51,11 +54,15 @@ quick_error! {
 
 pub struct Runner {
     engine: Arc<DB>,
+    ch: Option<Sender<TaskRes>>,
 }
 
 impl Runner {
-    pub fn new(engine: Arc<DB>) -> Runner {
-        Runner { engine: engine }
+    pub fn new(engine: Arc<DB>, ch: Option<Sender<TaskRes>>) -> Runner {
+        Runner {
+            engine: engine,
+            ch: ch,
+        }
     }
 
     fn compact_range_cf(&mut self,
@@ -73,6 +80,14 @@ impl Runner {
         compact_range_timer.observe_duration();
         Ok(())
     }
+
+    fn finish_task(&mut self) {
+        if self.ch.is_none() {
+            return;
+        }
+        // only used by test.
+        self.ch.as_mut().unwrap().send(TaskRes).unwrap();
+    }
 }
 
 impl Runnable<Task> for Runner {
@@ -83,5 +98,63 @@ impl Runnable<Task> for Runner {
         } else {
             info!("compact range for cf {} finished", &cf);
         }
+        self.finish_task();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use util::rocksdb::new_engine;
+    use tempdir::TempDir;
+    use storage::CF_DEFAULT;
+    use rocksdb::{WriteBatch, Writable};
+    use super::*;
+
+    const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
+
+    #[test]
+    fn test_compact_range() {
+        let path = TempDir::new("compact-range-test").unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let db = Arc::new(db);
+
+        let (tx, rx) = mpsc::channel();
+        let mut runner = Runner::new(db.clone(), Some(tx));
+
+        // generate first sst file.
+        let wb = WriteBatch::new();
+        for i in 0..1000 {
+            let k = format!("key_{}", i);
+            wb.put(k.as_bytes(), b"whatever content").unwrap();
+        }
+        db.write(wb).unwrap();
+        db.flush(true).unwrap();
+
+        // generate another sst file has the same content with first sst file.
+        let wb = WriteBatch::new();
+        for i in 0..1000 {
+            let k = format!("key_{}", i);
+            wb.put(k.as_bytes(), b"whatever content").unwrap();
+        }
+        db.write(wb).unwrap();
+        db.flush(true).unwrap();
+
+        // get total sst files size.
+        let handle = rocksdb::get_cf_handle(&db, CF_DEFAULT).unwrap();
+        let old_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE);
+
+        // schedule compact range task
+        runner.run(Task {
+            cf_name: String::from(CF_DEFAULT),
+            start_key: None,
+            end_key: None,
+        });
+        rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        // get total sst files size after compact range.
+        let new_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE);
+        assert!(old_sst_files_size > new_sst_files_size);
     }
 }
