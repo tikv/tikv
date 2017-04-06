@@ -27,7 +27,7 @@ use url::Url;
 use rand::{self, Rng};
 
 use kvproto::metapb;
-use kvproto::pdpb::{self, GetMembersResponse, Member};
+use kvproto::pdpb::{self, GetMembersResponse, Member, ErrorType};
 use kvproto::pdpb_grpc::{PD, PDClient};
 
 use util::HandyRwLock;
@@ -233,7 +233,11 @@ fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
     }
     // TODO: translate more error types
     let err = header.get_error();
-    Err(box_err!(err.get_message()))
+    match err.get_field_type() {
+        ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
+        ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
+        _ => Err(box_err!(err.get_message())),
+    }
 }
 
 impl fmt::Debug for RpcClient {
