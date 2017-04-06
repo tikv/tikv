@@ -295,7 +295,6 @@ impl<'a> Worker<'a> {
 pub struct GroupTaskPool {
     tasks: Arc<Mutex<GroupTaskPoolMeta>>,
     job_sender: Sender<bool>,
-    concurrency: usize,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -315,7 +314,6 @@ impl GroupTaskPool {
         GroupTaskPool {
             tasks: tasks.clone(),
             job_sender: jtx,
-            concurrency: num_threads,
             threads: threads,
         }
     }
@@ -339,7 +337,7 @@ impl GroupTaskPool {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        for _ in 0..self.concurrency {
+        for _ in 0..self.threads.len() {
             if let Err(e) = self.job_sender.send(false) {
                 return Err(format!("{:?}", e));
             }
