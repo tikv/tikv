@@ -254,7 +254,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 try!(self.ch.raft_router.send_raft_msg(msg.take_raft()));
                 Ok(())
             }
-            MessageType::Cmd => panic!("invalid message type raftCmd"),
             MessageType::KvReq => {
                 RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
                 let req = msg.take_kv_req();
