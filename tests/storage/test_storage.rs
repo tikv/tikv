@@ -650,12 +650,12 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
 }
 
 fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
-    let engine = util::BlockEngine::new(engine);
+    let mut engine = util::BlockEngine::new(engine);
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
-
-    engine.block_snapshot();
+    let (stx, srx) = channel();
+    engine.block_snapshot(stx);
     let (tx1, rx1) = channel();
     storage.async_gc(ctx.clone(),
                   1,
@@ -678,6 +678,7 @@ fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
         })
         .unwrap();
 
+    srx.recv_timeout(Duration::from_secs(2)).unwrap();
     rx2.recv().unwrap();
     engine.unblock_snapshot();
     rx1.recv().unwrap();
