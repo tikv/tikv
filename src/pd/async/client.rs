@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,36 +12,33 @@
 // limitations under the License.
 
 use std::fmt;
-use std::result;
-use std::thread;
-use std::sync::RwLock;
 use std::time::Duration;
+use std::thread;
 use std::collections::HashSet;
 
 use grpc;
-
-use protobuf::RepeatedField;
-
+use grpc::futures_grpc::GrpcFutureSend;
 use url::Url;
-
 use rand::{self, Rng};
+use protobuf::RepeatedField;
+use futures::Future;
 
 use kvproto::metapb;
-use kvproto::pdpb::{self, GetMembersResponse, Member, ErrorType};
-use kvproto::pdpb_grpc::{PD, PDClient};
+use kvproto::pdpb::{self, ErrorType};
+use kvproto::pdpb::{GetMembersRequest, GetMembersResponse, Member};
+use kvproto::pdpb_grpc::PDAsync;
+use kvproto::pdpb_grpc::PDAsyncClient;
 
 use util::HandyRwLock;
-use super::{Result, Error, PdClient};
-use super::metrics::*;
 
-struct Inner {
-    members: GetMembersResponse,
-    client: PDClient,
-}
+use super::super::PdFuture;
+use super::super::{Result, Error, PdClient};
+use super::util::LeaderClient;
+use super::super:: metrics::*;
 
 pub struct RpcClient {
     cluster_id: u64,
-    inner: RwLock<Inner>,
+    leader_client: LeaderClient,
 }
 
 impl RpcClient {
@@ -55,12 +52,10 @@ impl RpcClient {
             .collect();
 
         let (client, members) = try!(validate_endpoints(&endpoints));
+
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
-            inner: RwLock::new(Inner {
-                members: members,
-                client: client,
-            }),
+            leader_client: LeaderClient::new(client, members),
         })
     }
 
@@ -72,13 +67,11 @@ impl RpcClient {
 
     // For tests
     pub fn get_leader(&self) -> Member {
-        let inner = self.inner.rl();
-        inner.members.get_leader().clone()
+        self.leader_client.inner.rl().members.get_leader().clone()
     }
 }
 
-
-pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersResponse)> {
+pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
     }
@@ -130,7 +123,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDClient, GetMembersR
     }
 }
 
-fn connect(addr: &str) -> Result<(PDClient, GetMembersResponse)> {
+fn connect(addr: &str) -> Result<(PDAsyncClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
     let ep = box_try!(Url::parse(addr));
     let host = ep.host_str().unwrap();
@@ -140,10 +133,10 @@ fn connect(addr: &str) -> Result<(PDClient, GetMembersResponse)> {
     conf.http.no_delay = Some(true);
 
     // TODO: It seems that `new` always return an Ok(_).
-    PDClient::new(host, port, false, conf)
+    PDAsyncClient::new(host, port, false, conf)
         .and_then(|client| {
             // try request.
-            match client.GetMembers(pdpb::GetMembersRequest::new()) {
+            match client.GetMembers(GetMembersRequest::new()).wait() {
                 Ok(resp) => Ok((client, resp)),
                 Err(e) => Err(e),
             }
@@ -151,7 +144,8 @@ fn connect(addr: &str) -> Result<(PDClient, GetMembersResponse)> {
         .map_err(Error::Grpc)
 }
 
-fn try_connect_leader(previous: &GetMembersResponse) -> Result<(PDClient, GetMembersResponse)> {
+pub fn try_connect_leader(previous: &GetMembersResponse)
+                          -> Result<(PDAsyncClient, GetMembersResponse)> {
     // Try to connect other members.
     // Randomize endpoints.
     let members = previous.get_members();
@@ -192,13 +186,12 @@ const MAX_RETRY_COUNT: usize = 100;
 const RETRY_INTERVAL: u64 = 1;
 
 fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
-    where F: Fn(&PDClient) -> result::Result<R, grpc::error::GrpcError>
+    where F: Fn(&PDAsyncClient) -> GrpcFutureSend<R>
 {
     for _ in 0..MAX_RETRY_COUNT {
         let r = {
-            let inner = client.inner.rl();
             let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = f(&inner.client);
+            let r = f(&client.leader_client.inner.rl().client).wait();
             timer.observe_duration();
             r
         };
@@ -209,9 +202,9 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                let mut inner = client.inner.wl();
-                match try_connect_leader(&inner.members) {
+                match try_connect_leader(&client.leader_client.inner.rl().members) {
                     Ok((cli, mbrs)) => {
+                        let mut inner = client.leader_client.inner.wl();
                         inner.client = cli;
                         inner.members = mbrs;
                     }
@@ -247,6 +240,8 @@ impl fmt::Debug for RpcClient {
                self.cluster_id)
     }
 }
+
+const LEADER_CHANGE_RETRY: usize = 10;
 
 impl PdClient for RpcClient {
     fn get_cluster_id(&self) -> Result<u64> {
@@ -395,5 +390,30 @@ impl PdClient for RpcClient {
         try!(check_resp_header(resp.get_header()));
 
         Ok(())
+    }
+
+    // For tests.
+    fn async_get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
+        let mut req = pdpb::GetRegionByIDRequest::new();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let request_factory = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
+            client.GetRegionByID(req)
+                .map_err(Error::Grpc)
+                .and_then(|mut resp| {
+                    try!(check_resp_header(resp.get_header()));
+                    if resp.has_region() {
+                        Ok(Some(resp.take_region()))
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .boxed()
+        };
+
+        self.leader_client
+            .request(req, request_factory, LEADER_CHANGE_RETRY)
+            .execute()
     }
 }
