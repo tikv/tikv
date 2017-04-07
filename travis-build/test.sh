@@ -36,7 +36,7 @@ fi
 export RUSTFLAGS=-Dwarnings
 
 if [[ "$SKIP_TESTS" != "true" ]]; then
-    make test 2>&1 | tee tests.out
+    NO_RUN="--verbose" make test 2>&1 | tee tests.out
 else
     NO_RUN="--no-run" make test
     exit $?
