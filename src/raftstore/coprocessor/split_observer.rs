@@ -130,7 +130,7 @@ mod test {
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();
-        req.set_cmd_type(AdminCmdType::Split);
+        req.set_cmd_type(AdminCmdType::SplitV2);
         let mut split_req = SplitRequest::new();
         split_req.set_split_key(key.to_vec());
         req.set_split(split_req);

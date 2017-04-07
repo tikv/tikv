@@ -1034,18 +1034,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_split_region(&mut self,
                              region_id: u64,
                              left: metapb::Region,
-                             right: metapb::Region) {
-        self.region_peers.get_mut(&region_id).unwrap().mut_store().region = left.clone();
-        for peer in right.get_peers() {
+                             right: metapb::Region,
+                             left_derive: bool) {
+        let new_region = if left_derive { right.clone() } else { left.clone() };
+        let origin_region = if left_derive { left.clone() } else { right.clone() };
+
+        self.region_peers.get_mut(&region_id).unwrap().mut_store().region = origin_region.clone();
+        for peer in new_region.get_peers() {
             // Add this peer to cache.
             self.peer_cache.borrow_mut().insert(peer.get_id(), peer.clone());
         }
-        let new_region_id = right.get_id();
+        let new_region_id = new_region.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
-            // Add new peers to cache.
-            for meta in right.get_peers() {
-                self.peer_cache.borrow_mut().insert(meta.get_id(), meta.to_owned());
-            }
             // If the store received a raft msg with the new region raft group
             // before splitting, it will creates a uninitialized peer.
             // We can remove this uninitialized peer directly.
@@ -1056,20 +1056,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut campaigned = false;
         let peer;
-        match Peer::create(self, &right) {
+        match Peer::create(self, &new_region) {
             Err(e) => {
                 // peer information is already written into db, can't recover.
                 // there is probably a bug.
-                panic!("create new split region {:?} err {:?}", right, e);
+                panic!("create new split region {:?} err {:?}", new_region, e);
             }
             Ok(mut new_peer) => {
                 peer = new_peer.peer.clone();
-                if let Some(left) = self.region_peers.get(&region_id) {
-                    campaigned = new_peer.maybe_campaign(left, &mut self.pending_raft_groups);
+                if let Some(origin_peer) = self.region_peers.get(&region_id) {
+                    campaigned =
+                        new_peer.maybe_campaign(origin_peer, &mut self.pending_raft_groups);
 
-                    if left.is_leader() {
+                    if origin_peer.is_leader() {
                         // Notify pd immediately to let it update the region meta.
-                        self.report_split_pd(left, &new_peer);
+                        if left_derive {
+                            self.report_split_pd(origin_peer, &new_peer);
+                        } else {
+                            self.report_split_pd(&new_peer, origin_peer);
+                        }
                     }
                 }
 
@@ -1081,7 +1086,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("region should not exist, {:?}", left);
                 }
                 if self.region_ranges
-                    .insert(enc_end_key(&right), new_region_id)
+                    .insert(enc_end_key(&right), right.get_id())
                     .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
@@ -1157,8 +1162,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::CompactLog { first_index, state } => {
                     self.on_ready_compact_log(region_id, first_index, state)
                 }
-                ExecResult::SplitRegion { left, right } => {
-                    self.on_ready_split_region(region_id, left, right)
+                ExecResult::SplitRegion { left, right, left_derive } => {
+                    self.on_ready_split_region(region_id, left, right, left_derive)
                 }
                 ExecResult::ComputeHash { region, index, snap } => {
                     self.on_ready_compute_hash(region, index, snap)

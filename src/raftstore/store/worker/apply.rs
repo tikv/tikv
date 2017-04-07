@@ -102,7 +102,11 @@ pub enum ExecResult {
         state: RaftTruncatedState,
         first_index: u64,
     },
-    SplitRegion { left: Region, right: Region },
+    SplitRegion {
+        left: Region,
+        right: Region,
+        left_derive: bool,
+    },
     ComputeHash {
         region: Region,
         index: u64,
@@ -393,8 +397,12 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
                 ExecResult::CompactLog { .. } => {}
-                ExecResult::SplitRegion { ref left, .. } => {
-                    self.region = left.clone();
+                ExecResult::SplitRegion { ref left, ref right, left_derive } => {
+                    if left_derive {
+                        self.region = left.clone();
+                    } else {
+                        self.region = right.clone();
+                    }
                     self.metrics.size_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
                 }
@@ -500,7 +508,8 @@ impl ApplyDelegate {
 
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
-            AdminCmdType::Split => self.exec_split(ctx, request),
+            AdminCmdType::Split => self.exec_split(ctx, request, true),
+            AdminCmdType::SplitV2 => self.exec_split(ctx, request, false),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
@@ -612,7 +621,8 @@ impl ApplyDelegate {
 
     fn exec_split(&mut self,
                   ctx: &ExecContext,
-                  req: &AdminRequest)
+                  req: &AdminRequest,
+                  left_derive: bool)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
 
@@ -637,13 +647,17 @@ impl ApplyDelegate {
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();
 
-        // After split, the origin region key range is [start_key, split_key),
-        // the new split region is [split_key, end).
+        // After split, the left region key range is [start_key, split_key),
+        // the right region is [split_key, end).
         let mut new_region = region.clone();
-        region.set_end_key(split_key.to_vec());
-
-        new_region.set_start_key(split_key.to_vec());
         new_region.set_id(new_region_id);
+        if left_derive {
+            region.set_end_key(split_key.to_vec());
+            new_region.set_start_key(split_key.to_vec());
+        } else {
+            region.set_start_key(split_key.to_vec());
+            new_region.set_end_key(split_key.to_vec());
+        }
 
         // Update new region peer ids.
         let new_peer_ids = split_req.get_new_peer_ids();
@@ -672,16 +686,31 @@ impl ApplyDelegate {
             });
 
         let mut resp = AdminResponse::new();
-        resp.mut_split().set_left(region.clone());
-        resp.mut_split().set_right(new_region.clone());
+        if left_derive {
+            resp.mut_split().set_left(region.clone());
+            resp.mut_split().set_right(new_region.clone());
+        } else {
+            resp.mut_split().set_left(new_region.clone());
+            resp.mut_split().set_right(region.clone());
+        }
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 
-        Ok((resp,
-            Some(ExecResult::SplitRegion {
-            left: region,
-            right: new_region,
-        })))
+        if left_derive {
+            Ok((resp,
+                Some(ExecResult::SplitRegion {
+                left: region,
+                right: new_region,
+                left_derive: true,
+            })))
+        } else {
+            Ok((resp,
+                Some(ExecResult::SplitRegion {
+                left: new_region,
+                right: region,
+                left_derive: false,
+            })))
+        }
     }
 
     fn exec_compact_log(&mut self,

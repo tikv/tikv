@@ -301,7 +301,7 @@ fn new_split_region_request(split_key: Vec<u8>,
                             peer_ids: Vec<u64>)
                             -> AdminRequest {
     let mut req = AdminRequest::new();
-    req.set_cmd_type(AdminCmdType::Split);
+    req.set_cmd_type(AdminCmdType::SplitV2);
     req.mut_split().set_split_key(split_key);
     req.mut_split().set_new_region_id(new_region_id);
     req.mut_split().set_new_peer_ids(peer_ids);

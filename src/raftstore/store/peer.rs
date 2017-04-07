@@ -1343,7 +1343,8 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
             AdminCmdType::InvalidAdmin |
             AdminCmdType::ComputeHash |
             AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => check_ver = true,
+            AdminCmdType::Split |
+            AdminCmdType::SplitV2 => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::TransferLeader => {
                 check_ver = true;
