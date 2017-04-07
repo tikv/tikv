@@ -1413,7 +1413,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   peer.tag,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            let task = SplitCheckTask::new(peer.get_store());
+            let task = SplitCheckTask::new(peer.get_store().get_engine(), peer.region());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
