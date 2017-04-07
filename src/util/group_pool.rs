@@ -17,19 +17,21 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
 use super::HashMap;
+use std::collections::{BinaryHeap, HashSet};
+use std::cmp::Ordering;
 
-struct TaskMeta<'a> {
+struct TaskMeta {
     // the task's number in the pool.
     // each task has a unique number,
     // and it's always bigger than precedes one.
     id: u64,
     // the task's group_id.
     group_id: u64,
-    task: Box<FnBox() + Send + 'a>,
+    task: Box<FnBox() + Send>,
 }
 
-impl<'a> TaskMeta<'a> {
-    fn new<F>(id: u64, group_id: u64, job: F) -> TaskMeta<'static>
+impl TaskMeta {
+    fn new<F>(id: u64, group_id: u64, job: F) -> TaskMeta
         where F: FnOnce() + Send + 'static
     {
         TaskMeta {
@@ -40,6 +42,31 @@ impl<'a> TaskMeta<'a> {
     }
 }
 
+impl<'a> Ord for TaskMeta {
+    fn cmp(&self, right: &TaskMeta) -> Ordering {
+        if self.id > right.id {
+            return Ordering::Less;
+        } else if self.id < right.id {
+            return Ordering::Greater;
+        }
+        Ordering::Equal
+    }
+}
+
+impl PartialEq for TaskMeta {
+    fn eq(&self, right: &TaskMeta) -> bool {
+        self.cmp(right) == Ordering::Equal
+    }
+}
+
+impl Eq for TaskMeta {}
+
+impl PartialOrd for TaskMeta {
+    fn partial_cmp(&self, rhs: &TaskMeta) -> Option<Ordering> {
+        Some(self.cmp(rhs))
+    }
+}
+
 struct GroupTaskPoolMeta {
     total_tasks_num: u64,
     running_tasks_num: usize,
@@ -47,7 +74,9 @@ struct GroupTaskPoolMeta {
     // group_id => count
     running_tasks: HashMap<u64, usize>,
     // group_id => tasks array
-    waiting_tasks: HashMap<u64, Vec<TaskMeta<'static>>>,
+    waiting_tasks: HashMap<u64, Vec<TaskMeta>>,
+    heap: BinaryHeap<TaskMeta>,
+    heap_group: HashSet<u64>,
 }
 
 impl GroupTaskPoolMeta {
@@ -58,6 +87,8 @@ impl GroupTaskPoolMeta {
             waiting_tasks_num: 0,
             running_tasks: HashMap::default(),
             waiting_tasks: HashMap::default(),
+            heap: BinaryHeap::new(),
+            heap_group: HashSet::new(),
         }
     }
 
@@ -69,6 +100,11 @@ impl GroupTaskPoolMeta {
         self.waiting_tasks_num += 1;
         self.total_tasks_num += 1;
         let group_id = task.group_id;
+        if !self.running_tasks.contains_key(&group_id) && !self.heap_group.contains(&group_id) {
+            self.heap_group.insert(group_id);
+            self.heap.push(task);
+            return;
+        }
         let mut group_tasks = self.waiting_tasks
             .entry(group_id)
             .or_insert_with(Vec::new);
@@ -84,12 +120,28 @@ impl GroupTaskPoolMeta {
     // task in the pool.
     fn finished_task(&mut self, group_id: u64) {
         self.running_tasks_num -= 1;
-        // sub 1 in running tasks for group_id.
-        if self.running_tasks[&group_id] <= 1 {
-            self.running_tasks.remove(&group_id);
-        } else {
+        // if running tasks exist.
+        if self.running_tasks[&group_id] > 1 {
             let mut count = self.running_tasks.get_mut(&group_id).unwrap();
             *count -= 1;
+            return;
+        }
+
+        // if no running tasks left.
+        self.running_tasks.remove(&group_id);
+        if !self.waiting_tasks.contains_key(&group_id) || self.heap_group.contains(&group_id) {
+            return;
+        }
+        // if waiting tasks exist && group not in heap.
+        let empty_group_wtasks = {
+            let mut waiting_tasks = self.waiting_tasks.get_mut(&group_id).unwrap();
+            let front_task = waiting_tasks.swap_remove(0);
+            self.heap.push(front_task);
+            self.heap_group.insert(group_id);
+            waiting_tasks.is_empty()
+        };
+        if empty_group_wtasks {
+            self.waiting_tasks.remove(&group_id);
         }
     }
 
@@ -101,14 +153,9 @@ impl GroupTaskPoolMeta {
     fn get_next_group(&self) -> Option<u64> {
         let mut next_group = None; //(group_id,count,task_id)
         for (group_id, tasks) in &self.waiting_tasks {
-            if tasks.is_empty() {
-                continue;
-            }
             let front_task_id = tasks[0].id;
-            let mut count = 0;
-            if self.running_tasks.contains_key(group_id) {
-                count = self.running_tasks[group_id];
-            };
+            assert!(self.running_tasks.contains_key(group_id));
+            let count = self.running_tasks[group_id];
             if next_group.is_none() {
                 next_group = Some((group_id, count, front_task_id));
                 continue;
@@ -138,12 +185,15 @@ impl GroupTaskPoolMeta {
     // 1. Choose one group to run with func `get_next_group()`.
     // 2. For the tasks in the selected group, choose the first
     // one in the queue(which means comes first).
-    fn pop_next_task(&mut self) -> Option<(u64, TaskMeta<'static>)> {
-        if let Some(group_id) = self.get_next_group() {
-            // running tasks for group add 1.
-            self.running_tasks.entry(group_id).or_insert(0 as usize);
-            let mut running_tasks = self.running_tasks.get_mut(&group_id).unwrap();
-            *running_tasks += 1;
+    fn pop_next_task(&mut self) -> Option<(u64, TaskMeta)> {
+        let next_task;
+        let group_id;
+        if let Some(task) = self.heap.pop() {
+            group_id = task.group_id;
+            self.heap_group.remove(&group_id);
+            next_task = Some((group_id, task));
+        } else if let Some(next_group_id) = self.get_next_group() {
+            group_id = next_group_id;
             // get front waiting task from group.
             let (empty_group_wtasks, task) = {
                 let mut waiting_tasks = self.waiting_tasks.get_mut(&group_id).unwrap();
@@ -154,12 +204,17 @@ impl GroupTaskPoolMeta {
             if empty_group_wtasks {
                 self.waiting_tasks.remove(&group_id);
             }
-
-            self.waiting_tasks_num -= 1;
-            self.running_tasks_num += 1;
-            return Some((group_id, task));
+            next_task = Some((group_id, task));
+        } else {
+            return None;
         }
-        None
+        // running tasks for group add 1.
+        self.running_tasks.entry(group_id).or_insert(0 as usize);
+        let mut running_tasks = self.running_tasks.get_mut(&group_id).unwrap();
+        *running_tasks += 1;
+        self.waiting_tasks_num -= 1;
+        self.running_tasks_num += 1;
+        next_task
     }
 }
 
