@@ -57,7 +57,7 @@ fn test_rpc_client() {
     let tmp_store = client.get_store(store_id).unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
-    let tmp_region = client.get_region_by_id(region_id).unwrap().unwrap();
+    let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
     let mut prev_id = 0;
@@ -130,7 +130,7 @@ fn test_retry_async() {
     let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
 
     for _ in 0..5 {
-        let region = client.async_get_region_by_id(1);
+        let region = client.get_region_by_id(1);
         region.wait().unwrap();
     }
 }
@@ -156,7 +156,7 @@ fn test_change_leader_async() {
     let leader = client.get_leader();
 
     for _ in 0..5 {
-        let region = client.async_get_region_by_id(1);
+        let region = client.get_region_by_id(1);
         region.wait().ok();
 
         let new = client.get_leader();

@@ -64,6 +64,7 @@ extern crate regex;
 extern crate grpc;
 extern crate fnv;
 extern crate futures;
+extern crate tokio_core;
 
 #[macro_use]
 pub mod util;
