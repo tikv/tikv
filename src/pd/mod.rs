@@ -13,18 +13,23 @@
 
 use std::vec::Vec;
 
-mod client;
+use futures;
+use futures::Future;
+use futures::BoxFuture;
+
+mod async;
 mod metrics;
 
 pub mod errors;
 pub use self::errors::{Result, Error};
-pub use self::client::RpcClient;
-pub use self::client::validate_endpoints;
+pub use self::async::RpcClient;
+pub use self::async::validate_endpoints;
 
 use kvproto::metapb;
 use kvproto::pdpb;
 
 pub type Key = Vec<u8>;
+pub type PdFuture<T> = BoxFuture<T, Error>;
 
 pub const INVALID_ID: u64 = 0;
 
@@ -101,4 +106,10 @@ pub trait PdClient: Send + Sync {
 
     // Report pd the split region.
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()>;
+
+    // Get region by region id.
+    // For tests.
+    fn async_get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
+        futures::empty().boxed()
+    }
 }
