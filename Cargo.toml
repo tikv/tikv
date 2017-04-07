@@ -89,7 +89,7 @@ features = ["profiling"]
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
-codegen-units = 4
+codegen-units = 1
 
 # The release profile, used for `cargo build --release`
 [profile.release]
