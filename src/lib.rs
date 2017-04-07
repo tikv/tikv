@@ -63,6 +63,7 @@ extern crate fs2;
 extern crate regex;
 extern crate grpc;
 extern crate fnv;
+extern crate futures;
 
 #[macro_use]
 pub mod util;
