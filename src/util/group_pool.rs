@@ -276,9 +276,8 @@ impl ThreadPoolMeta {
 }
 
 struct Worker<'a> {
-    receiver: &'a Arc<Mutex<Receiver<bool>>>,
+    job_rever: &'a Arc<Mutex<Receiver<bool>>>,
     pool_meta: &'a Arc<Mutex<ThreadPoolMeta>>,
-    running_task_group: Option<u64>,
 }
 
 impl<'a> Worker<'a> {
@@ -286,9 +285,8 @@ impl<'a> Worker<'a> {
            pool_meta: &'a Arc<Mutex<ThreadPoolMeta>>)
            -> Worker<'a> {
         Worker {
-            receiver: receiver,
+            job_rever: receiver,
             pool_meta: pool_meta,
-            running_task_group: None,
         }
     }
 
@@ -297,24 +295,15 @@ impl<'a> Worker<'a> {
     #[inline]
     fn wait(&self) -> bool {
         // try to receive notify
-        let job_receiver = self.receiver.lock().unwrap();
+        let job_receiver = self.job_rever.lock().unwrap();
         job_receiver.recv().unwrap()
     }
 
     #[inline]
-    fn get_next_task(&mut self) -> Option<TaskMeta> {
+    fn get_next_task(&mut self) -> Option<(u64, TaskMeta)> {
         // try to get task
         let mut meta = self.pool_meta.lock().unwrap();
-        match meta.pop_next_task() {
-            Some((group_id, task)) => {
-                self.running_task_group = Some(group_id);
-                Some(task)
-            }
-            None => {
-                self.running_task_group = None;
-                None
-            }
-        }
+        meta.pop_next_task()
     }
 
     fn run(&mut self) {
@@ -324,12 +313,11 @@ impl<'a> Worker<'a> {
             // handle task
             // since `tikv` would be down on any panic happens,
             // we needn't process panic case here.
-            if let Some(task) = self.get_next_task() {
+            if let Some((task_key, task)) = self.get_next_task() {
                 task.task.call_box(());
                 let mut meta = self.pool_meta.lock().unwrap();
-                meta.finished_task(task.group_id);
+                meta.finished_task(task_key);
             }
-            self.running_task_group = None;
         }
     }
 }
