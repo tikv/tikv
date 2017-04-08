@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
-use std::collections::{BinaryHeap, HashSet, HashMap};
+use std::collections::{BinaryHeap, HashSet, HashMap, VecDeque};
 use std::cmp::Ordering;
 use std::hash::Hash;
 
@@ -39,6 +39,10 @@ impl<T: Hash + Eq + Send + Clone + 'static> TaskMeta<T> {
             group_id: group_id,
             task: Box::new(job),
         }
+    }
+
+    fn group_id(&self) -> T {
+        self.group_id.clone()
     }
 }
 
@@ -80,9 +84,8 @@ impl<T: Hash + Eq + Send + Clone + 'static> WaitingHeap<T> {
         }
     }
 
-    // try_push
-    fn push(&mut self, task: TaskMeta<T>) -> bool {
-        let group_id = task.group_id.clone();
+    fn try_push(&mut self, task: TaskMeta<T>) -> bool {
+        let group_id = task.group_id();
         if self.group_set.contains(&group_id) {
             return false;
         }
@@ -108,7 +111,7 @@ struct TasksPool<T> {
     // group_id => count
     running_tasks: HashMap<T, usize>,
     // group_id => tasks array
-    waiting_queue: HashMap<T, Vec<TaskMeta<T>>>,
+    waiting_queue: HashMap<T, VecDeque<TaskMeta<T>>>,
     waiting_heap: WaitingHeap<T>,
 }
 
@@ -122,15 +125,15 @@ impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
     }
 
     fn push(&mut self, task: TaskMeta<T>) {
-        let group_id = task.group_id.clone();
+        let group_id = task.group_id();
         if !self.running_tasks.contains_key(&group_id) && !self.waiting_heap.contains(&group_id) {
-            self.waiting_heap.push(task);
+            self.waiting_heap.try_push(task);
             return;
         }
         let mut group_tasks = self.waiting_queue
             .entry(group_id)
-            .or_insert_with(Vec::new);
-        group_tasks.push(task);
+            .or_insert_with(VecDeque::new);
+        group_tasks.push_back(task);
     }
 
     fn pop(&mut self) -> Option<(T, TaskMeta<T>)> {
@@ -142,7 +145,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
         }
 
         if let Some(task) = next_task {
-            let group_id = task.group_id.clone();
+            let group_id = task.group_id();
             // running tasks for group add 1.
             self.running_tasks.entry(group_id.clone()).or_insert(0 as usize);
             let mut running_tasks = self.running_tasks.get_mut(&group_id).unwrap();
@@ -167,14 +170,14 @@ impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
         }
         // if waiting tasks exist && group not in heap.
         let group_task = self.pop_from_waiting_queue_with_group_id(group_id);
-        self.waiting_heap.push(group_task);
+        assert!(self.waiting_heap.try_push(group_task));
     }
 
     #[inline]
     fn pop_from_waiting_queue_with_group_id(&mut self, group_id: T) -> TaskMeta<T> {
         let (empty_group_wtasks, task) = {
             let mut waiting_tasks = self.waiting_queue.get_mut(&group_id).unwrap();
-            let task_meta = waiting_tasks.swap_remove(0);
+            let task_meta = waiting_tasks.pop_front().unwrap();
             (waiting_tasks.is_empty(), task_meta)
         };
         // if waiting tasks for group is empty,remove from waiting_tasks.
