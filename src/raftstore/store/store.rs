@@ -1036,15 +1036,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              left: metapb::Region,
                              right: metapb::Region,
                              left_derive: bool) {
-        let new_region = if left_derive {
-            right.clone()
+        let (origin_region, new_region) = if left_derive {
+            (left.clone(), right.clone())
         } else {
-            left.clone()
-        };
-        let origin_region = if left_derive {
-            left.clone()
-        } else {
-            right.clone()
+            (right.clone(), left.clone())
         };
 
         self.region_peers.get_mut(&region_id).unwrap().mut_store().region = origin_region.clone();
