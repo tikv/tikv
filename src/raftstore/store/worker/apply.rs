@@ -508,8 +508,7 @@ impl ApplyDelegate {
 
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
-            AdminCmdType::Split => self.exec_split(ctx, request, true),
-            AdminCmdType::SplitV2 => self.exec_split(ctx, request, false),
+            AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
@@ -621,12 +620,12 @@ impl ApplyDelegate {
 
     fn exec_split(&mut self,
                   ctx: &ExecContext,
-                  req: &AdminRequest,
-                  left_derive: bool)
+                  req: &AdminRequest)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
 
         let split_req = req.get_split();
+        let left_derive = !split_req.get_right_derive();
         if !split_req.has_split_key() {
             return Err(box_err!("missing split key"));
         }
