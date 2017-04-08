@@ -67,59 +67,91 @@ impl PartialOrd for TaskMeta {
     }
 }
 
-struct GroupTaskPoolMeta {
-    total_tasks_num: u64,
-    running_tasks_num: usize,
-    waiting_tasks_num: usize,
-    // group_id => count
-    running_tasks: HashMap<u64, usize>,
-    // group_id => tasks array
-    waiting_tasks: HashMap<u64, Vec<TaskMeta>>,
-    heap: BinaryHeap<TaskMeta>,
-    heap_group: HashSet<u64>,
+struct WaitingHeap {
+    data: BinaryHeap<TaskMeta>,
+    group_set: HashSet<u64>,
 }
 
-impl GroupTaskPoolMeta {
-    fn new() -> GroupTaskPoolMeta {
-        GroupTaskPoolMeta {
-            total_tasks_num: 0,
-            running_tasks_num: 0,
-            waiting_tasks_num: 0,
-            running_tasks: HashMap::default(),
-            waiting_tasks: HashMap::default(),
-            heap: BinaryHeap::new(),
-            heap_group: HashSet::new(),
+impl WaitingHeap {
+    fn new() -> WaitingHeap {
+        WaitingHeap {
+            data: BinaryHeap::new(),
+            group_set: HashSet::new(),
         }
     }
 
-    // push_task pushes a new task into pool.
-    fn push_task<F>(&mut self, group_id: u64, job: F)
-        where F: FnOnce() + Send + 'static
-    {
-        let task = TaskMeta::new(self.total_tasks_num, group_id, job);
-        self.waiting_tasks_num += 1;
-        self.total_tasks_num += 1;
+    // try_push
+    fn push(&mut self, task: TaskMeta) -> bool {
+        if self.group_set.contains(&task.group_id) {
+            return false;
+        }
+        self.group_set.insert(task.group_id);
+        self.data.push(task);
+        true
+    }
+
+    fn pop(&mut self) -> Option<TaskMeta> {
+        if let Some(task) = self.data.pop() {
+            self.group_set.remove(&task.group_id);
+            return Some(task);
+        }
+        None
+    }
+
+    fn contains(&self, group_id: &u64) -> bool {
+        self.group_set.contains(group_id)
+    }
+}
+
+struct TasksPool {
+    // group_id => count
+    running_tasks: HashMap<u64, usize>,
+    // group_id => tasks array
+    waiting_queue: HashMap<u64, Vec<TaskMeta>>,
+    waiting_heap: WaitingHeap,
+}
+
+impl TasksPool {
+    fn new() -> TasksPool {
+        TasksPool {
+            running_tasks: HashMap::default(),
+            waiting_queue: HashMap::default(),
+            waiting_heap: WaitingHeap::new(),
+        }
+    }
+
+    fn push(&mut self, task: TaskMeta) {
         let group_id = task.group_id;
-        if !self.running_tasks.contains_key(&group_id) && !self.heap_group.contains(&group_id) {
-            self.heap_group.insert(group_id);
-            self.heap.push(task);
+        if !self.running_tasks.contains_key(&group_id) && !self.waiting_heap.contains(&group_id) {
+            self.waiting_heap.push(task);
             return;
         }
-        let mut group_tasks = self.waiting_tasks
+        let mut group_tasks = self.waiting_queue
             .entry(group_id)
             .or_insert_with(Vec::new);
         group_tasks.push(task);
     }
 
-    fn total_task_num(&self) -> usize {
-        self.waiting_tasks_num + self.running_tasks_num
+    fn pop(&mut self) -> Option<(u64, TaskMeta)> {
+        let mut next_task = self.waiting_heap.pop();
+        if next_task.is_none() {
+            if let Some(gid) = self.pop_group_id_from_waiting_queue() {
+                next_task = Some(self.pop_from_waiting_queue_with_group_id(gid));
+            }
+        }
+
+        if let Some(task) = next_task {
+            let group_id = task.group_id;
+            // running tasks for group add 1.
+            self.running_tasks.entry(group_id).or_insert(0 as usize);
+            let mut running_tasks = self.running_tasks.get_mut(&group_id).unwrap();
+            *running_tasks += 1;
+            return Some((task.group_id, task));
+        }
+        None
     }
 
-    // finished_task is called when one task is finished in the
-    // thread. It will clean up the remaining information of the
-    // task in the pool.
-    fn finished_task(&mut self, group_id: u64) {
-        self.running_tasks_num -= 1;
+    fn finished(&mut self, group_id: u64) {
         // if running tasks exist.
         if self.running_tasks[&group_id] > 1 {
             let mut count = self.running_tasks.get_mut(&group_id).unwrap();
@@ -129,30 +161,38 @@ impl GroupTaskPoolMeta {
 
         // if no running tasks left.
         self.running_tasks.remove(&group_id);
-        if !self.waiting_tasks.contains_key(&group_id) || self.heap_group.contains(&group_id) {
+        if !self.waiting_queue.contains_key(&group_id) || self.waiting_heap.contains(&group_id) {
             return;
         }
         // if waiting tasks exist && group not in heap.
-        let empty_group_wtasks = {
-            let mut waiting_tasks = self.waiting_tasks.get_mut(&group_id).unwrap();
-            let front_task = waiting_tasks.swap_remove(0);
-            self.heap.push(front_task);
-            self.heap_group.insert(group_id);
-            waiting_tasks.is_empty()
-        };
-        if empty_group_wtasks {
-            self.waiting_tasks.remove(&group_id);
-        }
+        let group_task = self.pop_from_waiting_queue_with_group_id(group_id);
+        self.waiting_heap.push(group_task);
     }
 
-    // get_next_group returns the next task's group_id.
+    #[inline]
+    fn pop_from_waiting_queue_with_group_id(&mut self, group_id: u64) -> TaskMeta {
+        let (empty_group_wtasks, task) = {
+            let mut waiting_tasks = self.waiting_queue.get_mut(&group_id).unwrap();
+            let task_meta = waiting_tasks.swap_remove(0);
+            (waiting_tasks.is_empty(), task_meta)
+        };
+        // if waiting tasks for group is empty,remove from waiting_tasks.
+        if empty_group_wtasks {
+            self.waiting_queue.remove(&group_id);
+        }
+        task
+    }
+
+    // pop_group_id_from_waiting_queue returns the next task's group_id.
     // we choose the group according to the following rules:
     // 1. Choose the groups with least running tasks.
     // 2. If more than one groups has the least running tasks,
     //    choose the one whose task comes first(with the minum task's ID)
-    fn get_next_group(&self) -> Option<u64> {
-        let mut next_group = None; //(group_id,count,task_id)
-        for (group_id, tasks) in &self.waiting_tasks {
+    #[inline]
+    fn pop_group_id_from_waiting_queue(&mut self) -> Option<u64> {
+        // (group_id,count,task_id)
+        let mut next_group = None;
+        for (group_id, tasks) in &self.waiting_queue {
             let front_task_id = tasks[0].id;
             assert!(self.running_tasks.contains_key(group_id));
             let count = self.running_tasks[group_id];
@@ -165,13 +205,10 @@ impl GroupTaskPoolMeta {
                 next_group = Some((group_id, count, front_task_id));
                 continue;
             }
-
             if pre_count == count && pre_task_id > front_task_id {
                 next_group = Some((group_id, count, front_task_id));
             }
-
         }
-
         if let Some((group_id, _, _)) = next_group {
             return Some(*group_id);
         }
@@ -179,54 +216,74 @@ impl GroupTaskPoolMeta {
         // no tasks in waiting.
         None
     }
+}
 
-    // pop_next_task pops a task to running next.
+
+struct ThreadPoolMeta {
+    next_task_id: u64,
+    total_running_tasks: usize,
+    total_waiting_tasks: usize,
+    tasks_pool: TasksPool,
+}
+
+impl ThreadPoolMeta {
+    fn new() -> ThreadPoolMeta {
+        ThreadPoolMeta {
+            next_task_id: 0,
+            total_running_tasks: 0,
+            total_waiting_tasks: 0,
+            tasks_pool: TasksPool::new(),
+        }
+    }
+
+    // push_task pushes a new task into pool.
+    fn push_task<F>(&mut self, group_id: u64, job: F)
+        where F: FnOnce() + Send + 'static
+    {
+        let task = TaskMeta::new(self.next_task_id, group_id, job);
+        self.total_waiting_tasks += 1;
+        self.next_task_id += 1;
+        self.tasks_pool.push(task);
+    }
+
+    fn get_tasks_num(&self) -> usize {
+        self.total_waiting_tasks + self.total_running_tasks
+    }
+
+    // finished_task is called when one task is finished in the
+    // thread. It will clean up the remaining information of the
+    // task in the pool.
+    fn finished_task(&mut self, group_id: u64) {
+        self.total_running_tasks -= 1;
+        self.tasks_pool.finished(group_id);
+    }
+
+
+
     // we choose the task according to the following rules:
     // 1. Choose one group to run with func `get_next_group()`.
     // 2. For the tasks in the selected group, choose the first
     // one in the queue(which means comes first).
     fn pop_next_task(&mut self) -> Option<(u64, TaskMeta)> {
-        let next_task;
-        let group_id;
-        if let Some(task) = self.heap.pop() {
-            group_id = task.group_id;
-            self.heap_group.remove(&group_id);
-            next_task = Some((group_id, task));
-        } else if let Some(next_group_id) = self.get_next_group() {
-            group_id = next_group_id;
-            // get front waiting task from group.
-            let (empty_group_wtasks, task) = {
-                let mut waiting_tasks = self.waiting_tasks.get_mut(&group_id).unwrap();
-                let task_meta = waiting_tasks.swap_remove(0);
-                (waiting_tasks.is_empty(), task_meta)
-            };
-            // if waiting tasks for group is empty,remove from waiting_tasks.
-            if empty_group_wtasks {
-                self.waiting_tasks.remove(&group_id);
-            }
-            next_task = Some((group_id, task));
-        } else {
+        let next_task = self.tasks_pool.pop();
+        if next_task.is_none() {
             return None;
         }
-        // running tasks for group add 1.
-        self.running_tasks.entry(group_id).or_insert(0 as usize);
-        let mut running_tasks = self.running_tasks.get_mut(&group_id).unwrap();
-        *running_tasks += 1;
-        self.waiting_tasks_num -= 1;
-        self.running_tasks_num += 1;
+        self.total_waiting_tasks -= 1;
+        self.total_running_tasks += 1;
         next_task
     }
 }
 
 struct Worker<'a> {
     receiver: &'a Arc<Mutex<Receiver<bool>>>,
-    pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>,
+    pool_meta: &'a Arc<Mutex<ThreadPoolMeta>>,
     running_task_group: Option<u64>,
 }
 
 impl<'a> Worker<'a> {
     fn new(receiver: &'a Arc<Mutex<Receiver<bool>>>,
-           pool_meta: &'a Arc<Mutex<GroupTaskPoolMeta>>)
+           pool_meta: &'a Arc<Mutex<ThreadPoolMeta>>)
            -> Worker<'a> {
         Worker {
             receiver: receiver,
@@ -237,12 +294,14 @@ impl<'a> Worker<'a> {
 
     // wait to receive info from job_receiver,
     // return false when get stop msg
+    #[inline]
     fn wait(&self) -> bool {
         // try to receive notify
         let job_receiver = self.receiver.lock().unwrap();
         job_receiver.recv().unwrap()
     }
 
+    #[inline]
     fn get_next_task(&mut self) -> Option<TaskMeta> {
         // try to get task
         let mut meta = self.pool_meta.lock().unwrap();
@@ -258,13 +317,20 @@ impl<'a> Worker<'a> {
         }
     }
 
-    fn process_one_task(&mut self) {
-        if let Some(task) = self.get_next_task() {
-            task.task.call_box(());
-            let mut meta = self.pool_meta.lock().unwrap();
-            meta.finished_task(task.group_id);
+    fn run(&mut self) {
+        // start the worker.
+        // loop break on receive stop message.
+        while self.wait() {
+            // handle task
+            // since `tikv` would be down on any panic happens,
+            // we needn't process panic case here.
+            if let Some(task) = self.get_next_task() {
+                task.task.call_box(());
+                let mut meta = self.pool_meta.lock().unwrap();
+                meta.finished_task(task.group_id);
+            }
+            self.running_task_group = None;
         }
-        self.running_task_group = None;
     }
 }
 
@@ -291,14 +357,14 @@ impl<'a> Worker<'a> {
 ///
 /// ```
 /// # extern crate tikv;
-/// use tikv::util::group_pool::GroupTaskPool;
+/// use tikv::util::group_pool::ThreadPool;
 /// use std::thread::sleep;
 /// use std::time::Duration;
 /// use std::sync::mpsc::{Sender, Receiver, channel};
 /// # fn main(){
 /// let concurrency = 2;
 /// let name = Some(String::from("sample"));
-/// let mut task_pool = GroupTaskPool::new(name,concurrency);
+/// let mut task_pool = ThreadPool::new(name,concurrency);
 /// let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
 /// let group_with_many_tasks = 1001 as u64;
 /// // all tasks cost the same time.
@@ -347,28 +413,28 @@ impl<'a> Worker<'a> {
 /// }
 /// # }
 /// ```
-pub struct GroupTaskPool {
-    tasks: Arc<Mutex<GroupTaskPoolMeta>>,
+pub struct ThreadPool {
+    meta: Arc<Mutex<ThreadPoolMeta>>,
     job_sender: Sender<bool>,
     threads: Vec<JoinHandle<()>>,
 }
 
-impl GroupTaskPool {
-    pub fn new(name: Option<String>, num_threads: usize) -> GroupTaskPool {
+impl ThreadPool {
+    pub fn new(name: Option<String>, num_threads: usize) -> ThreadPool {
         assert!(num_threads >= 1);
-        let (jtx, jrx) = channel();
-        let jrx = Arc::new(Mutex::new(jrx));
-        let tasks = Arc::new(Mutex::new(GroupTaskPoolMeta::new()));
+        let (tx, rx) = channel();
+        let rx = Arc::new(Mutex::new(rx));
+        let meta = Arc::new(Mutex::new(ThreadPoolMeta::new()));
 
-        let mut threads = Vec::new();
+        let mut threads = Vec::with_capacity(num_threads);
         // Threadpool threads
         for _ in 0..num_threads {
-            threads.push(new_thread(name.clone(), jrx.clone(), tasks.clone()));
+            threads.push(new_thread(name.clone(), rx.clone(), meta.clone()));
         }
 
-        GroupTaskPool {
-            tasks: tasks.clone(),
-            job_sender: jtx,
+        ThreadPool {
+            meta: meta.clone(),
+            job_sender: tx,
             threads: threads,
         }
     }
@@ -378,7 +444,7 @@ impl GroupTaskPool {
         where F: FnOnce() + Send + 'static
     {
         {
-            let lock = self.tasks.clone();
+            let lock = self.meta.clone();
             let mut meta = lock.lock().unwrap();
             meta.push_task(group_id, job);
         }
@@ -386,9 +452,9 @@ impl GroupTaskPool {
     }
 
     pub fn get_tasks_num(&self) -> usize {
-        let lock = self.tasks.clone();
+        let lock = self.meta.clone();
         let meta = lock.lock().unwrap();
-        meta.total_task_num()
+        meta.get_tasks_num()
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
@@ -408,7 +474,7 @@ impl GroupTaskPool {
 
 fn new_thread(name: Option<String>,
               receiver: Arc<Mutex<Receiver<bool>>>,
-              tasks: Arc<Mutex<GroupTaskPoolMeta>>)
+              tasks: Arc<Mutex<ThreadPoolMeta>>)
               -> JoinHandle<()> {
     let mut builder = Builder::new();
     if let Some(ref name) = name {
@@ -417,21 +483,14 @@ fn new_thread(name: Option<String>,
 
     builder.spawn(move || {
             let mut worker = Worker::new(&receiver, &tasks);
-            // start the worker.
-            // loop break on receive stop message.
-            while worker.wait() {
-                // handle task
-                // since `tikv` would be down on any panic happens,
-                // we needn't process panic case here.
-                worker.process_one_task();
-            }
+            worker.run();
         })
         .unwrap()
 }
 
 #[cfg(test)]
 mod test {
-    use super::GroupTaskPool;
+    use super::ThreadPool;
     use std::thread::sleep;
     use std::time::Duration;
     use std::sync::mpsc::channel;
@@ -440,7 +499,7 @@ mod test {
     fn test_tasks_with_same_cost() {
         let name = Some(thd_name!("test_tasks_with_same_cost"));
         let concurrency = 2;
-        let mut task_pool = GroupTaskPool::new(name, concurrency);
+        let mut task_pool = ThreadPool::new(name, concurrency);
         let (jtx, jrx) = channel();
         let group_with_many_tasks = 1001 as u64;
         // all tasks cost the same time.
@@ -496,7 +555,7 @@ mod test {
     fn test_tasks_with_different_cost() {
         let name = Some(thd_name!("test_tasks_with_different_cost"));
         let concurrency = 2;
-        let mut task_pool = GroupTaskPool::new(name, concurrency);
+        let mut task_pool = ThreadPool::new(name, concurrency);
         let (jtx, jrx) = channel();
         let group_with_big_task = 1001 as u64;
         let sleep_duration = Duration::from_millis(50);

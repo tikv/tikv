@@ -34,7 +34,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
-use util::group_pool::GroupTaskPool;
+use util::group_pool::ThreadPool;
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
@@ -68,7 +68,7 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: GroupTaskPool,
+    pool: ThreadPool,
     max_running_task_count: usize,
 }
 
@@ -79,7 +79,7 @@ impl Host {
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: GroupTaskPool::new(Some(thd_name!("endpoint-pool")), concurrency),
+            pool: ThreadPool::new(Some(thd_name!("endpoint-pool")), concurrency),
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
         }
     }
