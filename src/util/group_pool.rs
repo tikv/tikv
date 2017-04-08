@@ -16,22 +16,22 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
-use super::HashMap;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BinaryHeap, HashSet, HashMap};
 use std::cmp::Ordering;
+use std::hash::Hash;
 
-struct TaskMeta {
+struct TaskMeta<T> {
     // the task's number in the pool.
     // each task has a unique number,
     // and it's always bigger than precedes one.
     id: u64,
     // the task's group_id.
-    group_id: u64,
+    group_id: T,
     task: Box<FnBox() + Send>,
 }
 
-impl TaskMeta {
-    fn new<F>(id: u64, group_id: u64, job: F) -> TaskMeta
+impl<T: Hash + Eq + Send + Clone + 'static> TaskMeta<T> {
+    fn new<F>(id: u64, group_id: T, job: F) -> TaskMeta<T>
         where F: FnOnce() + Send + 'static
     {
         TaskMeta {
@@ -42,8 +42,8 @@ impl TaskMeta {
     }
 }
 
-impl<'a> Ord for TaskMeta {
-    fn cmp(&self, right: &TaskMeta) -> Ordering {
+impl<T> Ord for TaskMeta<T> {
+    fn cmp(&self, right: &TaskMeta<T>) -> Ordering {
         if self.id > right.id {
             return Ordering::Less;
         } else if self.id < right.id {
@@ -53,27 +53,27 @@ impl<'a> Ord for TaskMeta {
     }
 }
 
-impl PartialEq for TaskMeta {
-    fn eq(&self, right: &TaskMeta) -> bool {
+impl<T> PartialEq for TaskMeta<T> {
+    fn eq(&self, right: &TaskMeta<T>) -> bool {
         self.cmp(right) == Ordering::Equal
     }
 }
 
-impl Eq for TaskMeta {}
+impl<T> Eq for TaskMeta<T> {}
 
-impl PartialOrd for TaskMeta {
-    fn partial_cmp(&self, rhs: &TaskMeta) -> Option<Ordering> {
+impl<T> PartialOrd for TaskMeta<T> {
+    fn partial_cmp(&self, rhs: &TaskMeta<T>) -> Option<Ordering> {
         Some(self.cmp(rhs))
     }
 }
 
-struct WaitingHeap {
-    data: BinaryHeap<TaskMeta>,
-    group_set: HashSet<u64>,
+struct WaitingHeap<T> {
+    data: BinaryHeap<TaskMeta<T>>,
+    group_set: HashSet<T>,
 }
 
-impl WaitingHeap {
-    fn new() -> WaitingHeap {
+impl<T: Hash + Eq + Send + Clone + 'static> WaitingHeap<T> {
+    fn new() -> WaitingHeap<T> {
         WaitingHeap {
             data: BinaryHeap::new(),
             group_set: HashSet::new(),
@@ -81,16 +81,17 @@ impl WaitingHeap {
     }
 
     // try_push
-    fn push(&mut self, task: TaskMeta) -> bool {
-        if self.group_set.contains(&task.group_id) {
+    fn push(&mut self, task: TaskMeta<T>) -> bool {
+        let group_id = task.group_id.clone();
+        if self.group_set.contains(&group_id) {
             return false;
         }
-        self.group_set.insert(task.group_id);
+        self.group_set.insert(group_id);
         self.data.push(task);
         true
     }
 
-    fn pop(&mut self) -> Option<TaskMeta> {
+    fn pop(&mut self) -> Option<TaskMeta<T>> {
         if let Some(task) = self.data.pop() {
             self.group_set.remove(&task.group_id);
             return Some(task);
@@ -98,21 +99,21 @@ impl WaitingHeap {
         None
     }
 
-    fn contains(&self, group_id: &u64) -> bool {
+    fn contains(&self, group_id: &T) -> bool {
         self.group_set.contains(group_id)
     }
 }
 
-struct TasksPool {
+struct TasksPool<T> {
     // group_id => count
-    running_tasks: HashMap<u64, usize>,
+    running_tasks: HashMap<T, usize>,
     // group_id => tasks array
-    waiting_queue: HashMap<u64, Vec<TaskMeta>>,
-    waiting_heap: WaitingHeap,
+    waiting_queue: HashMap<T, Vec<TaskMeta<T>>>,
+    waiting_heap: WaitingHeap<T>,
 }
 
-impl TasksPool {
-    fn new() -> TasksPool {
+impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
+    fn new() -> TasksPool<T> {
         TasksPool {
             running_tasks: HashMap::default(),
             waiting_queue: HashMap::default(),
@@ -120,8 +121,8 @@ impl TasksPool {
         }
     }
 
-    fn push(&mut self, task: TaskMeta) {
-        let group_id = task.group_id;
+    fn push(&mut self, task: TaskMeta<T>) {
+        let group_id = task.group_id.clone();
         if !self.running_tasks.contains_key(&group_id) && !self.waiting_heap.contains(&group_id) {
             self.waiting_heap.push(task);
             return;
@@ -132,7 +133,7 @@ impl TasksPool {
         group_tasks.push(task);
     }
 
-    fn pop(&mut self) -> Option<(u64, TaskMeta)> {
+    fn pop(&mut self) -> Option<(T, TaskMeta<T>)> {
         let mut next_task = self.waiting_heap.pop();
         if next_task.is_none() {
             if let Some(gid) = self.pop_group_id_from_waiting_queue() {
@@ -141,17 +142,17 @@ impl TasksPool {
         }
 
         if let Some(task) = next_task {
-            let group_id = task.group_id;
+            let group_id = task.group_id.clone();
             // running tasks for group add 1.
-            self.running_tasks.entry(group_id).or_insert(0 as usize);
+            self.running_tasks.entry(group_id.clone()).or_insert(0 as usize);
             let mut running_tasks = self.running_tasks.get_mut(&group_id).unwrap();
             *running_tasks += 1;
-            return Some((task.group_id, task));
+            return Some((group_id, task));
         }
         None
     }
 
-    fn finished(&mut self, group_id: u64) {
+    fn finished(&mut self, group_id: T) {
         // if running tasks exist.
         if self.running_tasks[&group_id] > 1 {
             let mut count = self.running_tasks.get_mut(&group_id).unwrap();
@@ -170,7 +171,7 @@ impl TasksPool {
     }
 
     #[inline]
-    fn pop_from_waiting_queue_with_group_id(&mut self, group_id: u64) -> TaskMeta {
+    fn pop_from_waiting_queue_with_group_id(&mut self, group_id: T) -> TaskMeta<T> {
         let (empty_group_wtasks, task) = {
             let mut waiting_tasks = self.waiting_queue.get_mut(&group_id).unwrap();
             let task_meta = waiting_tasks.swap_remove(0);
@@ -189,7 +190,7 @@ impl TasksPool {
     // 2. If more than one groups has the least running tasks,
     //    choose the one whose task comes first(with the minum task's ID)
     #[inline]
-    fn pop_group_id_from_waiting_queue(&mut self) -> Option<u64> {
+    fn pop_group_id_from_waiting_queue(&mut self) -> Option<T> {
         // (group_id,count,task_id)
         let mut next_group = None;
         for (group_id, tasks) in &self.waiting_queue {
@@ -210,7 +211,7 @@ impl TasksPool {
             }
         }
         if let Some((group_id, _, _)) = next_group {
-            return Some(*group_id);
+            return Some((*group_id).clone());
         }
 
         // no tasks in waiting.
@@ -219,15 +220,15 @@ impl TasksPool {
 }
 
 
-struct ThreadPoolMeta {
+struct ThreadPoolMeta<T> {
     next_task_id: u64,
     total_running_tasks: usize,
     total_waiting_tasks: usize,
-    tasks_pool: TasksPool,
+    tasks_pool: TasksPool<T>,
 }
 
-impl ThreadPoolMeta {
-    fn new() -> ThreadPoolMeta {
+impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
+    fn new() -> ThreadPoolMeta<T> {
         ThreadPoolMeta {
             next_task_id: 0,
             total_running_tasks: 0,
@@ -237,7 +238,7 @@ impl ThreadPoolMeta {
     }
 
     // push_task pushes a new task into pool.
-    fn push_task<F>(&mut self, group_id: u64, job: F)
+    fn push_task<F>(&mut self, group_id: T, job: F)
         where F: FnOnce() + Send + 'static
     {
         let task = TaskMeta::new(self.next_task_id, group_id, job);
@@ -253,7 +254,7 @@ impl ThreadPoolMeta {
     // finished_task is called when one task is finished in the
     // thread. It will clean up the remaining information of the
     // task in the pool.
-    fn finished_task(&mut self, group_id: u64) {
+    fn finished_task(&mut self, group_id: T) {
         self.total_running_tasks -= 1;
         self.tasks_pool.finished(group_id);
     }
@@ -264,7 +265,7 @@ impl ThreadPoolMeta {
     // 1. Choose one group to run with func `get_next_group()`.
     // 2. For the tasks in the selected group, choose the first
     // one in the queue(which means comes first).
-    fn pop_next_task(&mut self) -> Option<(u64, TaskMeta)> {
+    fn pop_next_task(&mut self) -> Option<(T, TaskMeta<T>)> {
         let next_task = self.tasks_pool.pop();
         if next_task.is_none() {
             return None;
@@ -275,15 +276,19 @@ impl ThreadPoolMeta {
     }
 }
 
-struct Worker<'a> {
+struct Worker<'a, T>
+    where T: Hash + Eq + Send + Clone + 'static
+{
     job_rever: &'a Arc<Mutex<Receiver<bool>>>,
-    pool_meta: &'a Arc<Mutex<ThreadPoolMeta>>,
+    pool_meta: &'a Arc<Mutex<ThreadPoolMeta<T>>>,
 }
 
-impl<'a> Worker<'a> {
+impl<'a, T> Worker<'a, T>
+    where T: Hash + Eq + Send + Clone + 'static
+{
     fn new(receiver: &'a Arc<Mutex<Receiver<bool>>>,
-           pool_meta: &'a Arc<Mutex<ThreadPoolMeta>>)
-           -> Worker<'a> {
+           pool_meta: &'a Arc<Mutex<ThreadPoolMeta<T>>>)
+           -> Worker<'a, T> {
         Worker {
             job_rever: receiver,
             pool_meta: pool_meta,
@@ -300,7 +305,7 @@ impl<'a> Worker<'a> {
     }
 
     #[inline]
-    fn get_next_task(&mut self) -> Option<(u64, TaskMeta)> {
+    fn get_next_task(&mut self) -> Option<(T, TaskMeta<T>)> {
         // try to get task
         let mut meta = self.pool_meta.lock().unwrap();
         meta.pop_next_task()
@@ -401,14 +406,14 @@ impl<'a> Worker<'a> {
 /// }
 /// # }
 /// ```
-pub struct ThreadPool {
-    meta: Arc<Mutex<ThreadPoolMeta>>,
+pub struct ThreadPool<T: Hash + Eq + Send + Clone + 'static> {
+    meta: Arc<Mutex<ThreadPoolMeta<T>>>,
     job_sender: Sender<bool>,
     threads: Vec<JoinHandle<()>>,
 }
 
-impl ThreadPool {
-    pub fn new(name: Option<String>, num_threads: usize) -> ThreadPool {
+impl<T: Hash + Eq + Send + Clone + 'static> ThreadPool<T> {
+    pub fn new(name: Option<String>, num_threads: usize) -> ThreadPool<T> {
         assert!(num_threads >= 1);
         let (tx, rx) = channel();
         let rx = Arc::new(Mutex::new(rx));
@@ -428,7 +433,7 @@ impl ThreadPool {
     }
 
     /// Executes the function `job` on a thread in the pool.
-    pub fn execute<F>(&mut self, group_id: u64, job: F)
+    pub fn execute<F>(&mut self, group_id: T, job: F)
         where F: FnOnce() + Send + 'static
     {
         {
@@ -460,10 +465,12 @@ impl ThreadPool {
     }
 }
 
-fn new_thread(name: Option<String>,
-              receiver: Arc<Mutex<Receiver<bool>>>,
-              tasks: Arc<Mutex<ThreadPoolMeta>>)
-              -> JoinHandle<()> {
+fn new_thread<T>(name: Option<String>,
+                 receiver: Arc<Mutex<Receiver<bool>>>,
+                 tasks: Arc<Mutex<ThreadPoolMeta<T>>>)
+                 -> JoinHandle<()>
+    where T: Hash + Eq + Send + Clone + 'static
+{
     let mut builder = Builder::new();
     if let Some(ref name) = name {
         builder = builder.name(name.clone());

@@ -68,7 +68,7 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool,
+    pool: ThreadPool<u64>,
     max_running_task_count: usize,
 }
 
