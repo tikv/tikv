@@ -114,7 +114,10 @@ fn test_update_term_from_message(state: StateRole) {
 #[test]
 fn test_reject_stale_term_message() {
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
-    let panic_before_step_state = Box::new(|_: &Message| panic!("before step state function hook called unexpectedly"));
+    let panic_before_step_state = Box::new(|_: &Message| {
+                                               panic!("before step state function\
+                                                            hook called unexpectedly")
+                                           });
     r.before_step_state = Some(panic_before_step_state);
     r.load_state(hard_state(2, 0, 0));
 

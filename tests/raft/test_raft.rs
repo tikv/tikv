@@ -1282,7 +1282,10 @@ fn test_pass_election_timeout() {
 #[test]
 fn test_step_ignore_old_term_msg() {
     let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());
-    let panic_before_step_state = Box::new(|_: &Message| panic!("before step state function hook called unexpectedly"));
+    let panic_before_step_state = Box::new(|_: &Message| {
+                                               panic!("before step state function\
+                                                            hook called unexpectedly")
+                                           });
     sm.before_step_state = Some(panic_before_step_state);
     sm.term = 2;
     let mut m = new_message(0, 0, MessageType::MsgAppend, 0);
@@ -2128,10 +2131,13 @@ fn test_read_only_for_new_leader() {
 #[test]
 fn test_leader_append_response() {
     // initial progress: match = 0; next = 3
-    let mut tests = vec![(3, true, 0, 3, 0, 0, 0), // stale resp; no replies
-                         (2, true, 0, 2, 1, 1, 0), // denied resp; leader does not commit; descrease next and send
+    let mut tests = vec![// stale resp; no replies
+                         (3, true, 0, 3, 0, 0, 0),
+                         // denied resp; leader does not commit; descrease next and send
                          // probing msg
-                         (2, false, 2, 4, 2, 2, 2), // accept resp; leader commits; broadcast with commit index
+                         (2, true, 0, 2, 1, 1, 0),
+                         // accept resp; leader commits; broadcast with commit index
+                         (2, false, 2, 4, 2, 2, 2),
                          (0, false, 0, 3, 0, 0, 0)];
 
     for (i, (index, reject, wmatch, wnext, wmsg_num, windex, wcommitted)) in

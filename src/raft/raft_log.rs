@@ -937,7 +937,8 @@ mod test {
                   Some(last_index),
                   last_index - 1,
                   false), // commit up to the commit in the message
-                 (last_term, last_index, 0, vec![], Some(last_index), commit, false), // commit do not decrease
+                 // commit do not decrease
+                 (last_term, last_index, 0, vec![], Some(last_index), commit, false),
                  (0, 0, last_index, vec![], Some(0), commit, false), // commit do not decrease
                  (last_term,
                   last_index,
