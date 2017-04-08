@@ -56,20 +56,14 @@ impl Unstable {
     // maybe_first_index returns the index of the first possible entry in entries
     // if it has a snapshot.
     pub fn maybe_first_index(&self) -> Option<u64> {
-        self.snapshot
-            .as_ref()
-            .map(|snap| snap.get_metadata().get_index() + 1)
+        self.snapshot.as_ref().map(|snap| snap.get_metadata().get_index() + 1)
     }
 
     // maybe_last_index returns the last index if it has at least one
     // unstable entry or snapshot.
     pub fn maybe_last_index(&self) -> Option<u64> {
         match self.entries.len() {
-            0 => {
-                self.snapshot
-                    .as_ref()
-                    .map(|snap| snap.get_metadata().get_index())
-            }
+            0 => self.snapshot.as_ref().map(|snap| snap.get_metadata().get_index()),
             len => Some(self.offset + len as u64 - 1),
         }
     }
@@ -88,12 +82,13 @@ impl Unstable {
             }
             return None;
         }
-        self.maybe_last_index().and_then(|last| {
-            if idx > last {
-                return None;
-            }
-            Some(self.entries[(idx - self.offset) as usize].get_term())
-        })
+        self.maybe_last_index()
+            .and_then(|last| {
+                          if idx > last {
+                              return None;
+                          }
+                          Some(self.entries[(idx - self.offset) as usize].get_term())
+                      })
     }
 
     pub fn stable_to(&mut self, idx: u64, term: u64) {
@@ -195,14 +190,12 @@ mod test {
     #[test]
     fn test_maybe_first_index() {
         // entry, offset, snap, wok, windex,
-        let tests = vec![
-            // no snapshot
-            (Some(new_entry(5,1)), 5, None, false, 0),
-            (None, 0, None, false, 0),
-            // has snapshot
-            (Some(new_entry(5, 1)), 5, Some(new_snapshot(4,1)), true, 5),
-            (None, 5, Some(new_snapshot(4,1)), true, 5),
-        ];
+        let tests = vec![// no snapshot
+                         (Some(new_entry(5, 1)), 5, None, false, 0),
+                         (None, 0, None, false, 0),
+                         // has snapshot
+                         (Some(new_entry(5, 1)), 5, Some(new_snapshot(4, 1)), true, 5),
+                         (None, 5, Some(new_snapshot(4, 1)), true, 5)];
 
         for (entries, offset, snapshot, wok, windex) in tests {
             let u = Unstable {
@@ -222,14 +215,12 @@ mod test {
     #[test]
     fn test_maybe_last_index() {
         // entry, offset, snap, wok, windex,
-        let tests = vec![
-            (Some(new_entry(5,1)), 5, None, true, 5),
-            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), true, 5),
-            // last in snapshot
-            (None, 5, Some(new_snapshot(4,1)), true, 4),
-            // empty unstable
-            (None, 0, None, false, 0),
-       ];
+        let tests = vec![(Some(new_entry(5, 1)), 5, None, true, 5),
+                         (Some(new_entry(5, 1)), 5, Some(new_snapshot(4, 1)), true, 5),
+                         // last in snapshot
+                         (None, 5, Some(new_snapshot(4, 1)), true, 4),
+                         // empty unstable
+                         (None, 0, None, false, 0)];
 
         for (entries, offset, snapshot, wok, windex) in tests {
             let u = Unstable {
@@ -249,20 +240,18 @@ mod test {
     #[test]
     fn test_maybe_term() {
         // entry, offset, snap, index, wok, wterm
-        let tests = vec![
-            // term from entries
-            (Some(new_entry(5,1)), 5, None, 5, true, 1),
-            (Some(new_entry(5,1)), 5, None, 6, false, 0),
-            (Some(new_entry(5,1)), 5, None, 4, false, 0),
-            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 5, true, 1),
-            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 6, false, 0),
-            // term from snapshot
-            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 4, true, 1),
-            (Some(new_entry(5,1)), 5, Some(new_snapshot(4,1)), 3, false, 0),
-            (None, 5, Some(new_snapshot(4,1)), 5, false, 0),
-            (None, 5, Some(new_snapshot(4,1)), 4, true, 1),
-            (None, 0, None, 5, false, 0),
-       ];
+        let tests = vec![// term from entries
+                         (Some(new_entry(5, 1)), 5, None, 5, true, 1),
+                         (Some(new_entry(5, 1)), 5, None, 6, false, 0),
+                         (Some(new_entry(5, 1)), 5, None, 4, false, 0),
+                         (Some(new_entry(5, 1)), 5, Some(new_snapshot(4, 1)), 5, true, 1),
+                         (Some(new_entry(5, 1)), 5, Some(new_snapshot(4, 1)), 6, false, 0),
+                         // term from snapshot
+                         (Some(new_entry(5, 1)), 5, Some(new_snapshot(4, 1)), 4, true, 1),
+                         (Some(new_entry(5, 1)), 5, Some(new_snapshot(4, 1)), 3, false, 0),
+                         (None, 5, Some(new_snapshot(4, 1)), 5, false, 0),
+                         (None, 5, Some(new_snapshot(4, 1)), 4, true, 1),
+                         (None, 0, None, 5, false, 0)];
 
         for (entries, offset, snapshot, index, wok, wterm) in tests {
             let u = Unstable {
@@ -300,28 +289,27 @@ mod test {
     #[test]
     fn test_stable_to() {
         // entries, offset, snap, index, term, woffset, wlen
-        let tests = vec![
-            (vec![], 0, None, 5, 1, 0, 0),
-            // stable to the first entry
-            (vec![new_entry(5,1)], 5, None, 5, 1, 6, 0),
-            (vec![new_entry(5,1), new_entry(6, 0)], 5, None, 5, 1, 6, 1),
-            // stable to the first entry and term mismatch
-            (vec![new_entry(6,2)], 5, None, 6, 1, 5, 1),
-            // stable to old entry
-            (vec![new_entry(5,1)], 5, None, 4, 1, 5, 1),
-            (vec![new_entry(5,1)], 5, None, 4, 2, 5, 1),
-            // with snapshot
-            // stable to the first entry
-            (vec![new_entry(5,1)], 5, Some(new_snapshot(4,1)), 5, 1, 6, 0),
-            // stable to the first entry
-            (vec![new_entry(5,1), new_entry(6,1)], 5, Some(new_snapshot(4,1)), 5, 1, 6, 1),
-            // stable to the first entry and term mismatch
-            (vec![new_entry(6,2)], 5, Some(new_snapshot(5,1)), 6, 1, 5, 1),
-            // stable to snapshot
-            (vec![new_entry(5,1)], 5, Some(new_snapshot(4,1)), 4, 1, 5, 1),
-            // stable to old entry
-            (vec![new_entry(5,2)], 5, Some(new_snapshot(4,2)), 4, 1, 5, 1),
-       ];
+        let tests =
+            vec![(vec![], 0, None, 5, 1, 0, 0),
+                 // stable to the first entry
+                 (vec![new_entry(5, 1)], 5, None, 5, 1, 6, 0),
+                 (vec![new_entry(5, 1), new_entry(6, 0)], 5, None, 5, 1, 6, 1),
+                 // stable to the first entry and term mismatch
+                 (vec![new_entry(6, 2)], 5, None, 6, 1, 5, 1),
+                 // stable to old entry
+                 (vec![new_entry(5, 1)], 5, None, 4, 1, 5, 1),
+                 (vec![new_entry(5, 1)], 5, None, 4, 2, 5, 1),
+                 // with snapshot
+                 // stable to the first entry
+                 (vec![new_entry(5, 1)], 5, Some(new_snapshot(4, 1)), 5, 1, 6, 0),
+                 // stable to the first entry
+                 (vec![new_entry(5, 1), new_entry(6, 1)], 5, Some(new_snapshot(4, 1)), 5, 1, 6, 1),
+                 // stable to the first entry and term mismatch
+                 (vec![new_entry(6, 2)], 5, Some(new_snapshot(5, 1)), 6, 1, 5, 1),
+                 // stable to snapshot
+                 (vec![new_entry(5, 1)], 5, Some(new_snapshot(4, 1)), 4, 1, 5, 1),
+                 // stable to old entry
+                 (vec![new_entry(5, 2)], 5, Some(new_snapshot(4, 2)), 4, 1, 5, 1)];
 
         for (entries, offset, snapshot, index, term, woffset, wlen) in tests {
             let mut u = Unstable {
@@ -339,30 +327,46 @@ mod test {
     #[test]
     fn test_truncate_and_append() {
         // entries, offset, snap, to_append, woffset, wentries
-        let tests = vec![
-            // replace to the end
-            (vec![new_entry(5, 1)], 5, None,
-                vec![new_entry(6, 1), new_entry(7, 1)],
-                    5, vec![new_entry(5,1), new_entry(6,1), new_entry(7,1)]),
+        let tests = vec![// replace to the end
+                         (vec![new_entry(5, 1)],
+                          5,
+                          None,
+                          vec![new_entry(6, 1), new_entry(7, 1)],
+                          5,
+                          vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)]),
 
-            // replace to unstable entries
-           (vec![new_entry(5, 1)], 5, None,
-               vec![new_entry(5, 2), new_entry(6, 2)],
-                   5, vec![new_entry(5, 2), new_entry(6, 2)]),
+                         // replace to unstable entries
+                         (vec![new_entry(5, 1)],
+                          5,
+                          None,
+                          vec![new_entry(5, 2), new_entry(6, 2)],
+                          5,
+                          vec![new_entry(5, 2), new_entry(6, 2)]),
 
-            (vec![new_entry(5, 1)], 5, None,
-                vec![new_entry(4, 2), new_entry(5, 2), new_entry(6, 2)],
-                    4, vec![new_entry(4,2), new_entry(5, 2), new_entry(6, 2)]),
+                         (vec![new_entry(5, 1)],
+                          5,
+                          None,
+                          vec![new_entry(4, 2), new_entry(5, 2), new_entry(6, 2)],
+                          4,
+                          vec![new_entry(4, 2), new_entry(5, 2), new_entry(6, 2)]),
 
-            // truncate existing entries and append
-           (vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)], 5, None,
-               vec![new_entry(6, 2)],
-                   5, vec![new_entry(5, 1), new_entry(6, 2)]),
+                         // truncate existing entries and append
+                         (vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)],
+                          5,
+                          None,
+                          vec![new_entry(6, 2)],
+                          5,
+                          vec![new_entry(5, 1), new_entry(6, 2)]),
 
-            (vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)], 5, None,
-                vec![new_entry(7, 2), new_entry(8, 2)],
-                    5, vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 2), new_entry(8, 2)]),
-      ];
+                         (vec![new_entry(5, 1), new_entry(6, 1), new_entry(7, 1)],
+                          5,
+                          None,
+                          vec![new_entry(7, 2), new_entry(8, 2)],
+                          5,
+                          vec![new_entry(5, 1),
+                               new_entry(6, 1),
+                               new_entry(7, 2),
+                               new_entry(8, 2)])];
 
 
         for (entries, offset, snapshot, to_append, woffset, wentries) in tests {

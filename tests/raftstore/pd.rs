@@ -121,7 +121,9 @@ impl Cluster {
     }
 
     fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
-        Ok(self.region_id_keys.get(&region_id).and_then(|k| self.regions.get(k).cloned()))
+        Ok(self.region_id_keys
+               .get(&region_id)
+               .and_then(|k| self.regions.get(k).cloned()))
     }
 
     fn get_stores(&self) -> Vec<metapb::Store> {
@@ -263,7 +265,8 @@ impl Cluster {
             }
         } else if peer_count > max_peer_count {
             // find the first peer which not leader.
-            let pos = region.get_peers()
+            let pos = region
+                .get_peers()
                 .iter()
                 .position(|x| x.get_store_id() != leader.get_store_id())
                 .unwrap();
@@ -395,8 +398,7 @@ impl TestPdClient {
             }
         }
 
-        let region = self.get_region_by_id(region_id)
-            .unwrap();
+        let region = self.get_region_by_id(region_id).unwrap();
         panic!("region {:?} has no peer {:?}", region, peer);
     }
 
@@ -414,18 +416,17 @@ impl TestPdClient {
             }
         }
 
-        let region = self.get_region_by_id(region_id)
-            .unwrap();
+        let region = self.get_region_by_id(region_id).unwrap();
         panic!("region {:?} has peer {:?}", region, peer);
     }
 
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
-            if region.get_id() != region_id {
-                return None;
-            }
-            new_pd_add_change_peer(region, peer.clone())
-        });
+                              if region.get_id() != region_id {
+                                  return None;
+                              }
+                              new_pd_add_change_peer(region, peer.clone())
+                          });
     }
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
@@ -435,11 +436,11 @@ impl TestPdClient {
 
     pub fn remove_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
-            if region.get_id() != region_id {
-                return None;
-            }
-            new_pd_remove_change_peer(region, peer.clone())
-        });
+                              if region.get_id() != region_id {
+                                  return None;
+                              }
+                              new_pd_remove_change_peer(region, peer.clone())
+                          });
     }
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
@@ -556,7 +557,9 @@ impl PdClient for TestPdClient {
                         written_bytes: u64)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         try!(self.check_bootstrap());
-        self.cluster.wl().region_heartbeat(region, leader, down_peers, pending_peers, written_bytes)
+        self.cluster
+            .wl()
+            .region_heartbeat(region, leader, down_peers, pending_peers, written_bytes)
     }
 
     fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {

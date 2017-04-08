@@ -114,14 +114,16 @@ impl ProposalQueue {
     }
 
     fn pop(&mut self, term: u64) -> Option<ProposalMeta> {
-        self.queue.pop_front().and_then(|meta| {
-            if meta.term > term {
-                self.queue.push_front(meta);
-                return None;
-            }
-            self.uuids.remove(&meta.uuid);
-            Some(meta)
-        })
+        self.queue
+            .pop_front()
+            .and_then(|meta| {
+                          if meta.term > term {
+                              self.queue.push_front(meta);
+                              return None;
+                          }
+                          self.uuids.remove(&meta.uuid);
+                          Some(meta)
+                      })
     }
 
     fn push(&mut self, meta: ProposalMeta) {
@@ -694,9 +696,10 @@ impl Peer {
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
 
         if !self.is_leader() {
-            self.send(trans, ready.messages.drain(..), &mut metrics.message).unwrap_or_else(|e| {
-                warn!("{} follower send messages err {:?}", self.tag, e);
-            });
+            self.send(trans, ready.messages.drain(..), &mut metrics.message)
+                .unwrap_or_else(|e| {
+                                    warn!("{} follower send messages err {:?}", self.tag, e);
+                                });
         }
 
         if apply_snap_result.is_some() {
@@ -798,12 +801,12 @@ impl Peer {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        let has_split = res.exec_res.iter().any(|e| {
-            match *e {
-                ExecResult::SplitRegion { .. } => true,
-                _ => false,
-            }
-        });
+        let has_split = res.exec_res
+            .iter()
+            .any(|e| match *e {
+                     ExecResult::SplitRegion { .. } => true,
+                     _ => false,
+                 });
 
         self.raft_group.advance_apply(res.apply_state.get_applied_index());
         self.mut_store().apply_state = res.apply_state.clone();
@@ -873,9 +876,9 @@ impl Peer {
     fn maybe_update_lease(&mut self, term: u64, data: &[u8]) -> bool {
         let mut req = RaftCmdRequest::new();
         let propose_time = match req.merge_from_bytes(data)
-            .ok()
-            .and_then(|_| util::get_uuid_from_req(&req))
-            .and_then(|uuid| self.find_propose_time(uuid, term)) {
+                  .ok()
+                  .and_then(|_| util::get_uuid_from_req(&req))
+                  .and_then(|uuid| self.find_propose_time(uuid, term)) {
             Some(t) => t,
             _ => return false,
         };
@@ -1101,7 +1104,9 @@ impl Peer {
             return Ok(());
         }
 
-        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["conf_change", "reject_unsafe"]).inc();
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["conf_change", "reject_unsafe"])
+            .inc();
 
         info!("{} rejects unsafe conf change request {:?}, total {}, healthy {},  \
                quorum after change {}",
@@ -1179,11 +1184,13 @@ impl Peer {
             return false;
         }
 
-        self.pending_reads.reads.push_back(ReadIndexRequest {
-            uuid: uuid,
-            cmds: vec![(req, cb)],
-            renew_lease_time: renew_lease_time,
-        });
+        self.pending_reads
+            .reads
+            .push_back(ReadIndexRequest {
+                           uuid: uuid,
+                           cmds: vec![(req, cb)],
+                           renew_lease_time: renew_lease_time,
+                       });
 
         match self.leader_lease_expired_time {
             Some(Either::Right(_)) => {}
@@ -1310,13 +1317,14 @@ impl Peer {
     }
 
     fn handle_read(&mut self, mut req: RaftCmdRequest, cb: Callback) {
-        let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
-            match e {
-                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
-                _ => error!("{} execute raft command err: {:?}", self.tag, e),
-            }
-            cmd_resp::new_error(e)
-        });
+        let mut resp = self.exec_read(&req)
+            .unwrap_or_else(|e| {
+                match e {
+                    Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                }
+                cmd_resp::new_error(e)
+            });
 
         resp.mut_header().set_uuid(req.mut_header().take_uuid());
         cmd_resp::bind_term(&mut resp, self.term());

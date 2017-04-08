@@ -30,21 +30,19 @@ impl TimeMonitor {
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
             .name(thd_name!("time-monitor-worker"))
-            .spawn(move || {
-                while let Err(_) = rx.try_recv() {
-                    let before = now();
-                    thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
+            .spawn(move || while let Err(_) = rx.try_recv() {
+                       let before = now();
+                       thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
 
-                    let after = now();
-                    if let Err(e) = after.duration_since(before) {
-                        error!("system time jumped back, {:?} -> {:?}, err {:?}",
-                               before,
-                               after,
-                               e);
-                        on_jumped()
-                    }
-                }
-            })
+                       let after = now();
+                       if let Err(e) = after.duration_since(before) {
+                           error!("system time jumped back, {:?} -> {:?}, err {:?}",
+                                  before,
+                                  after,
+                                  e);
+                           on_jumped()
+                       }
+                   })
             .unwrap();
 
         TimeMonitor {
@@ -93,19 +91,15 @@ mod tests {
     fn test_time_monitor() {
         let jumped = Arc::new(AtomicBool::new(false));
         let triggered = AtomicBool::new(false);
-        let now = move || {
-            if !triggered.load(Ordering::SeqCst) {
-                triggered.store(true, Ordering::SeqCst);
-                SystemTime::now()
-            } else {
-                SystemTime::now().sub(Duration::from_secs(2))
-            }
+        let now = move || if !triggered.load(Ordering::SeqCst) {
+            triggered.store(true, Ordering::SeqCst);
+            SystemTime::now()
+        } else {
+            SystemTime::now().sub(Duration::from_secs(2))
         };
 
         let jumped2 = jumped.clone();
-        let on_jumped = move || {
-            jumped2.store(true, Ordering::SeqCst);
-        };
+        let on_jumped = move || { jumped2.store(true, Ordering::SeqCst); };
 
         let _m = TimeMonitor::new(on_jumped, now);
         thread::sleep(Duration::from_secs(1));

@@ -220,7 +220,7 @@ mod test {
                          &Region::new(),
                          worker::dummy_scheduler(),
                          "".to_owned())
-            .unwrap()
+                .unwrap()
     }
 
     fn share<T>(t: T) -> Arc<RwLock<T>> {

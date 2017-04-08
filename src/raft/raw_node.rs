@@ -125,10 +125,10 @@ impl Ready {
             ..Default::default()
         };
         rd.committed_entries = Some((match since_idx {
-                None => raft.raft_log.next_entries(),
-                Some(idx) => raft.raft_log.next_entries_since(idx),
-            })
-            .unwrap_or_else(Vec::new));
+                                             None => raft.raft_log.next_entries(),
+                                             Some(idx) => raft.raft_log.next_entries_since(idx),
+                                         })
+                                        .unwrap_or_else(Vec::new));
         let ss = raft.soft_state();
         if &ss != prev_ss {
             rd.ss = Some(ss);
@@ -177,8 +177,8 @@ impl<T: Storage> RawNode<T> {
                 if peer.context.is_some() {
                     cc.set_context(peer.context.as_ref().unwrap().clone());
                 }
-                let data = protobuf::Message::write_to_bytes(&cc)
-                    .expect("unexpected marshal error");
+                let data =
+                    protobuf::Message::write_to_bytes(&cc).expect("unexpected marshal error");
                 let mut e = Entry::new();
                 e.set_entry_type(EntryType::EntryConfChange);
                 e.set_term(1);

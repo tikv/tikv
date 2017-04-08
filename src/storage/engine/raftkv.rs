@@ -140,7 +140,7 @@ fn on_result(mut resp: RaftCmdResponse,
         return (cb_ctx,
                 Err(Error::InvalidResponse("response count is not equal to requests, something \
                                             must go wrong."
-            .to_owned())));
+                                                   .to_owned())));
     }
     let mut resps = resp.take_responses();
     if resps.len() != 1 || resps[0].get_cmd_type() != CmdType::Snap {
@@ -163,11 +163,12 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
         let db = self.db.clone();
-        try!(self.router.send_command(req,
-                                      box move |resp| {
-                                          let (cb_ctx, res) = on_result(resp, l, &uuid, db);
-                                          cb((cb_ctx, res.map_err(Error::into)));
-                                      }));
+        try!(self.router
+                 .send_command(req,
+                               box move |resp| {
+                                       let (cb_ctx, res) = on_result(resp, l, &uuid, db);
+                                       cb((cb_ctx, res.map_err(Error::into)));
+                                   }));
         Ok(())
     }
 
@@ -276,30 +277,29 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
         self.exec_requests(ctx,
                            vec![req],
-                           box move |(cb_ctx, res)| {
-                match res {
-                    Ok(CmdRes::Resp(r)) => {
-                        cb((cb_ctx,
-                            Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into())))
-                    }
-                    Ok(CmdRes::Snap(s)) => {
-                        req_timer.observe_duration();
-                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"])
-                            .inc();
-                        cb((cb_ctx, Ok(box s)))
-                    }
-                    Err(e) => {
-                        let tag = get_tag_from_engine_error(&e);
-                        ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
-                        cb((cb_ctx, Err(e)))
-                    }
-                }
-            })
-            .map_err(|e| {
-                let tag = get_tag_from_error(&e);
+                           box move |(cb_ctx, res)| match res {
+                                   Ok(CmdRes::Resp(r)) => {
+                                       cb((cb_ctx,
+                                           Err(invalid_resp_type(CmdType::Snap,
+                                                                 r[0].get_cmd_type())
+                                                       .into())))
+                                   }
+                                   Ok(CmdRes::Snap(s)) => {
+                req_timer.observe_duration();
+                ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", "success"]).inc();
+                cb((cb_ctx, Ok(box s)))
+            }
+                                   Err(e) => {
+                let tag = get_tag_from_engine_error(&e);
                 ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
-                e.into()
-            })
+                cb((cb_ctx, Err(e)))
+            }
+                               })
+            .map_err(|e| {
+                         let tag = get_tag_from_error(&e);
+                         ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
+                         e.into()
+                     })
     }
 
     fn clone(&self) -> Box<Engine> {

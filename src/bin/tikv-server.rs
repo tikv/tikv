@@ -107,11 +107,14 @@ fn get_flag_string(matches: &Matches, name: &str) -> Option<String> {
 }
 
 fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
-    let i = matches.opt_str(name).map(|x| {
-        x.parse::<i64>()
-            .or_else(|_| util::config::parse_readable_int(&x))
-            .unwrap_or_else(|e| exit_with_err(format!("parse {} failed: {:?}", name, e)))
-    });
+    let i =
+        matches
+            .opt_str(name)
+            .map(|x| {
+                x.parse::<i64>()
+                    .or_else(|_| util::config::parse_readable_int(&x))
+                    .unwrap_or_else(|e| exit_with_err(format!("parse {} failed: {:?}", name, e)))
+            });
     info!("flag {}: {:?}", name, i);
 
     i
@@ -207,19 +210,28 @@ fn cfg_duration(target: &mut Duration, config: &toml::Value, name: &str) {
 }
 
 fn initial_log(matches: &Matches, config: &toml::Value) {
-    let level = get_flag_string(matches, "L")
-        .unwrap_or_else(|| get_toml_string(config, "server.log-level", Some("info".to_owned())));
+    let level = get_flag_string(matches, "L").unwrap_or_else(|| {
+                                                                 get_toml_string(config,
+                                                                         "server.log-level",
+                                                                         Some("info".to_owned()))
+                                                             });
 
-    let log_file_path = get_flag_string(matches, "f")
-        .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
+    let log_file_path = get_flag_string(matches, "f").unwrap_or_else(|| {
+                                                                         get_toml_string(config,
+                                                                         "server.log-file",
+                                                                         Some("".to_owned()))
+                                                                     });
 
     let level_filter = logger::get_level_by_string(&level);
     if log_file_path.is_empty() {
         let w = StderrLogger;
         logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     } else {
-        let w = RotatingFileLogger::new(&log_file_path)
-            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+        let w =
+            RotatingFileLogger::new(&log_file_path).unwrap_or_else(|err| {
+                                                                       exit_with_err(format!("{:?}",
+                                                                                             err))
+                                                                   });
         logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     }
 }
@@ -342,9 +354,10 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
 
     let info_log_dir = get_toml_string(config, "rocksdb.info-log-dir", Some("".to_owned()));
     if !info_log_dir.is_empty() {
-        opts.create_info_log(&info_log_dir).unwrap_or_else(|e| {
-            panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
-        })
+        opts.create_info_log(&info_log_dir)
+            .unwrap_or_else(|e| {
+                                panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
+                            })
     }
 
     let rate_bytes_per_sec = get_toml_int(config, "rocksdb.rate-bytes-per-sec", Some(0));
@@ -446,8 +459,8 @@ fn get_rocksdb_cf_option(config: &toml::Value,
 
 fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
     // Default column family uses bloom filter.
-    let default_block_cache_size =
-        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64);
+    let default_block_cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as
+                                               u64);
     get_rocksdb_cf_option(config,
                           "defaultcf",
                           default_block_cache_size,
@@ -456,8 +469,8 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let default_block_cache_size =
-        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64);
+    let default_block_cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as
+                                               u64);
     let mut opt = get_rocksdb_cf_option(config, "writecf", default_block_cache_size, true, false);
     // prefix extractor(trim the timestamp at tail) for write cf.
     opt.set_prefix_extractor("FixedSuffixSliceTransform",
@@ -569,8 +582,8 @@ fn build_cfg(matches: &Matches,
     cfg_usize(&mut cfg.messages_per_tick,
               config,
               "server.messages-per-tick");
-    let capacity = get_flag_int(matches, "capacity")
-        .or_else(|| get_toml_int_opt(config, "server.capacity"));
+    let capacity =
+        get_flag_int(matches, "capacity").or_else(|| get_toml_int_opt(config, "server.capacity"));
     if let Some(cap) = capacity {
         assert!(cap >= 0);
         cfg.raft_store.capacity = cap as u64;
@@ -693,14 +706,15 @@ fn build_raftkv(config: &toml::Value,
     cfs_opts.insert(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem));
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
-                                                           .unwrap(),
-                                                       db_opts,
-                                                       cfs_opts)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
+    let engine =
+        Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), db_opts, cfs_opts)
+                     .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
 
-    let mut event_loop = store::create_event_loop(&cfg.raft_store)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let mut event_loop =
+        store::create_event_loop(&cfg.raft_store).unwrap_or_else(|err| {
+                                                                     exit_with_err(format!("{:?}",
+                                                                                           err))
+                                                                 });
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
 
     let mut snap_path = path.clone();
@@ -731,13 +745,18 @@ fn canonicalize_path(path: &str) -> String {
         fs::create_dir_all(p).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     }
     format!("{}",
-            p.canonicalize().unwrap_or_else(|err| exit_with_err(format!("{:?}", err))).display())
+            p.canonicalize()
+                .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
+                .display())
 }
 
 fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
     // Store path
-    let store_path = get_flag_string(matches, "s")
-        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
+    let store_path = get_flag_string(matches, "s").unwrap_or_else(|| {
+                                                                      get_toml_string(config,
+                                                                         "server.store",
+                                                                         Some(TEMP_DIR.to_owned()))
+                                                                  });
     let store_abs_path = if store_path == TEMP_DIR {
         TEMP_DIR.to_owned()
     } else {
@@ -763,8 +782,9 @@ fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String
 fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
     let labels = get_flag_string(matches, "labels")
         .unwrap_or_else(|| get_toml_string(config, "server.labels", Some("".to_owned())));
-    util::config::parse_store_labels(&labels)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
+    util::config::parse_store_labels(&labels).unwrap_or_else(|err| {
+                                                                 exit_with_err(format!("{:?}", err))
+                                                             })
 }
 
 fn start_server<T, S>(mut server: Server<T, S>,
@@ -778,8 +798,8 @@ fn start_server<T, S>(mut server: Server<T, S>,
     let h = thread::Builder::new()
         .name("tikv-eventloop".to_owned())
         .spawn(move || {
-            server.run(&mut el).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-        })
+                   server.run(&mut el).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+               })
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     signal_handler::handle_signal(ch, engine, backup_path);
     h.join().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
@@ -790,12 +810,15 @@ fn run_raft_server(pd_client: RpcClient,
                    backup_path: &str,
                    config: &toml::Value,
                    total_mem: u64) {
-    let mut event_loop = create_event_loop(&cfg)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let mut event_loop =
+        create_event_loop(&cfg).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
-    let resolver = PdStoreAddrResolver::new(pd_client.clone())
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let resolver =
+        PdStoreAddrResolver::new(pd_client.clone()).unwrap_or_else(|err| {
+                                                                       exit_with_err(format!("{:?}",
+                                                                                             err))
+                                                                   });
 
     let store_path = &cfg.storage.path;
     let mut lock_path = Path::new(store_path).to_path_buf();
@@ -831,7 +854,7 @@ fn run_raft_server(pd_client: RpcClient,
                           server_chan,
                           resolver,
                           snap_mgr)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     start_server(svr, event_loop, engine, backup_path);
     node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
@@ -873,11 +896,12 @@ fn main() {
                 "attributes about this server",
                 "zone=example-zone,disk=example-disk");
 
-    let matches = opts.parse(&args[1..]).unwrap_or_else(|e| {
-        println!("opts parse failed, {:?}", e);
-        print_usage(&program, &opts);
-        process::exit(1);
-    });
+    let matches = opts.parse(&args[1..])
+        .unwrap_or_else(|e| {
+                            println!("opts parse failed, {:?}", e);
+                            print_usage(&program, &opts);
+                            process::exit(1);
+                        });
     if matches.opt_present("h") {
         print_usage(&program, &opts);
         return;
@@ -920,25 +944,31 @@ fn main() {
         addr
     });
 
-    let pd_endpoints = get_flag_string(&matches, "pd")
-        .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
-    for addr in pd_endpoints.split(',')
-        .map(|s| s.trim())
-        .filter_map(|s| if s.is_empty() {
-            None
-        } else if s.starts_with("http://") {
-            Some(&s[7..])
-        } else {
-            Some(s)
-        }) {
+    let pd_endpoints =
+        get_flag_string(&matches, "pd").unwrap_or_else(|| {
+                                                           get_toml_string(&config,
+                                                                           "pd.endpoints",
+                                                                           None)
+                                                       });
+    for addr in pd_endpoints
+            .split(',')
+            .map(|s| s.trim())
+            .filter_map(|s| if s.is_empty() {
+                            None
+                        } else if s.starts_with("http://") {
+        Some(&s[7..])
+    } else {
+        Some(s)
+    }) {
         if let Err(e) = util::config::check_addr(addr) {
             panic!("{:?}", e);
         }
     }
 
-    let pd_client = RpcClient::new(&pd_endpoints)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let cluster_id = pd_client.get_cluster_id()
+    let pd_client =
+        RpcClient::new(&pd_endpoints).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let cluster_id = pd_client
+        .get_cluster_id()
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     info!("connect to PD cluster {}", cluster_id);
 

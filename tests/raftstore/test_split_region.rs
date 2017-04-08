@@ -35,7 +35,9 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = cluster.pd_client.clone();
 
-    let tbls = vec![(b"k22", b"k11", b"k33"), (b"k11", b"k00", b"k11"), (b"k33", b"k22", b"k33")];
+    let tbls = vec![(b"k22", b"k11", b"k33"),
+                    (b"k11", b"k00", b"k11"),
+                    (b"k33", b"k22", b"k33")];
 
     for (split_key, left_key, right_key) in tbls {
         cluster.must_put(left_key, b"v1");
@@ -172,10 +174,10 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
               &data_key(middle_key),
               false,
               &mut |k, v| {
-                  size += k.len() as u64;
-                  size += v.len() as u64;
-                  Ok(true)
-              })
+                       size += k.len() as u64;
+                       size += v.len() as u64;
+                       Ok(true)
+                   })
         .expect("");
     assert!(size <= REGION_SPLIT_SIZE);
     // although size may be smaller than util::REGION_SPLIT_SIZE, but the diff should
@@ -414,7 +416,7 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     // isolate node 3 for region 1.
     // only filter MsgAppend to avoid election when recover.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
-        .msg_type(MessageType::MsgAppend)));
+                                                   .msg_type(MessageType::MsgAppend)));
 
     let region = pd_client.get_region(b"").unwrap();
 

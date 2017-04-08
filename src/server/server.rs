@@ -224,12 +224,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn on_conn_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) -> Result<()> {
         let msgs = try!(match self.conns.get_mut(&token) {
-            None => {
-                debug!("missing conn for token {:?}", token);
-                return Ok(());
-            }
-            Some(conn) => conn.on_readable(event_loop),
-        });
+                            None => {
+            debug!("missing conn for token {:?}", token);
+            return Ok(());
+        }
+                            Some(conn) => conn.on_readable(event_loop),
+                        });
 
         if msgs.is_empty() {
             // Read no message, no need to handle.
@@ -374,15 +374,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn resolve_store(&mut self, store_id: u64, data: ConnData) {
         let ch = self.sendch.clone();
-        let cb = box move |r| {
-            if let Err(e) = ch.send(Msg::ResolveResult {
-                store_id: store_id,
-                sock_addr: r,
-                data: data,
-            }) {
-                error!("send store sock msg err {:?}", e);
-            }
-        };
+        let cb = box move |r| if let Err(e) = ch.send(Msg::ResolveResult {
+                                                          store_id: store_id,
+                                                          sock_addr: r,
+                                                          data: data,
+                                                      }) {
+                         error!("send store sock msg err {:?}", e);
+                     };
         if let Err(e) = self.resolver.resolve(store_id, cb) {
             error!("try to resolve err {:?}", e);
         }
@@ -490,19 +488,18 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
 
     fn send_snapshot_sock(&mut self, sock_addr: SocketAddr, data: ConnData) {
         let rep = self.new_snapshot_reporter(&data);
-        let cb = box move |res: Result<()>| {
-            if res.is_err() {
-                rep.report(SnapshotStatus::Failure);
-            } else {
-                rep.report(SnapshotStatus::Finish);
-            }
-        };
-        if let Err(Stopped(SnapTask::SendTo { cb, .. })) = self.snap_worker
-            .schedule(SnapTask::SendTo {
-                addr: sock_addr,
-                data: data,
-                cb: cb,
-            }) {
+        let cb = box move |res: Result<()>| if res.is_err() {
+                         rep.report(SnapshotStatus::Failure);
+                     } else {
+                         rep.report(SnapshotStatus::Finish);
+                     };
+        if let Err(Stopped(SnapTask::SendTo { cb, .. })) =
+            self.snap_worker
+                .schedule(SnapTask::SendTo {
+                              addr: sock_addr,
+                              data: data,
+                              cb: cb,
+                          }) {
             error!("channel is closed, failed to schedule snapshot to {}",
                    sock_addr);
             cb(Err(box_err!("failed to schedule snapshot")));
@@ -514,9 +511,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         box move |res: Message| {
             let tp = res.get_msg_type();
             if let Err(e) = ch.send(Msg::WriteData {
-                token: token,
-                data: ConnData::new(msg_id, res),
-            }) {
+                                        token: token,
+                                        data: ConnData::new(msg_id, res),
+                                    }) {
                 error!("send {:?} resp failed with token {:?}, msg id {}, err {:?}",
                        tp,
                        token,
@@ -555,9 +552,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
-            Msg::ResolveResult { store_id, sock_addr, data } => {
-                self.on_resolve_result(event_loop, store_id, sock_addr, data)
-            }
+            Msg::ResolveResult {
+                store_id,
+                sock_addr,
+                data,
+            } => self.on_resolve_result(event_loop, store_id, sock_addr, data),
             Msg::CloseConn { token } => self.remove_conn(event_loop, token),
         }
     }
@@ -605,11 +604,12 @@ impl SnapshotReporter {
             REPORT_FAILURE_MSG_COUNTER.with_label_values(&["snapshot", &*store]).inc();
         };
 
-        if let Err(e) = self.snapshot_status_sender.send(SnapshotStatusMsg {
-            region_id: self.region_id,
-            to_peer_id: self.to_peer_id,
-            status: status,
-        }) {
+        if let Err(e) = self.snapshot_status_sender
+               .send(SnapshotStatusMsg {
+                         region_id: self.region_id,
+                         to_peer_id: self.to_peer_id,
+                         status: status,
+                     }) {
             error!("report snapshot to peer {} in store {} with region {} err {:?}",
                    self.to_peer_id,
                    self.to_store_id,
@@ -713,7 +713,7 @@ mod tests {
                         ch,
                         resolver,
                         SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
-                .unwrap();
+                    .unwrap();
 
         for i in 0..10 {
             let mut msg = Message::new();
@@ -725,17 +725,15 @@ mod tests {
         }
 
         let ch = server.get_sendch();
-        let h = thread::spawn(move || {
-            event_loop.run(&mut server).unwrap();
-        });
+        let h = thread::spawn(move || { event_loop.run(&mut server).unwrap(); });
 
         let mut msg = Message::new();
         msg.set_msg_type(MessageType::Raft);
 
         ch.try_send(Msg::SendStore {
-                store_id: 1,
-                data: ConnData::new(0, msg),
-            })
+                          store_id: 1,
+                          data: ConnData::new(0, msg),
+                      })
             .unwrap();
 
         rx.recv().unwrap();

@@ -42,9 +42,9 @@ pub trait RaftStoreRouter: Send + Clone {
 
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64, _: u64) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::ReportUnreachable {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-        })
+                          region_id: region_id,
+                          to_peer_id: to_peer_id,
+                      })
     }
 }
 
@@ -65,7 +65,9 @@ impl ServerRaftStoreRouter {
     fn validate_store_id(&self, store_id: u64) -> RaftStoreResult<()> {
         if store_id != self.store_id {
             let store = store_id.to_string();
-            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["store_not_match", &*store]).inc();
+            REPORT_FAILURE_MSG_COUNTER
+                .with_label_values(&["store_not_match", &*store])
+                .inc();
             Err(RaftStoreError::StoreNotMatch(store_id, self.store_id))
         } else {
             Ok(())
@@ -104,9 +106,9 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         let store = to_store_id.to_string();
         REPORT_FAILURE_MSG_COUNTER.with_label_values(&["unreachable", &*store]).inc();
         self.try_send(StoreMsg::ReportUnreachable {
-            region_id: region_id,
-            to_peer_id: to_peer_id,
-        })
+                          region_id: region_id,
+                          to_peer_id: to_peer_id,
+                      })
     }
 }
 
@@ -137,10 +139,11 @@ impl Transport for ServerTransport {
         req.set_msg_type(MessageType::Raft);
         req.set_raft(msg);
 
-        try!(self.ch.try_send(Msg::SendStore {
-            store_id: to_store_id,
-            data: ConnData::new(self.alloc_msg_id(), req),
-        }));
+        try!(self.ch
+                 .try_send(Msg::SendStore {
+                               store_id: to_store_id,
+                               data: ConnData::new(self.alloc_msg_id(), req),
+                           }));
         Ok(())
     }
 }

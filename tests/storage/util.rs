@@ -88,41 +88,43 @@ impl Engine for BlockEngine {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()> {
         let block_write = self.block_write.clone();
         let sender = self.sender.clone();
-        self.engine.async_write(ctx,
-                                batch,
-                                box move |res| {
-            thread::spawn(move || {
-                try_notify(block_write.clone(), sender);
-                while block_write.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                callback(res);
-            });
-        })
+        self.engine
+            .async_write(ctx,
+                         batch,
+                         box move |res| {
+                thread::spawn(move || {
+                                  try_notify(block_write.clone(), sender);
+                                  while block_write.load(Ordering::SeqCst) {
+                                      thread::sleep(Duration::from_millis(50));
+                                  }
+                                  callback(res);
+                              });
+            })
     }
 
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()> {
         let block_snapshot = self.block_snapshot.clone();
         let sender = self.sender.clone();
-        self.engine.async_snapshot(ctx,
-                                   box move |res| {
-            thread::spawn(move || {
-                try_notify(block_snapshot.clone(), sender);
-                while block_snapshot.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                callback(res);
-            });
-        })
+        self.engine
+            .async_snapshot(ctx,
+                            box move |res| {
+                thread::spawn(move || {
+                                  try_notify(block_snapshot.clone(), sender);
+                                  while block_snapshot.load(Ordering::SeqCst) {
+                                      thread::sleep(Duration::from_millis(50));
+                                  }
+                                  callback(res);
+                              });
+            })
     }
 
     fn clone(&self) -> Box<Engine + 'static> {
         box BlockEngine {
-            engine: self.engine.clone(),
-            block_write: self.block_write.clone(),
-            block_snapshot: self.block_snapshot.clone(),
-            sender: self.sender.clone(),
-        }
+                engine: self.engine.clone(),
+                block_write: self.block_write.clone(),
+                block_snapshot: self.block_snapshot.clone(),
+                sender: self.sender.clone(),
+            }
     }
 }
 

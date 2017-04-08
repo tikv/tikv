@@ -115,14 +115,16 @@ impl<T: Storage> RaftLog<T> {
         match self.unstable.maybe_term(idx) {
             Some(term) => Ok(term),
             _ => {
-                self.store.term(idx).map_err(|e| {
-                    match e {
-                        Error::Store(StorageError::Compacted) |
-                        Error::Store(StorageError::Unavailable) => {}
-                        _ => panic!("{} unexpected error: {:?}", self.tag, e),
-                    }
-                    e
-                })
+                self.store
+                    .term(idx)
+                    .map_err(|e| {
+                                 match e {
+                                     Error::Store(StorageError::Compacted) |
+                                     Error::Store(StorageError::Unavailable) => {}
+                                     _ => panic!("{} unexpected error: {:?}", self.tag, e),
+                                 }
+                                 e
+                             })
             }
         }
     }
@@ -374,8 +376,8 @@ impl<T: Storage> RaftLog<T> {
         }
 
         if low < self.unstable.offset {
-            let stored_entries = self.store
-                .entries(low, cmp::min(high, self.unstable.offset), max_size);
+            let stored_entries =
+                self.store.entries(low, cmp::min(high, self.unstable.offset), max_size);
             if stored_entries.is_err() {
                 let e = stored_entries.unwrap_err();
                 match e {
@@ -447,25 +449,35 @@ mod test {
     #[test]
     fn test_find_conflict() {
         let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
-        let tests = vec![
-            // no conflict, empty ent
-            (vec![], 0),
-            (vec![], 0),
-            // no conflict
-            (vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)], 0),
-            (vec![new_entry(2, 2), new_entry(3, 3)], 0),
-            (vec![new_entry(3, 3)], 0),
-            // no conflict, but has new entries
-            (vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3), new_entry(4, 4),
-                new_entry(5, 4)], 4),
-            (vec![new_entry(2, 2), new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
-            (vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
-            (vec![new_entry(4, 4), new_entry(5, 4)], 4),
-            // conflicts with existing entries
-            (vec![new_entry(1, 4), new_entry(2, 4)], 1),
-            (vec![new_entry(2, 1), new_entry(3, 4), new_entry(4, 4)], 2),
-            (vec![new_entry(3, 1), new_entry(4, 2), new_entry(5, 4), new_entry(6, 4)], 3),
-        ];
+        let tests = vec![// no conflict, empty ent
+                         (vec![], 0),
+                         (vec![], 0),
+                         // no conflict
+                         (vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)], 0),
+                         (vec![new_entry(2, 2), new_entry(3, 3)], 0),
+                         (vec![new_entry(3, 3)], 0),
+                         // no conflict, but has new entries
+                         (vec![new_entry(1, 1),
+                               new_entry(2, 2),
+                               new_entry(3, 3),
+                               new_entry(4, 4),
+                               new_entry(5, 4)],
+                          4),
+                         (vec![new_entry(2, 2),
+                               new_entry(3, 3),
+                               new_entry(4, 4),
+                               new_entry(5, 4)],
+                          4),
+                         (vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 4)], 4),
+                         (vec![new_entry(4, 4), new_entry(5, 4)], 4),
+                         // conflicts with existing entries
+                         (vec![new_entry(1, 4), new_entry(2, 4)], 1),
+                         (vec![new_entry(2, 1), new_entry(3, 4), new_entry(4, 4)], 2),
+                         (vec![new_entry(3, 1),
+                               new_entry(4, 2),
+                               new_entry(5, 4),
+                               new_entry(6, 4)],
+                          3)];
         for (i, &(ref ents, wconflict)) in tests.iter().enumerate() {
             let store = MemStorage::new();
             let mut raft_log = new_raft_log(store);
@@ -483,20 +495,18 @@ mod test {
         let store = MemStorage::new();
         let mut raft_log = new_raft_log(store);
         raft_log.append(&previous_ents);
-        let tests = vec![
-            // greater term, ignore lastIndex
-            (raft_log.last_index() - 1, 4, true),
-            (raft_log.last_index(), 4, true),
-            (raft_log.last_index() + 1, 4, true),
-            // smaller term, ignore lastIndex
-            (raft_log.last_index() - 1, 2, false),
-            (raft_log.last_index(), 2, false),
-            (raft_log.last_index() + 1, 2, false),
-            // equal term, lager lastIndex wins
-            (raft_log.last_index() - 1, 3, false),
-            (raft_log.last_index(), 3, true),
-            (raft_log.last_index() + 1, 3, true),
-        ];
+        let tests = vec![// greater term, ignore lastIndex
+                         (raft_log.last_index() - 1, 4, true),
+                         (raft_log.last_index(), 4, true),
+                         (raft_log.last_index() + 1, 4, true),
+                         // smaller term, ignore lastIndex
+                         (raft_log.last_index() - 1, 2, false),
+                         (raft_log.last_index(), 2, false),
+                         (raft_log.last_index() + 1, 2, false),
+                         // equal term, lager lastIndex wins
+                         (raft_log.last_index() - 1, 3, false),
+                         (raft_log.last_index(), 3, true),
+                         (raft_log.last_index() + 1, 3, true)];
         for (i, &(last_index, term, up_to_date)) in tests.iter().enumerate() {
             let g_up_to_date = raft_log.is_up_to_date(last_index, term);
             if g_up_to_date != up_to_date {
@@ -508,15 +518,18 @@ mod test {
     #[test]
     fn test_append() {
         let previous_ents = vec![new_entry(1, 1), new_entry(2, 2)];
-        let tests = vec![
-            (vec![], 2, vec![new_entry(1, 1), new_entry(2, 2)], 3),
-            (vec![new_entry(3, 2)], 3, vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 2)], 3),
-            // conflicts with index 1
-            (vec![new_entry(1, 2)], 1, vec![new_entry(1, 2)], 1),
-            // conflicts with index 2
-            (vec![new_entry(2, 3), new_entry(3, 3)], 3, vec![new_entry(1, 1), new_entry(2, 3),
-                new_entry(3, 3)], 2),
-        ];
+        let tests = vec![(vec![], 2, vec![new_entry(1, 1), new_entry(2, 2)], 3),
+                         (vec![new_entry(3, 2)],
+                          3,
+                          vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 2)],
+                          3),
+                         // conflicts with index 1
+                         (vec![new_entry(1, 2)], 1, vec![new_entry(1, 2)], 1),
+                         // conflicts with index 2
+                         (vec![new_entry(2, 3), new_entry(3, 3)],
+                          3,
+                          vec![new_entry(1, 1), new_entry(2, 3), new_entry(3, 3)],
+                          2)];
         for (i, &(ref ents, windex, ref wents, wunstable)) in tests.iter().enumerate() {
             let store = MemStorage::new();
             store.wl().append(&previous_ents).expect("append failed");
@@ -545,7 +558,10 @@ mod test {
         let last_term = last_index;
         let storage = MemStorage::new();
         for i in 1..(unstable_index + 1) {
-            storage.wl().append(&[new_entry(i as u64, i as u64)]).expect("append failed");
+            storage
+                .wl()
+                .append(&[new_entry(i as u64, i as u64)])
+                .expect("append failed");
         }
         let mut raft_log = new_raft_log(storage);
         for i in unstable_index..last_index {
@@ -588,19 +604,20 @@ mod test {
         let storagesnapi = 10064;
         let unstablesnapi = storagesnapi + 5;
         let store = MemStorage::new();
-        store.wl().apply_snapshot(new_snapshot(storagesnapi, 1)).expect("apply failed.");
+        store
+            .wl()
+            .apply_snapshot(new_snapshot(storagesnapi, 1))
+            .expect("apply failed.");
         let mut raft_log = new_raft_log(store);
         raft_log.restore(new_snapshot(unstablesnapi, 1));
 
-        let tests = vec![
-            // cannot get term from storage
-            (storagesnapi, 0),
-            // cannot get term from the gap between storage ents and unstable snapshot
-            (storagesnapi + 1, 0),
-            (unstablesnapi - 1, 0),
-            // get term from unstable snapshot index
-            (unstablesnapi, 1),
-        ];
+        let tests = vec![// cannot get term from storage
+                         (storagesnapi, 0),
+                         // cannot get term from the gap between storage ents and unstable snapshot
+                         (storagesnapi + 1, 0),
+                         (unstablesnapi - 1, 0),
+                         // get term from unstable snapshot index
+                         (unstablesnapi, 1)];
 
         for (i, &(index, w)) in tests.iter().enumerate() {
             let term = raft_log.term(index).expect("");
@@ -622,13 +639,11 @@ mod test {
             raft_log.append(&[new_entry(offset + i, i)]);
         }
 
-        let tests = vec![
-            (offset - 1, 0),
-            (offset, 1),
-            (offset + num / 2, num / 2),
-            (offset + num - 1, num - 1),
-            (offset + num, 0),
-        ];
+        let tests = vec![(offset - 1, 0),
+                         (offset, 1),
+                         (offset + num / 2, num / 2),
+                         (offset + num - 1, num - 1),
+                         (offset + num, 0)];
 
         for (i, &(index, w)) in tests.iter().enumerate() {
             let term = raft_log.term(index).expect("");
@@ -656,26 +671,39 @@ mod test {
     #[test]
     fn test_stable_to_with_snap() {
         let (snap_index, snap_term) = (5u64, 2u64);
-        let tests = vec![
-            (snap_index + 1, snap_term, vec![], snap_index + 1),
-            (snap_index, snap_term, vec![], snap_index + 1),
-            (snap_index - 1, snap_term, vec![], snap_index + 1),
+        let tests = vec![(snap_index + 1, snap_term, vec![], snap_index + 1),
+                         (snap_index, snap_term, vec![], snap_index + 1),
+                         (snap_index - 1, snap_term, vec![], snap_index + 1),
 
-            (snap_index + 1, snap_term + 1, vec![], snap_index + 1),
-            (snap_index, snap_term + 1, vec![], snap_index + 1),
-            (snap_index - 1, snap_term + 1, vec![], snap_index + 1),
+                         (snap_index + 1, snap_term + 1, vec![], snap_index + 1),
+                         (snap_index, snap_term + 1, vec![], snap_index + 1),
+                         (snap_index - 1, snap_term + 1, vec![], snap_index + 1),
 
-            (snap_index + 1, snap_term, vec![new_entry(snap_index + 1, snap_term)], snap_index + 2),
-            (snap_index, snap_term, vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
-            (snap_index - 1, snap_term, vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
+                         (snap_index + 1,
+                          snap_term,
+                          vec![new_entry(snap_index + 1, snap_term)],
+                          snap_index + 2),
+                         (snap_index,
+                          snap_term,
+                          vec![new_entry(snap_index + 1, snap_term)],
+                          snap_index + 1),
+                         (snap_index - 1,
+                          snap_term,
+                          vec![new_entry(snap_index + 1, snap_term)],
+                          snap_index + 1),
 
-            (snap_index + 1, snap_term + 1,
-                vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
-            (snap_index, snap_term + 1,
-                vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
-            (snap_index - 1, snap_term + 1,
-                vec![new_entry(snap_index + 1, snap_term)], snap_index + 1),
-        ];
+                         (snap_index + 1,
+                          snap_term + 1,
+                          vec![new_entry(snap_index + 1, snap_term)],
+                          snap_index + 1),
+                         (snap_index,
+                          snap_term + 1,
+                          vec![new_entry(snap_index + 1, snap_term)],
+                          snap_index + 1),
+                         (snap_index - 1,
+                          snap_term + 1,
+                          vec![new_entry(snap_index + 1, snap_term)],
+                          snap_index + 1)];
 
         for (i, &(stablei, stablet, ref new_ents, wunstable)) in tests.iter().enumerate() {
             let store = MemStorage::new();
@@ -694,12 +722,7 @@ mod test {
 
     #[test]
     fn test_stable_to() {
-        let tests = vec![
-            (1, 1, 2),
-            (2, 2, 3),
-            (2, 1, 1),
-            (3, 1, 1),
-        ];
+        let tests = vec![(1, 1, 2), (2, 2, 3), (2, 1, 1), (3, 1, 1)];
         for (i, &(stablei, stablet, wunstable)) in tests.iter().enumerate() {
             let store = MemStorage::new();
             let mut raft_log = new_raft_log(store);
@@ -719,10 +742,7 @@ mod test {
     #[test]
     fn test_unstable_ents() {
         let previous_ents = vec![new_entry(1, 1), new_entry(2, 2)];
-        let tests = vec![
-            (3, vec![]),
-            (1, previous_ents.clone()),
-        ];
+        let tests = vec![(3, vec![]), (1, previous_ents.clone())];
 
         for (i, &(unstable, ref wents)) in tests.iter().enumerate() {
             // append stable entries to storage
@@ -752,12 +772,10 @@ mod test {
     #[test]
     fn test_next_ents() {
         let ents = [new_entry(4, 1), new_entry(5, 1), new_entry(6, 1)];
-        let tests = vec![
-            (0, Some(&ents[..2])),
-            (3, Some(&ents[..2])),
-            (4, Some(&ents[1..2])),
-            (5, None),
-        ];
+        let tests = vec![(0, Some(&ents[..2])),
+                         (3, Some(&ents[..2])),
+                         (4, Some(&ents[1..2])),
+                         (5, None)];
         for (i, &(applied, ref expect_entries)) in tests.iter().enumerate() {
             let store = MemStorage::new();
             store.wl().apply_snapshot(new_snapshot(3, 1)).expect("");
@@ -779,12 +797,7 @@ mod test {
     #[test]
     fn test_has_next_ents() {
         let ents = [new_entry(4, 1), new_entry(5, 1), new_entry(6, 1)];
-        let tests = vec![
-            (0, true),
-            (3, true),
-            (4, true),
-            (5, false),
-        ];
+        let tests = vec![(0, true), (3, true), (4, true), (5, false)];
 
         for (i, &(applied, has_next)) in tests.iter().enumerate() {
             let store = MemStorage::new();
@@ -818,29 +831,41 @@ mod test {
             raft_log.append(&[new_entry(offset + i, offset + i)]);
         }
 
-        let tests = vec![
-            // test no limit
-            (offset - 1, offset + 1, raft_log::NO_LIMIT, vec![], false),
-            (offset, offset + 1, raft_log::NO_LIMIT, vec![], false),
-            (half - 1, half + 1, raft_log::NO_LIMIT, vec![new_entry(half - 1, half - 1),
-                new_entry(half, half)], false),
-            (half, half + 1, raft_log::NO_LIMIT, vec![new_entry(half, half)], false),
-            (last - 1, last, raft_log::NO_LIMIT, vec![new_entry(last - 1, last - 1)], false),
-            (last, last + 1, raft_log::NO_LIMIT, vec![], true),
+        let tests =
+            vec![// test no limit
+                 (offset - 1, offset + 1, raft_log::NO_LIMIT, vec![], false),
+                 (offset, offset + 1, raft_log::NO_LIMIT, vec![], false),
+                 (half - 1,
+                  half + 1,
+                  raft_log::NO_LIMIT,
+                  vec![new_entry(half - 1, half - 1), new_entry(half, half)],
+                  false),
+                 (half, half + 1, raft_log::NO_LIMIT, vec![new_entry(half, half)], false),
+                 (last - 1, last, raft_log::NO_LIMIT, vec![new_entry(last - 1, last - 1)], false),
+                 (last, last + 1, raft_log::NO_LIMIT, vec![], true),
 
-            // test limit
-            (half - 1, half + 1, 0, vec![new_entry(half - 1, half - 1)], false),
-            (half - 1, half + 1, halfe_size + 1, vec![new_entry(half - 1, half - 1)], false),
-            (half - 2, half + 1, halfe_size + 1, vec![new_entry(half - 2, half - 2)], false),
-            (half - 1, half + 1, halfe_size * 2, vec![new_entry(half - 1, half - 1),
-                                                      new_entry(half, half)], false),
-            (half - 1, half + 2, halfe_size * 3, vec![new_entry(half - 1, half - 1),
-                                                      new_entry(half, half),
-                                                      new_entry(half + 1, half + 1)], false),
-            (half, half + 2, halfe_size, vec![new_entry(half, half)], false),
-            (half, half + 2, halfe_size * 2, vec![new_entry(half, half),
-                new_entry(half + 1, half + 1)], false),
-        ];
+                 // test limit
+                 (half - 1, half + 1, 0, vec![new_entry(half - 1, half - 1)], false),
+                 (half - 1, half + 1, halfe_size + 1, vec![new_entry(half - 1, half - 1)], false),
+                 (half - 2, half + 1, halfe_size + 1, vec![new_entry(half - 2, half - 2)], false),
+                 (half - 1,
+                  half + 1,
+                  halfe_size * 2,
+                  vec![new_entry(half - 1, half - 1), new_entry(half, half)],
+                  false),
+                 (half - 1,
+                  half + 2,
+                  halfe_size * 3,
+                  vec![new_entry(half - 1, half - 1),
+                       new_entry(half, half),
+                       new_entry(half + 1, half + 1)],
+                  false),
+                 (half, half + 2, halfe_size, vec![new_entry(half, half)], false),
+                 (half,
+                  half + 2,
+                  halfe_size * 2,
+                  vec![new_entry(half, half), new_entry(half + 1, half + 1)],
+                  false)];
 
         for (i, &(from, to, limit, ref w, wpanic)) in tests.iter().enumerate() {
             let res = recover_safe!(|| raft_log.slice(from, to, limit));
@@ -879,48 +904,102 @@ mod test {
         let previous_ents = vec![new_entry(1, 1), new_entry(2, 2), new_entry(3, 3)];
         let (last_index, last_term, commit) = (3u64, 3u64, 1u64);
 
-        let tests = vec![
-            // not match: term is different
-            (last_term - 1, last_index, last_index, vec![new_entry(last_index + 1, 4)],
-             None, commit, false),
-            // not match: index out of bound
-            (last_term, last_index + 1, last_index, vec![new_entry(last_index + 2, 4)],
-             None, commit, false),
-            // match with the last existing entry
-            (last_term, last_index, last_index, vec![],
-             Some(last_index), last_index, false),
-            (last_term, last_index, last_index + 1, vec![],
-             Some(last_index), last_index, false), // do not increase commit higher than lastnewi
-            (last_term, last_index, last_index - 1, vec![],
-             Some(last_index), last_index - 1, false), // commit up to the commit in the message
-            (last_term, last_index, 0, vec![],
-             Some(last_index), commit, false), // commit do not decrease
-            (0, 0, last_index, vec![],
-             Some(0), commit, false), // commit do not decrease
-            (last_term, last_index, last_index, vec![new_entry(last_index + 1, 4)],
-             Some(last_index + 1), last_index, false),
-            (last_term, last_index, last_index + 1, vec![new_entry(last_index + 1, 4)],
-             Some(last_index + 1), last_index + 1, false),
-            (last_term, last_index, last_index + 2, vec![new_entry(last_index + 1, 4)],
-             Some(last_index + 1), last_index + 1, false), // do not increase commit higher than
-                                                           // lastnewi
-            (last_term, last_index, last_index + 2, vec![new_entry(last_index + 1, 4),
-                new_entry(last_index + 2, 4)],
-             Some(last_index + 2), last_index + 2, false),
-            // match with the the entry in the middle
-            (last_term - 1, last_index - 1, last_index, vec![new_entry(last_index, 4)],
-             Some(last_index), last_index, false),
-            (last_term - 2, last_index - 2, last_index, vec![new_entry(last_index - 1, 4)],
-             Some(last_index - 1), last_index - 1, false),
-            (last_term - 3, last_index - 3, last_index, vec![new_entry(last_index - 2, 4)],
-             Some(last_index - 2), last_index - 2, true), // conflict with existing committed entry
-            (last_term - 2, last_index - 2, last_index, vec![new_entry(last_index - 1, 4),
-                                                             new_entry(last_index, 4)],
-             Some(last_index), last_index, false),
-        ];
+        let tests =
+            vec![// not match: term is different
+                 (last_term - 1,
+                  last_index,
+                  last_index,
+                  vec![new_entry(last_index + 1, 4)],
+                  None,
+                  commit,
+                  false),
+                 // not match: index out of bound
+                 (last_term,
+                  last_index + 1,
+                  last_index,
+                  vec![new_entry(last_index + 2, 4)],
+                  None,
+                  commit,
+                  false),
+                 // match with the last existing entry
+                 (last_term, last_index, last_index, vec![], Some(last_index), last_index, false),
+                 (last_term,
+                  last_index,
+                  last_index + 1,
+                  vec![],
+                  Some(last_index),
+                  last_index,
+                  false), // do not increase commit higher than lastnewi
+                 (last_term,
+                  last_index,
+                  last_index - 1,
+                  vec![],
+                  Some(last_index),
+                  last_index - 1,
+                  false), // commit up to the commit in the message
+                 (last_term, last_index, 0, vec![], Some(last_index), commit, false), // commit do not decrease
+                 (0, 0, last_index, vec![], Some(0), commit, false), // commit do not decrease
+                 (last_term,
+                  last_index,
+                  last_index,
+                  vec![new_entry(last_index + 1, 4)],
+                  Some(last_index + 1),
+                  last_index,
+                  false),
+                 (last_term,
+                  last_index,
+                  last_index + 1,
+                  vec![new_entry(last_index + 1, 4)],
+                  Some(last_index + 1),
+                  last_index + 1,
+                  false),
+                 (last_term,
+                  last_index,
+                  last_index + 2,
+                  vec![new_entry(last_index + 1, 4)],
+                  Some(last_index + 1),
+                  last_index + 1,
+                  false), // do not increase commit higher than
+                 // lastnewi
+                 (last_term,
+                  last_index,
+                  last_index + 2,
+                  vec![new_entry(last_index + 1, 4), new_entry(last_index + 2, 4)],
+                  Some(last_index + 2),
+                  last_index + 2,
+                  false),
+                 // match with the the entry in the middle
+                 (last_term - 1,
+                  last_index - 1,
+                  last_index,
+                  vec![new_entry(last_index, 4)],
+                  Some(last_index),
+                  last_index,
+                  false),
+                 (last_term - 2,
+                  last_index - 2,
+                  last_index,
+                  vec![new_entry(last_index - 1, 4)],
+                  Some(last_index - 1),
+                  last_index - 1,
+                  false),
+                 (last_term - 3,
+                  last_index - 3,
+                  last_index,
+                  vec![new_entry(last_index - 2, 4)],
+                  Some(last_index - 2),
+                  last_index - 2,
+                  true), // conflict with existing committed entry
+                 (last_term - 2,
+                  last_index - 2,
+                  last_index,
+                  vec![new_entry(last_index - 1, 4), new_entry(last_index, 4)],
+                  Some(last_index),
+                  last_index,
+                  false)];
 
-        for (i, &(log_term, index, committed, ref ents, wlasti, wcommit, wpanic)) in tests.iter()
-            .enumerate() {
+        for (i, &(log_term, index, committed, ref ents, wlasti, wcommit, wpanic)) in
+            tests.iter().enumerate() {
             let store = MemStorage::new();
             let mut raft_log = new_raft_log(store);
             raft_log.append(&previous_ents);
@@ -943,8 +1022,7 @@ mod test {
             let ents_len = ents.len() as u64;
             if glasti.is_some() && ents_len != 0 {
                 let (from, to) = (raft_log.last_index() - ents_len + 1, raft_log.last_index() + 1);
-                let gents = raft_log.slice(from, to, raft_log::NO_LIMIT)
-                    .expect("");
+                let gents = raft_log.slice(from, to, raft_log::NO_LIMIT).expect("");
                 if &gents != ents {
                     panic!("#{}: appended entries = {:?}, want {:?}", i, gents, ents);
                 }
@@ -980,13 +1058,11 @@ mod test {
     // TestCompaction ensures that the number of log entries is correct after compactions.
     #[test]
     fn test_compaction() {
-        let tests = vec![
-            // out of upper bound
-            (1000, vec![1001u64], vec![0usize], false),
-            (1000, vec![300, 500, 800, 900], vec![700, 500, 200, 100], true),
-            // out of lower bound
-            (1000, vec![300, 299], vec![700, 0], false),
-        ];
+        let tests = vec![// out of upper bound
+                         (1000, vec![1001u64], vec![0usize], false),
+                         (1000, vec![300, 500, 800, 900], vec![700, 500, 200, 100], true),
+                         // out of lower bound
+                         (1000, vec![300, 299], vec![700, 0], false)];
 
         for (i, &(last_index, ref compact, ref wleft, wallow)) in tests.iter().enumerate() {
             let store = MemStorage::new();
@@ -1031,16 +1107,14 @@ mod test {
             raft_log.append(&[new_entry(i + offset, 0)]);
         }
         let first = offset + 1;
-        let tests = vec![
-            (first - 2, first + 1, false, true),
-            (first - 1, first + 1, false, true),
-            (first, first, false, false),
-            (first + num / 2, first + num / 2, false, false),
-            (first + num - 1, first + num - 1, false, false),
-            (first + num, first + num, false, false),
-            (first + num, first + num + 1, true, false),
-            (first + num + 1, first + num + 1, true, false),
-        ];
+        let tests = vec![(first - 2, first + 1, false, true),
+                         (first - 1, first + 1, false, true),
+                         (first, first, false, false),
+                         (first + num / 2, first + num / 2, false, false),
+                         (first + num - 1, first + num - 1, false, false),
+                         (first + num, first + num, false, false),
+                         (first + num, first + num + 1, true, false),
+                         (first + num + 1, first + num + 1, true, false)];
 
         for (i, &(lo, hi, wpanic, w_err_compacted)) in tests.iter().enumerate() {
             let res = recover_safe!(|| raft_log.must_check_outofbounds(lo, hi));

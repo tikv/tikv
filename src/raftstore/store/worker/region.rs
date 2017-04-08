@@ -70,7 +70,11 @@ impl Display for Task {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
-            Task::Destroy { region_id, ref start_key, ref end_key } => {
+            Task::Destroy {
+                region_id,
+                ref start_key,
+                ref end_key,
+            } => {
                 write!(f,
                        "Destroy {} [{}, {})",
                        region_id,
@@ -187,18 +191,19 @@ impl Runner {
         box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = match box_try!(self.db.get_msg_cf(CF_RAFT, &state_key)) {
-            Some(state) => state,
-            None => return Err(box_err!("failed to get raftstate from {}", escape(&state_key))),
-        };
+        let apply_state: RaftApplyState =
+            match box_try!(self.db.get_msg_cf(CF_RAFT, &state_key)) {
+                Some(state) => state,
+                None => return Err(box_err!("failed to get raftstate from {}", escape(&state_key))),
+            };
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
         let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         self.mgr.register(snap_key.clone(), SnapEntry::Applying);
         defer!({
-            self.mgr.deregister(&snap_key, &SnapEntry::Applying);
-        });
+                   self.mgr.deregister(&snap_key, &SnapEntry::Applying);
+               });
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
@@ -265,11 +270,16 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Gen { region_id, notifier } => self.handle_gen(region_id, notifier),
+            Task::Gen {
+                region_id,
+                notifier,
+            } => self.handle_gen(region_id, notifier),
             Task::Apply { region_id, status } => self.handle_apply(region_id, status),
-            Task::Destroy { region_id, start_key, end_key } => {
-                self.handle_destroy(region_id, start_key, end_key)
-            }
+            Task::Destroy {
+                region_id,
+                start_key,
+                end_key,
+            } => self.handle_destroy(region_id, start_key, end_key),
         }
     }
 }

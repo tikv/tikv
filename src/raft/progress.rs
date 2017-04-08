@@ -202,7 +202,10 @@ pub struct Inflights {
 
 impl Inflights {
     pub fn new(cap: usize) -> Inflights {
-        Inflights { buffer: Vec::with_capacity(cap), ..Default::default() }
+        Inflights {
+            buffer: Vec::with_capacity(cap),
+            ..Default::default()
+        }
     }
 
     // full returns true if the inflights is full.

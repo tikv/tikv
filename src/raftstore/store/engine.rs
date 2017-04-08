@@ -525,29 +525,33 @@ mod tests {
         engine.put_cf(handle, b"a2", b"v22").unwrap();
 
         let mut data = vec![];
-        engine.scan(b"",
+        engine
+            .scan(b"",
                   &[0xFF, 0xFF],
                   false,
                   &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(true)
-                  })
+                           data.push((key.to_vec(), value.to_vec()));
+                           Ok(true)
+                       })
             .unwrap();
         assert_eq!(data,
-                   vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a2".to_vec(), b"v2".to_vec())]);
+                   vec![(b"a1".to_vec(), b"v1".to_vec()),
+                        (b"a2".to_vec(), b"v2".to_vec())]);
         data.clear();
 
-        engine.scan_cf(cf,
+        engine
+            .scan_cf(cf,
                      b"",
                      &[0xFF, 0xFF],
                      false,
                      &mut |key, value| {
-                         data.push((key.to_vec(), value.to_vec()));
-                         Ok(true)
-                     })
+                              data.push((key.to_vec(), value.to_vec()));
+                              Ok(true)
+                          })
             .unwrap();
         assert_eq!(data,
-                   vec![(b"a1".to_vec(), b"v1".to_vec()), (b"a2".to_vec(), b"v22".to_vec())]);
+                   vec![(b"a1".to_vec(), b"v1".to_vec()),
+                        (b"a2".to_vec(), b"v22".to_vec())]);
         data.clear();
 
         let pair = engine.seek(b"a1").unwrap().unwrap();
@@ -558,14 +562,15 @@ mod tests {
         assert!(engine.seek_cf(cf, b"a3").unwrap().is_none());
 
         let mut index = 0;
-        engine.scan(b"",
+        engine
+            .scan(b"",
                   &[0xFF, 0xFF],
                   false,
                   &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      index += 1;
-                      Ok(index != 1)
-                  })
+                           data.push((key.to_vec(), value.to_vec()));
+                           index += 1;
+                           Ok(index != 1)
+                       })
             .unwrap();
 
         assert_eq!(data.len(), 1);
@@ -585,9 +590,9 @@ mod tests {
                   &[0xFF, 0xFF],
                   false,
                   &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(true)
-                  })
+                           data.push((key.to_vec(), value.to_vec()));
+                           Ok(true)
+                       })
             .unwrap();
 
         assert_eq!(data.len(), 2);
@@ -605,7 +610,7 @@ mod tests {
         let engine = Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(),
                                                       db_opt,
                                                       HashMap::default())
-            .unwrap());
+                                      .unwrap());
 
         let value = vec![0;1024];
         for i in 0..10 {

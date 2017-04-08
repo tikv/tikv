@@ -147,9 +147,8 @@ pub fn decode_region_meta_key(key: &[u8]) -> Result<(u64, u8)> {
         return Err(box_err!("invalid region meta prefix for key {}", escape(key)));
     }
 
-    let region_id =
-        BigEndian::read_u64(&key[REGION_META_PREFIX_KEY.len()..REGION_META_PREFIX_KEY.len() +
-                                                               mem::size_of::<u64>()]);
+    let region_id = BigEndian::read_u64(&key[REGION_META_PREFIX_KEY.len()..
+                                         REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>()]);
 
     Ok((region_id, key[key.len() - 1]))
 }
@@ -226,7 +225,9 @@ mod tests {
         }
 
         // test sort.
-        let tbls = vec![(1, 0, Ordering::Greater), (1, 1, Ordering::Equal), (1, 2, Ordering::Less)];
+        let tbls = vec![(1, 0, Ordering::Greater),
+                        (1, 1, Ordering::Equal),
+                        (1, 2, Ordering::Less)];
         for (lid, rid, order) in tbls {
             let lhs = region_raft_prefix(lid);
             let rhs = region_raft_prefix(rid);
@@ -268,11 +269,9 @@ mod tests {
         }
 
         // test sort.
-        let tbls: Vec<(u64, u64, Ordering)> = vec![
-        (1, 2, Ordering::Less),
-        (1, 1, Ordering::Equal),
-        (2, 1, Ordering::Greater),
-        ];
+        let tbls: Vec<(u64, u64, Ordering)> = vec![(1, 2, Ordering::Less),
+                                                   (1, 1, Ordering::Equal),
+                                                   (2, 1, Ordering::Greater)];
 
         for (lkey, rkey, order) in tbls {
             let lhs = region_state_key(lkey);

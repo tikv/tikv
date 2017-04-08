@@ -137,8 +137,8 @@ impl<'a> MvccReader<'a> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
                 let iter_opt = IterOption::new(None, self.fill_cache);
-                let iter = try!(self.snapshot
-                    .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false)));
+                let iter =
+                    try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false)));
                 self.write_cursor = Some(iter);
             }
         } else {
@@ -181,11 +181,11 @@ impl<'a> MvccReader<'a> {
                 } else {
                     // There is a pending lock. Client should wait or clean it.
                     return Err(Error::KeyIsLocked {
-                        key: try!(key.raw()),
-                        primary: lock.primary,
-                        ts: lock.ts,
-                        ttl: lock.ttl,
-                    });
+                                   key: try!(key.raw()),
+                                   primary: lock.primary,
+                                   ts: lock.ts,
+                                   ttl: lock.ttl,
+                               });
                 }
             }
         }

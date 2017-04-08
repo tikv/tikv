@@ -106,10 +106,10 @@ impl Duration {
     pub fn new(dur: StdDuration, neg: bool, fsp: i8) -> Result<Duration> {
         try!(check_dur(&dur));
         Ok(Duration {
-            dur: dur,
-            neg: neg,
-            fsp: try!(check_fsp(fsp)),
-        })
+               dur: dur,
+               neg: neg,
+               fsp: try!(check_fsp(fsp)),
+           })
     }
 
     // `parse` parses the time form a formatted string with a fractional seconds part,
@@ -149,11 +149,12 @@ impl Duration {
         match parts.next() {
             Some(remain) => {
                 let remain_str = try!(str::from_utf8(remain));
-                let t = box_try!(match remain.len() {
-                    5 => time::strptime(remain_str, "%M:%S"),
-                    2 => time::strptime(remain_str, "%M"),
-                    _ => return Err(invalid_type!("{} is invalid time.", remain_str)),
-                });
+                let t =
+                    box_try!(match remain.len() {
+                                 5 => time::strptime(remain_str, "%M:%S"),
+                                 2 => time::strptime(remain_str, "%M"),
+                                 _ => return Err(invalid_type!("{} is invalid time.", remain_str)),
+                             });
                 secs = tm_to_secs(t);
                 secs += box_try!(u64::from_str_radix(s_str, 10)) * SECS_PER_HOUR;
             }
@@ -162,11 +163,11 @@ impl Duration {
             }
             None => {
                 let t = box_try!(match s.len() {
-                    6 => time::strptime(s_str, "%H%M%S"),
-                    4 => time::strptime(s_str, "%M%S"),
-                    2 => time::strptime(s_str, "%S"),
-                    _ => return Err(invalid_type!("{} is invalid time", s_str)),
-                });
+                                     6 => time::strptime(s_str, "%H%M%S"),
+                                     4 => time::strptime(s_str, "%M%S"),
+                                     2 => time::strptime(s_str, "%S"),
+                                     _ => return Err(invalid_type!("{} is invalid time", s_str)),
+                                 });
                 secs = tm_to_secs(t);
             }
         }
@@ -227,11 +228,11 @@ impl PartialEq for Duration {
 impl PartialOrd for Duration {
     fn partial_cmp(&self, dur: &Duration) -> Option<Ordering> {
         Some(match (self.neg, dur.neg) {
-            (true, true) => dur.dur.cmp(&self.dur),
-            (true, false) => Ordering::Less,
-            (false, true) => Ordering::Greater,
-            (false, false) => self.dur.cmp(&dur.dur),
-        })
+                 (true, true) => dur.dur.cmp(&self.dur),
+                 (true, false) => Ordering::Less,
+                 (false, true) => Ordering::Greater,
+                 (false, false) => self.dur.cmp(&dur.dur),
+             })
     }
 }
 
@@ -250,43 +251,42 @@ mod test {
 
     #[test]
     fn test_parse() {
-        let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
-            (b"10:11:12", 0, Some("10:11:12")),
-            (b"101112", 0, Some("10:11:12")),
-            (b"10:11", 0, Some("10:11:00")),
-            (b"101112.123456", 0, Some("10:11:12")),
-            (b"1112", 0, Some("00:11:12")),
-            (b"12", 0, Some("00:00:12")),
-            (b"1 12", 0, Some("36:00:00")),
-            (b"1 10:11:12", 0, Some("34:11:12")),
-            (b"1 10:11:12.123456", 0, Some("34:11:12")),
-            (b"1 10:11:12.123456", 4, Some("34:11:12.1235")),
-            (b"1 10:11:12.12", 4, Some("34:11:12.1200")),
-            (b"1 10:11:12.1234565", 6, Some("34:11:12.123457")),
-            (b"1 10:11:12.9999995", 6, Some("34:11:13.000000")),
-            (b"1 10:11:12.123456", 7, None),
-            (b"10:11:12.123456", 0, Some("10:11:12")),
-            (b"1 10:11", 0, Some("34:11:00")),
-            (b"1 10", 0, Some("34:00:00")),
-            (b"24 10", 0, Some("586:00:00")),
-            (b"-24 10", 0, Some("-586:00:00")),
-            (b"0 10", 0, Some("10:00:00")),
-            (b"-10:10:10", 0, Some("-10:10:10")),
-            (b"-838:59:59", 0, Some("-838:59:59")),
-            (b"838:59:59", 0, Some("838:59:59")),
-            (b"23:60:59", 0, None),
-            (b"54:59:59", 0, Some("54:59:59")),
-            (b"2011-11-11 00:00:01", 0, None),
-            (b"2011-11-11", 0, None),
-            (b"--23", 0, None),
-            (b"232 10", 0, None),
-            (b"-232 10", 0, None),
-            (b"00:00:00.1", 0, Some("00:00:00")),
-            (b"00:00:00.1", 1, Some("00:00:00.1")),
-            (b"00:00:00.777777", 2, Some("00:00:00.78")),
-            (b"00:00:00.777777", 6, Some("00:00:00.777777")),
-            (b"00:00:00.001", 3, Some("00:00:00.001")),
-        ];
+        let cases: Vec<(&'static [u8], i8, Option<&'static str>)> =
+            vec![(b"10:11:12", 0, Some("10:11:12")),
+                 (b"101112", 0, Some("10:11:12")),
+                 (b"10:11", 0, Some("10:11:00")),
+                 (b"101112.123456", 0, Some("10:11:12")),
+                 (b"1112", 0, Some("00:11:12")),
+                 (b"12", 0, Some("00:00:12")),
+                 (b"1 12", 0, Some("36:00:00")),
+                 (b"1 10:11:12", 0, Some("34:11:12")),
+                 (b"1 10:11:12.123456", 0, Some("34:11:12")),
+                 (b"1 10:11:12.123456", 4, Some("34:11:12.1235")),
+                 (b"1 10:11:12.12", 4, Some("34:11:12.1200")),
+                 (b"1 10:11:12.1234565", 6, Some("34:11:12.123457")),
+                 (b"1 10:11:12.9999995", 6, Some("34:11:13.000000")),
+                 (b"1 10:11:12.123456", 7, None),
+                 (b"10:11:12.123456", 0, Some("10:11:12")),
+                 (b"1 10:11", 0, Some("34:11:00")),
+                 (b"1 10", 0, Some("34:00:00")),
+                 (b"24 10", 0, Some("586:00:00")),
+                 (b"-24 10", 0, Some("-586:00:00")),
+                 (b"0 10", 0, Some("10:00:00")),
+                 (b"-10:10:10", 0, Some("-10:10:10")),
+                 (b"-838:59:59", 0, Some("-838:59:59")),
+                 (b"838:59:59", 0, Some("838:59:59")),
+                 (b"23:60:59", 0, None),
+                 (b"54:59:59", 0, Some("54:59:59")),
+                 (b"2011-11-11 00:00:01", 0, None),
+                 (b"2011-11-11", 0, None),
+                 (b"--23", 0, None),
+                 (b"232 10", 0, None),
+                 (b"-232 10", 0, None),
+                 (b"00:00:00.1", 0, Some("00:00:00")),
+                 (b"00:00:00.1", 1, Some("00:00:00.1")),
+                 (b"00:00:00.777777", 2, Some("00:00:00.78")),
+                 (b"00:00:00.777777", 6, Some("00:00:00.777777")),
+                 (b"00:00:00.001", 3, Some("00:00:00.001"))];
 
         for (input, fsp, expect) in cases {
             let d = Duration::parse(input, fsp);
@@ -308,22 +308,20 @@ mod test {
 
     #[test]
     fn test_to_decimal() {
-        let cases = vec![
-            ("31 11:30:45", 0, "7553045"),
-            ("31 11:30:45", 6, "7553045.000000"),
-            ("31 11:30:45", 0, "7553045"),
-            ("31 11:30:45.123", 6, "7553045.123000"),
-            ("11:30:45", 0, "113045"),
-            ("11:30:45", 6, "113045.000000"),
-            ("11:30:45.123", 6, "113045.123000"),
-            ("11:30:45.123345", 0, "113045"),
-            ("11:30:45.123345", 3, "113045.123"),
-            ("11:30:45.123345", 5, "113045.12335"),
-            ("11:30:45.123345", 6, "113045.123345"),
-            ("11:30:45.1233456", 6, "113045.123346"),
-            ("11:30:45.9233456", 0, "113046"),
-            ("-11:30:45.9233456", 0, "-113046"),
-        ];
+        let cases = vec![("31 11:30:45", 0, "7553045"),
+                         ("31 11:30:45", 6, "7553045.000000"),
+                         ("31 11:30:45", 0, "7553045"),
+                         ("31 11:30:45.123", 6, "7553045.123000"),
+                         ("11:30:45", 0, "113045"),
+                         ("11:30:45", 6, "113045.000000"),
+                         ("11:30:45.123", 6, "113045.123000"),
+                         ("11:30:45.123345", 0, "113045"),
+                         ("11:30:45.123345", 3, "113045.123"),
+                         ("11:30:45.123345", 5, "113045.12335"),
+                         ("11:30:45.123345", 6, "113045.123345"),
+                         ("11:30:45.1233456", 6, "113045.123346"),
+                         ("11:30:45.9233456", 0, "113046"),
+                         ("-11:30:45.9233456", 0, "-113046")];
 
         for (input, fsp, exp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();

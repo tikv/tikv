@@ -160,7 +160,10 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer = &region.get_peers()[0];
 
-    let i = stores.iter().position(|store| store.get_id() == peer.get_store_id()).unwrap();
+    let i = stores
+        .iter()
+        .position(|store| store.get_id() == peer.get_store_id())
+        .unwrap();
     stores.swap(0, i);
 
     // Now the first store has first region. others have none.
@@ -288,7 +291,8 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     region = pd_client.get_region_by_id(region_id).unwrap().unwrap();
-    let i = stores.iter()
+    let i = stores
+        .iter()
         .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
         .unwrap();
 
@@ -361,7 +365,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     pd_client.set_rule(box move |region, _| new_pd_remove_change_peer(region, new_peer(1, 1)));
 
-    let epoch = cluster.pd_client
+    let epoch = cluster
+        .pd_client
         .get_region_by_id(1)
         .unwrap()
         .unwrap()

@@ -218,12 +218,16 @@ mod check_kernel {
                                -> Result<(), ConfigError> {
         let mut buffer = String::new();
         try!(fs::File::open(param_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+                 .and_then(|mut f| f.read_to_string(&mut buffer))
+                 .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
 
-        let got = try!(buffer.trim_matches('\n')
-            .parse::<i64>()
-            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e))));
+        let got = try!(buffer
+                           .trim_matches('\n')
+                           .parse::<i64>()
+                           .map_err(|e| {
+                                        ConfigError::Limit(format!("check_kernel_params failed {}",
+                                                                   e))
+                                    }));
 
         let mut param = String::new();
         // skip 3, ["", "proc", "sys", ...]
@@ -251,14 +255,13 @@ mod check_kernel {
     ///
     /// Note that: It works on **Linux** only.
     pub fn check_kernel() -> Vec<ConfigError> {
-        let params: Vec<(&str, i64, Box<Checker>)> = vec![
-            // Check net.core.somaxconn.
-            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| got >= expect),
-            // Check net.ipv4.tcp_syncookies.
-            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| got == expect),
-            // Check vm.swappiness.
-            ("/proc/sys/vm/swappiness", 0, box |got, expect| got == expect),
-        ];
+        let params: Vec<(&str, i64, Box<Checker>)> =
+            vec![// Check net.core.somaxconn.
+                 ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| got >= expect),
+                 // Check net.ipv4.tcp_syncookies.
+                 ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| got == expect),
+                 // Check vm.swappiness.
+                 ("/proc/sys/vm/swappiness", 0, box |got, expect| got == expect)];
 
         let mut errors = Vec::with_capacity(params.len());
         for (param_path, expect, checker) in params {
@@ -301,8 +304,11 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 
     // Check Port.
     let port: u16 = try!(parts[1]
-        .parse()
-        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {}", addr))));
+                 .parse()
+                 .map_err(|_| {
+                              ConfigError::Address(format!("invalid addr, parse port failed: {}",
+                                                           addr))
+                          }));
     // Port = 0 is invalid.
     if port == 0 {
         return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {}", addr)));
@@ -397,11 +403,13 @@ mod test {
         use super::check_kernel::{check_kernel_params, Checker};
 
         // The range of vm.swappiness is from 0 to 100.
-        let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
-            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got == expect), false),
+        let table: Vec<(&str, i64, Box<Checker>, bool)> =
+            vec![("/proc/sys/vm/swappiness",
+                  i64::MAX,
+                  Box::new(|got, expect| got == expect),
+                  false),
 
-            ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got < expect), true),
-        ];
+                 ("/proc/sys/vm/swappiness", i64::MAX, Box::new(|got, expect| got < expect), true)];
 
         for (path, expect, checker, is_ok) in table {
             assert_eq!(check_kernel_params(path, expect, checker).is_ok(), is_ok);
@@ -410,40 +418,38 @@ mod test {
 
     #[test]
     fn test_check_addrs() {
-        let table = vec![
-            ("127.0.0.1:8080",true),
-            ("[::1]:8080",true),
-            ("localhost:8080",true),
-            ("pingcap.com:8080",true),
-            ("funnydomain:8080",true),
+        let table = vec![("127.0.0.1:8080", true),
+                         ("[::1]:8080", true),
+                         ("localhost:8080", true),
+                         ("pingcap.com:8080", true),
+                         ("funnydomain:8080", true),
 
-            ("127.0.0.1",false),
-            ("[::1]",false),
-            ("localhost",false),
-            ("pingcap.com",false),
-            ("funnydomain",false),
-            ("funnydomain:",false),
+                         ("127.0.0.1", false),
+                         ("[::1]", false),
+                         ("localhost", false),
+                         ("pingcap.com", false),
+                         ("funnydomain", false),
+                         ("funnydomain:", false),
 
-            ("root@google.com:8080",false),
-            ("http://google.com:8080",false),
-            ("google.com:8080/path",false),
-            ("http://google.com:8080/path",false),
-            ("http://google.com:8080/path?lang=en",false),
-            ("http://google.com:8080/path?lang=en#top",false),
+                         ("root@google.com:8080", false),
+                         ("http://google.com:8080", false),
+                         ("google.com:8080/path", false),
+                         ("http://google.com:8080/path", false),
+                         ("http://google.com:8080/path?lang=en", false),
+                         ("http://google.com:8080/path?lang=en#top", false),
 
-            ("ftp://ftp.is.co.za/rfc/rfc1808.txt",false),
-            ("http://www.ietf.org/rfc/rfc2396.txt",false),
-            ("ldap://[2001:db8::7]/c=GB?objectClass?one",false),
-            ("mailto:John.Doe@example.com",false),
-            ("news:comp.infosystems.www.servers.unix",false),
-            ("tel:+1-816-555-1212",false),
-            ("telnet://192.0.2.16:80/",false),
-            ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2",false),
+                         ("ftp://ftp.is.co.za/rfc/rfc1808.txt", false),
+                         ("http://www.ietf.org/rfc/rfc2396.txt", false),
+                         ("ldap://[2001:db8::7]/c=GB?objectClass?one", false),
+                         ("mailto:John.Doe@example.com", false),
+                         ("news:comp.infosystems.www.servers.unix", false),
+                         ("tel:+1-816-555-1212", false),
+                         ("telnet://192.0.2.16:80/", false),
+                         ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2", false),
 
-            (":8080",false),
-            ("8080",false),
-            ("8080:",false),
-        ];
+                         (":8080", false),
+                         ("8080", false),
+                         ("8080:", false)];
 
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
@@ -452,16 +458,14 @@ mod test {
 
     #[test]
     fn test_store_labels() {
-        let cases = vec![
-            "abc",
-            "abc=",
-            "abc.012",
-            "abc,012",
-            "abc=123*",
-            ".123=-abc",
-            "abc,123=123.abc",
-            "abc=123,abc=abc",
-        ];
+        let cases = vec!["abc",
+                         "abc=",
+                         "abc.012",
+                         "abc,012",
+                         "abc=123*",
+                         ".123=-abc",
+                         "abc,123=123.abc",
+                         "abc=123,abc=abc"];
 
         for case in cases {
             assert!(parse_store_labels(case).is_err());

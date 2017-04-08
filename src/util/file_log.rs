@@ -54,10 +54,7 @@ fn open_log_file(path: &str) -> io::Result<File> {
     if !parent.is_dir() {
         try!(fs::create_dir_all(parent))
     }
-    OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(path)
+    OpenOptions::new().append(true).create(true).open(path)
 }
 
 struct RotatingFileLoggerCore {
@@ -166,15 +163,15 @@ mod tests {
     #[test]
     fn test_rotating_file_logger() {
         let tmp_dir = TempDir::new("").unwrap();
-        let log_file =
-            tmp_dir.path().join("test_rotating_file_logger.log").to_str().unwrap().to_string();
+        let log_file = tmp_dir
+            .path()
+            .join("test_rotating_file_logger.log")
+            .to_str()
+            .unwrap()
+            .to_string();
         // create a file with mtime == one day ago
         {
-            let mut file = OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&log_file)
-                .unwrap();
+            let mut file = OpenOptions::new().append(true).create(true).open(&log_file).unwrap();
             file.write_all(b"hello world!").unwrap();
         }
         let ts = time::now().to_timespec();

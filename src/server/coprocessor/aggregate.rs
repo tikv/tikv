@@ -14,9 +14,9 @@ pub fn build_aggr_func(expr: &Expr) -> Result<Box<AggrFunc>> {
         ExprType::Sum => Ok(box Sum { res: None }),
         ExprType::Avg => {
             Ok(box Avg {
-                sum: Sum { res: None },
-                cnt: 0,
-            })
+                       sum: Sum { res: None },
+                       cnt: 0,
+                   })
         }
         ExprType::Max => Ok(box Extremum::new(Ordering::Less)),
         ExprType::Min => Ok(box Extremum::new(Ordering::Greater)),

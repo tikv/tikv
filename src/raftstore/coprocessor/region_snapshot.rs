@@ -207,8 +207,7 @@ impl<'a> RegionIterator<'a> {
             return self.valid;
         }
 
-        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {
-        }
+        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {}
 
         self.valid = self.iter.valid();
         self.update_valid(false)
@@ -309,12 +308,10 @@ mod tests {
         r.set_start_key(b"a2".to_vec());
         r.set_end_key(b"a7".to_vec());
 
-        let base_data = vec![
-            (b"a1".to_vec(), b"v1".to_vec()),
-            (b"a3".to_vec(), b"v3".to_vec()),
-            (b"a5".to_vec(), b"v5".to_vec()),
-            (b"a7".to_vec(), b"v7".to_vec()),
-        ];
+        let base_data = vec![(b"a1".to_vec(), b"v1".to_vec()),
+                             (b"a3".to_vec(), b"v3".to_vec()),
+                             (b"a5".to_vec(), b"v5".to_vec()),
+                             (b"a7".to_vec(), b"v7".to_vec())];
 
         for &(ref k, ref v) in &base_data {
             engine.put(&data_key(k), v).expect("");
@@ -368,23 +365,22 @@ mod tests {
                   &[0xFF, 0xFF],
                   false,
                   &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(true)
-                  })
+                           data.push((key.to_vec(), value.to_vec()));
+                           Ok(true)
+                       })
             .unwrap();
 
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let seek_table: Vec<(_, _, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> = vec![
-            (b"a1", false, None, None),
-            (b"a2", true, Some((b"a3", b"v3")), None),
-            (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
-            (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
-            (b"a6", true, None, Some((b"a5", b"v5"))),
-            (b"a7", true, None, Some((b"a5", b"v5"))),
-            (b"a8", false, None, None),
-        ];
+        let seek_table: Vec<(_, _, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> =
+            vec![(b"a1", false, None, None),
+                 (b"a2", true, Some((b"a3", b"v3")), None),
+                 (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
+                 (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
+                 (b"a6", true, None, Some((b"a5", b"v5"))),
+                 (b"a7", true, None, Some((b"a5", b"v5"))),
+                 (b"a8", false, None, None)];
         let upper_bounds: Vec<Option<&[u8]>> = vec![None, Some(b"a7")];
         for upper_bound in upper_bounds {
             let iter_opt = IterOption::new(upper_bound.map(|v| v.to_vec()), true);
@@ -418,9 +414,9 @@ mod tests {
                   &[0xFF, 0xFF],
                   false,
                   &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(false)
-                  })
+                           data.push((key.to_vec(), value.to_vec()));
+                           Ok(false)
+                       })
             .unwrap();
 
         assert_eq!(data.len(), 1);
@@ -446,9 +442,9 @@ mod tests {
                   &[0xFF, 0xFF],
                   false,
                   &mut |key, value| {
-                      data.push((key.to_vec(), value.to_vec()));
-                      Ok(true)
-                  })
+                           data.push((key.to_vec(), value.to_vec()));
+                           Ok(true)
+                       })
             .unwrap();
 
         assert_eq!(data.len(), 4);
@@ -491,16 +487,22 @@ mod tests {
         let snap = RegionSnapshot::new(&store);
         let mut statistics = Statistics::default();
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics).unwrap());
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+                     .unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics)
+                    .unwrap());
         let mut pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics).unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a5".to_vec()), &mut statistics)
+                    .unwrap());
         pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics).is_err());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics).is_err());
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a3".to_vec()), &mut statistics)
+                     .unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+                    .is_err());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a8".to_vec()), &mut statistics)
+                    .is_err());
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
@@ -520,8 +522,10 @@ mod tests {
         let store = new_peer_storage(engine.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
-        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics).unwrap());
-        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
+        assert!(!iter.reverse_seek(&Key::from_encoded(b"a1".to_vec()), &mut statistics)
+                     .unwrap());
+        assert!(iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics)
+                    .unwrap());
         let pair = (iter.key().to_vec(), iter.value().to_vec());
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
         for kv_pairs in test_data.windows(2) {

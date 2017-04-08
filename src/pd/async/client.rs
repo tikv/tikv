@@ -34,7 +34,7 @@ use util::HandyRwLock;
 use super::super::PdFuture;
 use super::super::{Result, Error, PdClient};
 use super::util::LeaderClient;
-use super::super:: metrics::*;
+use super::super::metrics::*;
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -43,20 +43,21 @@ pub struct RpcClient {
 
 impl RpcClient {
     pub fn new(endpoints: &str) -> Result<RpcClient> {
-        let endpoints: Vec<_> = endpoints.split(',')
+        let endpoints: Vec<_> = endpoints
+            .split(',')
             .map(|s| if !s.starts_with("http://") {
-                format!("http://{}", s)
-            } else {
-                s.to_owned()
-            })
+                     format!("http://{}", s)
+                 } else {
+                     s.to_owned()
+                 })
             .collect();
 
         let (client, members) = try!(validate_endpoints(&endpoints));
 
         Ok(RpcClient {
-            cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(client, members),
-        })
+               cluster_id: members.get_header().get_cluster_id(),
+               leader_client: LeaderClient::new(client, members),
+           })
     }
 
     fn header(&self) -> pdpb::RequestHeader {
@@ -135,12 +136,12 @@ fn connect(addr: &str) -> Result<(PDAsyncClient, GetMembersResponse)> {
     // TODO: It seems that `new` always return an Ok(_).
     PDAsyncClient::new(host, port, false, conf)
         .and_then(|client| {
-            // try request.
-            match client.GetMembers(GetMembersRequest::new()).wait() {
-                Ok(resp) => Ok((client, resp)),
-                Err(e) => Err(e),
-            }
-        })
+                      // try request.
+                      match client.GetMembers(GetMembersRequest::new()).wait() {
+                          Ok(resp) => Ok((client, resp)),
+                          Err(e) => Err(e),
+                      }
+                  })
         .map_err(Error::Grpc)
 }
 
@@ -227,8 +228,12 @@ fn check_resp_header(header: &pdpb::ResponseHeader) -> Result<()> {
     // TODO: translate more error types
     let err = header.get_error();
     match err.get_field_type() {
-        ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
-        ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
+        ErrorType::ALREADY_BOOTSTRAPPED => {
+            Err(Error::ClusterBootstrapped(header.get_cluster_id()))
+        }
+        ErrorType::NOT_BOOTSTRAPPED => {
+            Err(Error::ClusterNotBootstrapped(header.get_cluster_id()))
+        }
         _ => Err(box_err!(err.get_message())),
     }
 }
@@ -399,16 +404,17 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let request_factory = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
-            client.GetRegionByID(req)
+            client
+                .GetRegionByID(req)
                 .map_err(Error::Grpc)
                 .and_then(|mut resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    if resp.has_region() {
-                        Ok(Some(resp.take_region()))
-                    } else {
-                        Ok(None)
-                    }
-                })
+                              try!(check_resp_header(resp.get_header()));
+                              if resp.has_region() {
+                                  Ok(Some(resp.take_region()))
+                              } else {
+                                  Ok(None)
+                              }
+                          })
                 .boxed()
         };
 

@@ -208,12 +208,12 @@ mod v1 {
                           end_key,
                           false,
                           &mut |key, value| {
-            cf_key_count += 1;
-            cf_size += key.len() + value.len();
-            try!(encoder.encode_compact_bytes(key));
-            try!(encoder.encode_compact_bytes(value));
-            Ok(true)
-        }));
+                                   cf_key_count += 1;
+                                   cf_size += key.len() + value.len();
+                                   try!(encoder.encode_compact_bytes(key));
+                                   try!(encoder.encode_compact_bytes(value));
+                                   Ok(true)
+                               }));
         // use an empty byte array to indicate that cf reaches an end.
         box_try!(encoder.encode_compact_bytes(b""));
         Ok((cf_key_count, cf_size))
@@ -540,11 +540,11 @@ mod v1 {
             }
             let left = len as usize - CRC32_BYTES_COUNT;
             Ok(SnapValidationReader {
-                reader: reader,
-                digest: digest,
-                left: left,
-                res: None,
-            })
+                   reader: reader,
+                   digest: digest,
+                   left: left,
+                   res: None,
+               })
         }
 
         /// Validate the file
@@ -904,10 +904,8 @@ mod v2 {
                 cf_file.file = Some(f);
                 cf_file.write_digest = Some(Digest::new(crc32::IEEE));
             }
-            let f = try!(OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&s.meta_file.tmp_path));
+            let f =
+                try!(OpenOptions::new().write(true).create_new(true).open(&s.meta_file.tmp_path));
             s.meta_file.file = Some(f);
             Ok(s)
         }
@@ -928,10 +926,10 @@ mod v2 {
             for cf_file in &mut self.cf_files {
                 if plain_file_used(cf_file.cf) {
                     let f = try!(OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .open(&cf_file.tmp_path));
+                                     .write(true)
+                                     .create(true)
+                                     .truncate(true)
+                                     .open(&cf_file.tmp_path));
                     cf_file.file = Some(f);
                 } else {
                     // initialize sst file writer
@@ -943,9 +941,9 @@ mod v2 {
                 }
             }
             let file = try!(OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&self.meta_file.tmp_path));
+                                .write(true)
+                                .create_new(true)
+                                .open(&self.meta_file.tmp_path));
             self.meta_file.file = Some(file);
             Ok(())
         }
@@ -1114,11 +1112,11 @@ mod v2 {
                                       &end_key,
                                       false,
                                       &mut |key, value| {
-                                          key_count += 1;
-                                          size += key.len() + value.len();
-                                          try!(self.add_kv(key, value));
-                                          Ok(true)
-                                      }));
+                                               key_count += 1;
+                                               size += key.len() + value.len();
+                                               try!(self.add_kv(key, value));
+                                               Ok(true)
+                                           }));
                     (key_count, size)
                 };
                 snap_key_count += cf_key_count;
@@ -1176,7 +1174,9 @@ mod v2 {
         }
 
         fn exists(&self) -> bool {
-            self.cf_files.iter().all(|cf_file| cf_file.size == 0 || file_exists(&cf_file.path)) &&
+            self.cf_files
+                .iter()
+                .all(|cf_file| cf_file.size == 0 || file_exists(&cf_file.path)) &&
             file_exists(&self.meta_file.path)
         }
 
@@ -1413,9 +1413,9 @@ mod v2 {
                              &keys::data_key(b"z"),
                              false,
                              &mut |_, _| {
-                                 kv_count += 1;
-                                 Ok(true)
-                             })
+                                      kv_count += 1;
+                                      Ok(true)
+                                  })
                     .unwrap();
             }
             kv_count
@@ -1555,7 +1555,7 @@ mod v2 {
                                                  &key,
                                                  snap_data.take_meta(),
                                                  size_track.clone())
-                .unwrap();
+                    .unwrap();
             assert!(!s3.exists());
 
             // Ensure snapshot data could be read out of `s2`, and write into `s3`.
@@ -1581,7 +1581,7 @@ mod v2 {
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
             let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(),
                                                       ALL_CFS)
-                .unwrap());
+                                          .unwrap());
             let options = ApplyOptions {
                 db: dst_db.clone(),
                 region: region.clone(),
@@ -1685,11 +1685,11 @@ impl SnapManager {
                                 -> SnapManager {
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
-                base: path.into(),
-                registry: map![],
-                use_sst_file_snapshot: use_sst_file_snapshot,
-                snap_size: Arc::new(RwLock::new(0)),
-            })),
+                                           base: path.into(),
+                                           registry: map![],
+                                           use_sst_file_snapshot: use_sst_file_snapshot,
+                                           snap_size: Arc::new(RwLock::new(0)),
+                                       })),
             ch: ch,
         }
     }
@@ -1726,39 +1726,37 @@ impl SnapManager {
         let core = self.core.rl();
         let path = Path::new(&core.base);
         let read_dir = try!(fs::read_dir(path));
-        Ok(read_dir.filter_map(|p| {
-                let p = match p {
-                    Err(e) => {
-                        error!("failed to list content of {}: {:?}", core.base, e);
-                        return None;
-                    }
-                    Ok(p) => p,
-                };
-                match p.file_type() {
-                    Ok(t) if t.is_file() => {}
-                    _ => return None,
-                }
-                let file_name = p.file_name();
-                let name = match file_name.to_str() {
-                    None => return None,
-                    Some(n) => n,
-                };
-                let is_sending = name.starts_with(SNAP_GEN_PREFIX);
-                let numbers: Vec<u64> = name.split('.')
-                    .next()
-                    .map_or_else(|| vec![], |s| {
-                        s.split('_')
-                            .skip(1)
-                            .filter_map(|s| s.parse().ok())
-                            .collect()
-                    });
-                if numbers.len() != 3 {
-                    error!("failed to parse snapkey from {}", name);
+        Ok(read_dir
+               .filter_map(|p| {
+            let p = match p {
+                Err(e) => {
+                    error!("failed to list content of {}: {:?}", core.base, e);
                     return None;
                 }
-                Some((SnapKey::new(numbers[0], numbers[1], numbers[2]), is_sending))
-            })
-            .collect())
+                Ok(p) => p,
+            };
+            match p.file_type() {
+                Ok(t) if t.is_file() => {}
+                _ => return None,
+            }
+            let file_name = p.file_name();
+            let name = match file_name.to_str() {
+                None => return None,
+                Some(n) => n,
+            };
+            let is_sending = name.starts_with(SNAP_GEN_PREFIX);
+            let numbers: Vec<u64> =
+                name.split('.')
+                    .next()
+                    .map_or_else(|| vec![],
+                                 |s| s.split('_').skip(1).filter_map(|s| s.parse().ok()).collect());
+            if numbers.len() != 3 {
+                error!("failed to parse snapkey from {}", name);
+                return None;
+            }
+            Some((SnapKey::new(numbers[0], numbers[1], numbers[2]), is_sending))
+        })
+               .collect())
     }
 
     #[inline]
@@ -2006,7 +2004,7 @@ mod test {
                                                &key1,
                                                snap_data.get_meta().clone(),
                                                size_track.clone())
-            .unwrap();
+                .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
         assert_eq!(n, expected_size);
         s2.save().unwrap();
@@ -2075,7 +2073,7 @@ mod test {
 
         let dst_db_dir = TempDir::new("test-snap-v1-v2-compatible-dst-db").unwrap();
         let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS)
-            .unwrap());
+                                  .unwrap());
         let options = ApplyOptions {
             db: dst_db.clone(),
             region: region.clone(),

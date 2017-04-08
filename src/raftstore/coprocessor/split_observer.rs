@@ -73,7 +73,7 @@ impl RegionObserver for SplitObserver {
         if !req.has_split() {
             box_try!(Err("cmd_type is Split but it doesn't have split request, message maybe \
                           corrupted!"
-                .to_owned()));
+                                 .to_owned()));
         }
         if let Err(e) = self.on_split(ctx, req.mut_split()) {
             error!("failed to handle split req: {:?}", e);
@@ -125,7 +125,7 @@ mod test {
                          &Region::new(),
                          worker::dummy_scheduler(),
                          "".to_owned())
-            .unwrap()
+                .unwrap()
     }
 
     fn new_split_request(key: &[u8]) -> AdminRequest {

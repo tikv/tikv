@@ -188,31 +188,31 @@ impl InvokeContext {
 
 fn init_raft_state(engine: &DB, region: &Region) -> Result<RaftLocalState> {
     Ok(match try!(engine.get_msg_cf(CF_RAFT, &keys::raft_state_key(region.get_id()))) {
-        Some(s) => s,
-        None => {
-            let mut raft_state = RaftLocalState::new();
-            if !region.get_peers().is_empty() {
-                raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-            }
-            raft_state
+           Some(s) => s,
+           None => {
+        let mut raft_state = RaftLocalState::new();
+        if !region.get_peers().is_empty() {
+            raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
         }
-    })
+        raft_state
+    }
+       })
 }
 
 fn init_apply_state(engine: &DB, region: &Region) -> Result<RaftApplyState> {
     Ok(match try!(engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))) {
-        Some(s) => s,
-        None => {
-            let mut apply_state = RaftApplyState::new();
-            if !region.get_peers().is_empty() {
-                apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
-                let state = apply_state.mut_truncated_state();
-                state.set_index(RAFT_INIT_LOG_INDEX);
-                state.set_term(RAFT_INIT_LOG_TERM);
-            }
-            apply_state
+           Some(s) => s,
+           None => {
+        let mut apply_state = RaftApplyState::new();
+        if !region.get_peers().is_empty() {
+            apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+            let state = apply_state.mut_truncated_state();
+            state.set_index(RAFT_INIT_LOG_INDEX);
+            state.set_term(RAFT_INIT_LOG_TERM);
         }
-    })
+        apply_state
+    }
+       })
 }
 
 fn init_last_term(engine: &DB,
@@ -232,13 +232,13 @@ fn init_last_term(engine: &DB,
     }
     let last_log_key = keys::raft_log_key(region.get_id(), last_idx);
     Ok(match try!(engine.get_msg_cf::<Entry>(CF_RAFT, &last_log_key)) {
-        None => {
-            return Err(box_err!("[region {}] entry at {} doesn't exist, may lose data.",
-                                region.get_id(),
-                                last_idx))
-        }
-        Some(e) => e.get_term(),
-    })
+           None => {
+               return Err(box_err!("[region {}] entry at {} doesn't exist, may lose data.",
+                                   region.get_id(),
+                                   last_idx))
+           }
+           Some(e) => e.get_term(),
+       })
 }
 
 impl PeerStorage {
@@ -253,17 +253,17 @@ impl PeerStorage {
         let last_term = try!(init_last_term(&engine, region, &raft_state, &apply_state));
 
         Ok(PeerStorage {
-            engine: engine,
-            region: region.clone(),
-            raft_state: raft_state,
-            apply_state: apply_state,
-            snap_state: RefCell::new(SnapState::Relax),
-            region_sched: region_sched,
-            snap_tried_cnt: RefCell::new(0),
-            tag: tag,
-            applied_index_term: RAFT_INIT_LOG_TERM,
-            last_term: last_term,
-        })
+               engine: engine,
+               region: region.clone(),
+               raft_state: raft_state,
+               apply_state: apply_state,
+               snap_state: RefCell::new(SnapState::Relax),
+               region_sched: region_sched,
+               snap_tried_cnt: RefCell::new(0),
+               tag: tag,
+               applied_index_term: RAFT_INIT_LOG_TERM,
+               last_term: last_term,
+           })
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -281,9 +281,9 @@ impl PeerStorage {
                     self.raft_state);
 
             return Ok(RaftState {
-                hard_state: hard_state,
-                conf_state: conf_state,
-            });
+                          hard_state: hard_state,
+                          conf_state: conf_state,
+                      });
         }
 
         for p in self.region.get_peers() {
@@ -291,9 +291,9 @@ impl PeerStorage {
         }
 
         Ok(RaftState {
-            hard_state: hard_state,
-            conf_state: conf_state,
-        })
+               hard_state: hard_state,
+               conf_state: conf_state,
+           })
     }
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -338,11 +338,12 @@ impl PeerStorage {
 
         let end_key = keys::raft_log_key(self.get_region_id(), high);
 
-        try!(self.engine.scan_cf(CF_RAFT,
-                                 &start_key,
-                                 &end_key,
-                                 true, // fill_cache
-                                 &mut |_, value| {
+        try!(self.engine
+                 .scan_cf(CF_RAFT,
+                          &start_key,
+                          &end_key,
+                          true, // fill_cache
+                          &mut |_, value| {
             let mut entry = Entry::new();
             try!(entry.merge_from_bytes(value));
 
@@ -442,7 +443,9 @@ impl PeerStorage {
             error!("{} decode snapshot fail, it may be corrupted: {:?}",
                    self.tag,
                    e);
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.with_label_values(&["decode"]).inc();
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
+                .with_label_values(&["decode"])
+                .inc();
             return false;
         }
         let snap_epoch = snap_data.get_region().get_region_epoch();
@@ -592,7 +595,9 @@ impl PeerStorage {
         // The snapshot only contains log which index > applied index, so
         // here the truncate state's (index, term) is in snapshot metadata.
         ctx.apply_state.mut_truncated_state().set_index(last_index);
-        ctx.apply_state.mut_truncated_state().set_term(snap.get_metadata().get_term());
+        ctx.apply_state
+            .mut_truncated_state()
+            .set_term(snap.get_metadata().get_term());
 
         info!("{} apply snapshot for region {:?} with state {:?} ok",
               self.tag,
@@ -611,27 +616,29 @@ impl PeerStorage {
         let region_id = self.get_region_id();
         let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
                                       keys::region_meta_prefix(region_id + 1));
-        try!(self.engine.scan(&meta_start,
-                              &meta_end,
-                              false,
-                              &mut |key, _| {
-                                  try!(wb.delete(key));
-                                  meta_count += 1;
-                                  Ok(true)
-                              }));
+        try!(self.engine
+                 .scan(&meta_start,
+                       &meta_end,
+                       false,
+                       &mut |key, _| {
+                                try!(wb.delete(key));
+                                meta_count += 1;
+                                Ok(true)
+                            }));
 
         let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
         let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
                                       keys::region_raft_prefix(region_id + 1));
-        try!(self.engine.scan_cf(CF_RAFT,
-                                 &raft_start,
-                                 &raft_end,
-                                 false,
-                                 &mut |key, _| {
-                                     try!(wb.delete_cf(handle, key));
-                                     raft_count += 1;
-                                     Ok(true)
-                                 }));
+        try!(self.engine
+                 .scan_cf(CF_RAFT,
+                          &raft_start,
+                          &raft_end,
+                          false,
+                          &mut |key, _| {
+                                   try!(wb.delete_cf(handle, key));
+                                   raft_count += 1;
+                                   Ok(true)
+                               }));
         info!("{} clear peer {} meta keys and {} raft keys, takes {:?}",
               self.tag,
               meta_count,
@@ -646,7 +653,8 @@ impl PeerStorage {
         let (start_key, end_key) = (enc_start_key(self.get_region()),
                                     enc_end_key(self.get_region()));
         let region_id = self.get_region_id();
-        box_try!(self.region_sched.schedule(RegionTask::destroy(region_id, start_key, end_key)));
+        box_try!(self.region_sched
+                     .schedule(RegionTask::destroy(region_id, start_key, end_key)));
         Ok(())
     }
 
@@ -658,11 +666,13 @@ impl PeerStorage {
         let region_id = new_region.get_id();
         if old_start_key < new_start_key {
             box_try!(self.region_sched
-                .schedule(RegionTask::destroy(region_id, old_start_key, new_start_key)));
+                         .schedule(RegionTask::destroy(region_id,
+                                                       old_start_key,
+                                                       new_start_key)));
         }
         if new_end_key < old_end_key {
             box_try!(self.region_sched
-                .schedule(RegionTask::destroy(region_id, new_end_key, old_end_key)));
+                         .schedule(RegionTask::destroy(region_id, new_end_key, old_end_key)));
         }
         Ok(())
     }
@@ -834,9 +844,9 @@ impl PeerStorage {
         self.region = snap_region;
 
         Some(ApplySnapResult {
-            prev_region: prev_region,
-            region: self.region.clone(),
-        })
+                 prev_region: prev_region,
+                 region: self.region.clone(),
+             })
     }
 }
 
@@ -865,12 +875,10 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
     let state: RegionLocalState = try!(snap.get_msg(&keys::region_state_key(key.region_id))
-        .and_then(|res| {
-            match res {
-                None => Err(box_err!("could not find region info")),
-                Some(state) => Ok(state),
-            }
-        }));
+                 .and_then(|res| match res {
+                               None => Err(box_err!("could not find region info")),
+                               Some(state) => Ok(state),
+                           }));
 
     if state.get_state() != PeerState::Normal {
         return Err(box_err!("snap job for {} seems stale, skip.", region_id));
@@ -1025,18 +1033,12 @@ mod test {
 
     #[test]
     fn test_storage_term() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
 
-        let mut tests = vec![
-            (2, Err(RaftError::Store(StorageError::Compacted))),
-            (3, Ok(3)),
-            (4, Ok(4)),
-            (5, Ok(5)),
-        ];
+        let mut tests = vec![(2, Err(RaftError::Store(StorageError::Compacted))),
+                             (3, Ok(3)),
+                             (4, Ok(4)),
+                             (5, Ok(5))];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
             let worker = Worker::new("snap_manager");
@@ -1051,27 +1053,37 @@ mod test {
 
     #[test]
     fn test_storage_entries() {
-        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+        let ents = vec![new_entry(3, 3),
+                        new_entry(4, 4),
+                        new_entry(5, 5),
+                        new_entry(6, 6)];
         let max_u64 = u64::max_value();
-        let mut tests = vec![
-            (2, 6, max_u64, Err(RaftError::Store(StorageError::Compacted))),
-            (3, 4, max_u64, Err(RaftError::Store(StorageError::Compacted))),
-            (4, 5, max_u64, Ok(vec![new_entry(4, 4)])),
-            (4, 6, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
-            // even if maxsize is zero, the first entry should be returned
-            (4, 7, 0, Ok(vec![new_entry(4, 4)])),
-            // limit to 2
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2])) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            // all
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
-        ];
+        let mut tests =
+            vec![(2, 6, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+                 (3, 4, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+                 (4, 5, max_u64, Ok(vec![new_entry(4, 4)])),
+                 (4, 6, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4, 7, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+                 // even if maxsize is zero, the first entry should be returned
+                 (4, 7, 0, Ok(vec![new_entry(4, 4)])),
+                 // limit to 2
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2])) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 // all
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]))];
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
@@ -1091,21 +1103,21 @@ mod test {
     #[test]
     fn test_storage_compact() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut tests = vec![
-            (2, Err(RaftError::Store(StorageError::Compacted))),
-            (3, Err(RaftError::Store(StorageError::Compacted))),
-            (4, Ok(())),
-            (5, Ok(())),
-        ];
+        let mut tests = vec![(2, Err(RaftError::Store(StorageError::Compacted))),
+                             (3, Err(RaftError::Store(StorageError::Compacted))),
+                             (4, Ok(())),
+                             (5, Ok(()))];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
             let store = new_storage_from_ents(sched, &td, &ents);
             let mut ctx = InvokeContext::new(&store);
-            let res = store.term(idx)
-                .map_err(From::from)
-                .and_then(|term| compact_raft_log(&store.tag, &mut ctx.apply_state, idx, term));
+            let res =
+                store
+                    .term(idx)
+                    .map_err(From::from)
+                    .and_then(|term| compact_raft_log(&store.tag, &mut ctx.apply_state, idx, term));
             // TODO check exact error type after refactoring error.
             if res.is_err() ^ werr.is_err() {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
@@ -1231,35 +1243,22 @@ mod test {
     #[test]
     fn test_storage_append() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut tests = vec![
-            (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
-                vec![new_entry(4, 4), new_entry(5, 5)],
-            ),
-            (
-                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
-                vec![new_entry(4, 6), new_entry(5, 6)],
-            ),
-            (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-            ),
-            // truncate incoming entries, truncate the existing entries and append
-            (
-                vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)],
-                vec![new_entry(4, 5)],
-            ),
-            // truncate the existing entries and append
-            (
-                vec![new_entry(4, 5)],
-                vec![new_entry(4, 5)],
-            ),
-            // direct append
-            (
-                vec![new_entry(6, 5)],
-                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-            ),
-        ];
+        let mut tests =
+            vec![(vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
+                  vec![new_entry(4, 4), new_entry(5, 5)]),
+                 (vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
+                  vec![new_entry(4, 6), new_entry(5, 6)]),
+                 (vec![new_entry(3, 3),
+                       new_entry(4, 4),
+                       new_entry(5, 5),
+                       new_entry(6, 5)],
+                  vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)]),
+                 // truncate incoming entries, truncate the existing entries and append
+                 (vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)], vec![new_entry(4, 5)]),
+                 // truncate the existing entries and append
+                 (vec![new_entry(4, 5)], vec![new_entry(4, 5)]),
+                 // direct append
+                 (vec![new_entry(6, 5)], vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)])];
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
             let worker = Worker::new("snap_manager");
@@ -1290,7 +1289,10 @@ mod test {
     }
 
     fn test_storage_apply_snapshot(use_sst_file_snapshot: bool) {
-        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+        let ents = vec![new_entry(3, 3),
+                        new_entry(4, 4),
+                        new_entry(5, 5),
+                        new_entry(6, 6)];
         let mut cs = ConfState::new();
         cs.set_nodes(vec![1, 2, 3]);
 

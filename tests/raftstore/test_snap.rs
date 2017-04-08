@@ -62,7 +62,10 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let value = format!("{:01024}", 0);
     must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
     let stale = Arc::new(AtomicBool::new(false));
-    cluster.sim.wl().add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, box LeadingDuplicatedSnapshotFilter::new(stale.clone()));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
     loop {
@@ -209,8 +212,8 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.must_add_peer(r1, new_peer(2, 2));
     // Force peer 2 to be followers all the way.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(r1, 2)
-        .msg_type(MessageType::MsgRequestVote)
-        .direction(Direction::Send)));
+                                                   .msg_type(MessageType::MsgRequestVote)
+                                                   .direction(Direction::Send)));
     cluster.must_transfer_leader(r1, new_peer(1, 1));
     cluster.must_put(b"k3", b"v3");
     // Pile up snapshots of overlapped region ranges and deliver them all at once.

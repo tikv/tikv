@@ -22,8 +22,7 @@ use super::{HashSet, HashMap};
 pub use rocksdb::CFHandle;
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
-    db.cf_handle(cf)
-        .ok_or_else(|| format!("cf {} not found.", cf))
+    db.cf_handle(cf).ok_or_else(|| format!("cf {} not found.", cf))
 }
 
 pub fn open(path: &str, cfs: &[&str]) -> Result<DB, String> {

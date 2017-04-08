@@ -134,8 +134,11 @@ impl Conn {
             self.conn_type = ConnType::Snapshot;
 
             let mut snap_data = RaftSnapshotData::new();
-            try!(snap_data.merge_from_bytes(
-                data.msg.get_raft().get_message().get_snapshot().get_data()));
+            try!(snap_data.merge_from_bytes(data.msg
+                                                .get_raft()
+                                                .get_message()
+                                                .get_snapshot()
+                                                .get_data()));
             self.expect_size = snap_data.get_file_size() as usize;
             let expect_cap = cmp::min(SNAPSHOT_PAYLOAD_BUF, self.expect_size);
             // no need to shrink, the connection will be closed soon.
@@ -219,9 +222,9 @@ impl Conn {
         let msg_id = self.last_msg_id.unwrap();
         self.last_msg_id = None;
         Ok(Some(ConnData {
-            msg_id: msg_id,
-            msg: msg,
-        }))
+                    msg_id: msg_id,
+                    msg: msg,
+                }))
     }
 
     fn read_rpc<T, S>(&mut self,

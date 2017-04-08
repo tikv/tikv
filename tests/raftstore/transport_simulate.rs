@@ -292,21 +292,24 @@ impl Filter<RaftMessage> for RegionPacketFilter {
             if self.region_id == region_id &&
                (self.direction.is_send() && self.store_id == from_store_id ||
                 self.direction.is_recv() && self.store_id == to_store_id) &&
-               self.msg_type.as_ref().map_or(true, |t| t == &m.get_message().get_msg_type()) {
+               self.msg_type
+                   .as_ref()
+                   .map_or(true, |t| t == &m.get_message().get_msg_type()) {
                 return match self.block {
-                    Either::Left(ref count) => {
-                        loop {
-                            let left = count.load(Ordering::SeqCst);
-                            if left == 0 {
-                                return false;
-                            }
-                            if count.compare_and_swap(left, left - 1, Ordering::SeqCst) == left {
-                                return true;
-                            }
-                        }
-                    }
-                    Either::Right(ref block) => !block.load(Ordering::SeqCst),
-                };
+                           Either::Left(ref count) => {
+                               loop {
+                                   let left = count.load(Ordering::SeqCst);
+                                   if left == 0 {
+                                       return false;
+                                   }
+                                   if count.compare_and_swap(left, left - 1, Ordering::SeqCst) ==
+                                      left {
+                                       return true;
+                                   }
+                               }
+                           }
+                           Either::Right(ref block) => !block.load(Ordering::SeqCst),
+                       };
             }
             true
         });
@@ -417,9 +420,7 @@ impl Filter<StoreMsg> for CollectSnapshotFilter {
             if is_pending {
                 self.dropped.compare_and_swap(false, true, Ordering::Relaxed);
                 pending_msg.insert(from_peer_id, m);
-                let sender = self.pending_count_sender
-                    .lock()
-                    .unwrap();
+                let sender = self.pending_count_sender.lock().unwrap();
                 sender.send(pending_msg.len()).unwrap();
             } else {
                 to_send.push(m);
@@ -458,22 +459,21 @@ impl DropSnapshotFilter {
 impl Filter<StoreMsg> for DropSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         let notifier = self.notifier.lock().unwrap();
-        msgs.retain(|m| {
-            match *m {
-                StoreMsg::RaftMessage(ref msg) => {
-                    if msg.get_message().get_msg_type() != MessageType::MsgSnapshot {
-                        true
-                    } else {
-                        let idx = msg.get_message().get_snapshot().get_metadata().get_index();
-                        if let Err(e) = notifier.send(idx) {
-                            error!("failed to notify snapshot {:?}: {:?}", msg, e);
+        msgs.retain(|m| match *m {
+                        StoreMsg::RaftMessage(ref msg) => {
+                            if msg.get_message().get_msg_type() != MessageType::MsgSnapshot {
+                                true
+                            } else {
+                                let idx =
+                                    msg.get_message().get_snapshot().get_metadata().get_index();
+                                if let Err(e) = notifier.send(idx) {
+                                    error!("failed to notify snapshot {:?}: {:?}", msg, e);
+                                }
+                                false
+                            }
                         }
-                        false
-                    }
-                }
-                _ => true,
-            }
-        });
+                        _ => true,
+                    });
         Ok(())
     }
 }

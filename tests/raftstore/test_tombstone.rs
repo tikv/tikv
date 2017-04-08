@@ -61,14 +61,15 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, b"k3");
     let mut existing_kvs = vec![];
     for cf in engine_2.cf_names() {
-        engine_2.scan_cf(cf,
+        engine_2
+            .scan_cf(cf,
                      b"",
                      &[0xFF],
                      false,
                      &mut |k, v| {
-                         existing_kvs.push((k.to_vec(), v.to_vec()));
-                         Ok(true)
-                     })
+                              existing_kvs.push((k.to_vec(), v.to_vec()));
+                              Ok(true)
+                          })
             .unwrap();
     }
     // only tombstone key and store ident key exist.

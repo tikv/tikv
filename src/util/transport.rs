@@ -209,9 +209,9 @@ mod tests {
         let ch = SendCh::new(event_loop.channel(), "test");
         let _ch = ch.clone();
         let h = thread::spawn(move || {
-            let mut sender = SenderHandler { ch: _ch };
-            event_loop.run(&mut sender).unwrap();
-        });
+                                  let mut sender = SenderHandler { ch: _ch };
+                                  event_loop.run(&mut sender).unwrap();
+                              });
 
         ch.try_send(Msg::Stop).unwrap();
 
@@ -226,9 +226,9 @@ mod tests {
         let ch = SendCh::new(event_loop.channel(), "test");
         let _ch = ch.clone();
         let h = thread::spawn(move || {
-            let mut sender = SenderHandler { ch: _ch };
-            event_loop.run(&mut sender).unwrap();
-        });
+                                  let mut sender = SenderHandler { ch: _ch };
+                                  event_loop.run(&mut sender).unwrap();
+                              });
 
         ch.send(Msg::Sleep(1000)).unwrap();
         ch.send(Msg::Stop).unwrap();
@@ -247,9 +247,9 @@ mod tests {
         let ch = SyncSendCh::new(tx, "test");
         let _ch = ch.clone();
         let h = thread::spawn(move || {
-            let mut handler = SenderHandler { ch: _ch };
-            handler.run(rx);
-        });
+                                  let mut handler = SenderHandler { ch: _ch };
+                                  handler.run(rx);
+                              });
 
         ch.try_send(Msg::Stop).unwrap();
 
@@ -262,9 +262,9 @@ mod tests {
         let ch = SyncSendCh::new(tx, "test");
         let _ch = ch.clone();
         let h = thread::spawn(move || {
-            let mut handler = SenderHandler { ch: _ch };
-            handler.run(rx);
-        });
+                                  let mut handler = SenderHandler { ch: _ch };
+                                  handler.run(rx);
+                              });
 
         ch.send(Msg::Sleep(1000)).unwrap();
         ch.send(Msg::Stop).unwrap();

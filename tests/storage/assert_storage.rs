@@ -117,7 +117,10 @@ impl AssertionStorage {
         assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
-            storage::Error::Txn(txn::Error::InvalidTxnTso { start_ts, commit_ts }) => {
+            storage::Error::Txn(txn::Error::InvalidTxnTso {
+                                    start_ts,
+                                    commit_ts,
+                                }) => {
                 assert_eq!(sts, start_ts);
                 assert_eq!(cmt_ts, commit_ts);
             }
@@ -152,10 +155,11 @@ impl AssertionStorage {
                               commit_ts: u64) {
         let mut success = false;
         for _ in 0..3 {
-            let res = self.store.prewrite(self.ctx.clone(),
-                                          vec![Mutation::Put((make_key(key), value.to_vec()))],
-                                          key.to_vec(),
-                                          start_ts);
+            let res = self.store
+                .prewrite(self.ctx.clone(),
+                          vec![Mutation::Put((make_key(key), value.to_vec()))],
+                          key.to_vec(),
+                          start_ts);
             if res.is_ok() {
                 success = true;
                 break;
@@ -186,7 +190,9 @@ impl AssertionStorage {
                       key.to_vec(),
                       start_ts)
             .unwrap();
-        self.store.commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts).unwrap();
+        self.store
+            .commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts)
+            .unwrap();
     }
 
     pub fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -196,7 +202,9 @@ impl AssertionStorage {
                       key.to_vec(),
                       start_ts)
             .unwrap();
-        self.store.commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts).unwrap();
+        self.store
+            .commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts)
+            .unwrap();
     }
 
     pub fn scan_ok(&self,
@@ -206,10 +214,9 @@ impl AssertionStorage {
                    expect: Vec<Option<(&[u8], &[u8])>>) {
         let key_address = make_key(start_key);
         let result = self.store.scan(self.ctx.clone(), key_address, limit, false, ts).unwrap();
-        let result: Vec<Option<KvPair>> = result.into_iter()
-            .map(Result::ok)
-            .collect();
-        let expect: Vec<Option<KvPair>> = expect.into_iter()
+        let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
+        let expect: Vec<Option<KvPair>> = expect
+            .into_iter()
             .map(|x| x.map(|(k, v)| (k.to_vec(), v.to_vec())))
             .collect();
         assert_eq!(result, expect);
@@ -222,17 +229,16 @@ impl AssertionStorage {
                             expect: Vec<Option<&[u8]>>) {
         let key_address = make_key(start_key);
         let result = self.store.scan(self.ctx.clone(), key_address, limit, true, ts).unwrap();
-        let result: Vec<Option<KvPair>> = result.into_iter()
-            .map(Result::ok)
-            .collect();
-        let expect: Vec<Option<KvPair>> = expect.into_iter()
-            .map(|x| x.map(|k| (k.to_vec(), vec![])))
-            .collect();
+        let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
+        let expect: Vec<Option<KvPair>> =
+            expect.into_iter().map(|x| x.map(|k| (k.to_vec(), vec![]))).collect();
         assert_eq!(result, expect);
     }
 
     pub fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
-        self.store.prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts).unwrap();
+        self.store
+            .prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts)
+            .unwrap();
     }
 
     pub fn prewrite_locked(&self,
@@ -240,14 +246,17 @@ impl AssertionStorage {
                            primary: &[u8],
                            start_ts: u64,
                            expect_locks: Vec<(&[u8], &[u8], u64)>) {
-        let res =
-            self.store.prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts).unwrap();
+        let res = self.store
+            .prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts)
+            .unwrap();
         let locks: Vec<(&[u8], &[u8], u64)> = res.iter()
             .filter_map(|x| {
-                if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ref key,
+                if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked {
+                                                                    ref key,
                                                                     ref primary,
                                                                     ts,
-                                                                    .. }))) = *x {
+                                                                    ..
+                                                                }))) = *x {
                     Some((key.as_ref(), primary.as_ref(), ts))
                 } else {
                     None
