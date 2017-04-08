@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::boxed::Box;
-use std::collections::Bound::{Excluded, Unbounded};
+use std::collections::Bound::{Included, Excluded, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
@@ -1036,8 +1036,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              left: metapb::Region,
                              right: metapb::Region,
                              left_derive: bool) {
-        let new_region = if left_derive { right.clone() } else { left.clone() };
-        let origin_region = if left_derive { left.clone() } else { right.clone() };
+        let new_region = if left_derive {
+            right.clone()
+        } else {
+            left.clone()
+        };
+        let origin_region = if left_derive {
+            left.clone()
+        } else {
+            right.clone()
+        };
 
         self.region_peers.get_mut(&region_id).unwrap().mut_store().region = origin_region.clone();
         for peer in new_region.get_peers() {
@@ -1090,7 +1098,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
-                new_peer.size_diff_hint = self.cfg.region_check_size_diff;
+                if left_derive {
+                    new_peer.size_diff_hint = self.cfg.region_check_size_diff;
+                } else if let Some(old_peer) = self.region_peers.get_mut(&region_id) {
+                    old_peer.size_diff_hint = self.cfg.region_check_size_diff;
+                }
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
                 self.region_peers.insert(new_region_id, new_peer);
             }
@@ -1260,12 +1272,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let res = peer::check_epoch(peer.region(), msg);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach the next region which might be split from the current region. But it doesn't
-            // matter if the next region is not split from the current region. If the region meta
+            // Attach the prev region which might be split from the current region. But it doesn't
+            // matter if the prev region is not split from the current region. If the region meta
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
             if let Some((_, &next_region_id)) = self.region_ranges
-                .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
+                .range((Included(enc_start_key(peer.region())), Unbounded::<Key>))
                 .next() {
                 let next_region = self.region_peers[&next_region_id].region();
                 new_regions.push(next_region.to_owned());

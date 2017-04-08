@@ -52,7 +52,7 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         let left = pd_client.get_region(left_key).unwrap();
         let right = pd_client.get_region(right_key).unwrap();
 
-        assert_eq!(region.get_id(), left.get_id());
+        assert_eq!(region.get_id(), right.get_id());
         assert_eq!(region.get_start_key(), left.get_start_key());
         assert_eq!(left.get_end_key(), right.get_start_key());
         assert_eq!(region.get_end_key(), right.get_end_key());
@@ -534,7 +534,7 @@ fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_stale_epoch());
     assert_eq!(resp.get_header().get_error().get_stale_epoch().get_new_regions(),
-               &[left, right]);
+               &[right, left]);
 }
 
 #[test]
