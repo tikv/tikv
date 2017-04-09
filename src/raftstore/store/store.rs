@@ -76,6 +76,12 @@ pub struct StoreChannel {
     pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
 }
 
+#[derive(Default)]
+pub struct StoreStat {
+    pub lock_cf_bytes_written: u64,
+    pub engine_total_bytes_written: u64,
+}
+
 pub struct Store<T, C: 'static> {
     cfg: Rc<Config>,
     engine: Arc<DB>,
@@ -120,9 +126,8 @@ pub struct Store<T, C: 'static> {
 
     region_written_bytes: LocalHistogram,
     region_written_keys: LocalHistogram,
-    lock_cf_written_bytes: u64,
 
-    bytes_written: u64,
+    store_stat: StoreStat,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -197,8 +202,7 @@ impl<T, C> Store<T, C> {
             is_busy: false,
             region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
-            lock_cf_written_bytes: 0,
-            bytes_written: 0,
+            store_stat: StoreStat::default(),
         };
         try!(s.init());
         Ok(s)
@@ -519,7 +523,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         debug!("{} async apply finish: {:?}", p.tag, res);
                         p.post_apply(&res, &mut self.pending_raft_groups);
                     }
-                    self.lock_cf_written_bytes += res.metrics.lock_cf_written_bytes;
+                    self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
                     self.on_ready_result(res.region_id, res.exec_res);
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
@@ -1601,9 +1605,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_start_time(self.start_time.sec as u32);
 
         // report store write flow to pd
-        let bytes_written = self.engine.get_statistics_ticker_count(TickerType::BytesWritten);
-        let delta = bytes_written - self.bytes_written;
-        self.bytes_written = bytes_written;
+        let engine_total_bytes_written = self.engine
+            .get_statistics_ticker_count(TickerType::BytesWritten);
+        let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
+        self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
         stats.set_bytes_written(delta);
 
         stats.set_is_busy(self.is_busy);
@@ -1702,8 +1707,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        if self.lock_cf_written_bytes > self.cfg.lock_cf_compact_threshold {
-            self.lock_cf_written_bytes = 0;
+        if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_threshold {
+            self.store_stat.lock_cf_bytes_written = 0;
             let task = CompactTask {
                 cf_name: String::from(CF_LOCK),
                 start_key: None,
