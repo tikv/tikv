@@ -63,8 +63,8 @@ bench:
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
 format:
-	@cargo fmt -- --write-mode diff | grep -E "Diff .*at line" > /dev/null && cargo fmt -- --write-mode overwrite || exit 0
-	@rustfmt --write-mode diff tests/tests.rs benches/benches.rs | grep -E "Diff .*at line" > /dev/null && rustfmt --write-mode overwrite tests/tests.rs benches/benches.rs || exit 0
+	@cd ${PROJECT_DIR}
+	@./tools/format-diff.sh || exit 0
 
 clean:
 	cargo clean
