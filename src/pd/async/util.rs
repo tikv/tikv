@@ -19,7 +19,7 @@ use std::thread;
 
 use futures::Future;
 use futures::future::ok;
-use futures::future::{loop_fn, Loop};
+use futures::future::{self, loop_fn, Loop};
 
 use kvproto::pdpb::GetMembersResponse;
 use kvproto::pdpb_grpc::PDAsyncClient;
@@ -85,32 +85,31 @@ impl<Req, Resp, F> Request<Req, Resp, F>
           F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
 {
     // Re-establish connection with PD leader in synchronized fashion.
-    fn reconnect_if_needed(self) -> PdFuture<Self> {
-        let mut ctx = self;
-        debug!("reconnect remains: {}", ctx.reconnect_count);
+    fn reconnect_if_needed(mut self) -> PdFuture<Self> {
+        debug!("reconnect remains: {}", self.reconnect_count);
 
-        if ctx.request_sent == 0 {
-            return ok(ctx).boxed();
+        if self.request_sent == 0 {
+            return ok(self).boxed();
         }
 
-        if ctx.request_sent < MAX_REQUEST_COUNT {
+        if self.request_sent < MAX_REQUEST_COUNT {
             debug!("retry on the same client");
-            return ok(ctx).boxed();
+            return ok(self).boxed();
         }
 
         // Updating client.
 
-        ctx.request_sent = 0;
-        ctx.reconnect_count -= 1;
+        self.request_sent = 0;
+        self.reconnect_count -= 1;
 
         // FIXME: should not block the core.
         warn!("updating PD client, block the tokio core");
 
         let start = Instant::now();
-        let members = ctx.inner.rl().members.clone();
+        let members = self.inner.rl().members.clone();
         match try_connect_leader(&members) {
             Ok((client, members)) => {
-                let mut inner = ctx.inner.wl();
+                let mut inner = self.inner.wl();
                 if members != inner.members {
                     inner.client = client;
                     inner.members = members;
@@ -127,40 +126,24 @@ impl<Req, Resp, F> Request<Req, Resp, F>
             }
         }
 
-        ok(ctx).boxed()
+        ok(self).boxed()
     }
 
-    fn send(self) -> PdFuture<Self> {
-        let mut ctx = self;
-        ctx.request_sent += 1;
-        debug!("request sent: {}", ctx.request_sent);
-        let r = ctx.req.clone();
-        let req = (ctx.func)(&ctx.inner.rl().client, r);
+    fn send(mut self) -> PdFuture<Self> {
+        self.request_sent += 1;
+        debug!("request sent: {}", self.request_sent);
+        let r = self.req.clone();
+        let req = (self.func)(&self.inner.rl().client, r);
         req.then(|resp| {
                 match resp {
-                    Ok(resp) => ctx.resp = Some(Ok(resp)),
+                    Ok(resp) => self.resp = Some(Ok(resp)),
                     Err(err) => {
                         error!("request failed: {:?}", err);
                     }
                 };
-                Ok(ctx)
+                ok(self)
             })
             .boxed()
-    }
-
-    fn receive(self) -> Result<Loop<Self, Self>> {
-        let ctx = self;
-        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
-        if done {
-            Ok(Loop::Break(ctx))
-        } else {
-            Ok(Loop::Continue(ctx))
-        }
-    }
-
-    fn post_loop(ctx: Result<Self>) -> Result<Resp> {
-        let ctx = ctx.expect("end loop with Ok(_)");
-        ctx.resp.unwrap_or_else(|| Err(box_err!("fail to request")))
     }
 
     /// Returns a Future, it is resolves once a future returned by the closure
@@ -169,10 +152,24 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         let ctx = self;
         loop_fn(ctx, |ctx| {
                 ctx.reconnect_if_needed()
-                    .and_then(Self::send)
-                    .and_then(Self::receive)
+                    .and_then(|ctx| ctx.send())
+                    .and_then(|ctx| {
+                        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
+                        if done {
+                            Ok(Loop::Break(ctx))
+                        } else {
+                            Ok(Loop::Continue(ctx))
+                        }
+                    })
             })
-            .then(Self::post_loop)
+            .then(|ctx| {
+                let ctx = ctx.expect("end loop with Ok(_)");
+                match ctx.resp {
+                    Some(Ok(resp)) => future::ok(resp),
+                    Some(Err(err)) => future::err(err),
+                    None => future::err(box_err!("fail to request")),
+                }
+            })
             .boxed()
     }
 }

@@ -34,7 +34,7 @@ use util::HandyRwLock;
 use super::super::PdFuture;
 use super::super::{Result, Error, PdClient};
 use super::util::LeaderClient;
-use super::super::metrics::*;
+use super::super:: metrics::*;
 
 pub struct RpcClient {
     cluster_id: u64,
