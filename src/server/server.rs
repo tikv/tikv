@@ -30,7 +30,6 @@ use util::{HashMap, HashSet};
 use super::{Msg, ConnData};
 use super::conn::Conn;
 use super::{Result, Config};
-use super::coprocessor::{EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
@@ -38,7 +37,6 @@ use super::metrics::*;
 
 const SERVER_TOKEN: Token = Token(1);
 const FIRST_CUSTOM_TOKEN: Token = Token(1024);
-const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
 pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
@@ -84,9 +82,6 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
 
     ch: ServerChannel<T>,
 
-    store: Storage,
-    end_point_worker: Worker<EndPointTask>,
-
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
@@ -104,7 +99,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
                listener: TcpListener,
-               storage: Storage,
+               _: Storage,
                ch: ServerChannel<T>,
                resolver: S,
                snap_mgr: SnapManager)
@@ -115,7 +110,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  PollOpt::edge()));
 
         let sendch = SendCh::new(event_loop.channel(), "raft-server");
-        let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 
         let svr = Server {
@@ -126,8 +120,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store_tokens: HashMap::default(),
             store_resolving: HashSet::default(),
             ch: ch,
-            store: storage,
-            end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
             resolver: resolver,
@@ -138,11 +130,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        let end_point = EndPointHost::new(self.store.get_engine(),
-                                          self.end_point_worker.scheduler(),
-                                          self.cfg.end_point_concurrency);
-        box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
-
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
@@ -520,11 +507,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         // we will quit the server here.
         // TODO: handle quit server if event_loop is_running() returns false.
         if !el.is_running() {
-            self.end_point_worker.stop();
             self.snap_worker.stop();
-            if let Err(e) = self.store.stop() {
-                error!("failed to stop store: {:?}", e);
-            }
         }
     }
 }
