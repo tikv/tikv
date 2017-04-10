@@ -34,7 +34,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
-use util::group_pool::ThreadPool;
+use util::threadpool::ThreadPool;
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 

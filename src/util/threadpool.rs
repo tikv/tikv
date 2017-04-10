@@ -20,7 +20,7 @@ use std::collections::{BinaryHeap, HashSet, HashMap, VecDeque};
 use std::cmp::Ordering;
 use std::hash::Hash;
 
-struct TaskMeta<T> {
+struct Task<T> {
     // the task's number in the pool.
     // each task has a unique number,
     // and it's always bigger than precedes one.
@@ -30,11 +30,11 @@ struct TaskMeta<T> {
     task: Box<FnBox() + Send>,
 }
 
-impl<T: Hash + Eq + Send + Clone + 'static> TaskMeta<T> {
-    fn new<F>(id: u64, group_id: T, job: F) -> TaskMeta<T>
+impl<T: Hash + Eq + Send + Clone + 'static> Task<T> {
+    fn new<F>(id: u64, group_id: T, job: F) -> Task<T>
         where F: FnOnce() + Send + 'static
     {
-        TaskMeta {
+        Task {
             id: id,
             group_id: group_id,
             task: Box::new(job),
@@ -46,8 +46,8 @@ impl<T: Hash + Eq + Send + Clone + 'static> TaskMeta<T> {
     }
 }
 
-impl<T> Ord for TaskMeta<T> {
-    fn cmp(&self, right: &TaskMeta<T>) -> Ordering {
+impl<T> Ord for Task<T> {
+    fn cmp(&self, right: &Task<T>) -> Ordering {
         if self.id > right.id {
             return Ordering::Less;
         } else if self.id < right.id {
@@ -57,22 +57,22 @@ impl<T> Ord for TaskMeta<T> {
     }
 }
 
-impl<T> PartialEq for TaskMeta<T> {
-    fn eq(&self, right: &TaskMeta<T>) -> bool {
+impl<T> PartialEq for Task<T> {
+    fn eq(&self, right: &Task<T>) -> bool {
         self.cmp(right) == Ordering::Equal
     }
 }
 
-impl<T> Eq for TaskMeta<T> {}
+impl<T> Eq for Task<T> {}
 
-impl<T> PartialOrd for TaskMeta<T> {
-    fn partial_cmp(&self, rhs: &TaskMeta<T>) -> Option<Ordering> {
+impl<T> PartialOrd for Task<T> {
+    fn partial_cmp(&self, rhs: &Task<T>) -> Option<Ordering> {
         Some(self.cmp(rhs))
     }
 }
 
 struct WaitingHeap<T> {
-    data: BinaryHeap<TaskMeta<T>>,
+    data: BinaryHeap<Task<T>>,
     group_set: HashSet<T>,
 }
 
@@ -84,7 +84,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> WaitingHeap<T> {
         }
     }
 
-    fn try_push(&mut self, task: TaskMeta<T>) -> bool {
+    fn try_push(&mut self, task: Task<T>) -> bool {
         let group_id = task.group_id();
         if self.group_set.contains(&group_id) {
             return false;
@@ -94,7 +94,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> WaitingHeap<T> {
         true
     }
 
-    fn pop(&mut self) -> Option<TaskMeta<T>> {
+    fn pop(&mut self) -> Option<Task<T>> {
         if let Some(task) = self.data.pop() {
             self.group_set.remove(&task.group_id);
             return Some(task);
@@ -111,7 +111,7 @@ struct TasksPool<T> {
     // group_id => count
     running_tasks: HashMap<T, usize>,
     // group_id => tasks array
-    waiting_queue: HashMap<T, VecDeque<TaskMeta<T>>>,
+    waiting_queue: HashMap<T, VecDeque<Task<T>>>,
     waiting_heap: WaitingHeap<T>,
 }
 
@@ -124,7 +124,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
         }
     }
 
-    fn push(&mut self, task: TaskMeta<T>) {
+    fn push(&mut self, task: Task<T>) {
         let group_id = task.group_id();
         if !self.running_tasks.contains_key(&group_id) && !self.waiting_heap.contains(&group_id) {
             self.waiting_heap.try_push(task);
@@ -136,7 +136,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
         group_tasks.push_back(task);
     }
 
-    fn pop(&mut self) -> Option<(T, TaskMeta<T>)> {
+    fn pop(&mut self) -> Option<(T, Task<T>)> {
         let mut next_task = self.waiting_heap.pop();
         if next_task.is_none() {
             if let Some(gid) = self.pop_group_id_from_waiting_queue() {
@@ -174,7 +174,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
     }
 
     #[inline]
-    fn pop_from_waiting_queue_with_group_id(&mut self, group_id: T) -> TaskMeta<T> {
+    fn pop_from_waiting_queue_with_group_id(&mut self, group_id: T) -> Task<T> {
         let (empty_group_wtasks, task) = {
             let mut waiting_tasks = self.waiting_queue.get_mut(&group_id).unwrap();
             let task_meta = waiting_tasks.pop_front().unwrap();
@@ -244,7 +244,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
     fn push_task<F>(&mut self, group_id: T, job: F)
         where F: FnOnce() + Send + 'static
     {
-        let task = TaskMeta::new(self.next_task_id, group_id, job);
+        let task = Task::new(self.next_task_id, group_id, job);
         self.total_waiting_tasks += 1;
         self.next_task_id += 1;
         self.tasks_pool.push(task);
@@ -268,7 +268,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
     // 1. Choose one group to run with func `get_next_group()`.
     // 2. For the tasks in the selected group, choose the first
     // one in the queue(which means comes first).
-    fn pop_next_task(&mut self) -> Option<(T, TaskMeta<T>)> {
+    fn pop_next_task(&mut self) -> Option<(T, Task<T>)> {
         let next_task = self.tasks_pool.pop();
         if next_task.is_none() {
             return None;
@@ -308,7 +308,7 @@ impl<'a, T> Worker<'a, T>
     }
 
     #[inline]
-    fn get_next_task(&mut self) -> Option<(T, TaskMeta<T>)> {
+    fn get_next_task(&mut self) -> Option<(T, Task<T>)> {
         // try to get task
         let mut meta = self.pool_meta.lock().unwrap();
         meta.pop_next_task()
