@@ -199,8 +199,8 @@ impl<T: Display + Send + 'static> Worker<T> {
         let rx = receiver.take().unwrap();
         let counter = self.scheduler.counter.clone();
         let h = try!(Builder::new()
-            .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size)));
+                         .name(thd_name!(self.scheduler.name.as_ref()))
+                         .spawn(move || poll(runner, rx, counter, batch_size)));
         self.handle = Some(h);
         Ok(())
     }
@@ -306,9 +306,9 @@ mod test {
         worker.start(StepRunner { ch: tx }).unwrap();
         let scheduler = worker.scheduler();
         thread::spawn(move || {
-            scheduler.schedule(90).unwrap();
-            scheduler.schedule(110).unwrap();
-        });
+                          scheduler.schedule(90).unwrap();
+                          scheduler.schedule(110).unwrap();
+                      });
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 90);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 110);
         worker.stop().unwrap().join().unwrap();

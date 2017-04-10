@@ -83,9 +83,7 @@ impl ServerCluster {
 
     fn pool_get(&self, addr: &SocketAddr) -> Result<TcpStream> {
         {
-            let mut conns = self.conns
-                .lock()
-                .unwrap();
+            let mut conns = self.conns.lock().unwrap();
             let conn = conns.get_mut(addr);
             if let Some(mut pool) = conn {
                 if !pool.is_empty() {
@@ -99,9 +97,7 @@ impl ServerCluster {
     }
 
     fn pool_put(&self, addr: &SocketAddr, conn: TcpStream) {
-        let mut conns = self.conns
-            .lock()
-            .unwrap();
+        let mut conns = self.conns.lock().unwrap();
         let p = conns.entry(*addr).or_insert_with(Vec::new);
         p.push(conn);
     }
@@ -192,15 +188,13 @@ impl Simulator for ServerCluster {
                                      server_chan,
                                      resolver,
                                      snap_mgr)
-            .unwrap();
+                .unwrap();
 
         let ch = server.get_sendch();
 
         let t = Builder::new()
             .name(thd_name!(format!("server-{}", node_id)))
-            .spawn(move || {
-                server.run(&mut event_loop).unwrap();
-            })
+            .spawn(move || { server.run(&mut event_loop).unwrap(); })
             .unwrap();
 
         self.handles.insert(node_id, (node, t));
@@ -220,10 +214,7 @@ impl Simulator for ServerCluster {
         let ch = self.senders.remove(&node_id).unwrap();
         let addr = &self.addrs[&node_id];
         let _ = self.store_chs.remove(&node_id).unwrap();
-        self.conns
-            .lock()
-            .unwrap()
-            .remove(addr);
+        self.conns.lock().unwrap().remove(addr);
 
         ch.try_send(Msg::Quit).unwrap();
         node.stop().unwrap();
@@ -248,7 +239,7 @@ impl Simulator for ServerCluster {
                      router.send_command(request, cb).unwrap()
                  },
                  timeout)
-            .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
+                .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {

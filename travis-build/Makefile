@@ -39,9 +39,7 @@ ${LOCAL_DIR}/bin/kcov:
 	fi
 
 prepare-rustfmt:
-	curl -L https://github.com/tennix/rustfmt/releases/download/v0.6/rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -o rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz && \
-	mkdir -p ${HOME}/.cargo/bin && tar xzf rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -C ${HOME}/.cargo/bin --strip-components=1
-	# cargo install --vers =0.6.0 rustfmt || exit 0
+	cargo install --vers =0.8.3 rustfmt || exit 0
 
 prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
 

@@ -84,12 +84,12 @@ impl EngineRocksdb {
         let db = try!(rocksdb::new_engine(&path, cfs));
         box_try!(worker.start(Runner(Arc::new(db))));
         Ok(EngineRocksdb {
-            sched: worker.scheduler(),
-            core: Arc::new(Mutex::new(EngineRocksdbCore {
-                temp_dir: temp_dir,
-                worker: worker,
-            })),
-        })
+               sched: worker.scheduler(),
+               core: Arc::new(Mutex::new(EngineRocksdbCore {
+                                             temp_dir: temp_dir,
+                                             worker: worker,
+                                         })),
+           })
     }
 }
 
@@ -149,9 +149,9 @@ impl Engine for EngineRocksdb {
 
     fn clone(&self) -> Box<Engine> {
         box EngineRocksdb {
-            core: self.core.clone(),
-            sched: self.sched.clone(),
-        }
+                core: self.core.clone(),
+                sched: self.sched.clone(),
+            }
     }
 }
 

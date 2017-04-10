@@ -138,15 +138,21 @@ fn test_txn_store_scan() {
         store.scan_ok(b"",
                       3,
                       10,
-                      vec![Some((b"A", b"A10")), Some((b"C", b"C10")), Some((b"E", b"E10"))]);
+                      vec![Some((b"A", b"A10")),
+                           Some((b"C", b"C10")),
+                           Some((b"E", b"E10"))]);
         store.scan_ok(b"",
                       4,
                       10,
-                      vec![Some((b"A", b"A10")), Some((b"C", b"C10")), Some((b"E", b"E10"))]);
+                      vec![Some((b"A", b"A10")),
+                           Some((b"C", b"C10")),
+                           Some((b"E", b"E10"))]);
         store.scan_ok(b"A",
                       3,
                       10,
-                      vec![Some((b"A", b"A10")), Some((b"C", b"C10")), Some((b"E", b"E10"))]);
+                      vec![Some((b"A", b"A10")),
+                           Some((b"C", b"C10")),
+                           Some((b"E", b"E10"))]);
         store.scan_ok(b"A\x00",
                       3,
                       10,
@@ -175,7 +181,9 @@ fn test_txn_store_scan() {
         store.scan_ok(b"C",
                       5,
                       20,
-                      vec![Some((b"C", b"C10")), Some((b"D", b"D20")), Some((b"E", b"E10"))]);
+                      vec![Some((b"C", b"C10")),
+                           Some((b"D", b"D20")),
+                           Some((b"E", b"E10"))]);
         store.scan_ok(b"D\x00", 1, 20, vec![Some((b"E", b"E10"))]);
     };
     check_v10();
@@ -189,7 +197,9 @@ fn test_txn_store_scan() {
         store.scan_ok(b"",
                       5,
                       30,
-                      vec![Some((b"B", b"B20")), Some((b"C", b"C10")), Some((b"E", b"E10"))]);
+                      vec![Some((b"B", b"B20")),
+                           Some((b"C", b"C10")),
+                           Some((b"E", b"E10"))]);
         store.scan_ok(b"A", 1, 30, vec![Some((b"B", b"B20"))]);
         store.scan_ok(b"C\x00", 5, 30, vec![Some((b"E", b"E10"))]);
     };
@@ -206,11 +216,15 @@ fn test_txn_store_scan() {
         store.scan_ok(b"",
                       5,
                       40,
-                      vec![Some((b"C", b"C40")), Some((b"D", b"D40")), Some((b"E", b"E10"))]);
+                      vec![Some((b"C", b"C40")),
+                           Some((b"D", b"D40")),
+                           Some((b"E", b"E10"))]);
         store.scan_ok(b"",
                       5,
                       100,
-                      vec![Some((b"C", b"C40")), Some((b"D", b"D40")), Some((b"E", b"E10"))]);
+                      vec![Some((b"C", b"C40")),
+                           Some((b"D", b"D40")),
+                           Some((b"E", b"E10"))]);
     };
     check_v10();
     check_v20();
@@ -492,20 +506,22 @@ fn inc(store: &SyncStorage, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
             }
         };
         let next = number + 1;
-        if store.prewrite(Context::new(),
-                      vec![Mutation::Put((make_key(key), next.to_string().into_bytes()))],
-                      key.to_vec(),
-                      start_ts)
-            .is_err() {
+        if store
+               .prewrite(Context::new(),
+                         vec![Mutation::Put((make_key(key), next.to_string().into_bytes()))],
+                         key.to_vec(),
+                         start_ts)
+               .is_err() {
             backoff(i);
             continue;
         }
         let commit_ts = oracle.get_ts();
-        if store.commit(Context::new(),
-                    vec![key_address.clone()],
-                    start_ts,
-                    commit_ts)
-            .is_err() {
+        if store
+               .commit(Context::new(),
+                       vec![key_address.clone()],
+                       start_ts,
+                       commit_ts)
+               .is_err() {
             backoff(i);
             continue;
         }
@@ -526,14 +542,13 @@ fn test_isolation_inc() {
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {
         let (punch_card, store, oracle) = (punch_card.clone(), store.clone(), oracle.clone());
-        threads.push(thread::spawn(move || {
-            for _ in 0..INC_PER_THREAD {
-                let number = inc(&store.store, &oracle, b"key").unwrap() as usize;
-                let mut punch = punch_card.lock().unwrap();
-                assert_eq!(punch[number], false);
-                punch[number] = true;
-            }
-        }));
+        threads.push(thread::spawn(move || for _ in 0..INC_PER_THREAD {
+                                       let number = inc(&store.store, &oracle, b"key").unwrap() as
+                                                    usize;
+                                       let mut punch = punch_card.lock().unwrap();
+                                       assert_eq!(punch[number], false);
+                                       punch[number] = true;
+                                   }));
     }
     for t in threads {
         t.join().unwrap();
@@ -600,11 +615,9 @@ fn test_isolation_multi_inc() {
     let mut threads = vec![];
     for _ in 0..THREAD_NUM {
         let (store, oracle) = (store.clone(), oracle.clone());
-        threads.push(thread::spawn(move || {
-            for _ in 0..INC_PER_THREAD {
-                assert!(inc_multi(&store.store, &oracle, KEY_NUM));
-            }
-        }));
+        threads.push(thread::spawn(move || for _ in 0..INC_PER_THREAD {
+                                       assert!(inc_multi(&store.store, &oracle, KEY_NUM));
+                                   }));
     }
     for t in threads {
         t.join().unwrap();
@@ -622,9 +635,7 @@ fn bench_txn_store_rocksdb_inc(b: &mut Bencher) {
     let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
-    b.iter(|| {
-        inc(&store.store, &oracle, b"key").unwrap();
-    });
+    b.iter(|| { inc(&store.store, &oracle, b"key").unwrap(); });
 }
 
 #[bench]
@@ -632,9 +643,7 @@ fn bench_txn_store_rocksdb_inc_x100(b: &mut Bencher) {
     let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
-    b.iter(|| {
-        inc_multi(&store.store, &oracle, 100);
-    });
+    b.iter(|| { inc_multi(&store.store, &oracle, 100); });
 }
 
 #[bench]
@@ -642,11 +651,9 @@ fn bench_txn_store_rocksdb_put_x100(b: &mut Bencher) {
     let store = AssertionStorage::default();
     let oracle = Oracle::new();
 
-    b.iter(|| {
-        for _ in 0..100 {
-            store.put_ok(b"key", b"value", oracle.get_ts(), oracle.get_ts());
-        }
-    });
+    b.iter(|| for _ in 0..100 {
+               store.put_ok(b"key", b"value", oracle.get_ts(), oracle.get_ts());
+           });
 }
 
 fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
@@ -657,25 +664,27 @@ fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
     let (stx, srx) = channel();
     engine.block_snapshot(stx);
     let (tx1, rx1) = channel();
-    storage.async_gc(ctx.clone(),
+    storage
+        .async_gc(ctx.clone(),
                   1,
                   box move |res: storage::Result<()>| {
-                      assert!(res.is_ok());
-                      tx1.send(1).unwrap();
-                  })
+                          assert!(res.is_ok());
+                          tx1.send(1).unwrap();
+                      })
         .unwrap();
 
     // Old GC command is blocked at snapshot stage, the other one will get ServerIsBusy error.
     let (tx2, rx2) = channel();
-    storage.async_gc(Context::new(),
+    storage
+        .async_gc(Context::new(),
                   1,
                   box move |res: storage::Result<()>| {
-            match res {
-                Err(storage::Error::SchedTooBusy) => {}
-                _ => panic!("expect too busy"),
-            }
-            tx2.send(1).unwrap();
-        })
+                          match res {
+                              Err(storage::Error::SchedTooBusy) => {}
+                              _ => panic!("expect too busy"),
+                          }
+                          tx2.send(1).unwrap();
+                      })
         .unwrap();
 
     srx.recv_timeout(Duration::from_secs(2)).unwrap();

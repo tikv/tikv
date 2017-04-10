@@ -40,7 +40,7 @@ dependencies:
       else
         rustup default "nightly-${RUSTC_DATE}";
       fi
-    - test -e $HOME/.cargo/bin/cargo-fmt || cargo install --force --vers =0.6.0 rustfmt || true
+    - test -e $HOME/.cargo/bin/cargo-fmt || cargo install --force --vers =0.8.3 rustfmt || true
     - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         cd /tmp && \

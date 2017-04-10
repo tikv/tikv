@@ -318,7 +318,10 @@ pub fn strftimespec(t: Timespec) -> String {
 }
 
 pub fn get_tag_from_thread_name() -> Option<String> {
-    thread::current().name().and_then(|name| name.split("::").skip(1).last()).map(From::from)
+    thread::current()
+        .name()
+        .and_then(|name| name.split("::").skip(1).last())
+        .map(From::from)
 }
 
 /// `DeferContext` will invoke the wrapped closure when dropped.
@@ -404,21 +407,19 @@ pub fn run_prometheus(interval: Duration,
     let address = address.to_owned();
     let handler = thread::Builder::new()
         .name("promepusher".to_owned())
-        .spawn(move || {
-            loop {
-                let metric_familys = prometheus::gather();
+        .spawn(move || loop {
+                   let metric_familys = prometheus::gather();
 
-                let res = prometheus::push_metrics(&job,
-                                                   prometheus::hostname_grouping_key(),
-                                                   &address,
-                                                   metric_familys);
-                if let Err(e) = res {
-                    error!("fail to push metrics: {}", e);
-                }
+                   let res = prometheus::push_metrics(&job,
+                                                      prometheus::hostname_grouping_key(),
+                                                      &address,
+                                                      metric_familys);
+                   if let Err(e) = res {
+                       error!("fail to push metrics: {}", e);
+                   }
 
-                thread::sleep(interval);
-            }
-        })
+                   thread::sleep(interval);
+               })
         .unwrap();
 
     Some(handler)
@@ -479,22 +480,17 @@ mod tests {
 
     #[test]
     fn test_to_socket_addr() {
-        let tbls = vec![
-            ("", false),
-            ("127.0.0.1", false),
-            ("localhost", false),
-            ("127.0.0.1:80", true),
-            ("localhost:80", true),
-        ];
+        let tbls = vec![("", false),
+                        ("127.0.0.1", false),
+                        ("localhost", false),
+                        ("127.0.0.1:80", true),
+                        ("localhost:80", true)];
 
         for (addr, ok) in tbls {
             assert_eq!(to_socket_addr(addr).is_ok(), ok);
         }
 
-        let tbls = vec![
-            ("localhost:80", false),
-            ("127.0.0.1:80", true),
-        ];
+        let tbls = vec![("localhost:80", false), ("127.0.0.1:80", true)];
 
         for (addr, ok) in tbls {
             let ret: Result<SocketAddr, AddrParseError> = addr.parse();

@@ -82,10 +82,10 @@ impl<C: MsgSender> Runner<C> {
                                    &end_key,
                                    false,
                                    &mut |k, v| {
-                                       digest.write(k);
-                                       digest.write(v);
-                                       Ok(true)
-                                   });
+                                            digest.write(k);
+                                            digest.write(v);
+                                            Ok(true)
+                                        });
             if let Err(e) = res {
                 REGION_HASH_COUNTER_VEC.with_label_values(&["compute", "failed"]).inc();
                 error!("[region {}] failed to calculate hash: {:?}", region_id, e);
@@ -124,7 +124,11 @@ impl<C: MsgSender> Runner<C> {
 impl<C: MsgSender> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
         match task {
-            Task::ComputeHash { region, index, snap } => self.compute_hash(region, index, snap),
+            Task::ComputeHash {
+                region,
+                index,
+                snap,
+            } => self.compute_hash(region, index, snap),
         }
     }
 }
@@ -157,10 +161,7 @@ mod test {
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner::new(tx);
         let mut digest = Digest::new(crc32::IEEE);
-        let kvs = vec![
-            (b"k1", b"v1"),
-            (b"k2", b"v2"),
-        ];
+        let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
         for (k, v) in kvs {
             let key = keys::data_key(k);
             db.put(&key, v).unwrap();
@@ -174,16 +175,20 @@ mod test {
         digest.write(b"");
         let sum = digest.sum32();
         runner.run(Task::ComputeHash {
-            index: 10,
-            region: region.clone(),
-            snap: Snapshot::new(db.clone()),
-        });
+                       index: 10,
+                       region: region.clone(),
+                       snap: Snapshot::new(db.clone()),
+                   });
         let mut checksum_bytes = vec![];
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();
 
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         match res {
-            Msg::ComputeHashResult { region_id, index, hash } => {
+            Msg::ComputeHashResult {
+                region_id,
+                index,
+                hash,
+            } => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(index, 10);
                 assert_eq!(hash, checksum_bytes);

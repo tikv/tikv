@@ -60,25 +60,35 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::AskSplit { ref region, ref split_key, .. } => {
+            Task::AskSplit {
+                ref region,
+                ref split_key,
+                ..
+            } => {
                 write!(f,
                        "ask split region {} with key {}",
                        region.get_id(),
                        escape(&split_key))
             }
-            Task::Heartbeat { ref region, ref peer, .. } => {
+            Task::Heartbeat {
+                ref region,
+                ref peer,
+                ..
+            } => {
                 write!(f,
                        "heartbeat for region {:?}, leader {}",
                        region,
                        peer.get_id())
             }
             Task::StoreHeartbeat { ref stats } => write!(f, "store heartbeat stats: {:?}", stats),
-            Task::ReportSplit { ref left, ref right } => {
-                write!(f, "report split left {:?}, right {:?}", left, right)
-            }
-            Task::ValidatePeer { ref region, ref peer } => {
-                write!(f, "validate peer {:?} with region {:?}", peer, region)
-            }
+            Task::ReportSplit {
+                ref left,
+                ref right,
+            } => write!(f, "report split left {:?}, right {:?}", left, right),
+            Task::ValidatePeer {
+                ref region,
+                ref peer,
+            } => write!(f, "validate peer {:?} with region {:?}", peer, region),
         }
     }
 }
@@ -149,11 +159,11 @@ impl<T: PdClient> Runner<T> {
 
         // Now we use put region protocol for heartbeat.
         match self.pd_client
-            .region_heartbeat(region.clone(),
-                              peer.clone(),
-                              down_peers,
-                              pending_peers,
-                              written_bytes) {
+                  .region_heartbeat(region.clone(),
+                                    peer.clone(),
+                                    down_peers,
+                                    pending_peers,
+                                    written_bytes) {
             Ok(mut resp) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
 
@@ -275,12 +285,18 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         debug!("executing task {}", task);
 
         match task {
-            Task::AskSplit { region, split_key, peer } => {
-                self.handle_ask_split(region, split_key, peer)
-            }
-            Task::Heartbeat { region, peer, down_peers, pending_peers, written_bytes } => {
-                self.handle_heartbeat(region, peer, down_peers, pending_peers, written_bytes)
-            }
+            Task::AskSplit {
+                region,
+                split_key,
+                peer,
+            } => self.handle_ask_split(region, split_key, peer),
+            Task::Heartbeat {
+                region,
+                peer,
+                down_peers,
+                pending_peers,
+                written_bytes,
+            } => self.handle_heartbeat(region, peer, down_peers, pending_peers, written_bytes),
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
             Task::ReportSplit { left, right } => self.handle_report_split(left, right),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),

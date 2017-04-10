@@ -58,9 +58,9 @@ impl<'a> SnapshotStore<'a> {
         let mut reader = MvccReader::new(self.snapshot, statistics, Some(mode), true, upper_bound);
         reader.set_key_only(key_only);
         Ok(StoreScanner {
-            reader: reader,
-            start_ts: self.start_ts,
-        })
+               reader: reader,
+               start_ts: self.start_ts,
+           })
     }
 }
 

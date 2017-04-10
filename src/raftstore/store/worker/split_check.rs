@@ -91,9 +91,9 @@ impl<'a> MergedIterator<'a> {
             iters.push(iter);
         }
         Ok(MergedIterator {
-            iters: iters,
-            heap: heap,
-        })
+               iters: iters,
+               heap: heap,
+           })
     }
 
     fn next(&mut self) -> Option<KeyEntry> {
@@ -175,17 +175,15 @@ impl Runnable<Task> for Runner {
                                       &task.start_key,
                                       &task.end_key,
                                       false)
-            .map(|mut iter| {
-                while let Some(e) = iter.next() {
-                    size += e.len() as u64;
-                    if split_key.is_empty() && size > self.split_size {
-                        split_key = e.key.unwrap();
-                    }
-                    if size >= self.region_max_size {
-                        break;
-                    }
-                }
-            });
+                .map(|mut iter| while let Some(e) = iter.next() {
+                         size += e.len() as u64;
+                         if split_key.is_empty() && size > self.split_size {
+                             split_key = e.key.unwrap();
+                         }
+                         if size >= self.region_max_size {
+                             break;
+                         }
+                     });
 
         if let Err(e) = res {
             error!("failed to scan split key of region {}: {:?}",
@@ -205,7 +203,8 @@ impl Runnable<Task> for Runner {
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
             return;
         }
-        let res = self.ch.try_send(new_split_check_result(task.region_id, task.epoch, split_key));
+        let res = self.ch
+            .try_send(new_split_check_result(task.region_id, task.epoch, split_key));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result, err {:?}",
                   task.region_id,

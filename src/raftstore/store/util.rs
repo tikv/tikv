@@ -34,7 +34,8 @@ pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer
 }
 
 pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
-    region.get_peers()
+    region
+        .get_peers()
         .iter()
         .position(|x| x.get_store_id() == store_id)
         .map(|i| region.mut_peers().remove(i))
@@ -174,7 +175,10 @@ mod tests {
         epoch.set_version(10);
         epoch.set_conf_ver(10);
 
-        let tbl = vec![(11, 10, true), (10, 11, true), (10, 10, false), (10, 9, false)];
+        let tbl = vec![(11, 10, true),
+                       (10, 11, true),
+                       (10, 10, false),
+                       (10, 9, false)];
 
         for (version, conf_version, is_stale) in tbl {
             let mut check_epoch = metapb::RegionEpoch::new();

@@ -87,8 +87,8 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     mgr.register(key.clone(), SnapEntry::Sending);
     let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
     defer!({
-        mgr.deregister(&key, &SnapEntry::Sending);
-    });
+               mgr.deregister(&key, &SnapEntry::Sending);
+           });
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
@@ -209,9 +209,9 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
                         info!("saving snapshot to {}", snap.path());
                         defer!({
-                            self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
-                            self.close(token);
-                        });
+                                   self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
+                                   self.close(token);
+                               });
                         if let Err(e) = snap.save() {
                             error!("failed to save snapshot file {} for token {:?}: {:?}",
                                    snap.path(),
@@ -239,13 +239,14 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             Task::SendTo { addr, data, cb } => {
                 SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
                 let mgr = self.snap_mgr.clone();
-                self.pool.execute(move || {
-                    let res = send_snap(mgr, addr, data);
-                    if res.is_err() {
-                        error!("failed to send snap to {}: {:?}", addr, res);
-                    }
-                    cb(res)
-                });
+                self.pool
+                    .execute(move || {
+                                 let res = send_snap(mgr, addr, data);
+                                 if res.is_err() {
+                                     error!("failed to send snap to {}: {:?}", addr, res);
+                                 }
+                                 cb(res)
+                             });
             }
         }
     }

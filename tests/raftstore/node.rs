@@ -53,10 +53,10 @@ impl ChannelTransport {
     pub fn new() -> ChannelTransport {
         ChannelTransport {
             core: Arc::new(RwLock::new(ChannelTransportCore {
-                snap_paths: HashMap::new(),
-                routers: HashMap::new(),
-                snapshot_status_senders: HashMap::new(),
-            })),
+                                           snap_paths: HashMap::new(),
+                                           routers: HashMap::new(),
+                                           snapshot_status_senders: HashMap::new(),
+                                       })),
         }
     }
 }
@@ -97,10 +97,10 @@ impl Channel<RaftMessage> for ChannelTransport {
             };
 
             defer!({
-                let core = self.rl();
-                core.snap_paths[&from_store].0.deregister(&key, &SnapEntry::Sending);
-                core.snap_paths[&to_store].0.deregister(&key, &SnapEntry::Receiving);
-            });
+                       let core = self.rl();
+                       core.snap_paths[&from_store].0.deregister(&key, &SnapEntry::Sending);
+                       core.snap_paths[&to_store].0.deregister(&key, &SnapEntry::Receiving);
+                   });
 
             try!(copy_snapshot(from, to));
         }
@@ -115,10 +115,10 @@ impl Channel<RaftMessage> for ChannelTransport {
                         .lock()
                         .unwrap()
                         .send(SnapshotStatusMsg {
-                            region_id: region_id,
-                            to_peer_id: to_peer_id,
-                            status: SnapshotStatus::Finish,
-                        })
+                                  region_id: region_id,
+                                  to_peer_id: to_peer_id,
+                                  status: SnapshotStatus::Finish,
+                              })
                         .unwrap();
                 }
                 Ok(())
@@ -177,7 +177,8 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone()).unwrap();
+        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone())
+            .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         debug!("node_id: {} tmp: {:?}",
                node_id,
@@ -226,7 +227,7 @@ impl Simulator for NodeCluster {
                      router.send_command(request, cb).unwrap()
                  },
                  timeout)
-            .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
+                .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {

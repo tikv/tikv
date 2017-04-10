@@ -140,12 +140,12 @@ impl Config {
 
         if self.election_tick <= self.heartbeat_tick {
             return Err(Error::ConfigInvalid("election tick must be greater than heartbeat tick"
-                .to_owned()));
+                                                .to_owned()));
         }
 
         if self.max_inflight_msgs == 0 {
             return Err(Error::ConfigInvalid("max inflight messages must be greater than 0"
-                .to_owned()));
+                                                .to_owned()));
         }
 
         Ok(())
@@ -612,7 +612,10 @@ impl<T: Storage> Raft<T> {
             e.set_index(li + 1 + i as u64);
         }
         self.raft_log.append(es);
-        self.prs.get_mut(&self.id).unwrap().maybe_update(self.raft_log.last_index());
+        self.prs
+            .get_mut(&self.id)
+            .unwrap()
+            .maybe_update(self.raft_log.last_index());
         // Regardless of maybe_commit's return, our caller will call bcastAppend.
         self.maybe_commit();
     }
@@ -731,7 +734,9 @@ impl<T: Storage> Raft<T> {
     }
 
     fn num_pending_conf(&self, ents: &[Entry]) -> usize {
-        ents.into_iter().filter(|e| e.get_entry_type() == EntryType::EntryConfChange).count()
+        ents.into_iter()
+            .filter(|e| e.get_entry_type() == EntryType::EntryConfChange)
+            .count()
     }
 
     fn campaign(&mut self, campaign_type: &[u8]) {
@@ -1484,10 +1489,11 @@ impl<T: Storage> Raft<T> {
         let mut to_send = Message::new();
         to_send.set_to(m.get_from());
         to_send.set_msg_type(MessageType::MsgAppendResponse);
-        match self.raft_log.maybe_append(m.get_index(),
-                                         m.get_log_term(),
-                                         m.get_commit(),
-                                         m.get_entries()) {
+        match self.raft_log
+                  .maybe_append(m.get_index(),
+                                m.get_log_term(),
+                                m.get_commit(),
+                                m.get_entries()) {
             Some(mlast_index) => {
                 to_send.set_index(mlast_index);
                 self.send(to_send);

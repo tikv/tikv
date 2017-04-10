@@ -69,16 +69,16 @@ impl SyncStorage {
                 start_ts: u64)
                 -> Result<Vec<Result<KvPair>>> {
         wait_op!(|cb| {
-                self.store
-                    .async_scan(ctx,
-                                key,
-                                limit,
-                                start_ts,
-                                Options::new(0, false, key_only),
-                                cb)
-                    .unwrap()
-            })
-            .unwrap()
+            self.store
+                .async_scan(ctx,
+                            key,
+                            limit,
+                            start_ts,
+                            Options::new(0, false, key_only),
+                            cb)
+                .unwrap()
+        })
+                .unwrap()
     }
 
     pub fn prewrite(&self,
@@ -88,11 +88,11 @@ impl SyncStorage {
                     start_ts: u64)
                     -> Result<Vec<Result<()>>> {
         wait_op!(|cb| {
-                self.store
-                    .async_prewrite(ctx, mutations, primary, start_ts, Options::default(), cb)
-                    .unwrap()
-            })
-            .unwrap()
+            self.store
+                .async_prewrite(ctx, mutations, primary, start_ts, Options::default(), cb)
+                .unwrap()
+        })
+                .unwrap()
     }
 
     pub fn commit(&self,

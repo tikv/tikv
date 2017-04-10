@@ -331,8 +331,8 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
 
     // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would abort later.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(region_id, peer3_store_id)
-        .msg_type(MessageType::MsgTimeoutNow)
-        .direction(Direction::Recv)));
+                                                   .msg_type(MessageType::MsgTimeoutNow)
+                                                   .direction(Direction::Recv)));
 
     // Issue a transfer leader request to transfer leader from `peer` to `peer3`.
     cluster.transfer_leader(region_id, peer3);
@@ -401,9 +401,9 @@ fn test_node_callback_when_destroyed() {
     // so the leader can't commit the conf change yet.
     let block = Arc::new(AtomicBool::new(true));
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, leader.get_store_id())
-        .msg_type(MessageType::MsgAppendResponse)
-        .direction(Direction::Recv)
-        .when(block.clone())));
+                                                   .msg_type(MessageType::MsgAppendResponse)
+                                                   .direction(Direction::Recv)
+                                                   .when(block.clone())));
     let mut filter = LeaseReadFilter::default();
     filter.take = true;
     // so the leader can't perform read index.

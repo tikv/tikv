@@ -50,16 +50,16 @@ fn bench_mio_channel(b: &mut Bencher) {
     let sender = event_loop.channel();
 
     let t = thread::spawn(move || {
-        let mut h = CountHandler { n: 0 };
-        event_loop.run(&mut h).unwrap();
-        h.n
-    });
+                              let mut h = CountHandler { n: 0 };
+                              event_loop.run(&mut h).unwrap();
+                              h.n
+                          });
 
     let mut n1 = 0;
     b.iter(|| {
-        n1 += 1;
-        mio_must_send(&sender, 1);
-    });
+               n1 += 1;
+               mio_must_send(&sender, 1);
+           });
 
     mio_must_send(&sender, 0);
 
@@ -84,9 +84,9 @@ fn bench_thread_channel(b: &mut Bencher) {
 
     let mut n1 = 0;
     b.iter(|| {
-        n1 += 1;
-        tx.send(1).unwrap()
-    });
+               n1 += 1;
+               tx.send(1).unwrap()
+           });
 
     tx.send(0).unwrap();
     let n2 = t.join().unwrap();

@@ -591,8 +591,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
-        let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
-            .unwrap();
+        let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5)).unwrap();
         assert_eq!(resp.get_admin_response().get_cmd_type(),
                    AdminCmdType::TransferLeader,
                    "{:?}",
@@ -633,10 +632,10 @@ impl<T: Simulator> Cluster<T> {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let ch = self.sim.rl().get_store_sendch(leader.get_store_id()).unwrap();
         ch.try_send(Msg::SplitCheckResult {
-                region_id: region.get_id(),
-                epoch: region.get_region_epoch().clone(),
-                split_key: data_key(split_key),
-            })
+                          region_id: region.get_id(),
+                          epoch: region.get_region_epoch().clone(),
+                          split_key: data_key(split_key),
+                      })
             .unwrap();
     }
 

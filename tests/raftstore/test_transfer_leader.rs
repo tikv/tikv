@@ -81,11 +81,11 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     for id in 1..4 {
         // select a new leader to transfer
         pd_client.set_rule(box move |_, peer| {
-            if peer.get_id() == id {
-                return None;
-            }
-            new_pd_transfer_leader(new_peer(id, id))
-        });
+                                   if peer.get_id() == id {
+                                       return None;
+                                   }
+                                   new_pd_transfer_leader(new_peer(id, id))
+                               });
 
 
         for _ in 0..100 {
@@ -145,8 +145,8 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     cluster.add_send_filter(DefaultFilterFactory::<SnapshotFilter>::default());
     // don't allow leader transfer succeed if it is actually triggered.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgTimeoutNow)
-        .direction(Direction::Recv)));
+                                                   .msg_type(MessageType::MsgTimeoutNow)
+                                                   .direction(Direction::Recv)));
 
     pd_client.must_add_peer(r1, new_peer(3, 3));
     // a just added peer needs wait a couple of ticks, it'll communicate with leader

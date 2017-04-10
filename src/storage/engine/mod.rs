@@ -512,8 +512,7 @@ mod tests {
 
     fn assert_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
-            .unwrap();
+        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed).unwrap();
         let mut statistics = Statistics::default();
         iter.seek(&make_key(key), &mut statistics).unwrap();
         assert_eq!((iter.key(), iter.value()),
@@ -522,8 +521,7 @@ mod tests {
 
     fn assert_reverse_seek(engine: &Engine, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
-            .unwrap();
+        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed).unwrap();
         let mut statistics = Statistics::default();
         iter.reverse_seek(&make_key(key), &mut statistics).unwrap();
         assert_eq!((iter.key(), iter.value()),
@@ -555,14 +553,16 @@ mod tests {
     }
 
     fn test_batch(engine: &Engine) {
-        engine.write(&Context::new(),
+        engine
+            .write(&Context::new(),
                    vec![Modify::Put(CF_DEFAULT, make_key(b"x"), b"1".to_vec()),
                         Modify::Put(CF_DEFAULT, make_key(b"y"), b"2".to_vec())])
             .unwrap();
         assert_has(engine, b"x", b"1");
         assert_has(engine, b"y", b"2");
 
-        engine.write(&Context::new(),
+        engine
+            .write(&Context::new(),
                    vec![Modify::Delete(CF_DEFAULT, make_key(b"x")),
                         Modify::Delete(CF_DEFAULT, make_key(b"y"))])
             .unwrap();
@@ -581,8 +581,7 @@ mod tests {
         assert_reverse_seek(engine, b"y", (b"x", b"1"));
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
-            .unwrap();
+        let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed).unwrap();
         let mut statistics = Statistics::default();
         assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
         assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
@@ -594,8 +593,7 @@ mod tests {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed)
-            .unwrap();
+        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed).unwrap();
         assert_near_seek(&mut cursor, b"x", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"a", (b"x", b"1"));
         assert_near_reverse_seek(&mut cursor, b"z1", (b"z", b"2"));
@@ -624,8 +622,7 @@ mod tests {
 
     fn test_empty_seek(engine: &Engine) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed)
-            .unwrap();
+        let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed).unwrap();
         let mut statistics = Statistics::default();
         assert!(!cursor.near_reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"z"), &mut statistics).unwrap());
@@ -661,8 +658,7 @@ mod tests {
                         seek_mode: SeekMode,
                         start: usize,
                         step: usize) {
-        let mut cursor = snapshot.iter(IterOption::default(), mode)
-            .unwrap();
+        let mut cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let mut near_cursor = snapshot.iter(IterOption::default(), mode).unwrap();
         let limit = (SEEK_BOUND * 10 + 50 - 1) * 2;
 

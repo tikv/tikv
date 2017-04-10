@@ -408,9 +408,9 @@ mod test {
         let col_values: Vec<_> = row.iter().map(|(_, v)| v.clone()).collect();
         let mut col_encoded: HashMap<_, _> = row.iter()
             .map(|(k, v)| {
-                let f = super::flatten(v.clone()).unwrap();
-                (*k, datum::encode_value(&[f]).unwrap())
-            })
+                     let f = super::flatten(v.clone()).unwrap();
+                     (*k, datum::encode_value(&[f]).unwrap())
+                 })
             .collect();
         let mut col_id_set: HashSet<_> = col_ids.iter().cloned().collect();
 
@@ -455,16 +455,18 @@ mod test {
         let col_types = vec![new_col_info(types::LONG_LONG),
                              new_col_info(types::VARCHAR),
                              new_col_info(types::NEW_DECIMAL)];
-        let col_values =
-            vec![Datum::I64(100), Datum::Bytes(b"abc".to_vec()), Datum::Dec(10.into())];
-        let mut col_encoded: HashMap<_, _> = col_ids.iter()
+        let col_values = vec![Datum::I64(100),
+                              Datum::Bytes(b"abc".to_vec()),
+                              Datum::Dec(10.into())];
+        let mut col_encoded: HashMap<_, _> = col_ids
+            .iter()
             .zip(&col_types)
             .zip(&col_values)
             .map(|((id, t), v)| {
-                let unflattened = super::unflatten(&Default::default(), v.clone(), t).unwrap();
-                let encoded = datum::encode_key(&[unflattened]).unwrap();
-                (*id, encoded)
-            })
+                     let unflattened = super::unflatten(&Default::default(), v.clone(), t).unwrap();
+                     let encoded = datum::encode_key(&[unflattened]).unwrap();
+                     (*id, encoded)
+                 })
             .collect();
 
         let key = datum::encode_key(&col_values).unwrap();

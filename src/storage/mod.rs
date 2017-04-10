@@ -143,17 +143,31 @@ pub enum Command {
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Command::Get { ref ctx, ref key, start_ts, .. } => {
-                write!(f, "kv::command::get {} @ {} | {:?}", key, start_ts, ctx)
-            }
-            Command::BatchGet { ref ctx, ref keys, start_ts, .. } => {
+            Command::Get {
+                ref ctx,
+                ref key,
+                start_ts,
+                ..
+            } => write!(f, "kv::command::get {} @ {} | {:?}", key, start_ts, ctx),
+            Command::BatchGet {
+                ref ctx,
+                ref keys,
+                start_ts,
+                ..
+            } => {
                 write!(f,
                        "kv::command_batch_get {} @ {} | {:?}",
                        keys.len(),
                        start_ts,
                        ctx)
             }
-            Command::Scan { ref ctx, ref start_key, limit, start_ts, .. } => {
+            Command::Scan {
+                ref ctx,
+                ref start_key,
+                limit,
+                start_ts,
+                ..
+            } => {
                 write!(f,
                        "kv::command::scan {}({}) @ {} | {:?}",
                        start_key,
@@ -161,14 +175,25 @@ impl Display for Command {
                        start_ts,
                        ctx)
             }
-            Command::Prewrite { ref ctx, ref mutations, start_ts, .. } => {
+            Command::Prewrite {
+                ref ctx,
+                ref mutations,
+                start_ts,
+                ..
+            } => {
                 write!(f,
                        "kv::command::prewrite mutations({}) @ {} | {:?}",
                        mutations.len(),
                        start_ts,
                        ctx)
             }
-            Command::Commit { ref ctx, ref keys, lock_ts, commit_ts, .. } => {
+            Command::Commit {
+                ref ctx,
+                ref keys,
+                lock_ts,
+                commit_ts,
+                ..
+            } => {
                 write!(f,
                        "kv::command::commit {} {} -> {} | {:?}",
                        keys.len(),
@@ -176,10 +201,18 @@ impl Display for Command {
                        commit_ts,
                        ctx)
             }
-            Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
-                write!(f, "kv::command::cleanup {} @ {} | {:?}", key, start_ts, ctx)
-            }
-            Command::Rollback { ref ctx, ref keys, start_ts, .. } => {
+            Command::Cleanup {
+                ref ctx,
+                ref key,
+                start_ts,
+                ..
+            } => write!(f, "kv::command::cleanup {} @ {} | {:?}", key, start_ts, ctx),
+            Command::Rollback {
+                ref ctx,
+                ref keys,
+                start_ts,
+                ..
+            } => {
                 write!(f,
                        "kv::command::rollback keys({}) @ {} | {:?}",
                        keys.len(),
@@ -189,14 +222,24 @@ impl Display for Command {
             Command::ScanLock { ref ctx, max_ts, .. } => {
                 write!(f, "kv::scan_lock {} | {:?}", max_ts, ctx)
             }
-            Command::ResolveLock { ref ctx, start_ts, commit_ts, .. } => {
+            Command::ResolveLock {
+                ref ctx,
+                start_ts,
+                commit_ts,
+                ..
+            } => {
                 write!(f,
                        "kv::resolve_txn {} -> {:?} | {:?}",
                        start_ts,
                        commit_ts,
                        ctx)
             }
-            Command::Gc { ref ctx, safe_point, ref scan_key, .. } => {
+            Command::Gc {
+                ref ctx,
+                safe_point,
+                ref scan_key,
+                ..
+            } => {
                 write!(f,
                        "kv::command::gc scan {:?} @ {} | {:?}",
                        scan_key,
@@ -334,13 +377,13 @@ impl Storage {
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
-            engine: engine,
-            sendch: sendch,
-            handle: Arc::new(Mutex::new(StorageHandle {
-                handle: None,
-                receiver: Some(rx),
-            })),
-        })
+               engine: engine,
+               sendch: sendch,
+               handle: Arc::new(Mutex::new(StorageHandle {
+                                               handle: None,
+                                               receiver: Some(rx),
+                                           })),
+           })
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
@@ -603,11 +646,11 @@ impl Storage {
                          callback: Callback<()>)
                          -> Result<()> {
         try!(self.engine
-            .async_write(&ctx,
-                         vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
-                         box |(_, res): (_, engine::Result<_>)| {
-                             callback(res.map_err(Error::from))
-                         }));
+                 .async_write(&ctx,
+                              vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
+                              box |(_, res): (_, engine::Result<_>)| {
+                                      callback(res.map_err(Error::from))
+                                  }));
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["put"]).inc();
         Ok(())
     }
@@ -618,11 +661,11 @@ impl Storage {
                             callback: Callback<()>)
                             -> Result<()> {
         try!(self.engine
-            .async_write(&ctx,
-                         vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
-                         box |(_, res): (_, engine::Result<_>)| {
-                             callback(res.map_err(Error::from))
-                         }));
+                 .async_write(&ctx,
+                              vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
+                              box |(_, res): (_, engine::Result<_>)| {
+                                      callback(res.map_err(Error::from))
+                                  }));
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["delete"]).inc();
         Ok(())
     }
@@ -696,65 +739,61 @@ mod tests {
 
     fn expect_get_none(done: Sender<i32>) -> Callback<Option<Value>> {
         Box::new(move |x: Result<Option<Value>>| {
-            assert_eq!(x.unwrap(), None);
-            done.send(1).unwrap();
-        })
+                     assert_eq!(x.unwrap(), None);
+                     done.send(1).unwrap();
+                 })
     }
 
     fn expect_get_val(done: Sender<i32>, v: Vec<u8>) -> Callback<Option<Value>> {
         Box::new(move |x: Result<Option<Value>>| {
-            assert_eq!(x.unwrap().unwrap(), v);
-            done.send(1).unwrap();
-        })
+                     assert_eq!(x.unwrap().unwrap(), v);
+                     done.send(1).unwrap();
+                 })
     }
 
     fn expect_ok<T>(done: Sender<i32>) -> Callback<T> {
         Box::new(move |x: Result<T>| {
-            assert!(x.is_ok());
-            done.send(1).unwrap();
-        })
+                     assert!(x.is_ok());
+                     done.send(1).unwrap();
+                 })
     }
 
     fn expect_fail<T>(done: Sender<i32>) -> Callback<T> {
         Box::new(move |x: Result<T>| {
-            assert!(x.is_err());
-            done.send(1).unwrap();
-        })
+                     assert!(x.is_err());
+                     done.send(1).unwrap();
+                 })
     }
 
     fn expect_too_busy<T>(done: Sender<i32>) -> Callback<T> {
         Box::new(move |x: Result<T>| {
-            assert!(x.is_err());
-            match x {
-                Err(Error::SchedTooBusy) => {}
-                _ => panic!("expect too busy"),
-            }
-            done.send(1).unwrap();
-        })
+                     assert!(x.is_err());
+                     match x {
+                         Err(Error::SchedTooBusy) => {}
+                         _ => panic!("expect too busy"),
+                     }
+                     done.send(1).unwrap();
+                 })
     }
 
     fn expect_scan(done: Sender<i32>, pairs: Vec<Option<KvPair>>) -> Callback<Vec<Result<KvPair>>> {
         Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
-            let rlt: Vec<Option<KvPair>> = rlt.unwrap()
-                .into_iter()
-                .map(Result::ok)
-                .collect();
-            assert_eq!(rlt, pairs);
-            done.send(1).unwrap()
-        })
+                     let rlt: Vec<Option<KvPair>> =
+                         rlt.unwrap().into_iter().map(Result::ok).collect();
+                     assert_eq!(rlt, pairs);
+                     done.send(1).unwrap()
+                 })
     }
 
     fn expect_batch_get_vals(done: Sender<i32>,
                              pairs: Vec<Option<KvPair>>)
                              -> Callback<Vec<Result<KvPair>>> {
         Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
-            let rlt: Vec<Option<KvPair>> = rlt.unwrap()
-                .into_iter()
-                .map(Result::ok)
-                .collect();
-            assert_eq!(rlt, pairs);
-            done.send(1).unwrap()
-        })
+                     let rlt: Vec<Option<KvPair>> =
+                         rlt.unwrap().into_iter().map(Result::ok).collect();
+                     assert_eq!(rlt, pairs);
+                     done.send(1).unwrap()
+                 })
     }
 
     #[test]
@@ -763,13 +802,15 @@ mod tests {
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage.async_get(Context::new(),
+        storage
+            .async_get(Context::new(),
                        make_key(b"x"),
                        100,
                        expect_get_none(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_prewrite(Context::new(),
+        storage
+            .async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
@@ -777,20 +818,23 @@ mod tests {
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_commit(Context::new(),
+        storage
+            .async_commit(Context::new(),
                           vec![make_key(b"x")],
                           100,
                           101,
                           expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_get(Context::new(),
+        storage
+            .async_get(Context::new(),
                        make_key(b"x"),
                        100,
                        expect_get_none(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_get(Context::new(),
+        storage
+            .async_get(Context::new(),
                        make_key(b"x"),
                        101,
                        expect_get_val(tx.clone(), b"100".to_vec()))
@@ -807,12 +851,11 @@ mod tests {
         let mut storage = Storage::from_engine(engine, &config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage.async_prewrite(Context::new(),
-                            vec![
-            Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-            Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-            Mutation::Put((make_key(b"c"), b"cc".to_vec())),
-            ],
+        storage
+            .async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"a"), b"aa".to_vec())),
+                                 Mutation::Put((make_key(b"b"), b"bb".to_vec())),
+                                 Mutation::Put((make_key(b"c"), b"cc".to_vec()))],
                             b"a".to_vec(),
                             1,
                             Options::default(),
@@ -828,36 +871,35 @@ mod tests {
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage.async_prewrite(Context::new(),
-                            vec![
-            Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-            Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-            Mutation::Put((make_key(b"c"), b"cc".to_vec())),
-            ],
+        storage
+            .async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"a"), b"aa".to_vec())),
+                                 Mutation::Put((make_key(b"b"), b"bb".to_vec())),
+                                 Mutation::Put((make_key(b"c"), b"cc".to_vec()))],
                             b"a".to_vec(),
                             1,
                             Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_commit(Context::new(),
-                          vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
+        storage
+            .async_commit(Context::new(),
+                          vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
                           1,
                           2,
                           expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_scan(Context::new(),
+        storage
+            .async_scan(Context::new(),
                         make_key(b"\x00"),
                         1000,
                         5,
                         Options::default(),
                         expect_scan(tx.clone(),
-                                    vec![
-            Some((b"a".to_vec(), b"aa".to_vec())),
-            Some((b"b".to_vec(), b"bb".to_vec())),
-            Some((b"c".to_vec(), b"cc".to_vec())),
-            ]))
+                                    vec![Some((b"a".to_vec(), b"aa".to_vec())),
+                                         Some((b"b".to_vec(), b"bb".to_vec())),
+                                         Some((b"c".to_vec(), b"cc".to_vec()))]))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -869,34 +911,33 @@ mod tests {
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage.async_prewrite(Context::new(),
-                            vec![
-            Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-            Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-            Mutation::Put((make_key(b"c"), b"cc".to_vec())),
-            ],
+        storage
+            .async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"a"), b"aa".to_vec())),
+                                 Mutation::Put((make_key(b"b"), b"bb".to_vec())),
+                                 Mutation::Put((make_key(b"c"), b"cc".to_vec()))],
                             b"a".to_vec(),
                             1,
                             Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_commit(Context::new(),
-                          vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
+        storage
+            .async_commit(Context::new(),
+                          vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
                           1,
                           2,
                           expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_batch_get(Context::new(),
+        storage
+            .async_batch_get(Context::new(),
                              vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
                              5,
                              expect_batch_get_vals(tx.clone(),
-                                                   vec![
-            Some((b"a".to_vec(), b"aa".to_vec())),
-            Some((b"b".to_vec(), b"bb".to_vec())),
-            Some((b"c".to_vec(), b"cc".to_vec())),
-            ]))
+                                                   vec![Some((b"a".to_vec(), b"aa".to_vec())),
+                                                        Some((b"b".to_vec(), b"bb".to_vec())),
+                                                        Some((b"c".to_vec(), b"cc".to_vec()))]))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -908,14 +949,16 @@ mod tests {
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage.async_prewrite(Context::new(),
+        storage
+            .async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
                             Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
-        storage.async_prewrite(Context::new(),
+        storage
+            .async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
@@ -924,13 +967,15 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
-        storage.async_commit(Context::new(),
+        storage
+            .async_commit(Context::new(),
                           vec![make_key(b"x")],
                           100,
                           110,
                           expect_ok(tx.clone()))
             .unwrap();
-        storage.async_commit(Context::new(),
+        storage
+            .async_commit(Context::new(),
                           vec![make_key(b"y")],
                           101,
                           111,
@@ -938,19 +983,22 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
-        storage.async_get(Context::new(),
+        storage
+            .async_get(Context::new(),
                        make_key(b"x"),
                        120,
                        expect_get_val(tx.clone(), b"100".to_vec()))
             .unwrap();
-        storage.async_get(Context::new(),
+        storage
+            .async_get(Context::new(),
                        make_key(b"y"),
                        120,
                        expect_get_val(tx.clone(), b"101".to_vec()))
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
-        storage.async_prewrite(Context::new(),
+        storage
+            .async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"105".to_vec()))],
                             b"x".to_vec(),
                             105,
@@ -968,19 +1016,22 @@ mod tests {
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage.async_get(Context::new(),
+        storage
+            .async_get(Context::new(),
                        make_key(b"x"),
                        100,
                        expect_get_none(tx.clone()))
             .unwrap();
-        storage.async_prewrite(Context::new(),
+        storage
+            .async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
                             Options::default(),
                             expect_ok(tx.clone()))
             .unwrap();
-        storage.async_prewrite(Context::new(),
+        storage
+            .async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
@@ -990,7 +1041,8 @@ mod tests {
         rx.recv().unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
-        storage.async_prewrite(Context::new(),
+        storage
+            .async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"z"), b"102".to_vec()))],
                             b"y".to_vec(),
                             102,
@@ -1007,7 +1059,8 @@ mod tests {
         let mut storage = Storage::new(&config).unwrap();
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
-        storage.async_prewrite(Context::new(),
+        storage
+            .async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
@@ -1015,10 +1068,12 @@ mod tests {
                             expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_cleanup(Context::new(), make_key(b"x"), 100, expect_ok(tx.clone()))
+        storage
+            .async_cleanup(Context::new(), make_key(b"x"), 100, expect_ok(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_get(Context::new(),
+        storage
+            .async_get(Context::new(),
                        make_key(b"x"),
                        105,
                        expect_get_none(tx.clone()))

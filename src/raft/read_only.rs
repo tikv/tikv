@@ -121,12 +121,14 @@ impl ReadOnly {
     /// the same context as the given `m`.
     pub fn advance(&mut self, m: &Message) -> Vec<ReadIndexStatus> {
         let mut rss = vec![];
-        if let Some(i) = self.read_index_queue.iter().position(|x| {
-            if !self.pending_read_index.contains_key(x) {
-                panic!("cannot find correspond read state from pending map");
-            }
-            *x == m.get_context()
-        }) {
+        if let Some(i) = self.read_index_queue
+               .iter()
+               .position(|x| {
+                             if !self.pending_read_index.contains_key(x) {
+                                 panic!("cannot find correspond read state from pending map");
+                             }
+                             *x == m.get_context()
+                         }) {
             for _ in 0..i + 1 {
                 let rs = self.read_index_queue.pop_front().unwrap();
                 let status = self.pending_read_index.remove(&rs).unwrap();

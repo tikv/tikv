@@ -44,9 +44,9 @@ impl LeaderClient {
     pub fn new(client: PDAsyncClient, members: GetMembersResponse) -> LeaderClient {
         LeaderClient {
             inner: Arc::new(RwLock::new(Inner {
-                client: client,
-                members: members,
-            })),
+                                            client: client,
+                                            members: members,
+                                        })),
         }
     }
 
@@ -151,25 +151,25 @@ impl<Req, Resp, F> Request<Req, Resp, F>
     pub fn execute(self) -> PdFuture<Resp> {
         let ctx = self;
         loop_fn(ctx, |ctx| {
-                ctx.reconnect_if_needed()
-                    .and_then(|ctx| ctx.send())
-                    .and_then(|ctx| {
-                        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
-                        if done {
-                            Ok(Loop::Break(ctx))
-                        } else {
-                            Ok(Loop::Continue(ctx))
-                        }
-                    })
-            })
-            .then(|ctx| {
-                let ctx = ctx.expect("end loop with Ok(_)");
-                match ctx.resp {
-                    Some(Ok(resp)) => future::ok(resp),
-                    Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
-                }
-            })
-            .boxed()
+            ctx.reconnect_if_needed()
+                .and_then(|ctx| ctx.send())
+                .and_then(|ctx| {
+                              let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
+                              if done {
+                                  Ok(Loop::Break(ctx))
+                              } else {
+                                  Ok(Loop::Continue(ctx))
+                              }
+                          })
+        })
+                .then(|ctx| {
+                          let ctx = ctx.expect("end loop with Ok(_)");
+                          match ctx.resp {
+                              Some(Ok(resp)) => future::ok(resp),
+                              Some(Err(err)) => future::err(err),
+                              None => future::err(box_err!("fail to request")),
+                          }
+                      })
+                .boxed()
     }
 }

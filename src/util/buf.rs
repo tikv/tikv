@@ -214,10 +214,10 @@ impl PipeBuffer {
                 Ok(l) => readed = l,
                 Err(e) => {
                     return if e.kind() == ErrorKind::WouldBlock {
-                        Ok(0)
-                    } else {
-                        Err(e)
-                    };
+                               Ok(0)
+                           } else {
+                               Err(e)
+                           };
                 }
             }
             end += readed;
@@ -247,10 +247,10 @@ impl PipeBuffer {
                 Ok(l) => written = l,
                 Err(e) => {
                     return if e.kind() == ErrorKind::WouldBlock {
-                        Ok(0)
-                    } else {
-                        Err(e)
-                    };
+                               Ok(0)
+                           } else {
+                               Err(e)
+                           };
                 }
             }
             start += written;

@@ -63,13 +63,15 @@ pub struct PendingCmdQueue {
 
 impl PendingCmdQueue {
     fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
-        self.normals.pop_front().and_then(|cmd| {
-            if cmd.term > term {
-                self.normals.push_front(cmd);
-                return None;
-            }
-            Some(cmd)
-        })
+        self.normals
+            .pop_front()
+            .and_then(|cmd| {
+                          if cmd.term > term {
+                              self.normals.push_front(cmd);
+                              return None;
+                          }
+                          Some(cmd)
+                      })
     }
 
     fn append_normal(&mut self, cmd: PendingCmd) {
@@ -242,15 +244,17 @@ impl ApplyDelegate {
         rocksdb::get_cf_handle(&self.engine, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
-                wb.put_msg_cf(handle, &keys::apply_state_key(self.region.get_id()), &state)
-            })
+                          wb.put_msg_cf(handle,
+                                        &keys::apply_state_key(self.region.get_id()),
+                                        &state)
+                      })
             .and_then(|_| self.engine.write(wb).map_err(From::from))
             .unwrap_or_else(|e| {
-                panic!("{} failed to apply empty entry at {}: {:?}",
-                       self.tag,
-                       index,
-                       e);
-            });
+                                panic!("{} failed to apply empty entry at {}: {:?}",
+                                       self.tag,
+                                       index,
+                                       e);
+                            });
         self.apply_state = state;
         self.applied_index_term = term;
         assert!(term > 0);
@@ -266,10 +270,12 @@ impl ApplyDelegate {
         let term = entry.get_term();
         let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        Some(self.process_raft_cmd(index, term, cmd).map_or_else(|| {
-            // If failed, tell raft that the config change was aborted.
-            ExecResult::ChangePeer(Default::default())
-        }, |mut res| {
+        Some(self.process_raft_cmd(index, term, cmd)
+                 .map_or_else(|| {
+                                  // If failed, tell raft that the config change was aborted.
+                                  ExecResult::ChangePeer(Default::default())
+                              },
+                              |mut res| {
             if let ExecResult::ChangePeer(ref mut cp) = res {
                 cp.conf_change = conf_change;
             } else {
@@ -358,15 +364,16 @@ impl ApplyDelegate {
         assert!(!self.pending_remove);
 
         let mut ctx = self.new_ctx(index, term, req);
-        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-            // clear dirty values.
-            ctx.wb.clear();
-            match e {
-                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
-                _ => error!("{} execute raft command err: {:?}", self.tag, e),
-            }
-            (cmd_resp::new_error(e), None)
-        });
+        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx)
+            .unwrap_or_else(|e| {
+                // clear dirty values.
+                ctx.wb.clear();
+                match e {
+                    Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                }
+                (cmd_resp::new_error(e), None)
+            });
 
         ctx.apply_state.set_applied_index(index);
         if !self.pending_remove {
@@ -465,9 +472,10 @@ struct ExecContext<'a> {
 impl<'a> ExecContext<'a> {
     fn save(&self, region_id: u64) -> Result<()> {
         let raft_cf = try!(self.snap.cf_handle(CF_RAFT));
-        try!(self.wb.put_msg_cf(raft_cf,
-                                &keys::apply_state_key(region_id),
-                                &self.apply_state));
+        try!(self.wb
+                 .put_msg_cf(raft_cf,
+                             &keys::apply_state_key(region_id),
+                             &self.apply_state));
         Ok(())
     }
 }
@@ -498,15 +506,16 @@ impl ApplyDelegate {
               ctx.term,
               ctx.index);
 
-        let (mut response, exec_result) = try!(match cmd_type {
-            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
-            AdminCmdType::Split => self.exec_split(ctx, request),
-            AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
-            AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
-            AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
-            AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
-            AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
-        });
+        let (mut response, exec_result) =
+            try!(match cmd_type {
+                     AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+                     AdminCmdType::Split => self.exec_split(ctx, request),
+                     AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
+                     AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
+                     AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
+                     AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
+                     AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
+                 });
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::new();
@@ -581,7 +590,9 @@ impl ApplyDelegate {
 
                 util::remove_peer(&mut region, store_id).unwrap();
 
-                PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["remove_peer", "success"]).inc();
+                PEER_ADMIN_CMD_COUNTER_VEC
+                    .with_label_values(&["remove_peer", "success"])
+                    .inc();
 
                 info!("{} remove {} from region:{:?}",
                       self.tag,
@@ -604,10 +615,10 @@ impl ApplyDelegate {
 
         Ok((resp,
             Some(ExecResult::ChangePeer(ChangePeer {
-            conf_change: Default::default(),
-            peer: peer.clone(),
-            region: region,
-        }))))
+                                            conf_change: Default::default(),
+                                            peer: peer.clone(),
+                                            region: region,
+                                        }))))
     }
 
     fn exec_split(&mut self,
@@ -665,11 +676,11 @@ impl ApplyDelegate {
             .and_then(|_| write_peer_state(&ctx.wb, &new_region, PeerState::Normal))
             .and_then(|_| write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()))
             .unwrap_or_else(|e| {
-                panic!("{} failed to save split region {:?}: {:?}",
-                       self.tag,
-                       new_region,
-                       e)
-            });
+                                panic!("{} failed to save split region {:?}: {:?}",
+                                       self.tag,
+                                       new_region,
+                                       e)
+                            });
 
         let mut resp = AdminResponse::new();
         resp.mut_split().set_left(region.clone());
@@ -679,9 +690,9 @@ impl ApplyDelegate {
 
         Ok((resp,
             Some(ExecResult::SplitRegion {
-            left: region,
-            right: new_region,
-        })))
+                     left: region,
+                     right: new_region,
+                 })))
     }
 
     fn exec_compact_log(&mut self,
@@ -719,9 +730,9 @@ impl ApplyDelegate {
 
         Ok((resp,
             Some(ExecResult::CompactLog {
-            state: ctx.apply_state.get_truncated_state().clone(),
-            first_index: first_index,
-        })))
+                     state: ctx.apply_state.get_truncated_state().clone(),
+                     first_index: first_index,
+                 })))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
@@ -731,12 +742,15 @@ impl ApplyDelegate {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                CmdType::Get => self.handle_get(ctx, req),
-                CmdType::Put => self.handle_put(ctx, req),
-                CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::Snap => self.handle_snap(ctx, req),
-                CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted")),
-            });
+                                    CmdType::Get => self.handle_get(ctx, req),
+                                    CmdType::Put => self.handle_put(ctx, req),
+                                    CmdType::Delete => self.handle_delete(ctx, req),
+                                    CmdType::Snap => self.handle_snap(ctx, req),
+                                    CmdType::Invalid => {
+                                        Err(box_err!("invalid cmd type,\
+                                                        message maybe currupted"))
+                                    }
+                                });
 
             resp.set_cmd_type(cmd_type);
 
@@ -770,21 +784,23 @@ impl ApplyDelegate {
             rocksdb::get_cf_handle(&self.engine, cf)
                 .and_then(|handle| ctx.wb.put_cf(handle, &key, value))
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to write ({}, {}) to cf {}: {:?}",
-                           self.tag,
-                           escape(&key),
-                           escape(value),
-                           cf,
-                           e)
-                });
+                                    panic!("{} failed to write ({}, {}) to cf {}: {:?}",
+                                           self.tag,
+                                           escape(&key),
+                                           escape(value),
+                                           cf,
+                                           e)
+                                });
         } else {
-            ctx.wb.put(&key, value).unwrap_or_else(|e| {
-                panic!("{} failed to write ({}, {}): {:?}",
-                       self.tag,
-                       escape(&key),
-                       escape(value),
-                       e);
-            });
+            ctx.wb
+                .put(&key, value)
+                .unwrap_or_else(|e| {
+                                    panic!("{} failed to write ({}, {}): {:?}",
+                                           self.tag,
+                                           escape(&key),
+                                           escape(value),
+                                           e);
+                                });
         }
         Ok(resp)
     }
@@ -803,8 +819,11 @@ impl ApplyDelegate {
             rocksdb::get_cf_handle(&self.engine, cf)
                 .and_then(|handle| ctx.wb.delete_cf(handle, &key))
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
-                });
+                                    panic!("{} failed to delete {}: {:?}",
+                                           self.tag,
+                                           escape(&key),
+                                           e)
+                                });
 
             if cf == CF_LOCK {
                 // delete is a kind of write for RocksDB.
@@ -813,9 +832,14 @@ impl ApplyDelegate {
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            ctx.wb.delete(&key).unwrap_or_else(|e| {
-                panic!("{} failed to delete {}: {:?}", self.tag, escape(&key), e)
-            });
+            ctx.wb
+                .delete(&key)
+                .unwrap_or_else(|e| {
+                                    panic!("{} failed to delete {}: {:?}",
+                                           self.tag,
+                                           escape(&key),
+                                           e)
+                                });
             self.metrics.delete_keys_hint += 1;
         }
 
@@ -855,13 +879,14 @@ pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Res
     let res = if req.get_get().has_cf() {
         let cf = req.get_get().get_cf();
         // TODO: check whether cf exists or not.
-        snap.get_value_cf(cf, &keys::data_key(key)).unwrap_or_else(|e| {
-            panic!("{} failed to get {} with cf {}: {:?}",
-                   tag,
-                   escape(key),
-                   cf,
-                   e)
-        })
+        snap.get_value_cf(cf, &keys::data_key(key))
+            .unwrap_or_else(|e| {
+                                panic!("{} failed to get {} with cf {}: {:?}",
+                                       tag,
+                                       escape(key),
+                                       cf,
+                                       e)
+                            })
     } else {
         snap.get_value(&keys::data_key(key))
             .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", tag, escape(key), e))
@@ -888,14 +913,14 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         Ok((resp,
             Some(ExecResult::ComputeHash {
-            region: self.region.clone(),
-            index: ctx.index,
-            // This snapshot may be held for a long time, which may cause too many
-            // open files in rocksdb.
-            // TODO: figure out another way to do consistency check without snapshot
-            // or short life snapshot.
-            snap: Snapshot::new(self.engine.clone()),
-        })))
+                     region: self.region.clone(),
+                     index: ctx.index,
+                     // This snapshot may be held for a long time, which may cause too many
+                     // open files in rocksdb.
+                     // TODO: figure out another way to do consistency check without snapshot
+                     // or short life snapshot.
+                     snap: Snapshot::new(self.engine.clone()),
+                 })))
     }
 
     fn exec_verify_hash(&self,
@@ -908,9 +933,9 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         Ok((resp,
             Some(ExecResult::VerifyHash {
-            index: index,
-            hash: hash,
-        })))
+                     index: index,
+                     hash: hash,
+                 })))
     }
 }
 
@@ -964,10 +989,10 @@ pub enum Task {
 impl Task {
     pub fn apply(region_id: u64, term: u64, entries: Vec<Entry>) -> Task {
         Task::Apply(Apply {
-            region_id: region_id,
-            term: term,
-            entries: entries,
-        })
+                        region_id: region_id,
+                        term: term,
+                        entries: entries,
+                    })
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -982,13 +1007,13 @@ impl Task {
                    cb: Callback)
                    -> Task {
         Task::Propose(Propose {
-            id: id,
-            region_id: region_id,
-            uuid: uuid,
-            term: term,
-            is_conf_change: is_conf_change,
-            cb: cb,
-        })
+                          id: id,
+                          region_id: region_id,
+                          uuid: uuid,
+                          term: term,
+                          is_conf_change: is_conf_change,
+                          cb: cb,
+                      })
     }
 
     pub fn destroy(region_id: u64) -> Task {
@@ -1078,12 +1103,12 @@ impl Runner {
 
             self.notifier
                 .send(TaskRes::Apply(ApplyRes {
-                    region_id: apply.region_id,
-                    apply_state: delegate.apply_state.clone(),
-                    exec_res: results,
-                    metrics: delegate.metrics.clone(),
-                    applied_index_term: delegate.applied_index_term,
-                }))
+                                         region_id: apply.region_id,
+                                         apply_state: delegate.apply_state.clone(),
+                                         exec_res: results,
+                                         metrics: delegate.metrics.clone(),
+                                         applied_index_term: delegate.applied_index_term,
+                                     }))
                 .unwrap();
         }
         if e.get().pending_remove {

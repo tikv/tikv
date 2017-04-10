@@ -39,9 +39,9 @@ impl ThreadsColletcor {
         let cpu_totals = CounterVec::new(Opts::new("thread_cpu_seconds_total",
                                                    "Total user and system CPU time spent in \
                                                     seconds by threads.")
-                                             .namespace(namespace),
+                                                 .namespace(namespace),
                                          &["name", "tid"])
-            .unwrap();
+                .unwrap();
         let descs = cpu_totals.desc().into_iter().cloned().collect();
 
         ThreadsColletcor {
@@ -63,9 +63,9 @@ impl Collector for ThreadsColletcor {
         for tid in tids {
             if let Ok((tname, utime, stime)) = get_thread_stat(self.pid, tid) {
                 let total = (utime + stime) / *CLK_TCK;
-                let cpu_total =
-                    cpu_totals.get_metric_with_label_values(&[&tname, &format!("{}", tid)])
-                        .unwrap();
+                let cpu_total = cpu_totals
+                    .get_metric_with_label_values(&[&tname, &format!("{}", tid)])
+                    .unwrap();
                 let past = cpu_total.get();
                 let delta = total - past;
                 if delta > 0.0 {
@@ -196,9 +196,9 @@ mod tests {
         let h = thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || {
-                tx1.send(()).unwrap();
-                rx.recv().unwrap();
-            })
+                       tx1.send(()).unwrap();
+                       rx.recv().unwrap();
+                   })
             .unwrap();
         rx1.recv().unwrap();
 

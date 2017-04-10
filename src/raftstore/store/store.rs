@@ -344,7 +344,11 @@ impl<T, C> Store<T, C> {
         // Poll all snapshot messages and handle them.
         loop {
             match self.snapshot_status_receiver.try_recv() {
-                Ok(SnapshotStatusMsg { region_id, to_peer_id, status }) => {
+                Ok(SnapshotStatusMsg {
+                       region_id,
+                       to_peer_id,
+                       status,
+                   }) => {
                     // Report snapshot status to the corresponding peer.
                     self.report_snapshot_status(region_id, to_peer_id, status);
                 }
@@ -603,9 +607,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let start_key = data_key(msg.get_start_key());
-        if let Some((_, &exist_region_id)) = self.region_ranges
-            .range((Excluded(start_key), Unbounded::<Key>))
-            .next() {
+        if let Some((_, &exist_region_id)) =
+            self.region_ranges.range((Excluded(start_key), Unbounded::<Key>)).next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
                 debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
@@ -841,9 +844,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   msg.get_to_peer());
             return Ok(false);
         }
-        if let Some((_, &exist_region_id)) = self.region_ranges
-            .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
-            .next() {
+        if let Some((_, &exist_region_id)) =
+            self.region_ranges
+                .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
+                .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
                 info!("region overlapped {:?}, {:?}", exist_region, snap_region);
@@ -885,9 +889,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         if !wb.is_empty() {
-            self.engine.write(wb).unwrap_or_else(|e| {
-                panic!("{} failed to save append result: {:?}", self.tag, e);
-            });
+            self.engine
+                .write(wb)
+                .unwrap_or_else(|e| {
+                                    panic!("{} failed to save append result: {:?}", self.tag, e);
+                                });
         }
 
         let mut ready_results = Vec::with_capacity(append_res.len());
@@ -930,9 +936,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let dur = t.elapsed();
         if !self.is_busy {
-            let election_timeout =
-                Duration::from_millis(self.cfg.raft_base_tick_interval *
-                                      self.cfg.raft_election_timeout_ticks as u64);
+            let election_timeout = Duration::from_millis(self.cfg.raft_base_tick_interval *
+                                                         self.cfg.raft_election_timeout_ticks as
+                                                         u64);
             if dur >= election_timeout {
                 self.is_busy = true;
             }
@@ -1095,14 +1101,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                 // Insert new regions and validation
                 info!("insert new regions left: {:?}, right:{:?}", left, right);
-                if self.region_ranges
-                    .insert(enc_end_key(&left), left.get_id())
-                    .is_some() {
+                if self.region_ranges.insert(enc_end_key(&left), left.get_id()).is_some() {
                     panic!("region should not exist, {:?}", left);
                 }
-                if self.region_ranges
-                    .insert(enc_end_key(&right), new_region_id)
-                    .is_none() {
+                if self.region_ranges.insert(enc_end_key(&right), new_region_id).is_none() {
                     panic!("region should exist, {:?}", right);
                 }
                 new_peer.size_diff_hint = self.cfg.region_check_size_diff;
@@ -1112,10 +1114,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if !campaigned {
-            if let Some(pos) = self.pending_votes
-                .iter()
-                .rev()
-                .position(|m| m.get_to_peer() == &peer) {
+            if let Some(pos) = self.pending_votes.iter().rev().position(|m| {
+                                                                            m.get_to_peer() == &peer
+                                                                        }) {
                 let msg = self.pending_votes.swap_remove_front(pos).unwrap();
                 let _ = self.on_raft_message(msg);
             }
@@ -1180,9 +1181,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::SplitRegion { left, right } => {
                     self.on_ready_split_region(region_id, left, right)
                 }
-                ExecResult::ComputeHash { region, index, snap } => {
-                    self.on_ready_compute_hash(region, index, snap)
-                }
+                ExecResult::ComputeHash {
+                    region,
+                    index,
+                    snap,
+                } => self.on_ready_compute_hash(region, index, snap),
                 ExecResult::VerifyHash { index, hash } => {
                     self.on_ready_verify_hash(region_id, index, hash)
                 }
@@ -1279,9 +1282,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // matter if the next region is not split from the current region. If the region meta
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
-            if let Some((_, &next_region_id)) = self.region_ranges
-                .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
-                .next() {
+            if let Some((_, &next_region_id)) =
+                self.region_ranges
+                    .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
+                    .next() {
                 let next_region = self.region_peers[&next_region_id].region();
                 new_regions.push(next_region.to_owned());
             }
@@ -1529,8 +1533,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
-        STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["leader"]).set(leader_count as f64);
-        STORE_PD_HEARTBEAT_GAUGE_VEC.with_label_values(&["region"])
+        STORE_PD_HEARTBEAT_GAUGE_VEC
+            .with_label_values(&["leader"])
+            .set(leader_count as f64);
+        STORE_PD_HEARTBEAT_GAUGE_VEC
+            .with_label_values(&["region"])
             .set(self.region_peers.len() as f64);
 
         self.register_pd_heartbeat_tick(event_loop);
@@ -1595,9 +1602,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         STORE_SIZE_GAUGE_VEC.with_label_values(&["capacity"]).set(capacity as f64);
         STORE_SIZE_GAUGE_VEC.with_label_values(&["available"]).set(available as f64);
 
-        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["sending"])
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["sending"])
             .set(snap_stats.sending_count as f64);
-        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["receiving"])
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as f64);
 
         let mut apply_snapshot_count = 0;
@@ -1608,7 +1617,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         stats.set_applying_snap_count(apply_snapshot_count as u32);
-        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC.with_label_values(&["applying"])
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["applying"])
             .set(apply_snapshot_count as f64);
 
         stats.set_start_time(self.start_time.sec as u32);
@@ -1853,8 +1863,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
         let region_id = region.get_id();
-        self.region_peers.get_mut(&region_id).unwrap().consistency_state.last_check_time =
-            Instant::now();
+        self.region_peers
+            .get_mut(&region_id)
+            .unwrap()
+            .consistency_state
+            .last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!("[region {}] schedule {}", region_id, task);
         if let Err(e) = self.consistency_check_worker.schedule(task) {
@@ -1981,7 +1994,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     error!("{} handle raft message err: {:?}", self.tag, e);
                 }
             }
-            Msg::RaftCmd { send_time, request, callback } => {
+            Msg::RaftCmd {
+                send_time,
+                request,
+                callback,
+            } => {
                 self.raft_metrics
                     .propose
                     .request_wait_time
@@ -1992,15 +2009,26 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
             }
-            Msg::SplitCheckResult { region_id, epoch, split_key } => {
+            Msg::SplitCheckResult {
+                region_id,
+                epoch,
+                split_key,
+            } => {
                 info!("[region {}] split check complete.", region_id);
                 self.on_split_check_result(region_id, epoch, split_key);
             }
-            Msg::ReportUnreachable { region_id, to_peer_id } => {
+            Msg::ReportUnreachable {
+                region_id,
+                to_peer_id,
+            } => {
                 self.on_unreachable(region_id, to_peer_id);
             }
             Msg::SnapshotStats => self.store_heartbeat_pd(),
-            Msg::ComputeHashResult { region_id, index, hash } => {
+            Msg::ComputeHashResult {
+                region_id,
+                index,
+                hash,
+            } => {
                 self.on_hash_computed(region_id, index, hash);
             }
         }
@@ -2059,11 +2087,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let cmd_type = request.get_status_request().get_cmd_type();
         let region_id = request.get_header().get_region_id();
 
-        let mut response = try!(match cmd_type {
-            StatusCmdType::RegionLeader => self.execute_region_leader(request),
-            StatusCmdType::RegionDetail => self.execute_region_detail(request),
-            StatusCmdType::InvalidStatus => Err(box_err!("invalid status command!")),
-        });
+        let mut response =
+            try!(match cmd_type {
+                     StatusCmdType::RegionLeader => self.execute_region_leader(request),
+                     StatusCmdType::RegionDetail => self.execute_region_detail(request),
+                     StatusCmdType::InvalidStatus => Err(box_err!("invalid status command!")),
+                 });
         response.set_cmd_type(cmd_type);
 
         let mut resp = RaftCmdResponse::new();

@@ -83,14 +83,21 @@ impl fmt::Debug for Msg {
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
             Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
-            Msg::ReportUnreachable { ref region_id, ref to_peer_id } => {
+            Msg::ReportUnreachable {
+                ref region_id,
+                ref to_peer_id,
+            } => {
                 write!(fmt,
                        "peer {} for region {} is unreachable",
                        to_peer_id,
                        region_id)
             }
             Msg::SnapshotStats => write!(fmt, "Snapshot stats"),
-            Msg::ComputeHashResult { region_id, index, ref hash } => {
+            Msg::ComputeHashResult {
+                region_id,
+                index,
+                ref hash,
+            } => {
                 write!(fmt,
                        "ComputeHashResult [region_id: {}, index: {}, hash: {}]",
                        region_id,
@@ -132,7 +139,7 @@ mod tests {
                      sendch.try_send(Msg::new_raft_cmd(request, cb)).unwrap()
                  },
                  timeout)
-            .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
+                .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     struct TestHandler;
@@ -162,9 +169,7 @@ mod tests {
         let mut event_loop = EventLoop::new().unwrap();
         let sendch = &SendCh::new(event_loop.channel(), "test-sender");
 
-        let t = thread::spawn(move || {
-            event_loop.run(&mut TestHandler).unwrap();
-        });
+        let t = thread::spawn(move || { event_loop.run(&mut TestHandler).unwrap(); });
 
         let mut request = RaftCmdRequest::new();
         request.mut_header().set_region_id(u64::max_value());

@@ -121,11 +121,11 @@ impl<'a> MvccTxn<'a> {
         if let Some(lock) = try!(self.reader.load_lock(&key)) {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
-                    key: try!(key.raw()),
-                    primary: lock.primary,
-                    ts: lock.ts,
-                    ttl: lock.ttl,
-                });
+                               key: try!(key.raw()),
+                               primary: lock.primary,
+                               ts: lock.ts,
+                               ttl: lock.ttl,
+                           });
             }
             // No need to overwrite the lock and data.
             // If we use single delete, we can't put a key multiple times.
@@ -166,21 +166,21 @@ impl<'a> MvccTxn<'a> {
             }
             _ => {
                 return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
-                    Some((_, WriteType::Rollback)) |
-                    None => {
-                        // TODO:None should not appear
-                        // Rollbacked by concurrent transaction.
-                        info!("txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
-                              key,
-                              self.start_ts,
-                              commit_ts);
-                        Err(Error::TxnLockNotFound)
-                    }
-                    // Committed by concurrent transaction.
-                    Some((_, WriteType::Put)) |
-                    Some((_, WriteType::Delete)) |
-                    Some((_, WriteType::Lock)) => Ok(()),
-                };
+                           Some((_, WriteType::Rollback)) |
+                           None => {
+                    // TODO:None should not appear
+                    // Rollbacked by concurrent transaction.
+                    info!("txn conflict (lock not found), key:{}, start_ts:{}, commit_ts:{}",
+                          key,
+                          self.start_ts,
+                          commit_ts);
+                    Err(Error::TxnLockNotFound)
+                }
+                           // Committed by concurrent transaction.
+                           Some((_, WriteType::Put)) |
+                           Some((_, WriteType::Delete)) |
+                           Some((_, WriteType::Lock)) => Ok(()),
+                       };
             }
         };
         let write = Write::new(WriteType::from_lock_type(lock_type),
@@ -201,26 +201,26 @@ impl<'a> MvccTxn<'a> {
             }
             _ => {
                 return match try!(self.reader.get_txn_commit_info(key, self.start_ts)) {
-                    Some((ts, write_type)) => {
-                        if write_type == WriteType::Rollback {
-                            // return Ok on Rollback already exist
-                            Ok(())
-                        } else {
-                            info!("txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
-                                  key,
-                                  self.start_ts,
-                                  ts);
-                            Err(Error::Committed { commit_ts: ts })
-                        }
-                    }
-                    None => {
-                        let ts = self.start_ts;
-                        // insert a Rollback to WriteCF when receives Rollback before Prewrite
-                        let write = Write::new(WriteType::Rollback, ts, None);
-                        self.put_write(key, ts, write.to_bytes());
+                           Some((ts, write_type)) => {
+                    if write_type == WriteType::Rollback {
+                        // return Ok on Rollback already exist
                         Ok(())
+                    } else {
+                        info!("txn conflict (committed), key:{}, start_ts:{}, commit_ts:{}",
+                              key,
+                              self.start_ts,
+                              ts);
+                        Err(Error::Committed { commit_ts: ts })
                     }
-                };
+                }
+                           None => {
+                    let ts = self.start_ts;
+                    // insert a Rollback to WriteCF when receives Rollback before Prewrite
+                    let write = Write::new(WriteType::Rollback, ts, None);
+                    self.put_write(key, ts, write.to_bytes());
+                    Ok(())
+                }
+                       };
             }
         }
         let write = Write::new(WriteType::Rollback, self.start_ts, None);
@@ -712,9 +712,9 @@ mod tests {
         let mut statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, 5, None);
         assert!(txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
-                      key,
-                      &Options::default())
-            .is_err());
+                             key,
+                             &Options::default())
+                    .is_err());
 
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -723,7 +723,7 @@ mod tests {
         let mut opt = Options::default();
         opt.skip_constraint_check = true;
         assert!(txn.prewrite(Mutation::Put((make_key(key), value.to_vec())), key, &opt)
-            .is_ok());
+                    .is_ok());
     }
 
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
@@ -767,7 +767,8 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
-        txn.prewrite(Mutation::Delete(make_key(key)), pk, &Options::default()).unwrap();
+        txn.prewrite(Mutation::Delete(make_key(key)), pk, &Options::default())
+            .unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
     }
 

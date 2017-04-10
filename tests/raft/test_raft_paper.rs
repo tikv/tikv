@@ -114,8 +114,10 @@ fn test_update_term_from_message(state: StateRole) {
 #[test]
 fn test_reject_stale_term_message() {
     let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
-    let panic_before_step_state =
-        Box::new(|_: &Message| panic!("before step state function hook called unexpectedly"));
+    let panic_before_step_state = Box::new(|_: &Message| {
+                                               panic!("before step state function\
+                                                            hook called unexpectedly")
+                                           });
     r.before_step_state = Some(panic_before_step_state);
     r.load_state(hard_state(2, 0, 0));
 
@@ -161,10 +163,7 @@ fn test_leader_bcast_beat() {
         m
     };
 
-    let expect_msgs = vec![
-        new_message_ext(1, 2),
-        new_message_ext(1, 3),
-    ];
+    let expect_msgs = vec![new_message_ext(1, 2), new_message_ext(1, 3)];
     assert_eq!(msgs, expect_msgs);
 }
 
@@ -214,10 +213,7 @@ fn test_nonleader_start_election(state: StateRole) {
         m.set_index(0);
         m
     };
-    let expect_msgs = vec![
-        new_message_ext(1, 2),
-        new_message_ext(1, 3),
-    ];
+    let expect_msgs = vec![new_message_ext(1, 2), new_message_ext(1, 3)];
     assert_eq!(msgs, expect_msgs);
 }
 
@@ -229,26 +225,25 @@ fn test_nonleader_start_election(state: StateRole) {
 // Reference: section 5.2
 #[test]
 fn test_leader_election_in_one_round_rpc() {
-    let mut tests = vec![
-        // win the election when receiving votes from a majority of the servers
-        (1, map!(), StateRole::Leader),
-        (3, map!(2 => true, 3 => true), StateRole::Leader),
-        (3, map!(2 => true), StateRole::Leader),
-        (5, map!(2 => true, 3 => true, 4 => true, 5 => true), StateRole::Leader),
-        (5, map!(2 => true, 3 => true, 4 => true), StateRole::Leader),
-        (5, map!(2 => true, 3 => true), StateRole::Leader),
+    let mut tests =
+        vec![// win the election when receiving votes from a majority of the servers
+             (1, map!(), StateRole::Leader),
+             (3, map!(2 => true, 3 => true), StateRole::Leader),
+             (3, map!(2 => true), StateRole::Leader),
+             (5, map!(2 => true, 3 => true, 4 => true, 5 => true), StateRole::Leader),
+             (5, map!(2 => true, 3 => true, 4 => true), StateRole::Leader),
+             (5, map!(2 => true, 3 => true), StateRole::Leader),
 
-        // return to follower state if it receives vote denial from a majority
-        (3, map!(2 => false, 3 => false), StateRole::Follower),
-        (5, map!(2 => false, 3 => false, 4 => false, 5 => false), StateRole::Follower),
-        (5, map!(2 => true, 3 => false, 4 => false, 5 => false), StateRole::Follower),
+             // return to follower state if it receives vote denial from a majority
+             (3, map!(2 => false, 3 => false), StateRole::Follower),
+             (5, map!(2 => false, 3 => false, 4 => false, 5 => false), StateRole::Follower),
+             (5, map!(2 => true, 3 => false, 4 => false, 5 => false), StateRole::Follower),
 
-        // stay in candidate if it does not obtain the majority
-        (3, map!(), StateRole::Candidate),
-        (5, map!(2 => true), StateRole::Candidate),
-        (5, map!(2 => false, 3 => false), StateRole::Candidate),
-        (5, map!(), StateRole::Candidate),
-    ];
+             // stay in candidate if it does not obtain the majority
+             (3, map!(), StateRole::Candidate),
+             (5, map!(2 => true), StateRole::Candidate),
+             (5, map!(2 => false, 3 => false), StateRole::Candidate),
+             (5, map!(), StateRole::Candidate)];
 
     for (i, (size, votes, state)) in tests.drain(..).enumerate() {
         let mut r = new_test_raft(1, (1..size as u64 + 1).collect(), 10, 1, new_storage());
@@ -274,14 +269,12 @@ fn test_leader_election_in_one_round_rpc() {
 // Reference: section 5.2
 #[test]
 fn test_follower_vote() {
-    let mut tests = vec![
-        (INVALID_ID, 1, false),
-        (INVALID_ID, 2, false),
-        (1, 1, false),
-        (2, 2, false),
-        (1, 2, true),
-        (2, 1, true),
-    ];
+    let mut tests = vec![(INVALID_ID, 1, false),
+                         (INVALID_ID, 2, false),
+                         (1, 1, false),
+                         (2, 2, false),
+                         (1, 2, true),
+                         (2, 1, true)];
 
     for (i, (vote, nvote, wreject)) in tests.drain(..).enumerate() {
         let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
@@ -314,10 +307,7 @@ fn test_candidate_fallback() {
         m.set_term(term);
         m
     };
-    let mut tests = vec![
-        new_message_ext(2, 1, 1),
-        new_message_ext(2, 1, 2),
-    ];
+    let mut tests = vec![new_message_ext(2, 1, 1), new_message_ext(2, 1, 2)];
     for (i, m) in tests.drain(..).enumerate() {
         let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
         r.step(new_message(1, 1, MessageType::MsgHup, 0)).expect("");
@@ -461,10 +451,8 @@ fn test_leader_start_replication() {
         m.set_entries(RepeatedField::from_vec(ents));
         m
     };
-    let expect_msgs = vec![
-        new_message_ext(1, 2, wents.clone()),
-        new_message_ext(1, 3, wents.clone()),
-    ];
+    let expect_msgs = vec![new_message_ext(1, 2, wents.clone()),
+                           new_message_ext(1, 3, wents.clone())];
     assert_eq!(msgs, expect_msgs);
     assert_eq!(r.raft_log.unstable_entries(), Some(&*wents));
 }
@@ -507,17 +495,15 @@ fn test_leader_commit_entry() {
 // Reference: section 5.3
 #[test]
 fn test_leader_acknowledge_commit() {
-    let mut tests = vec![
-        (1, map!(), true),
-        (3, map!(), false),
-        (3, map!(2 => true), true),
-        (3, map!(2 => true, 3 => true), true),
-        (5, map!(), false),
-        (5, map!(2 => true), false),
-        (5, map!(2 => true, 3 => true), true),
-        (5, map!(2 => true, 3 => true, 4 => true), true),
-        (5, map!(2 => true, 3 => true, 4 => true, 5 => true), true),
-    ];
+    let mut tests = vec![(1, map!(), true),
+                         (3, map!(), false),
+                         (3, map!(2 => true), true),
+                         (3, map!(2 => true, 3 => true), true),
+                         (5, map!(), false),
+                         (5, map!(2 => true), false),
+                         (5, map!(2 => true, 3 => true), true),
+                         (5, map!(2 => true, 3 => true, 4 => true), true),
+                         (5, map!(2 => true, 3 => true, 4 => true, 5 => true), true)];
     for (i, (size, acceptors, wack)) in tests.drain(..).enumerate() {
         let s = new_storage();
         let mut r = new_test_raft(1, (1..size + 1).collect(), 10, 1, s.clone());
@@ -547,12 +533,10 @@ fn test_leader_acknowledge_commit() {
 // Reference: section 5.3
 #[test]
 fn test_leader_commit_preceding_entries() {
-    let mut tests = vec![
-        vec![],
-        vec![empty_entry(2, 1)],
-        vec![empty_entry(1, 1), empty_entry(2, 2)],
-        vec![empty_entry(1, 1)],
-    ];
+    let mut tests = vec![vec![],
+                         vec![empty_entry(2, 1)],
+                         vec![empty_entry(1, 1), empty_entry(2, 2)],
+                         vec![empty_entry(1, 1)]];
 
     for (i, mut tt) in tests.drain(..).enumerate() {
         let s = new_storage();
@@ -582,12 +566,16 @@ fn test_leader_commit_preceding_entries() {
 // Reference: section 5.3
 #[test]
 fn test_follower_commit_entry() {
-    let mut tests = vec![
-        (vec![new_entry(1, 1, SOME_DATA)], 1),
-        (vec![new_entry(1, 1, SOME_DATA), new_entry(1, 2, Some("somedata2"))], 2),
-        (vec![new_entry(1, 1, Some("somedata2")), new_entry(1, 2, SOME_DATA)], 2),
-        (vec![new_entry(1, 1, SOME_DATA), new_entry(1, 2, Some("somedata2"))], 1),
-    ];
+    let mut tests = vec![(vec![new_entry(1, 1, SOME_DATA)], 1),
+                         (vec![new_entry(1, 1, SOME_DATA),
+                               new_entry(1, 2, Some("somedata2"))],
+                          2),
+                         (vec![new_entry(1, 1, Some("somedata2")),
+                               new_entry(1, 2, SOME_DATA)],
+                          2),
+                         (vec![new_entry(1, 1, SOME_DATA),
+                               new_entry(1, 2, Some("somedata2"))],
+                          1)];
 
     for (i, (ents, commit)) in tests.drain(..).enumerate() {
         let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
@@ -621,18 +609,17 @@ fn test_follower_commit_entry() {
 #[test]
 fn test_follower_check_msg_append() {
     let ents = vec![empty_entry(1, 1), empty_entry(2, 2)];
-    let mut tests = vec![
-        // match with committed entries
-        (0, 0, 1, false, 0),
-        (ents[0].get_term(), ents[0].get_index(), 1, false, 0),
-        // match with uncommitted entries
-        (ents[1].get_term(), ents[1].get_index(), 2, false, 0),
+    let mut tests =
+        vec![// match with committed entries
+             (0, 0, 1, false, 0),
+             (ents[0].get_term(), ents[0].get_index(), 1, false, 0),
+             // match with uncommitted entries
+             (ents[1].get_term(), ents[1].get_index(), 2, false, 0),
 
-        // unmatch with existing entry
-        (ents[0].get_term(), ents[1].get_index(), ents[1].get_index(), true, 2),
-        // unexisting entry
-        (ents[1].get_term() + 1, ents[1].get_index() + 1, ents[1].get_index() + 1, true, 2),
-    ];
+             // unmatch with existing entry
+             (ents[0].get_term(), ents[1].get_index(), ents[1].get_index(), true, 2),
+             // unexisting entry
+             (ents[1].get_term() + 1, ents[1].get_index() + 1, ents[1].get_index() + 1, true, 2)];
     for (i, (term, index, windex, wreject, wreject_hint)) in tests.drain(..).enumerate() {
         let s = new_storage();
         s.wl().append(&ents).expect("");
@@ -668,20 +655,21 @@ fn test_follower_check_msg_append() {
 // Reference: section 5.3
 #[test]
 fn test_follower_append_entries() {
-    let mut tests = vec![
-        (2, 2,
-            vec![empty_entry(3, 3)],
-            vec![empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)],
-            vec![empty_entry(3, 3)]),
+    let mut tests =
+        vec![(2,
+              2,
+              vec![empty_entry(3, 3)],
+              vec![empty_entry(1, 1), empty_entry(2, 2), empty_entry(3, 3)],
+              vec![empty_entry(3, 3)]),
 
-        (1, 1,
-            vec![empty_entry(3, 2), empty_entry(4, 3)],
-            vec![empty_entry(1, 1), empty_entry(3, 2), empty_entry(4, 3)],
-            vec![empty_entry(3, 2), empty_entry(4, 3)]),
+             (1,
+              1,
+              vec![empty_entry(3, 2), empty_entry(4, 3)],
+              vec![empty_entry(1, 1), empty_entry(3, 2), empty_entry(4, 3)],
+              vec![empty_entry(3, 2), empty_entry(4, 3)]),
 
-        (0, 0, vec![empty_entry(1, 1)], vec![empty_entry(1, 1), empty_entry(2, 2)], vec![]),
-        (0, 0, vec![empty_entry(3, 1)], vec![empty_entry(3, 1)], vec![empty_entry(3, 1)]),
-    ];
+             (0, 0, vec![empty_entry(1, 1)], vec![empty_entry(1, 1), empty_entry(2, 2)], vec![]),
+             (0, 0, vec![empty_entry(3, 1)], vec![empty_entry(3, 1)], vec![empty_entry(3, 1)])];
     for (i, (index, term, ents, wents, wunstable)) in tests.drain(..).enumerate() {
         let s = new_storage();
         s.wl().append(&[empty_entry(1, 1), empty_entry(2, 2)]).expect("");
@@ -716,56 +704,78 @@ fn test_follower_append_entries() {
 // Reference: section 5.3, figure 7
 #[test]
 fn test_leader_sync_follower_log() {
-    let ents = vec![
-        empty_entry(0, 0),
-        empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
-        empty_entry(4, 4), empty_entry(4, 5),
-        empty_entry(5, 6), empty_entry(5, 7),
-        empty_entry(6, 8), empty_entry(6, 9), empty_entry(6, 10),
-    ];
+    let ents = vec![empty_entry(0, 0),
+                    empty_entry(1, 1),
+                    empty_entry(1, 2),
+                    empty_entry(1, 3),
+                    empty_entry(4, 4),
+                    empty_entry(4, 5),
+                    empty_entry(5, 6),
+                    empty_entry(5, 7),
+                    empty_entry(6, 8),
+                    empty_entry(6, 9),
+                    empty_entry(6, 10)];
     let term = 8u64;
-    let mut tests = vec![
-        vec![
-            empty_entry(0, 0),
-            empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
-            empty_entry(4, 4), empty_entry(4, 5),
-            empty_entry(5, 6), empty_entry(5, 7),
-            empty_entry(6, 8), empty_entry(6, 9),
-        ],
-        vec![
-            empty_entry(0, 0),
-            empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
-            empty_entry(4, 4),
-        ],
-        vec![
-            empty_entry(0, 0),
-            empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
-            empty_entry(4, 4), empty_entry(4, 5),
-            empty_entry(5, 6), empty_entry(5, 7),
-            empty_entry(6, 8), empty_entry(6, 9), empty_entry(6, 10), empty_entry(6, 11),
-        ],
-        vec![
-            empty_entry(0, 0),
-            empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
-            empty_entry(4, 4), empty_entry(4, 5),
-            empty_entry(5, 6), empty_entry(5, 7),
-            empty_entry(6, 8), empty_entry(6, 9), empty_entry(6, 10),
-            empty_entry(7, 11), empty_entry(7, 12),
-        ],
-        vec![
-            empty_entry(0, 0),
-            empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
-            empty_entry(4, 4), empty_entry(4, 5), empty_entry(4, 6), empty_entry(4, 7),
-
-        ],
-        vec![
-            empty_entry(0, 0),
-            empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3),
-            empty_entry(2, 4), empty_entry(2, 5), empty_entry(2, 6),
-            empty_entry(3, 7), empty_entry(3, 8), empty_entry(3, 9), empty_entry(3, 10),
-                empty_entry(3, 11),
-        ],
-    ];
+    let mut tests = vec![vec![empty_entry(0, 0),
+                              empty_entry(1, 1),
+                              empty_entry(1, 2),
+                              empty_entry(1, 3),
+                              empty_entry(4, 4),
+                              empty_entry(4, 5),
+                              empty_entry(5, 6),
+                              empty_entry(5, 7),
+                              empty_entry(6, 8),
+                              empty_entry(6, 9)],
+                         vec![empty_entry(0, 0),
+                              empty_entry(1, 1),
+                              empty_entry(1, 2),
+                              empty_entry(1, 3),
+                              empty_entry(4, 4)],
+                         vec![empty_entry(0, 0),
+                              empty_entry(1, 1),
+                              empty_entry(1, 2),
+                              empty_entry(1, 3),
+                              empty_entry(4, 4),
+                              empty_entry(4, 5),
+                              empty_entry(5, 6),
+                              empty_entry(5, 7),
+                              empty_entry(6, 8),
+                              empty_entry(6, 9),
+                              empty_entry(6, 10),
+                              empty_entry(6, 11)],
+                         vec![empty_entry(0, 0),
+                              empty_entry(1, 1),
+                              empty_entry(1, 2),
+                              empty_entry(1, 3),
+                              empty_entry(4, 4),
+                              empty_entry(4, 5),
+                              empty_entry(5, 6),
+                              empty_entry(5, 7),
+                              empty_entry(6, 8),
+                              empty_entry(6, 9),
+                              empty_entry(6, 10),
+                              empty_entry(7, 11),
+                              empty_entry(7, 12)],
+                         vec![empty_entry(0, 0),
+                              empty_entry(1, 1),
+                              empty_entry(1, 2),
+                              empty_entry(1, 3),
+                              empty_entry(4, 4),
+                              empty_entry(4, 5),
+                              empty_entry(4, 6),
+                              empty_entry(4, 7)],
+                         vec![empty_entry(0, 0),
+                              empty_entry(1, 1),
+                              empty_entry(1, 2),
+                              empty_entry(1, 3),
+                              empty_entry(2, 4),
+                              empty_entry(2, 5),
+                              empty_entry(2, 6),
+                              empty_entry(3, 7),
+                              empty_entry(3, 8),
+                              empty_entry(3, 9),
+                              empty_entry(3, 10),
+                              empty_entry(3, 11)]];
     for (i, tt) in tests.drain(..).enumerate() {
         let lead_store = new_storage();
         lead_store.wl().append(&ents).expect("");
@@ -806,10 +816,8 @@ fn test_leader_sync_follower_log() {
 // Reference: section 5.4.1
 #[test]
 fn test_vote_request() {
-    let mut tests = vec![
-        (vec![empty_entry(1, 1)], 2),
-        (vec![empty_entry(1, 1), empty_entry(2, 2)], 3),
-    ];
+    let mut tests = vec![(vec![empty_entry(1, 1)], 2),
+                         (vec![empty_entry(1, 1), empty_entry(2, 2)], 3)];
     for (j, (ents, wterm)) in tests.drain(..).enumerate() {
         let mut r = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
         let mut m = new_message(2, 1, MessageType::MsgAppend, 0);
@@ -864,20 +872,18 @@ fn test_vote_request() {
 // Reference: section 5.4.1
 #[test]
 fn test_voter() {
-    let mut tests = vec![
-        // same logterm
-        (vec![empty_entry(1, 1)], 1, 1, false),
-        (vec![empty_entry(1, 1)], 1, 2, false),
-        (vec![empty_entry(1, 1), empty_entry(1, 2)], 1, 1, true),
-        // candidate higher logterm
-        (vec![empty_entry(1, 1)], 2, 1, false),
-        (vec![empty_entry(1, 1)], 2, 2, false),
-        (vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 1, false),
-        // voter higher logterm
-        (vec![empty_entry(2, 1)], 1, 1, true),
-        (vec![empty_entry(2, 1)], 1, 2, true),
-        (vec![empty_entry(2, 1), empty_entry(1, 2)], 1, 1, true),
-    ];
+    let mut tests = vec![// same logterm
+                         (vec![empty_entry(1, 1)], 1, 1, false),
+                         (vec![empty_entry(1, 1)], 1, 2, false),
+                         (vec![empty_entry(1, 1), empty_entry(1, 2)], 1, 1, true),
+                         // candidate higher logterm
+                         (vec![empty_entry(1, 1)], 2, 1, false),
+                         (vec![empty_entry(1, 1)], 2, 2, false),
+                         (vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 1, false),
+                         // voter higher logterm
+                         (vec![empty_entry(2, 1)], 1, 1, true),
+                         (vec![empty_entry(2, 1)], 1, 2, true),
+                         (vec![empty_entry(2, 1), empty_entry(1, 2)], 1, 1, true)];
     for (i, (ents, log_term, index, wreject)) in tests.drain(..).enumerate() {
         let s = new_storage();
         s.wl().append(&ents).expect("");
@@ -914,13 +920,11 @@ fn test_voter() {
 #[test]
 fn test_leader_only_commits_log_from_current_term() {
     let ents = vec![empty_entry(1, 1), empty_entry(2, 2)];
-    let mut tests = vec![
-        // do not commit log entries in previous terms
-        (1, 0),
-        (2, 0),
-        // commit log in current term
-        (3, 3),
-    ];
+    let mut tests = vec![// do not commit log entries in previous terms
+                         (1, 0),
+                         (2, 0),
+                         // commit log in current term
+                         (3, 3)];
     for (i, (index, wcommit)) in tests.drain(..).enumerate() {
         let store = new_storage();
         store.wl().append(&ents).expect("");

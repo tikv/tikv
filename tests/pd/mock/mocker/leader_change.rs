@@ -74,9 +74,9 @@ impl LeaderChange {
         LeaderChange {
             resps: resps,
             r: Mutex::new(Roulette {
-                ts: Instant::now(),
-                idx: 0,
-            }),
+                              ts: Instant::now(),
+                              idx: 0,
+                          }),
         }
     }
 

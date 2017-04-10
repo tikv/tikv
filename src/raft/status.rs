@@ -45,7 +45,10 @@ pub struct Status {
 impl Status {
     // new gets a copy of the current raft status.
     pub fn new<T: Storage>(raft: &Raft<T>) -> Status {
-        let mut s = Status { id: raft.id, ..Default::default() };
+        let mut s = Status {
+            id: raft.id,
+            ..Default::default()
+        };
         s.hs = raft.hard_state();
         s.ss = raft.soft_state();
         s.applied = raft.raft_log.get_applied();

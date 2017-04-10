@@ -201,22 +201,20 @@ impl Drop for RunningCtx {
 
 /// Creates a callback to receive async results of write prepare from the storage engine.
 fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SyncSendCh<Msg>) -> EngineCallback<()> {
-    Box::new(move |(cb_ctx, result)| {
-        match ch.send(Msg::WriteFinished {
-            cid: cid,
-            pr: pr,
-            cb_ctx: cb_ctx,
-            result: result,
-        }) {
-            Ok(_) => {}
-            e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-            Err(e) => {
-                panic!("send write finished to scheduler failed cid={}, err:{:?}",
-                       cid,
-                       e);
-            }
-        }
-    })
+    Box::new(move |(cb_ctx, result)| match ch.send(Msg::WriteFinished {
+                                                       cid: cid,
+                                                       pr: pr,
+                                                       cb_ctx: cb_ctx,
+                                                       result: result,
+                                                   }) {
+                 Ok(_) => {}
+                 e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+                 Err(e) => {
+        panic!("send write finished to scheduler failed cid={}, err:{:?}",
+               cid,
+               e);
+    }
+             })
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
@@ -290,7 +288,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
         }
         // Batch gets from the snapshot.
         Command::BatchGet { ref keys, start_ts, .. } => {
-            KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+            KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                .with_label_values(&[tag])
                 .observe(keys.len() as f64);
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
             match snap_store.batch_get(keys, &mut statistics) {
@@ -309,15 +308,23 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
-        Command::Scan { ref start_key, limit, start_ts, ref options, .. } => {
+        Command::Scan {
+            ref start_key,
+            limit,
+            start_ts,
+            ref options,
+            ..
+        } => {
             let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
-            let res = snap_store.scanner(ScanMode::Forward, options.key_only, None, &mut statistics)
+            let res = snap_store
+                .scanner(ScanMode::Forward, options.key_only, None, &mut statistics)
                 .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
                 .and_then(|mut results| {
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
-                        .observe(results.len() as f64);
-                    Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
-                });
+                              KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                                  .with_label_values(&[tag])
+                                  .observe(results.len() as f64);
+                              Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
+                          });
             KV_COMMAND_SCAN_INEFFICIENCY.observe(statistics.inefficiency());
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
@@ -331,7 +338,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              Some(ScanMode::Forward),
                                              true,
                                              None);
-            let res = reader.scan_lock(None, |lock| lock.ts <= max_ts, None)
+            let res = reader
+                .scan_lock(None, |lock| lock.ts <= max_ts, None)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
                     let mut locks = vec![];
@@ -342,7 +350,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                         lock_info.set_key(try!(key.raw()));
                         locks.push(lock_info);
                     }
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                        .with_label_values(&[tag])
                         .observe(locks.len() as f64);
                     Ok(locks)
                 });
@@ -353,30 +362,38 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
         }
         // Scan the locks with timestamp `start_ts`, then either commit them if the command has
         // commit timestamp populated or rollback otherwise.
-        Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, .. } => {
+        Command::ResolveLock {
+            ref ctx,
+            start_ts,
+            commit_ts,
+            ref mut scan_key,
+            ..
+        } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
                                              &mut statistics,
                                              Some(ScanMode::Forward),
                                              true,
                                              None);
-            let res = reader.scan_lock(scan_key.take(),
+            let res = reader
+                .scan_lock(scan_key.take(),
                            |lock| lock.ts == start_ts,
                            Some(RESOLVE_LOCK_BATCH_SIZE))
                 .map_err(Error::from)
                 .and_then(|(v, next_scan_key)| {
                     let keys: Vec<Key> = v.into_iter().map(|x| x.0).collect();
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                        .with_label_values(&[tag])
                         .observe(keys.len() as f64);
                     if keys.is_empty() {
                         Ok(None)
                     } else {
                         Ok(Some(Command::ResolveLock {
-                            ctx: ctx.clone(),
-                            start_ts: start_ts,
-                            commit_ts: commit_ts,
-                            scan_key: next_scan_key,
-                            keys: keys,
-                        }))
+                                    ctx: ctx.clone(),
+                                    start_ts: start_ts,
+                                    commit_ts: commit_ts,
+                                    scan_key: next_scan_key,
+                                    keys: keys,
+                                }))
                     }
                 });
             match res {
@@ -386,7 +403,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Collects garbage.
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
+        Command::Gc {
+            ref ctx,
+            safe_point,
+            ref mut scan_key,
+            ..
+        } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
                                              &mut statistics,
                                              Some(ScanMode::Forward),
@@ -394,10 +416,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              None);
             // scan_key is used as start_key here,and Range start gc with scan_key=none.
             let is_range_start_key = scan_key.is_none();
-            let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
+            let res = reader
+                .scan_keys(scan_key.take(), GC_BATCH_SIZE)
                 .map_err(Error::from)
                 .and_then(|(keys, next_start)| {
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
+                        .with_label_values(&[tag])
                         .observe(keys.len() as f64);
                     if keys.is_empty() {
                         // empty range
@@ -407,11 +431,11 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                         Ok(None)
                     } else {
                         Ok(Some(Command::Gc {
-                            ctx: ctx.clone(),
-                            safe_point: safe_point,
-                            scan_key: next_start,
-                            keys: keys,
-                        }))
+                                    ctx: ctx.clone(),
+                                    safe_point: safe_point,
+                                    scan_key: next_start,
+                                    keys: keys,
+                                }))
                     }
                 });
             match res {
@@ -457,7 +481,13 @@ fn process_write_impl(cid: u64,
                       -> Result<()> {
     let mut statistics = Statistics::default();
     let (pr, modifies) = match cmd {
-        Command::Prewrite { ref mutations, ref primary, start_ts, ref options, .. } => {
+        Command::Prewrite {
+            ref mutations,
+            ref primary,
+            start_ts,
+            ref options,
+            ..
+        } => {
             let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
             let mut locks = vec![];
             for m in mutations {
@@ -478,12 +508,17 @@ fn process_write_impl(cid: u64,
                 (pr, vec![])
             }
         }
-        Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
+        Command::Commit {
+            ref keys,
+            lock_ts,
+            commit_ts,
+            ..
+        } => {
             if commit_ts <= lock_ts {
                 return Err(Error::InvalidTxnTso {
-                    start_ts: lock_ts,
-                    commit_ts: commit_ts,
-                });
+                               start_ts: lock_ts,
+                               commit_ts: commit_ts,
+                           });
             }
             let mut txn = MvccTxn::new(snapshot, &mut statistics, lock_ts, None);
             for k in keys {
@@ -509,13 +544,19 @@ fn process_write_impl(cid: u64,
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
         }
-        Command::ResolveLock { ref ctx, start_ts, commit_ts, ref mut scan_key, ref keys } => {
+        Command::ResolveLock {
+            ref ctx,
+            start_ts,
+            commit_ts,
+            ref mut scan_key,
+            ref keys,
+        } => {
             if let Some(cts) = commit_ts {
                 if cts <= start_ts {
                     return Err(Error::InvalidTxnTso {
-                        start_ts: start_ts,
-                        commit_ts: cts,
-                    });
+                                   start_ts: start_ts,
+                                   commit_ts: cts,
+                               });
                 }
             }
             let mut scan_key = scan_key.take();
@@ -545,7 +586,12 @@ fn process_write_impl(cid: u64,
                 (pr, txn.modifies())
             }
         }
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
+        Command::Gc {
+            ref ctx,
+            safe_point,
+            ref mut scan_key,
+            ref keys,
+        } => {
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(snapshot, &mut statistics, 0, Some(ScanMode::Mixed));
             for k in keys {
@@ -573,11 +619,11 @@ fn process_write_impl(cid: u64,
     };
 
     box_try!(ch.send(Msg::WritePrepareFinished {
-        cid: cid,
-        cmd: cmd,
-        pr: pr,
-        to_be_write: modifies,
-    }));
+                         cid: cid,
+                         cmd: cmd,
+                         pr: pr,
+                         to_be_write: modifies,
+                     }));
 
     Ok(())
 }
@@ -623,7 +669,9 @@ impl Scheduler {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[self.get_ctx_tag(cid), "process"])
+            .inc();
         debug!("process cmd with snapshot, cid={}", cid);
         let mut cmd = {
             let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
@@ -645,7 +693,9 @@ impl Scheduler {
     /// Calls the callback with an error.
     fn finish_with_err(&mut self, cid: u64, err: Error) {
         debug!("command cid={}, finished with error", cid);
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "error"]).inc();
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[self.get_ctx_tag(cid), "error"])
+            .inc();
 
         let mut ctx = self.remove_ctx(cid);
         let cb = ctx.callback.take().unwrap();
@@ -721,22 +771,23 @@ impl Scheduler {
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
     fn get_snapshot(&mut self, cid: u64) {
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot"]).inc();
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[self.get_ctx_tag(cid), "snapshot"])
+            .inc();
         let ch = self.schedch.clone();
-        let cb = box move |(cb_ctx, snapshot)| {
-            match ch.send(Msg::SnapshotFinished {
-                cid: cid,
-                cb_ctx: cb_ctx,
-                snapshot: snapshot,
-            }) {
-                Ok(_) => {}
-                e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-                Err(e) => panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e),
-            }
-        };
+        let cb = box move |(cb_ctx, snapshot)| match ch.send(Msg::SnapshotFinished {
+                                                                 cid: cid,
+                                                                 cb_ctx: cb_ctx,
+                                                                 snapshot: snapshot,
+                                                             }) {
+                         Ok(_) => {}
+                         e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+                         Err(e) => panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e),
+                     };
 
         if let Err(e) = self.engine.async_snapshot(self.extract_context(cid), cb) {
-            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
+            SCHED_STAGE_COUNTER_VEC
+                .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
                 .inc();
             self.finish_with_err(cid, Error::from(e));
         }
@@ -752,12 +803,14 @@ impl Scheduler {
         debug!("receive snapshot finish msg for cid={}", cid);
         match snapshot {
             Ok(snapshot) => {
-                SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
                     .inc();
                 self.process_by_worker(cid, cb_ctx, snapshot);
             }
             Err(e) => {
-                SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
                     .inc();
                 self.finish_with_err(cid, Error::from(e));
             }
@@ -789,7 +842,8 @@ impl Scheduler {
     /// error to the callback, and releases the latches.
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
         debug!("write command(cid={}) failed at prewrite.", cid);
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"])
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"])
             .inc();
         self.finish_with_err(cid, e);
     }
@@ -803,13 +857,16 @@ impl Scheduler {
                                  cmd: Command,
                                  pr: ProcessResult,
                                  to_be_write: Vec<Modify>) {
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "write"]).inc();
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[self.get_ctx_tag(cid), "write"])
+            .inc();
         if to_be_write.is_empty() {
             return self.on_write_finished(cid, pr, Ok(()));
         }
         let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
         if let Err(e) = self.engine.async_write(cmd.get_context(), to_be_write, engine_cb) {
-            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
+            SCHED_STAGE_COUNTER_VEC
+                .with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
                 .inc();
             self.finish_with_err(cid, Error::from(e));
         }
@@ -817,7 +874,9 @@ impl Scheduler {
 
     /// Event handler for the success of write.
     fn on_write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "write_finish"]).inc();
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[self.get_ctx_tag(cid), "write_finish"])
+            .inc();
         debug!("write finished for command, cid={}", cid);
         let mut ctx = self.remove_ctx(cid);
         let cb = ctx.callback.take().unwrap();
@@ -857,13 +916,18 @@ impl Scheduler {
             match msg {
                 Msg::Quit => return Ok(()),
                 Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                Msg::SnapshotFinished { cid, cb_ctx, snapshot } => {
-                    self.on_snapshot_finished(cid, cb_ctx, snapshot)
-                }
+                Msg::SnapshotFinished {
+                    cid,
+                    cb_ctx,
+                    snapshot,
+                } => self.on_snapshot_finished(cid, cb_ctx, snapshot),
                 Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
-                Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
-                    self.on_write_prepare_finished(cid, cmd, pr, to_be_write)
-                }
+                Msg::WritePrepareFinished {
+                    cid,
+                    cmd,
+                    pr,
+                    to_be_write,
+                } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write),
                 Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
                 Msg::WriteFinished { cid, pr, result, .. } => {
                     self.on_write_finished(cid, pr, result)
@@ -967,13 +1031,14 @@ mod tests {
 
         let mut latches = Latches::new(1024);
 
-        let write_locks: Vec<Lock> = write_cmds.into_iter()
+        let write_locks: Vec<Lock> = write_cmds
+            .into_iter()
             .enumerate()
             .map(|(id, cmd)| {
-                let mut lock = gen_command_lock(&latches, &cmd);
-                assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
-                lock
-            })
+                     let mut lock = gen_command_lock(&latches, &cmd);
+                     assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
+                     lock
+                 })
             .collect();
 
         for (id, cmd) in readonly_cmds.iter().enumerate() {

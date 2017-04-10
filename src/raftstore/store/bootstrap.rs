@@ -32,9 +32,9 @@ fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Re
                         end_key,
                         false,
                         &mut |_, _| {
-                            count += 1;
-                            Ok(false)
-                        }));
+                                 count += 1;
+                                 Ok(false)
+                             }));
 
     Ok(count == 0)
 }
@@ -134,11 +134,11 @@ mod tests {
                                CF_DEFAULT,
                                &keys::region_meta_prefix(1),
                                &keys::region_meta_prefix(2))
-            .unwrap());
+                        .unwrap());
         assert!(is_range_empty(&engine,
                                CF_RAFT,
                                &keys::region_raft_prefix(1),
                                &keys::region_raft_prefix(2))
-            .unwrap());
+                        .unwrap());
     }
 }

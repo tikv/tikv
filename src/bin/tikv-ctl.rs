@@ -252,14 +252,13 @@ pub fn gen_mvcc_iter<T: MvccDeserializable>(db: &DB,
         vec![]
     } else {
         let kvs = iter.map(|s| {
-            let key = &keys::origin_key(&s.0);
-            MvccKv {
-                key: Key::from_encoded(key.to_vec()),
-                value: T::deserialize(&s.1),
-            }
-        });
-        kvs.take_while(|s| s.key.encoded().starts_with(&encoded_prefix))
-            .collect()
+                               let key = &keys::origin_key(&s.0);
+                               MvccKv {
+                                   key: Key::from_encoded(key.to_vec()),
+                                   value: T::deserialize(&s.1),
+                               }
+                           });
+        kvs.take_while(|s| s.key.encoded().starts_with(&encoded_prefix)).collect()
     }
 }
 
@@ -338,7 +337,9 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     let region_state_key = keys::region_state_key(region_id);
     let region_state: Option<RegionLocalState> = db.get_msg(&region_state_key).unwrap();
     if skip_tombstone &&
-       region_state.as_ref().map_or(false, |s| s.get_state() == PeerState::Tombstone) {
+       region_state
+           .as_ref()
+           .map_or(false, |s| s.get_state() == PeerState::Tombstone) {
         return;
     }
     println!("region state key: {}", escape(&region_state_key));
@@ -362,13 +363,13 @@ fn dump_all_region_info(db: DB, skip_tombstone: bool) {
               end_key,
               false,
               &mut |key, _| {
-            let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_STATE_SUFFIX {
-                return Ok(true);
-            }
-            dump_region_info(&db, region_id, skip_tombstone);
-            Ok(true)
-        })
+                       let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
+                       if suffix != keys::REGION_STATE_SUFFIX {
+                           return Ok(true);
+                       }
+                       dump_region_info(&db, region_id, skip_tombstone);
+                       Ok(true)
+                   })
         .unwrap();
 }
 
@@ -473,13 +474,15 @@ mod tests {
         let test_data_lock = vec![(b"kv", LockType::Put, b"v", 5),
                                   (b"kx", LockType::Lock, b"x", 10),
                                   (b"kz", LockType::Delete, b"y", 15)];
-        let keys: Vec<_> = test_data_lock.iter()
+        let keys: Vec<_> = test_data_lock
+            .iter()
             .map(|data| {
-                let encoded = encode_bytes(&data.0[..]);
-                keys::data_key(encoded.as_slice())
-            })
+                     let encoded = encode_bytes(&data.0[..]);
+                     keys::data_key(encoded.as_slice())
+                 })
             .collect();
-        let lock_value: Vec<_> = test_data_lock.iter()
+        let lock_value: Vec<_> = test_data_lock
+            .iter()
             .map(|data| Lock::new(data.1, data.2.to_vec(), data.3, 0, None).to_bytes())
             .collect();
         let kvs = keys.iter().zip(lock_value.iter());
@@ -505,15 +508,17 @@ mod tests {
                                    (PREFIX, WriteType::Lock, 15, 20),
                                    (PREFIX, WriteType::Put, 25, 30),
                                    (PREFIX, WriteType::Rollback, 35, 40)];
-        let keys: Vec<_> = test_data_write.iter()
+        let keys: Vec<_> = test_data_write
+            .iter()
             .map(|data| {
-                let encoded = encode_bytes(&data.0[..]);
-                let mut d = keys::data_key(encoded.as_slice());
-                let _ = d.encode_u64_desc(data.3);
-                d
-            })
+                     let encoded = encode_bytes(&data.0[..]);
+                     let mut d = keys::data_key(encoded.as_slice());
+                     let _ = d.encode_u64_desc(data.3);
+                     d
+                 })
             .collect();
-        let write_value: Vec<_> = test_data_write.iter()
+        let write_value: Vec<_> = test_data_write
+            .iter()
             .map(|data| Write::new(data.1, data.2, None).to_bytes())
             .collect();
         let kvs = keys.iter().zip(write_value.iter());
@@ -531,9 +536,10 @@ mod tests {
             let ts = kv.key.decode_ts().unwrap();
             let key = kv.key.truncate_ts().unwrap().raw().unwrap();
             test_iter.retain(|&s| {
-                !(&s.0[..] == key.as_slice() && s.1 == write.write_type && s.2 == write.start_ts &&
-                  s.3 == ts)
-            });
+                                 !(&s.0[..] == key.as_slice() && s.1 == write.write_type &&
+                                   s.2 == write.start_ts &&
+                                   s.3 == ts)
+                             });
         }
         assert_eq!(test_iter.len(), 0);
     }

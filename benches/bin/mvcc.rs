@@ -34,24 +34,28 @@ fn bench_tombstone_scan() -> BenchSamples {
 
     for (k, v) in kvs.take(100000) {
         let mut ts = ts_generator.next().unwrap();
-        store.prewrite(Context::new(),
+        store
+            .prewrite(Context::new(),
                       vec![Mutation::Put((Key::from_raw(&k), v))],
                       k.clone(),
                       ts)
             .expect("");
-        store.commit(Context::new(),
+        store
+            .commit(Context::new(),
                     vec![Key::from_raw(&k)],
                     ts,
                     ts_generator.next().unwrap())
             .expect("");
 
         ts = ts_generator.next().unwrap();
-        store.prewrite(Context::new(),
+        store
+            .prewrite(Context::new(),
                       vec![Mutation::Delete(Key::from_raw(&k))],
                       k.clone(),
                       ts)
             .expect("");
-        store.commit(Context::new(),
+        store
+            .commit(Context::new(),
                     vec![Key::from_raw(&k)],
                     ts,
                     ts_generator.next().unwrap())

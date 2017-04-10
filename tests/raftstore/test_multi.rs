@@ -46,12 +46,10 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
-    cluster.assert_quorum(|engine| {
-        match engine.get_value(&keys::data_key(key)).unwrap() {
-            None => false,
-            Some(v) => &*v == value,
-        }
-    });
+    cluster.assert_quorum(|engine| match engine.get_value(&keys::data_key(key)).unwrap() {
+                              None => false,
+                              Some(v) => &*v == value,
+                          });
 
     cluster.must_delete(key);
     assert_eq!(cluster.must_get(key), None);
@@ -313,7 +311,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     // So peer 3 won't replicate any message of the region but still can vote.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
-        .msg_type(MessageType::MsgAppend)));
+                                                   .msg_type(MessageType::MsgAppend)));
     cluster.must_put(b"k1", b"v1");
 
     // peer 1 and peer 2 must have k2, but peer 3 must not.
@@ -330,24 +328,25 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     // hack: first MsgAppend will append log, second MsgAppend will set commit index,
     // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Recv)
-        .allow(1)));
+                                                   .msg_type(MessageType::MsgAppend)
+                                                   .direction(Direction::Recv)
+                                                   .allow(1)));
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it becomes leader.
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
-        .msg_type(MessageType::MsgHeartbeatResponse)
-        .direction(Direction::Send)));
+    cluster
+        .add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
+                                                .msg_type(MessageType::MsgHeartbeatResponse)
+                                                .direction(Direction::Send)));
     // Make peer 2's msg won't be replicated when it becomes leader,
     // so the uncommitted entries won't be applied immediatly.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
-        .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Recv)));
+                                                   .msg_type(MessageType::MsgAppend)
+                                                   .direction(Direction::Recv)));
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgHeartbeat)
-        .direction(Direction::Recv)));
+                                                   .msg_type(MessageType::MsgHeartbeat)
+                                                   .direction(Direction::Recv)));
     debug!("putting k2");
     cluster.must_put(b"k2", b"v2");
 
@@ -404,7 +403,7 @@ fn test_node_leader_change_with_log_overlap() {
 
     // So peer 3 won't replicate any message of the region but still can vote.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
-        .msg_type(MessageType::MsgAppend)));
+                                                   .msg_type(MessageType::MsgAppend)));
     cluster.must_put(b"k1", b"v1");
 
     // peer 1 and peer 2 must have k1, but peer 3 must not.
@@ -420,8 +419,8 @@ fn test_node_leader_change_with_log_overlap() {
     // Make peer 1's msg won't be replicated,
     // so the proposed entries won't be committed.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
-        .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Send)));
+                                                   .msg_type(MessageType::MsgAppend)
+                                                   .direction(Direction::Send)));
     let put_msg = vec![new_put_cmd(b"k2", b"v2")];
     let region = cluster.get_region(b"");
     let mut put_req = new_request(region.get_id(),
@@ -431,22 +430,23 @@ fn test_node_leader_change_with_log_overlap() {
     put_req.mut_header().set_peer(new_peer(1, 1));
     let called = Arc::new(AtomicBool::new(false));
     let called_ = called.clone();
-    cluster.sim
+    cluster
+        .sim
         .rl()
         .get_node_router(1)
         .send_command(put_req,
                       box move |resp: RaftCmdResponse| {
-                          called_.store(true, Ordering::SeqCst);
-                          assert!(resp.get_header().has_error());
-                          assert!(resp.get_header().get_error().has_stale_command());
-                      })
+                              called_.store(true, Ordering::SeqCst);
+                              assert!(resp.get_header().has_error());
+                              assert!(resp.get_header().get_error().has_stale_command());
+                          })
         .unwrap();
 
     // Now let peer(1, 1) steps down. Can't use transfer leader here, because
     // it still has pending proposed entries.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 1)
-        .msg_type(MessageType::MsgHeartbeat)
-        .direction(Direction::Send)));
+                                                   .msg_type(MessageType::MsgHeartbeat)
+                                                   .direction(Direction::Send)));
     // make sure k2 has not been committed.
     must_get_none(&cluster.get_engine(1), b"k2");
 
@@ -492,21 +492,21 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // hack: first MsgAppend will append log, second MsgAppend will set commit index,
     // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Recv)
-        .allow(1)));
+                                                   .msg_type(MessageType::MsgAppend)
+                                                   .direction(Direction::Recv)
+                                                   .allow(1)));
 
     // Make peer 2's msg won't be replicated when it becomes leader,
     // so the uncommitted entries won't be applied immediatly.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Send)));
+                                                   .msg_type(MessageType::MsgAppend)
+                                                   .direction(Direction::Send)));
 
     // Make peer 2 have no way to know the uncommitted entries can be applied
     // when it's still follower.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgHeartbeat)
-        .direction(Direction::Recv)));
+                                                   .msg_type(MessageType::MsgHeartbeat)
+                                                   .direction(Direction::Recv)));
 
     let (k, v) = (b"k", b"v");
     cluster.must_put(k, v);
@@ -573,12 +573,12 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     // stop peer 2 replicate messages.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgAppend)
-        .direction(Direction::Recv)));
+                                                   .msg_type(MessageType::MsgAppend)
+                                                   .direction(Direction::Recv)));
     // peer 2 can't step to leader.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 2)
-        .msg_type(MessageType::MsgRequestVote)
-        .direction(Direction::Send)));
+                                                   .msg_type(MessageType::MsgRequestVote)
+                                                   .direction(Direction::Send)));
 
     let pd_client = cluster.pd_client.clone();
     pd_client.remove_peer(1, new_peer(1, 1));
@@ -631,7 +631,7 @@ fn test_node_dropped_proposal() {
 
     // so peer 3 won't have latest messages, it can't become leader.
     cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(1, 3)
-        .msg_type(MessageType::MsgAppend)));
+                                                   .msg_type(MessageType::MsgAppend)));
     cluster.must_put(b"k1", b"v1");
 
     // peer 1 and peer 2 must have k1, but peer 3 must not.
@@ -656,17 +656,17 @@ fn test_node_dropped_proposal() {
     cluster.transfer_leader(1, new_peer(3, 3));
 
     let (tx, rx) = mpsc::channel();
-    cluster.sim
+    cluster
+        .sim
         .rl()
         .get_node_router(1)
         .send_command(put_req,
-                      box move |resp: RaftCmdResponse| {
-                          let _ = tx.send(resp);
-                      })
+                      box move |resp: RaftCmdResponse| { let _ = tx.send(resp); })
         .unwrap();
 
     // Although proposal is dropped, callback should be cleaned up in time.
-    rx.recv_timeout(Duration::from_secs(5)).expect("callback should have been called with in 5s.");
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("callback should have been called with in 5s.");
 }
 
 fn test_consistency_check<T: Simulator>(cluster: &mut Cluster<T>) {

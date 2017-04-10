@@ -1,0 +1,201 @@
+# "Use verbose output"
+verbose = false
+
+# "Don't reformat anything"
+disable_all_formatting = false
+
+# "Don't reformat out of line modules"
+skip_children = false
+
+# "Lines to format this is not supported in rustfmt.toml, and can only be specified
+# via the --file-lines option"
+#file_lines =
+
+# "Maximum width of each line"
+max_width = 100
+
+# "Error if unable to get all lines within max_width"
+error_on_line_overflow = true
+
+# "Number of spaces per tab"
+tab_spaces = 4
+
+# "Maximum width of the args of a function call before falling back to vertical formatting"
+fn_call_width = 60
+
+# "Maximum width in the body of a struct lit before falling back to vertical formatting"
+struct_lit_width = 18
+
+# "Maximum width in the body of a struct variant before falling back to vertical formatting"
+struct_variant_width = 35
+
+# "Always print the abi for extern items"
+force_explicit_abi = true
+
+# "Unix or Windows line endings"
+newline_style = "Unix"
+
+# "Brace style for functions"
+fn_brace_style = "SameLineWhere"
+
+# "Brace style for structs and enums"
+item_brace_style = "SameLineWhere"
+
+# "Brace style for control flow constructs"
+control_brace_style = "AlwaysSameLine"
+
+# "Put empty-body implementations on a single line"
+impl_empty_single_line = true
+
+# "How to handle trailing commas for lists"
+trailing_comma = "Vertical"
+
+# "Put empty-body functions on a single line"
+fn_empty_single_line = true
+
+# "Put single-expression functions on a single line"
+fn_single_line = false
+
+# "Location of return type in function declaration"
+fn_return_indent = "WithArgs"
+
+# "If function argument parenthesis goes on a newline"
+fn_args_paren_newline = true
+
+# "Argument density in functions"
+fn_args_density = "Tall"
+
+# "Layout of function arguments and tuple structs"
+fn_args_layout = "Visual"
+
+# "Indent on arrays"
+array_layout = "Visual"
+
+# "Maximum width of an array literal before falling back to vertical formatting"
+array_width = 60
+
+# "Determines if '+' or '=' are wrapped in spaces in the punctuation of types"
+type_punctuation_density = "Wide"
+
+# "Overall strategy for where clauses"
+where_style = "Default"
+
+# "Density of a where clause"
+where_density = "CompressedIfEmpty"
+
+# "Indentation of a where clause"
+where_indent = "Block"
+
+# "Element layout inside a where clause"
+where_layout = "Vertical"
+
+# "Indentation style of a where predicate"
+where_pred_indent = "Visual"
+
+# "Overall strategy for generics"
+generics_style = "Default"
+
+# "Indentation of generics"
+generics_indent = "Visual"
+
+# "Style of struct definition"
+struct_lit_style = "Block"
+
+# "Multiline style on literal structs"
+struct_lit_multiline_style = "PreferSingle"
+
+# "Indentation for function calls, etc."
+fn_call_style = "Visual"
+
+# "Report all, none or unnumbered occurrences of TODO in source file comments"
+report_todo = "Never"
+
+# "Report all, none or unnumbered occurrences of FIXME in source file comments"
+report_fixme = "Never"
+
+# "Indentation of chain"
+chain_indent = "Block"
+
+# "Maximum length of a chain to fit on a single line"
+chain_one_line_max = 80
+
+# "Reorder import statements alphabetically"
+reorder_imports = false
+
+# "Reorder lists of names in import statements alphabetically"
+reorder_imported_names = false
+
+# "Maximum line length for single line if-else
+# expressions. A value of zero means always break
+# if-else expressions."
+single_line_if_else_max_width = 50
+
+# "Format string literals where necessary"
+format_strings = false
+
+# "Always format string literals"
+force_format_strings = false
+
+# "Retain some formatting characteristics from the source code"
+take_source_hints = false
+
+# "Use tab characters for indentation, spaces for alignment"
+hard_tabs = false
+
+# "Break comments to fit on the line"
+wrap_comments = false
+
+# "Maximum length of comments. No effect unless wrap_comments = true"
+comment_width = 80
+
+# "Convert /* */ comments to // comments where possible"
+normalize_comments = false
+
+# "Wrap multiline match arms in blocks"
+wrap_match_arms = true
+
+# "Put a trailing comma after a block based
+# match arm (non-block arms are not affected)"
+match_block_trailing_comma = false
+
+# "Indent match arms instead of keeping them at the same
+# indentation level as the match keyword"
+indent_match_arms = true
+
+# "How many lines a closure must have before it is
+# block indented. -1 means never use block indent."
+closure_block_indent_threshold = 7
+
+# "Leave a space before the colon in a type annotation"
+space_before_type_annotation = false
+
+# "Leave a space after the colon in a type annotation"
+space_after_type_annotation_colon = true
+
+# "Leave a space before the colon in a trait or lifetime bound"
+space_before_bound = false
+
+# "Leave a space after the colon in a trait or lifetime bound"
+space_after_bound_colon = true
+
+# "Put spaces around the  .. and ... range operators"
+spaces_around_ranges = false
+
+# "Put spaces within non-empty generic arguments"
+spaces_within_angle_brackets = false
+
+# "Put spaces within non-empty square brackets"
+spaces_within_square_brackets = false
+
+# "Put spaces within non-empty parentheses"
+spaces_within_parens = false
+
+# "Replace uses of the try! macro by the ? shorthand"
+use_try_shorthand = false
+
+# "What Write Mode to use when none is supplied:
+# Replace, Overwrite, Display, Diff, Coverage"
+write_mode = "Replace"
+
+# "Replace strings of _ wildcards by a single .. in tuple patterns"
+condense_wildcard_suffices = false

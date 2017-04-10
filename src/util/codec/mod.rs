@@ -15,8 +15,16 @@ use std::io;
 
 use protobuf;
 
-const TEN_POW: &'static [u32] =
-    &[1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000];
+const TEN_POW: &'static [u32] = &[1,
+                                  10,
+                                  100,
+                                  1_000,
+                                  10_000,
+                                  100_000,
+                                  1_000_000,
+                                  10_000_000,
+                                  100_000_000,
+                                  1_000_000_000];
 
 /// A shortcut to box an error.
 macro_rules! invalid_type {

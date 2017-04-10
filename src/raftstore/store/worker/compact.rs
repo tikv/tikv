@@ -64,11 +64,11 @@ impl Runner {
                         end_key: Option<Vec<u8>>)
                         -> Result<(), Error> {
         let cf_handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
-        let compact_range_timer = COMPACT_RANGE_CF.with_label_values(&[&cf_name])
-            .start_timer();
-        self.engine.compact_range_cf(cf_handle,
-                                     start_key.as_ref().map(Vec::as_slice),
-                                     end_key.as_ref().map(Vec::as_slice));
+        let compact_range_timer = COMPACT_RANGE_CF.with_label_values(&[&cf_name]).start_timer();
+        self.engine
+            .compact_range_cf(cf_handle,
+                              start_key.as_ref().map(Vec::as_slice),
+                              end_key.as_ref().map(Vec::as_slice));
 
         compact_range_timer.observe_duration();
         Ok(())

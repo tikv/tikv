@@ -80,13 +80,11 @@ impl StoreHandler {
         let mut req = msg.take_cmd_prewrite_req();
         let mutations = req.take_mutations()
             .into_iter()
-            .map(|mut x| {
-                match x.get_op() {
-                    Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
-                    Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
-                    Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
-                }
-            })
+            .map(|mut x| match x.get_op() {
+                     Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
+                     Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
+                     Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                 })
             .collect();
         let cb = self.make_cb(StoreHandler::cmd_prewrite_done, on_resp);
         let mut options = Options::default();
@@ -108,10 +106,7 @@ impl StoreHandler {
         }
         let req = msg.take_cmd_commit_req();
         let cb = self.make_cb(StoreHandler::cmd_commit_done, on_resp);
-        let keys = req.get_keys()
-            .iter()
-            .map(|x| Key::from_raw(x))
-            .collect();
+        let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
         self.store
             .async_commit(msg.take_context(),
                           keys,
@@ -194,7 +189,9 @@ impl StoreHandler {
         }
         let req = msg.take_cmd_gc_req();
         let cb = self.make_cb(StoreHandler::cmd_gc_done, on_resp);
-        self.store.async_gc(msg.take_context(), req.get_safe_point(), cb).map_err(Error::Storage)
+        self.store
+            .async_gc(msg.take_context(), req.get_safe_point(), cb)
+            .map_err(Error::Storage)
     }
 
     fn on_raw_get(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
@@ -203,7 +200,9 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_raw_get_req();
         let cb = self.make_cb(StoreHandler::cmd_raw_get_done, on_resp);
-        self.store.async_raw_get(msg.take_context(), req.take_key(), cb).map_err(Error::Storage)
+        self.store
+            .async_raw_get(msg.take_context(), req.take_key(), cb)
+            .map_err(Error::Storage)
     }
 
     fn on_raw_put(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
@@ -223,7 +222,9 @@ impl StoreHandler {
         }
         let mut req = msg.take_cmd_raw_delete_req();
         let cb = self.make_cb(StoreHandler::cmd_raw_delete_done, on_resp);
-        self.store.async_raw_delete(msg.take_context(), req.take_key(), cb).map_err(Error::Storage)
+        self.store
+            .async_raw_delete(msg.take_context(), req.take_key(), cb)
+            .map_err(Error::Storage)
     }
 
     fn make_cb<T: 'static>(&self,
@@ -365,21 +366,21 @@ impl StoreHandler {
 
     pub fn on_request(&self, req: Request, on_resp: OnResponse) -> Result<()> {
         if let Err(e) = match req.get_field_type() {
-            MessageType::CmdGet => self.on_get(req, on_resp),
-            MessageType::CmdScan => self.on_scan(req, on_resp),
-            MessageType::CmdPrewrite => self.on_prewrite(req, on_resp),
-            MessageType::CmdCommit => self.on_commit(req, on_resp),
-            MessageType::CmdCleanup => self.on_cleanup(req, on_resp),
-            MessageType::CmdBatchGet => self.on_batch_get(req, on_resp),
-            MessageType::CmdBatchRollback => self.on_batch_rollback(req, on_resp),
-            MessageType::CmdScanLock => self.on_scan_lock(req, on_resp),
-            MessageType::CmdResolveLock => self.on_resolve_lock(req, on_resp),
-            MessageType::CmdGC => self.on_gc(req, on_resp),
+               MessageType::CmdGet => self.on_get(req, on_resp),
+               MessageType::CmdScan => self.on_scan(req, on_resp),
+               MessageType::CmdPrewrite => self.on_prewrite(req, on_resp),
+               MessageType::CmdCommit => self.on_commit(req, on_resp),
+               MessageType::CmdCleanup => self.on_cleanup(req, on_resp),
+               MessageType::CmdBatchGet => self.on_batch_get(req, on_resp),
+               MessageType::CmdBatchRollback => self.on_batch_rollback(req, on_resp),
+               MessageType::CmdScanLock => self.on_scan_lock(req, on_resp),
+               MessageType::CmdResolveLock => self.on_resolve_lock(req, on_resp),
+               MessageType::CmdGC => self.on_gc(req, on_resp),
 
-            MessageType::CmdRawGet => self.on_raw_get(req, on_resp),
-            MessageType::CmdRawPut => self.on_raw_put(req, on_resp),
-            MessageType::CmdRawDelete => self.on_raw_delete(req, on_resp),
-        } {
+               MessageType::CmdRawGet => self.on_raw_get(req, on_resp),
+               MessageType::CmdRawPut => self.on_raw_put(req, on_resp),
+               MessageType::CmdRawDelete => self.on_raw_delete(req, on_resp),
+           } {
             // TODO: should we return an error and tell the client later?
             error!("Some error occur err[{:?}]", e);
         }
@@ -423,10 +424,12 @@ fn extract_committed(err: &StorageError) -> Option<u64> {
 fn extract_key_error(err: &StorageError) -> KeyError {
     let mut key_error = KeyError::new();
     match *err {
-        StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked { ref key,
-                                                                  ref primary,
-                                                                  ts,
-                                                                  ttl })) => {
+        StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
+                                             ref key,
+                                             ref primary,
+                                             ts,
+                                             ttl,
+                                         })) => {
             let mut lock_info = LockInfo::new();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
@@ -635,9 +638,9 @@ mod tests {
     #[test]
     fn test_extract_error_illegal_tso() {
         let err = StorageError::from(txn::Error::InvalidTxnTso {
-            start_ts: 5,
-            commit_ts: 4,
-        });
+                                         start_ts: 5,
+                                         commit_ts: 4,
+                                     });
         let key_error = extract_key_error(&err);
         assert!(key_error.has_abort());
         assert!(!key_error.has_locked());
@@ -721,8 +724,8 @@ mod tests {
                 ts: ts,
                 ttl: ttl,
             })
-            .map_err(txn::Error::from)
-            .map_err(storage::Error::from)
+                .map_err(txn::Error::from)
+                .map_err(storage::Error::from)
     }
 
     fn make_not_leader_error<T>(leader_info: NotLeader) -> StorageResult<T> {
