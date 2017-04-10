@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
 use std::io::ErrorKind;
+use std::boxed::FnBox;
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -26,9 +27,10 @@ use super::cluster::{Simulator, Cluster};
 use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
-use tikv::util::codec::{Error as CodecError, rpc};
+use tikv::util::codec::rpc;
 use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, ALL_CFS};
 use tikv::util::make_std_tcp_conn;
@@ -237,36 +239,16 @@ impl Simulator for ServerCluster {
                             request: RaftCmdRequest,
                             timeout: Duration)
                             -> Result<RaftCmdResponse> {
-        let addr = &self.addrs[&node_id];
-        let mut conn = self.pool_get(addr).unwrap();
+        if !self.routers.contains_key(&node_id) {
+            return Err(box_err!("missing sender for store {}", node_id));
+        }
 
-        let mut msg = Message::new();
-        msg.set_msg_type(MessageType::Cmd);
-        msg.set_cmd_req(request);
-
-        let msg_id = self.alloc_msg_id();
-        conn.set_write_timeout(Some(timeout)).unwrap();
-        try!(rpc::encode_msg(&mut conn, msg_id, &msg));
-
-        conn.set_read_timeout(Some(timeout)).unwrap();
-        let mut resp_msg = Message::new();
-        let get_msg_id = try!(rpc::decode_msg(&mut conn, &mut resp_msg).map_err(|e| {
-            if let CodecError::Io(ref err) = e {
-                // For unix, read timeout returns WouldBlock but windows returns TimedOut.
-                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut {
-                    return Error::Timeout(format!("{:?}", err));
-                }
-            }
-
-            Error::Codec(e)
-        }));
-
-        self.pool_put(addr, conn);
-
-        assert_eq!(resp_msg.get_msg_type(), MessageType::CmdResp);
-        assert_eq!(msg_id, get_msg_id);
-
-        Ok(resp_msg.take_cmd_resp())
+        let router = self.routers.get(&node_id).cloned().unwrap();
+        wait_op!(|cb: Box<FnBox(RaftCmdResponse) + 'static + Send>| {
+                     router.send_command(request, cb).unwrap()
+                 },
+                 timeout)
+            .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
