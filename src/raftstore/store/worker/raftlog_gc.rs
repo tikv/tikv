@@ -95,11 +95,11 @@ impl Runner {
         Ok(end_idx - first_idx)
     }
 
-    fn finish_task(&mut self, collected: u64) {
+    fn finish_task(&self, collected: u64) {
         if self.ch.is_none() {
             return;
         }
-        self.ch.as_mut().unwrap().send(TaskRes { collected: collected }).unwrap();
+        self.ch.as_ref().unwrap().send(TaskRes { collected: collected }).unwrap();
     }
 }
 
