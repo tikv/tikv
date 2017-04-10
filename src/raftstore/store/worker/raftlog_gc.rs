@@ -202,7 +202,7 @@ mod test {
         let raft_handle = rocksdb::get_cf_handle(engine, CF_RAFT).unwrap();
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
-            engine.get_cf(raft_handle, &k).unwrap().is_none();
+            assert!(engine.get_cf(raft_handle, &k).unwrap().is_none());
         }
     }
 
@@ -210,7 +210,7 @@ mod test {
         let raft_handle = rocksdb::get_cf_handle(engine, CF_RAFT).unwrap();
         for i in start_idx..end_idx {
             let k = keys::raft_log_key(region_id, i);
-            engine.get_cf(raft_handle, &k).unwrap().is_some();
+            assert!(engine.get_cf(raft_handle, &k).unwrap().is_some());
         }
     }
 }
