@@ -398,47 +398,22 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
 }
 
 #[test]
-fn test_txn_store_gc2_1() {
+fn test_txn_store_gc2_without_key() {
     test_txn_store_gc_multiple_keys(1, 0);
 }
 
 #[test]
-fn test_txn_store_gc2_2() {
-    test_txn_store_gc_multiple_keys(1, 1);
-}
-
-#[test]
-fn test_txn_store_gc2_3() {
-    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE - 1);
-}
-
-#[test]
-fn test_txn_store_gc2_4() {
-    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE);
-}
-
-#[test]
-fn test_txn_store_gc2_5() {
-    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE + 1);
-}
-
-#[test]
-fn test_txn_store_gc2_6() {
-    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE * 2);
-}
-
-#[test]
-fn test_txn_store_gc2_7() {
+fn test_txn_store_gc2_with_less_keys() {
     test_txn_store_gc_multiple_keys(1, 3);
 }
 
 #[test]
-fn test_txn_store_gc2_8() {
-    test_txn_store_gc_multiple_keys(MAX_TXN_WRITE_SIZE / 2, 3);
+fn test_txn_store_gc2_with_many_keys() {
+    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE + 1);
 }
 
 #[test]
-fn test_txn_store_gc2_9() {
+fn test_txn_store_gc2_with_long_key_prefix() {
     test_txn_store_gc_multiple_keys(MAX_TXN_WRITE_SIZE + 1, 3);
 }
 
