@@ -61,6 +61,7 @@ sys-info = "0.4.1"
 mio = "0.5"
 futures = "0.1"
 tokio-core = "0.1"
+tokio-timer = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"

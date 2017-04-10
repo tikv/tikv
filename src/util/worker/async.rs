@@ -136,6 +136,11 @@ impl<T: Display + Send + 'static> Worker<T> {
         self.scheduler.schedule(task)
     }
 
+    /// Check if underlying worker can't handle task immediately.
+    pub fn is_busy(&self) -> bool {
+        self.handle.is_none()
+    }
+
     pub fn name(&self) -> &str {
         self.scheduler.name.as_str()
     }

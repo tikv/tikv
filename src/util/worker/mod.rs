@@ -251,6 +251,11 @@ mod test {
     use std::sync::*;
     use std::sync::mpsc::*;
     use std::time::Duration;
+    use std::time::Instant;
+
+    use futures::Future;
+    use futures::future::BoxFuture;
+    use tokio_timer::Timer;
 
     use super::*;
 
@@ -262,6 +267,18 @@ mod test {
         fn run(&mut self, step: u64) {
             self.ch.send(step).unwrap();
             thread::sleep(Duration::from_millis(step));
+        }
+
+        fn shutdown(&mut self) {
+            self.ch.send(0).unwrap();
+        }
+    }
+
+    impl AsyncRunnable<u64> for StepRunner {
+        fn run(&mut self, step: u64) -> BoxFuture<(), ()> {
+            self.ch.send(step).unwrap();
+            let timer = Timer::default();
+            timer.sleep(Duration::from_millis(step)).map_err(|_| ()).boxed()
         }
 
         fn shutdown(&mut self) {
@@ -355,5 +372,28 @@ mod test {
             rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         assert_eq!(rx.recv().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_async_worker() {
+        let mut worker = AsyncWorker::new("test-async-worker");
+        let (tx, rx) = mpsc::channel();
+        worker.start(StepRunner { ch: tx }).unwrap();
+        assert!(!worker.is_busy());
+        // The default the tick size of tokio_timer is 100ms.
+        let start = Instant::now();
+        worker.schedule(500).unwrap();
+        worker.schedule(1000).unwrap();
+        worker.schedule(1500).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 500);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1000);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1500);
+        // above three tasks are executed concurrently, should be less then 2s.
+        assert!(start.elapsed() < Duration::from_secs(2));
+        worker.stop().unwrap().join().unwrap();
+        // now worker can't handle any task
+        assert!(worker.is_busy());
+        // when shutdown, StepRunner should send back a 0.
+        assert_eq!(0, rx.recv().unwrap());
     }
 }
