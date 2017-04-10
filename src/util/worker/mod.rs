@@ -15,6 +15,7 @@
 /// Worker contains all workers that do the expensive job in background.
 
 mod metrics;
+mod async;
 
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle, Builder};
@@ -26,6 +27,10 @@ use std::error::Error;
 
 use util::SlowTimer;
 use self::metrics::*;
+
+pub use self::async::Runnable as AsyncRunnable;
+pub use self::async::Scheduler as AsyncScheduler;
+pub use self::async::Worker as AsyncWorker;
 
 pub struct Stopped<T>(pub T);
 
