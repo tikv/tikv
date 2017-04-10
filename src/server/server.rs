@@ -19,7 +19,6 @@ use std::net::SocketAddr;
 use mio::{Token, Handler, EventLoop, EventLoopConfig, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
-use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
@@ -255,10 +254,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 try!(self.ch.raft_router.send_raft_msg(msg.take_raft()));
                 Ok(())
             }
-            MessageType::Cmd => {
-                RECV_MSG_COUNTER.with_label_values(&["cmd"]).inc();
-                self.on_raft_command(msg.take_cmd_req(), token, msg_id)
-            }
             MessageType::KvReq => {
                 RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
                 let req = msg.take_kv_req();
@@ -284,22 +279,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                              msg_id))
             }
         }
-    }
-
-    fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
-        trace!("handle raft command {:?}", msg);
-        let on_resp = self.make_response_cb(token, msg_id);
-        let cb = box move |resp| {
-            let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CmdResp);
-            resp_msg.set_cmd_resp(resp);
-
-            on_resp.call_box((resp_msg,));
-        };
-
-        try!(self.ch.raft_router.send_command(msg, cb));
-
-        Ok(())
     }
 
     fn on_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
