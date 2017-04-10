@@ -1308,8 +1308,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
+            peer.last_written_bytes = peer.written_bytes;
             if !peer.is_leader() {
-                peer.last_written_bytes = peer.written_bytes;
                 peer.written_bytes = 0;
                 peer.written_keys = 0;
                 continue;
@@ -1317,7 +1317,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
             self.store_stat.region_bytes_written.observe(peer.written_bytes as f64);
             self.store_stat.region_keys_written.observe(peer.written_keys as f64);
-            peer.last_written_bytes = peer.written_bytes;
             peer.written_bytes = 0;
             peer.written_keys = 0;
         }
