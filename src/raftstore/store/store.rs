@@ -1079,8 +1079,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(mut new_peer) => {
                 peer = new_peer.peer.clone();
                 if let Some(left) = self.region_peers.get(&region_id) {
-                    // new peer derive write flow from parent region.
+                    // New peer derive write flow from parent region,
+                    // this will be used by balance write flow.
                     new_peer.last_written_bytes = left.last_written_bytes;
+                    new_peer.written_bytes = left.written_bytes;
+                    new_peer.written_keys = left.written_keys;
 
                     campaigned = new_peer.maybe_campaign(left, &mut self.pending_raft_groups);
 
