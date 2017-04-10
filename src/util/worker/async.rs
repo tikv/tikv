@@ -24,6 +24,9 @@ use tokio_core::reactor::Core;
 use super::Stopped;
 
 pub trait Runnable<T: Display> {
+    // TODO: return `impl Future<Item=(), Error=()>`,
+    // once RFC: Expand and stabilize `impl Trait` is merged and implemented.
+    // See more: https://github.com/rust-lang/rfcs/pull/1951
     fn run(&mut self, t: T) -> BoxFuture<(), ()>;
     fn shutdown(&mut self) {}
 }
@@ -52,12 +55,6 @@ impl<T: Display> Scheduler<T> {
         }
         Ok(())
     }
-
-    // TODO: remove it.
-    /// Check if underlying worker can't handle task immediately.
-    pub fn is_busy(&self) -> bool {
-        false
-    }
 }
 
 impl<T: Display> Clone for Scheduler<T> {
@@ -76,6 +73,7 @@ pub struct Worker<T: Display> {
     handle: Option<JoinHandle<()>>,
 }
 
+// TODO: add metrics.
 fn poll<R, T>(mut runner: R, rx: UnboundedReceiver<Option<T>>)
     where R: Runnable<T> + Send + 'static,
           T: Display + Send + 'static
@@ -136,11 +134,6 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// If the worker is stopped, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), Stopped<T>> {
         self.scheduler.schedule(task)
-    }
-
-    /// Check if underlying worker can't handle task immediately.
-    pub fn is_busy(&self) -> bool {
-        self.handle.is_none() || self.scheduler.is_busy()
     }
 
     pub fn name(&self) -> &str {
