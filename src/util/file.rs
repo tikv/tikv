@@ -38,8 +38,7 @@ pub fn delete_file_if_exist(file: &PathBuf) {
 #[cfg(test)]
 mod test {
     use std::io::Write;
-    use std::fs::{OpenOptions, Permissions};
-    use std::os::unix::fs::PermissionsExt;
+    use std::fs::OpenOptions;
     use tempdir::TempDir;
 
     use super::*;
@@ -105,8 +104,7 @@ mod test {
         let perm_file = dir_path.join("perm_file");
         {
             let f = OpenOptions::new().write(true).create_new(true).open(&perm_file).unwrap();
-            let perm = Permissions::from_mode(0o400);
-            f.set_permissions(perm).unwrap();
+            f.metadata().unwrap().permissions().set_readonly(true);
         }
         assert_eq!(file_exists(&perm_file), true);
         delete_file_if_exist(&perm_file);
