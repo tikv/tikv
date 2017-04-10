@@ -76,10 +76,22 @@ pub struct StoreChannel {
     pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
 }
 
-#[derive(Default)]
 pub struct StoreStat {
+    pub region_bytes_written: LocalHistogram,
+    pub region_keys_written: LocalHistogram,
     pub lock_cf_bytes_written: u64,
     pub engine_total_bytes_written: u64,
+}
+
+impl Default for StoreStat {
+    fn default() -> StoreStat {
+        StoreStat {
+            region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
+            region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
+            lock_cf_bytes_written: 0,
+            engine_total_bytes_written: 0,
+        }
+    }
 }
 
 pub struct Store<T, C: 'static> {
@@ -123,9 +135,6 @@ pub struct Store<T, C: 'static> {
     is_busy: bool,
 
     pending_votes: RingQueue<RaftMessage>,
-
-    region_written_bytes: LocalHistogram,
-    region_written_keys: LocalHistogram,
 
     store_stat: StoreStat,
 }
@@ -200,8 +209,6 @@ impl<T, C> Store<T, C> {
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
-            region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
-            region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
             store_stat: StoreStat::default(),
         };
         try!(s.init());
@@ -1308,14 +1315,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
-            self.region_written_bytes.observe(peer.written_bytes as f64);
-            self.region_written_keys.observe(peer.written_keys as f64);
+            self.store_stat.region_bytes_written.observe(peer.written_bytes as f64);
+            self.store_stat.region_keys_written.observe(peer.written_keys as f64);
             peer.last_written_bytes = peer.written_bytes;
             peer.written_bytes = 0;
             peer.written_keys = 0;
         }
-        self.region_written_bytes.flush();
-        self.region_written_keys.flush();
+        self.store_stat.region_bytes_written.flush();
+        self.store_stat.region_keys_written.flush();
 
         self.register_report_region_flow_tick(event_loop);
     }
