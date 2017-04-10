@@ -11,14 +11,26 @@ function require() {
     if [[ $# -eq 1 ]]; then
         return 0
     fi
+
     version=`$1 --version | cut -d ' ' -f $2`
-    min_version=`printf "$3\n$version" | sort -V | head -n 1`
-    [[ "$min_version" == $3 ]] || panic version of $1 should be larger than $3
+    if [[ "$3" == "eq" ]]; then
+        # equal
+	[[ "$version" == "$4" ]] || panic version of $1 should be $4
+    else
+	if [[ "$3" == "le" ]]; then
+	    # larger or equal
+            min_version=`printf "$3\n$version" | sort -V | head -n 1`
+            [[ "$min_version" == "$4" ]] || panic version of $1 should be larger than $4
+	else
+            max_version=`printf "$3\n$version" | sort -V | tail -n 1`
+            [[ "$max_version" == "$4" ]] || panic versio of $1 should be less than $4
+	fi
+    fi
 }
 
-require git 3 1.7.8
+require git 3 le 1.7.8
 require python
-require rustfmt 1 0.8.3
+require rustfmt 1 eq 0.8.3
 require grep
 
 extract_script=`dirname "$0"`/extract-diff.py

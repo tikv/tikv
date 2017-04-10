@@ -39,7 +39,7 @@ ${LOCAL_DIR}/bin/kcov:
 	fi
 
 ${HOME}/.cargo/bin/rustfmt:
-	cargo install -f rustfmt
+	cargo install --vers 0.8.3 -f rustfmt
 
 prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov  ${HOME}/.cargo/bin/rustfmt
 
