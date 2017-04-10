@@ -22,8 +22,9 @@ mod imp {
 
     use tikv::server::Msg;
     use tikv::util::transport::SendCh;
-    use tikv::util::profiling;
     use prometheus::{self, Encoder, TextEncoder};
+
+    use profiling;
 
     const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
@@ -69,7 +70,9 @@ mod imp {
                     }
                 }
                 SIGUSR2 => {
-                    profiling::profile_memory(None, &profiling_memory, Duration::from_secs(PROFILE_SLEEP_SEC));
+                    profiling::profile_memory(None,
+                                              &profiling_memory,
+                                              Duration::from_secs(PROFILE_SLEEP_SEC));
                 }
                 // TODO: handle more signal
                 _ => unreachable!(),

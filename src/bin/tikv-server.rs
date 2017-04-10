@@ -19,7 +19,9 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
+#[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
+#[macro_use]
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
@@ -35,8 +37,11 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
+#[cfg(test)]
+extern crate tempdir;
 
 mod signal_handler;
+mod profiling;
 
 use std::process;
 use std::{env, thread};

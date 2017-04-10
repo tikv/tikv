@@ -9,10 +9,11 @@ time = "0.1"
 
 [features]
 default = []
-dev = ["clippy"]
+dev = ["clippy", "mem-profiling"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
+mem-profiling = ["jemallocator"]
 
 [lib]
 name = "tikv"
@@ -85,6 +86,7 @@ git = "https://github.com/stepancheg/grpc-rust.git"
 git = "https://github.com/busyjay/jemallocator.git"
 branch = "dev"
 features = ["profiling"]
+optional = true
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

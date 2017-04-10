@@ -29,7 +29,6 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
-extern crate jemallocator;
 #[macro_use]
 extern crate log;
 #[macro_use]
