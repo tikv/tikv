@@ -22,6 +22,8 @@ use kvproto::raft_serverpb::*;
 use kvproto::metapb;
 use tikv::pd::PdClient;
 
+use futures::Future;
+
 use super::cluster::{Cluster, Simulator};
 use super::transport_simulate::*;
 use super::node::new_node_cluster;
@@ -256,7 +258,7 @@ fn test_server_pd_conf_change() {
 fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize) {
     let mut replica_count = 0;
     for _ in 0..1000 {
-        let region = match pd_client.get_region_by_id(region_id).unwrap() {
+        let region = match pd_client.get_region_by_id(region_id).wait().unwrap() {
             Some(r) => r,
             None => continue,
         };
@@ -287,7 +289,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    region = pd_client.get_region_by_id(region_id).unwrap().unwrap();
+    region = pd_client.get_region_by_id(region_id).wait().unwrap().unwrap();
     let i = stores.iter()
         .position(|s| region.get_peers().iter().all(|p| s.get_id() != p.get_store_id()))
         .unwrap();
@@ -304,7 +306,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.reset_rule();
     wait_till_reach_count(pd_client.clone(), region_id, 5);
 
-    region = pd_client.get_region_by_id(region_id).unwrap().unwrap();
+    region = pd_client.get_region_by_id(region_id).wait().unwrap().unwrap();
     let peer = region.get_peers().get(1).unwrap().clone();
     pd_client.must_remove_peer(region_id, peer);
     wait_till_reach_count(pd_client.clone(), region_id, 4);
@@ -363,6 +365,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let epoch = cluster.pd_client
         .get_region_by_id(1)
+        .wait()
         .unwrap()
         .unwrap()
         .take_region_epoch();
