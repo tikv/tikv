@@ -90,12 +90,12 @@ impl Runner {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(wb.delete_cf(handle, &key));
         }
-        // It's not safe to disable WAL here.
+        // TODO: disable WAL here.
         engine.write(wb).unwrap();
         Ok(end_idx - first_idx)
     }
 
-    fn finish_task(&self, collected: u64) {
+    fn report_collected(&self, collected: u64) {
         if self.ch.is_none() {
             return;
         }
@@ -111,11 +111,11 @@ impl Runnable<Task> for Runner {
         match self.gc_raft_log(task.engine, task.region_id, task.start_idx, task.end_idx) {
             Err(e) => {
                 error!("[region {}] failed to gc: {:?}", task.region_id, e);
-                self.finish_task(0);
+                self.report_collected(0);
             }
             Ok(n) => {
                 info!("[region {}] collected {} log entries", task.region_id, n);
-                self.finish_task(n);
+                self.report_collected(n);
             }
         }
     }
@@ -158,6 +158,8 @@ mod test {
         });
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(res.collected, 10);
+        raft_log_must_not_exist(&db, 1, 0, 10);
+        raft_log_must_exist(&db, 1, 10, 100);
 
         // gc 10..50
         runner.run(Task {
@@ -168,6 +170,8 @@ mod test {
         });
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(res.collected, 40);
+        raft_log_must_not_exist(&db, 1, 0, 50);
+        raft_log_must_exist(&db, 1, 50, 100);
 
         // gc nothing
         runner.run(Task {
@@ -178,6 +182,8 @@ mod test {
         });
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(res.collected, 0);
+        raft_log_must_not_exist(&db, 1, 0, 50);
+        raft_log_must_exist(&db, 1, 50, 100);
 
         // 50..60
         runner.run(Task {
@@ -188,5 +194,23 @@ mod test {
         });
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(res.collected, 10);
+        raft_log_must_not_exist(&db, 1, 0, 60);
+        raft_log_must_exist(&db, 1, 60, 100);
+    }
+
+    fn raft_log_must_not_exist(engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
+        let raft_handle = rocksdb::get_cf_handle(engine, CF_RAFT).unwrap();
+        for i in start_idx..end_idx {
+            let k = keys::raft_log_key(region_id, i);
+            engine.get_cf(raft_handle, &k).unwrap().is_none();
+        }
+    }
+
+    fn raft_log_must_exist(engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
+        let raft_handle = rocksdb::get_cf_handle(engine, CF_RAFT).unwrap();
+        for i in start_idx..end_idx {
+            let k = keys::raft_log_key(region_id, i);
+            engine.get_cf(raft_handle, &k).unwrap().is_some();
+        }
     }
 }
