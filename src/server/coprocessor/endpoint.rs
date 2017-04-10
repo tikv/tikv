@@ -34,7 +34,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
-use util::threadpool::ThreadPool;
+use util::threadpool::{ThreadPool, ScheduleAlgorithm};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
@@ -79,7 +79,9 @@ impl Host {
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: ThreadPool::new(Some(thd_name!("endpoint-pool")), concurrency),
+            pool: ThreadPool::new(Some(thd_name!("endpoint-pool")),
+                                  concurrency,
+                                  ScheduleAlgorithm::FairGroups {}),
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
         }
     }

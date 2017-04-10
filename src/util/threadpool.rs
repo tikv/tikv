@@ -107,7 +107,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> WaitingHeap<T> {
     }
 }
 
-struct TasksPool<T> {
+pub struct FairGroupsTasksQueue<T> {
     // group_id => count
     running_tasks: HashMap<T, usize>,
     // group_id => tasks array
@@ -115,16 +115,16 @@ struct TasksPool<T> {
     waiting_heap: WaitingHeap<T>,
 }
 
-impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
-    fn new() -> TasksPool<T> {
-        TasksPool {
+impl<T: Hash + Eq + Send + Clone + 'static> FairGroupsTasksQueue<T> {
+    fn new() -> FairGroupsTasksQueue<T> {
+        FairGroupsTasksQueue {
             running_tasks: HashMap::default(),
             waiting_queue: HashMap::default(),
             waiting_heap: WaitingHeap::new(),
         }
     }
 
-    fn push(&mut self, task: Task<T>) {
+    fn push_back(&mut self, task: Task<T>) {
         let group_id = task.group_id();
         if !self.running_tasks.contains_key(&group_id) && !self.waiting_heap.contains(&group_id) {
             self.waiting_heap.try_push(task);
@@ -136,7 +136,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
         group_tasks.push_back(task);
     }
 
-    fn pop(&mut self) -> Option<(T, Task<T>)> {
+    fn pop_front(&mut self) -> Option<(T, Task<T>)> {
         let mut next_task = self.waiting_heap.pop();
         if next_task.is_none() {
             if let Some(gid) = self.pop_group_id_from_waiting_queue() {
@@ -222,21 +222,66 @@ impl<T: Hash + Eq + Send + Clone + 'static> TasksPool<T> {
     }
 }
 
+pub enum ScheduleAlgorithm {
+    FairGroups,
+    FIFO,
+}
+
+enum TasksQueueAlgorithm<T> {
+    FairGroups { queue: FairGroupsTasksQueue<T> },
+    FIFO { queue: VecDeque<Task<T>> },
+}
+
+impl<T: Hash + Eq + Send + Clone + 'static> TasksQueueAlgorithm<T> {
+    fn push(&mut self, task: Task<T>) {
+        match *self {
+            TasksQueueAlgorithm::FairGroups { ref mut queue } => {
+                queue.push_back(task);
+            }
+            TasksQueueAlgorithm::FIFO { ref mut queue } => {
+                queue.push_back(task);
+            }
+        }
+    }
+
+    fn pop(&mut self) -> Option<(T, Task<T>)> {
+        match *self {
+            TasksQueueAlgorithm::FairGroups { ref mut queue } => queue.pop_front(),
+            TasksQueueAlgorithm::FIFO { ref mut queue } => {
+                if let Some(task) = queue.pop_front() {
+                    return Some((task.group_id(), task));
+                }
+                None
+            }
+        }
+    }
+
+    fn finished(&mut self, group_id: T) {
+        if let TasksQueueAlgorithm::FairGroups { ref mut queue } = *self {
+            queue.finished(group_id);
+        }
+    }
+}
 
 struct ThreadPoolMeta<T> {
     next_task_id: u64,
     total_running_tasks: usize,
     total_waiting_tasks: usize,
-    tasks_pool: TasksPool<T>,
+    tasks_pool: TasksQueueAlgorithm<T>,
 }
 
 impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
-    fn new() -> ThreadPoolMeta<T> {
+    fn new(algorithm: ScheduleAlgorithm) -> ThreadPoolMeta<T> {
         ThreadPoolMeta {
             next_task_id: 0,
             total_running_tasks: 0,
             total_waiting_tasks: 0,
-            tasks_pool: TasksPool::new(),
+            tasks_pool: match algorithm {
+                ScheduleAlgorithm::FairGroups => {
+                    TasksQueueAlgorithm::FairGroups { queue: FairGroupsTasksQueue::new() }
+                }
+                ScheduleAlgorithm::FIFO => TasksQueueAlgorithm::FIFO { queue: VecDeque::new() },
+            },
         }
     }
 
@@ -262,12 +307,6 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
         self.tasks_pool.finished(group_id);
     }
 
-
-
-    // we choose the task according to the following rules:
-    // 1. Choose one group to run with func `get_next_group()`.
-    // 2. For the tasks in the selected group, choose the first
-    // one in the queue(which means comes first).
     fn pop_next_task(&mut self) -> Option<(T, Task<T>)> {
         let next_task = self.tasks_pool.pop();
         if next_task.is_none() {
@@ -278,58 +317,6 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
         next_task
     }
 }
-
-struct Worker<'a, T>
-    where T: Hash + Eq + Send + Clone + 'static
-{
-    job_rever: &'a Arc<Mutex<Receiver<bool>>>,
-    pool_meta: &'a Arc<Mutex<ThreadPoolMeta<T>>>,
-}
-
-impl<'a, T> Worker<'a, T>
-    where T: Hash + Eq + Send + Clone + 'static
-{
-    fn new(receiver: &'a Arc<Mutex<Receiver<bool>>>,
-           pool_meta: &'a Arc<Mutex<ThreadPoolMeta<T>>>)
-           -> Worker<'a, T> {
-        Worker {
-            job_rever: receiver,
-            pool_meta: pool_meta,
-        }
-    }
-
-    // wait to receive info from job_receiver,
-    // return false when get stop msg
-    #[inline]
-    fn wait(&self) -> bool {
-        // try to receive notify
-        let job_receiver = self.job_rever.lock().unwrap();
-        job_receiver.recv().unwrap()
-    }
-
-    #[inline]
-    fn get_next_task(&mut self) -> Option<(T, Task<T>)> {
-        // try to get task
-        let mut meta = self.pool_meta.lock().unwrap();
-        meta.pop_next_task()
-    }
-
-    fn run(&mut self) {
-        // start the worker.
-        // loop break on receive stop message.
-        while self.wait() {
-            // handle task
-            // since `tikv` would be down on any panic happens,
-            // we needn't process panic case here.
-            if let Some((task_key, task)) = self.get_next_task() {
-                task.task.call_box(());
-                let mut meta = self.pool_meta.lock().unwrap();
-                meta.finished_task(task_key);
-            }
-        }
-    }
-}
-
 
 /// A group task pool used to execute tasks in parallel.
 /// Spawns `concurrency` threads to process tasks.
@@ -353,14 +340,14 @@ impl<'a, T> Worker<'a, T>
 ///
 /// ```
 /// # extern crate tikv;
-/// use tikv::util::threadpool::ThreadPool;
+/// use tikv::util::threadpool::{ThreadPool,ScheduleAlgorithm};
 /// use std::thread::sleep;
 /// use std::time::Duration;
 /// use std::sync::mpsc::{Sender, Receiver, channel};
 /// # fn main(){
 /// let concurrency = 2;
 /// let name = Some(String::from("sample"));
-/// let mut task_pool = ThreadPool::new(name,concurrency);
+/// let mut task_pool = ThreadPool::new(name,concurrency,ScheduleAlgorithm::FairGroups{});
 /// let (jtx, jrx): (Sender<u64>, Receiver<u64>) = channel();
 /// let group_with_many_tasks = 1001 as u64;
 /// // all tasks cost the same time.
@@ -416,11 +403,14 @@ pub struct ThreadPool<T: Hash + Eq + Send + Clone + 'static> {
 }
 
 impl<T: Hash + Eq + Send + Clone + 'static> ThreadPool<T> {
-    pub fn new(name: Option<String>, num_threads: usize) -> ThreadPool<T> {
+    pub fn new(name: Option<String>,
+               num_threads: usize,
+               algorithm: ScheduleAlgorithm)
+               -> ThreadPool<T> {
         assert!(num_threads >= 1);
         let (tx, rx) = channel();
         let rx = Arc::new(Mutex::new(rx));
-        let meta = Arc::new(Mutex::new(ThreadPoolMeta::new()));
+        let meta = Arc::new(Mutex::new(ThreadPoolMeta::new(algorithm)));
 
         let mut threads = Vec::with_capacity(num_threads);
         // Threadpool threads
@@ -468,6 +458,59 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPool<T> {
     }
 }
 
+
+// each thread has a worker.
+struct Worker<'a, T>
+    where T: Hash + Eq + Send + Clone + 'static
+{
+    job_rever: &'a Arc<Mutex<Receiver<bool>>>,
+    pool_meta: &'a Arc<Mutex<ThreadPoolMeta<T>>>,
+}
+
+impl<'a, T> Worker<'a, T>
+    where T: Hash + Eq + Send + Clone + 'static
+{
+    fn new(receiver: &'a Arc<Mutex<Receiver<bool>>>,
+           pool_meta: &'a Arc<Mutex<ThreadPoolMeta<T>>>)
+           -> Worker<'a, T> {
+        Worker {
+            job_rever: receiver,
+            pool_meta: pool_meta,
+        }
+    }
+
+    // wait to receive info from job_receiver,
+    // return false when get stop msg
+    #[inline]
+    fn wait(&self) -> bool {
+        // try to receive notify
+        let job_receiver = self.job_rever.lock().unwrap();
+        job_receiver.recv().unwrap()
+    }
+
+    #[inline]
+    fn get_next_task(&mut self) -> Option<(T, Task<T>)> {
+        // try to get task
+        let mut meta = self.pool_meta.lock().unwrap();
+        meta.pop_next_task()
+    }
+
+    fn run(&mut self) {
+        // start the worker.
+        // loop break on receive stop message.
+        while self.wait() {
+            // handle task
+            // since `tikv` would be down on any panic happens,
+            // we needn't process panic case here.
+            if let Some((task_key, task)) = self.get_next_task() {
+                task.task.call_box(());
+                let mut meta = self.pool_meta.lock().unwrap();
+                meta.finished_task(task_key);
+            }
+        }
+    }
+}
+
 fn new_thread<T>(name: Option<String>,
                  receiver: Arc<Mutex<Receiver<bool>>>,
                  tasks: Arc<Mutex<ThreadPoolMeta<T>>>)
@@ -488,7 +531,7 @@ fn new_thread<T>(name: Option<String>,
 
 #[cfg(test)]
 mod test {
-    use super::ThreadPool;
+    use super::{ThreadPool, ScheduleAlgorithm};
     use std::thread::sleep;
     use std::time::Duration;
     use std::sync::mpsc::channel;
@@ -497,7 +540,7 @@ mod test {
     fn test_tasks_with_same_cost() {
         let name = Some(thd_name!("test_tasks_with_same_cost"));
         let concurrency = 2;
-        let mut task_pool = ThreadPool::new(name, concurrency);
+        let mut task_pool = ThreadPool::new(name, concurrency, ScheduleAlgorithm::FairGroups {});
         let (jtx, jrx) = channel();
         let group_with_many_tasks = 1001 as u64;
         // all tasks cost the same time.
@@ -553,7 +596,7 @@ mod test {
     fn test_tasks_with_different_cost() {
         let name = Some(thd_name!("test_tasks_with_different_cost"));
         let concurrency = 2;
-        let mut task_pool = ThreadPool::new(name, concurrency);
+        let mut task_pool = ThreadPool::new(name, concurrency, ScheduleAlgorithm::FairGroups {});
         let (jtx, jrx) = channel();
         let group_with_big_task = 1001 as u64;
         let sleep_duration = Duration::from_millis(50);
