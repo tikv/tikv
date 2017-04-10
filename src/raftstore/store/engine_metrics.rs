@@ -212,7 +212,7 @@ lazy_static!{
         register_gauge_vec!(
             "tikv_engine_block_cache_size_bytes",
             "Usage of each column families' block cache.",
-            &["type"]
+            &["cf"]
         ).unwrap();
 
     pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: GaugeVec =
