@@ -83,7 +83,7 @@ fn poll<R, T>(mut runner: R, rx: UnboundedReceiver<Option<T>>)
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     {
-        let f = rx.for_each(|t| {
+        let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
             if let Some(t) = t {
                 let f = runner.run(t);
                 handle.spawn(f);
