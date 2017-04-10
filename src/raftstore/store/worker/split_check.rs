@@ -123,17 +123,15 @@ pub struct Task {
     epoch: RegionEpoch,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-    engine: Arc<DB>,
 }
 
 impl Task {
-    pub fn new(engine: Arc<DB>, region: &Region) -> Task {
+    pub fn new(region: &Region) -> Task {
         Task {
             region_id: region.get_id(),
             epoch: region.get_region_epoch().clone(),
             start_key: keys::enc_start_key(region),
             end_key: keys::enc_end_key(region),
-            engine: engine,
         }
     }
 }
@@ -145,14 +143,16 @@ impl Display for Task {
 }
 
 pub struct Runner<C> {
+    engine: Arc<DB>,
     ch: RetryableSendCh<Msg, C>,
     region_max_size: u64,
     split_size: u64,
 }
 
 impl<C> Runner<C> {
-    pub fn new(ch: RetryableSendCh<Msg, C>, region_max_size: u64, split_size: u64) -> Runner<C> {
+    pub fn new(engine: Arc<DB>, ch: RetryableSendCh<Msg, C>, region_max_size: u64, split_size: u64) -> Runner<C> {
         Runner {
+            engine: engine,
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
@@ -171,7 +171,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
         let mut size = 0;
         let mut split_key = vec![];
         let timer = CHECK_SPILT_HISTOGRAM.start_timer();
-        let res = MergedIterator::new(task.engine.as_ref(),
+        let res = MergedIterator::new(self.engine.as_ref(),
                                       LARGE_CFS,
                                       &task.start_key,
                                       &task.end_key,
@@ -253,7 +253,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
-        let mut runnable = Runner::new(ch, 100, 60);
+        let mut runnable = Runner::new(engine.clone(), ch, 100, 60);
 
         // so split key will be z0006
         for i in 0..7 {
@@ -261,7 +261,7 @@ mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(Task::new(engine.clone(), &region));
+        runnable.run(Task::new(&region));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
             Err(TryRecvError::Empty) => {}
@@ -273,7 +273,7 @@ mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(Task::new(engine.clone(), &region));
+        runnable.run(Task::new(&region));
         match rx.try_recv() {
             Ok(Msg::SplitCheckResult { region_id, epoch, split_key }) => {
                 assert_eq!(region_id, region.get_id());
@@ -292,7 +292,7 @@ mod tests {
             }
         }
 
-        runnable.run(Task::new(engine.clone(), &region));
+        runnable.run(Task::new(&region));
         match rx.try_recv() {
             Ok(Msg::SplitCheckResult { region_id, epoch, split_key }) => {
                 assert_eq!(region_id, region.get_id());
@@ -304,6 +304,6 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(Task::new(engine, &region));
+        runnable.run(Task::new(&region));
     }
 }
