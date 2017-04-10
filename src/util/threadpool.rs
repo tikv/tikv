@@ -353,7 +353,7 @@ impl<'a, T> Worker<'a, T>
 ///
 /// ```
 /// # extern crate tikv;
-/// use tikv::util::group_pool::ThreadPool;
+/// use tikv::util::threadpool::ThreadPool;
 /// use std::thread::sleep;
 /// use std::time::Duration;
 /// use std::sync::mpsc::{Sender, Receiver, channel};
