@@ -267,7 +267,7 @@ struct ThreadPoolMeta<T> {
     next_task_id: u64,
     total_running_tasks: usize,
     total_waiting_tasks: usize,
-    tasks_pool: TasksQueueAlgorithm<T>,
+    tasks: TasksQueueAlgorithm<T>,
 }
 
 impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
@@ -276,7 +276,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
             next_task_id: 0,
             total_running_tasks: 0,
             total_waiting_tasks: 0,
-            tasks_pool: match algorithm {
+            tasks: match algorithm {
                 ScheduleAlgorithm::FairGroups => {
                     TasksQueueAlgorithm::FairGroups { queue: FairGroupsTasksQueue::new() }
                 }
@@ -292,7 +292,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
         let task = Task::new(self.next_task_id, group_id, job);
         self.total_waiting_tasks += 1;
         self.next_task_id += 1;
-        self.tasks_pool.push(task);
+        self.tasks.push(task);
     }
 
     fn get_tasks_num(&self) -> usize {
@@ -304,11 +304,11 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
     // task in the pool.
     fn finished_task(&mut self, group_id: T) {
         self.total_running_tasks -= 1;
-        self.tasks_pool.finished(group_id);
+        self.tasks.finished(group_id);
     }
 
     fn pop_next_task(&mut self) -> Option<(T, Task<T>)> {
-        let next_task = self.tasks_pool.pop();
+        let next_task = self.tasks.pop();
         if next_task.is_none() {
             return None;
         }
