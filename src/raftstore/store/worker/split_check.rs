@@ -150,7 +150,11 @@ pub struct Runner<C> {
 }
 
 impl<C> Runner<C> {
-    pub fn new(engine: Arc<DB>, ch: RetryableSendCh<Msg, C>, region_max_size: u64, split_size: u64) -> Runner<C> {
+    pub fn new(engine: Arc<DB>,
+               ch: RetryableSendCh<Msg, C>,
+               region_max_size: u64,
+               split_size: u64)
+               -> Runner<C> {
         Runner {
             engine: engine,
             ch: ch,
