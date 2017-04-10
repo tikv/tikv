@@ -414,7 +414,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#5e57c99ad20914529fccb18c7e1918bb154f9b7d"
+source = "git+https://github.com/pingcap/kvproto.git#3d2964e111240c5777c3b1e7aeb30cf223b644c7"
 dependencies = [
  "futures 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",

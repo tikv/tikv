@@ -19,7 +19,6 @@ use std::net::SocketAddr;
 use mio::{Token, Handler, EventLoop, EventLoopConfig, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
-use kvproto::msgpb::{MessageType, Message};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
@@ -30,9 +29,8 @@ use util::{HashMap, HashSet};
 
 use super::{Msg, ConnData};
 use super::conn::Conn;
-use super::{Result, OnResponse, Config};
-use super::kv::StoreHandler;
-use super::coprocessor::{RequestTask, EndPointHost, EndPointTask};
+use super::{Result, Config};
+use super::coprocessor::{EndPointHost, EndPointTask};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
@@ -86,7 +84,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
 
     ch: ServerChannel<T>,
 
-    store: StoreHandler,
+    store: Storage,
     end_point_worker: Worker<EndPointTask>,
 
     snap_mgr: SnapManager,
@@ -117,7 +115,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                  PollOpt::edge()));
 
         let sendch = SendCh::new(event_loop.channel(), "raft-server");
-        let store_handler = StoreHandler::new(storage);
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 
@@ -129,7 +126,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             store_tokens: HashMap::default(),
             store_resolving: HashSet::default(),
             ch: ch,
-            store: store_handler,
+            store: storage,
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
@@ -141,7 +138,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        let end_point = EndPointHost::new(self.store.engine(),
+        let end_point = EndPointHost::new(self.store.get_engine(),
                                           self.end_point_worker.scheduler(),
                                           self.cfg.end_point_concurrency);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
@@ -243,42 +240,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         Ok(())
     }
 
-    fn on_conn_msg(&mut self, token: Token, data: ConnData) -> Result<()> {
-        let msg_id = data.msg_id;
-        let mut msg = data.msg;
-
-        let msg_type = msg.get_msg_type();
-        match msg_type {
-            MessageType::Raft => {
-                RECV_MSG_COUNTER.with_label_values(&["raft"]).inc();
-                try!(self.ch.raft_router.send_raft_msg(msg.take_raft()));
-                Ok(())
-            }
-            MessageType::KvReq => {
-                RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
-                let req = msg.take_kv_req();
-                debug!("notify Request token[{:?}] msg_id[{}] type[{:?}]",
-                       token,
-                       msg_id,
-                       req.get_field_type());
-                let on_resp = self.make_response_cb(token, msg_id);
-                self.store.on_request(req, on_resp)
-            }
-            MessageType::CopReq => {
-                RECV_MSG_COUNTER.with_label_values(&["coprocessor"]).inc();
-                let on_resp = self.make_response_cb(token, msg_id);
-                let req = RequestTask::new(msg.take_cop_req(), on_resp);
-                box_try!(self.end_point_worker.schedule(EndPointTask::Request(req)));
-                Ok(())
-            }
-            _ => {
-                RECV_MSG_COUNTER.with_label_values(&["invalid"]).inc();
-                Err(box_err!("unsupported message {:?} for token {:?} with msg id {}",
-                             msg_type,
-                             token,
-                             msg_id))
-            }
-        }
+    fn on_conn_msg(&mut self, _: Token, data: ConnData) -> Result<()> {
+        RECV_MSG_COUNTER.with_label_values(&["raft"]).inc();
+        try!(self.ch.raft_router.send_raft_msg(data.msg));
+        Ok(())
     }
 
     fn on_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
@@ -389,13 +354,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn report_unreachable(&self, data: ConnData) {
-        if !data.msg.has_raft() {
-            return;
-        }
-
-        let region_id = data.msg.get_raft().get_region_id();
-        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
-        let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
+        let region_id = data.msg.get_region_id();
+        let to_peer_id = data.msg.get_to_peer().get_id();
+        let to_store_id = data.msg.get_to_peer().get_store_id();
 
         if let Err(e) = self.ch.raft_router.report_unreachable(region_id, to_peer_id, to_store_id) {
             error!("report peer {} unreachable for region {} failed {:?}",
@@ -476,9 +437,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter {
-        let region_id = data.msg.get_raft().get_region_id();
-        let to_peer_id = data.msg.get_raft().get_to_peer().get_id();
-        let to_store_id = data.msg.get_raft().get_to_peer().get_store_id();
+        let region_id = data.msg.get_region_id();
+        let to_peer_id = data.msg.get_to_peer().get_id();
+        let to_store_id = data.msg.get_to_peer().get_store_id();
 
         SnapshotReporter {
             snapshot_status_sender: self.ch.snapshot_status_sender.clone(),
@@ -506,23 +467,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             error!("channel is closed, failed to schedule snapshot to {}",
                    sock_addr);
             cb(Err(box_err!("failed to schedule snapshot")));
-        }
-    }
-
-    fn make_response_cb(&mut self, token: Token, msg_id: u64) -> OnResponse {
-        let ch = self.sendch.clone();
-        box move |res: Message| {
-            let tp = res.get_msg_type();
-            if let Err(e) = ch.send(Msg::WriteData {
-                token: token,
-                data: ConnData::new(msg_id, res),
-            }) {
-                error!("send {:?} resp failed with token {:?}, msg id {}, err {:?}",
-                       tp,
-                       token,
-                       msg_id,
-                       e);
-            }
         }
     }
 }
@@ -553,7 +497,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
                 self.on_resolve_result(event_loop, store_id, sock_addr, data)
@@ -634,7 +577,6 @@ mod tests {
     use super::super::transport::RaftStoreRouter;
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::Storage;
-    use kvproto::msgpb::{Message, MessageType};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
@@ -716,11 +658,9 @@ mod tests {
                 .unwrap();
 
         for i in 0..10 {
-            let mut msg = Message::new();
             if i % 2 == 1 {
-                msg.set_raft(RaftMessage::new());
+                server.report_unreachable(ConnData::new(0, RaftMessage::new()));
             }
-            server.report_unreachable(ConnData::new(0, msg));
             assert_eq!(report_unreachable_count.load(Ordering::SeqCst), (i + 1) / 2);
         }
 
@@ -729,12 +669,9 @@ mod tests {
             event_loop.run(&mut server).unwrap();
         });
 
-        let mut msg = Message::new();
-        msg.set_msg_type(MessageType::Raft);
-
         ch.try_send(Msg::SendStore {
                 store_id: 1,
-                data: ConnData::new(0, msg),
+                data: ConnData::new(0, RaftMessage::new()),
             })
             .unwrap();
 

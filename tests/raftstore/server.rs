@@ -35,7 +35,6 @@ use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, ALL_CFS};
 use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb::{self, RaftMessage};
-use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
@@ -255,14 +254,9 @@ impl Simulator for ServerCluster {
         let store_id = raft_msg.get_to_peer().get_store_id();
         let addr = &self.addrs[&store_id];
 
-        let mut msg = Message::new();
-        msg.set_msg_type(MessageType::Raft);
-        msg.set_raft(raft_msg);
-        let msg_id = self.alloc_msg_id();
-
         let mut conn = self.pool_get(addr).unwrap();
         conn.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
-        try!(rpc::encode_msg(&mut conn, msg_id, &msg));
+        try!(rpc::encode_msg(&mut conn, self.alloc_msg_id(), &raft_msg));
 
         self.pool_put(addr, conn);
 

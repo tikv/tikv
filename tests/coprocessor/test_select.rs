@@ -993,8 +993,8 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     let (tx, rx) = mpsc::channel();
     let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-    let resp = rx.recv().unwrap().take_cop_resp();
-    assert!(resp.has_data(), "{:?}", resp);
+    let resp = rx.recv().unwrap();
+    assert!(!resp.get_data().is_empty(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp
@@ -1459,8 +1459,8 @@ fn test_handle_truncate() {
         let (tx, rx) = mpsc::channel();
         let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
         end_point.schedule(EndPointTask::Request(req)).unwrap();
-        let resp = rx.recv().unwrap().take_cop_resp();
-        assert!(resp.has_other_error());
+        let resp = rx.recv().unwrap();
+        assert!(!resp.get_other_error().is_empty());
     }
 
     end_point.stop().unwrap().join().unwrap();
