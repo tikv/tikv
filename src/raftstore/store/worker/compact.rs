@@ -81,12 +81,12 @@ impl Runner {
         Ok(())
     }
 
-    fn finish_task(&mut self) {
+    fn finish_task(&self) {
         if self.ch.is_none() {
             return;
         }
         // only used by test.
-        self.ch.as_mut().unwrap().send(TaskRes).unwrap();
+        self.ch.as_ref().unwrap().send(TaskRes).unwrap();
     }
 }
 
