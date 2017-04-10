@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use futures::Future;
 use kvproto::metapb;
+use kvproto::pdpb;
 
 use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError};
 
@@ -67,6 +68,18 @@ fn test_rpc_client() {
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
     }
+
+    // Only check if it works.
+    client.region_heartbeat(metapb::Region::new(),
+                          metapb::Peer::new(),
+                          vec![],
+                          vec![],
+                          0)
+        .wait()
+        .unwrap();
+    client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();
+    client.ask_split(metapb::Region::new()).wait().unwrap();
+    client.report_split(metapb::Region::new(), metapb::Region::new()).wait().unwrap();
 }
 
 #[test]
