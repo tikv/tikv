@@ -327,7 +327,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let request_factory = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
+        let executor = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
             client.GetRegionByID(req)
                 .map_err(Error::Grpc)
                 .and_then(|mut resp| {
@@ -342,7 +342,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, request_factory, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 
@@ -361,7 +361,7 @@ impl PdClient for RpcClient {
         req.set_pending_peers(RepeatedField::from_vec(pending_peers));
         req.set_bytes_written(written_bytes);
 
-        let request_factory = |client: &PDAsyncClient, req: pdpb::RegionHeartbeatRequest| {
+        let executor = |client: &PDAsyncClient, req: pdpb::RegionHeartbeatRequest| {
             client.RegionHeartbeat(req)
                 .map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -372,7 +372,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, request_factory, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 
@@ -381,7 +381,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
 
-        let request_factory = |client: &PDAsyncClient, req: pdpb::AskSplitRequest| {
+        let executor = |client: &PDAsyncClient, req: pdpb::AskSplitRequest| {
             client.AskSplit(req)
                 .map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -392,7 +392,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, request_factory, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 
@@ -401,7 +401,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_stats(stats);
 
-        let request_factory = |client: &PDAsyncClient, req: pdpb::StoreHeartbeatRequest| {
+        let executor = |client: &PDAsyncClient, req: pdpb::StoreHeartbeatRequest| {
             client.StoreHeartbeat(req)
                 .map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -412,7 +412,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, request_factory, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 
@@ -422,7 +422,7 @@ impl PdClient for RpcClient {
         req.set_left(left);
         req.set_right(right);
 
-        let request_factory = |client: &PDAsyncClient, req: pdpb::ReportSplitRequest| {
+        let executor = |client: &PDAsyncClient, req: pdpb::ReportSplitRequest| {
             client.ReportSplit(req)
                 .map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -433,7 +433,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, request_factory, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 }
