@@ -189,7 +189,7 @@ mod test {
         let (tx, rx) = mpsc::channel();
         worker.start(StepRunner { ch: tx }).unwrap();
         assert!(!worker.is_busy());
-        // The default the tick size of tokio_timer is 100ms.
+        // The default tick size of tokio_timer is 100ms.
         let start = Instant::now();
         worker.schedule(500).unwrap();
         worker.schedule(1000).unwrap();
