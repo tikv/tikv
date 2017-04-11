@@ -110,7 +110,7 @@ mod imp {
         #[ignore]
         fn test_profiling_memory() {
             let dir = TempDir::new("test_profiling").unwrap();
-            let sleep_time = Duration::from_millis(500);
+            let sleep_time = Duration::from_millis(1000);
             let os_path = dir.path().to_path_buf().join("test.dump").into_os_string();
             let path = os_path.into_string().unwrap();
             let profiling = Arc::new(AtomicBool::new(true));
