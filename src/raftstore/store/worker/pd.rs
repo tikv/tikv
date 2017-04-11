@@ -120,14 +120,13 @@ impl<T: PdClient> Runner<T> {
                         let req = new_split_region_request(split_key,
                                                            resp.get_new_region_id(),
                                                            resp.take_new_peer_ids());
-                        send_admin_request(&ch, region, peer, req);
-                        Ok(())
+                        send_admin_request(ch, region, peer, req);
                     }
                     Err(e) => {
                         debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
-                        Err(())
                     }
                 }
+                Ok(())
             });
         handle.spawn(f)
     }
@@ -166,7 +165,7 @@ impl<T: PdClient> Runner<T> {
                                   region);
                             let req = new_change_peer_request(change_peer.get_change_type().into(),
                                                               change_peer.take_peer());
-                            send_admin_request(&ch, region, peer, req);
+                            send_admin_request(ch, region, peer, req);
                         } else if resp.has_transfer_leader() {
                             PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]).inc();
 
@@ -176,17 +175,16 @@ impl<T: PdClient> Runner<T> {
                                   peer,
                                   transfer_leader.get_peer());
                             let req = new_transfer_leader_request(transfer_leader.take_peer());
-                            send_admin_request(&ch, region, peer, req)
+                            send_admin_request(ch, region, peer, req)
                         }
-                        Ok(())
                     }
                     Err(e) => {
                         debug!("[region {}] failed to send heartbeat: {:?}",
                                region.get_id(),
                                e);
-                        Err(())
                     }
                 }
+                Ok(())
             });
         handle.spawn(f);
     }
@@ -209,13 +207,12 @@ impl<T: PdClient> Runner<T> {
                 match resp {
                     Ok(_) => {
                         PD_REQ_COUNTER_VEC.with_label_values(&["report split", "success"]).inc();
-                        Ok(())
                     }
                     Err(e) => {
                         error!("report split failed {:?}", e);
-                        Err(())
                     }
                 }
+                Ok(())
             });
         handle.spawn(f);
     }
@@ -257,7 +254,7 @@ impl<T: PdClient> Runner<T> {
                               peer.get_id(),
                               pd_region);
                         PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer stale"]).inc();
-                        send_destroy_peer_message(&ch, local_region, peer, pd_region);
+                        send_destroy_peer_message(ch, local_region, peer, pd_region);
                         return Ok(());
                     }
                     info!("[region {}] {} is still valid in region {:?}",
@@ -265,18 +262,16 @@ impl<T: PdClient> Runner<T> {
                           peer.get_id(),
                           pd_region);
                     PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["peer valid"]).inc();
-                    Ok(())
                 }
                 Ok(None) => {
                     // splitted region has not yet reported to pd.
                     // TODO: handle merge
-                    Ok(())
                 }
                 Err(e) => {
                     error!("get region failed {:?}", e);
-                    Err(())
                 }
             }
+            Ok(())
         });
         handle.spawn(f);
     }
@@ -332,7 +327,7 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     req
 }
 
-fn send_admin_request(ch: &SendCh<Msg>,
+fn send_admin_request(ch: SendCh<Msg>,
                       mut region: metapb::Region,
                       peer: metapb::Peer,
                       request: AdminRequest) {
@@ -356,7 +351,7 @@ fn send_admin_request(ch: &SendCh<Msg>,
 }
 
 // send a raft message to destroy the specified stale peer
-fn send_destroy_peer_message(ch: &SendCh<Msg>,
+fn send_destroy_peer_message(ch: SendCh<Msg>,
                              local_region: metapb::Region,
                              peer: metapb::Peer,
                              pd_region: metapb::Region) {
