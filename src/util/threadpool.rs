@@ -107,14 +107,16 @@ struct ThreadPoolMeta<T> {
     total_running_tasks: usize,
     total_waiting_tasks: usize,
     tasks: TasksQueueAlgorithm<T>,
+    job_sender: Sender<bool>,
 }
 
 impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
-    fn new(algorithm: ScheduleAlgorithm) -> ThreadPoolMeta<T> {
+    fn new(algorithm: ScheduleAlgorithm, job_sender: Sender<bool>) -> ThreadPoolMeta<T> {
         ThreadPoolMeta {
             next_task_id: 0,
             total_running_tasks: 0,
             total_waiting_tasks: 0,
+            job_sender: job_sender,
             tasks: match algorithm {
                 ScheduleAlgorithm::FIFO => TasksQueueAlgorithm::FIFO { queue: VecDeque::new() },
             },
@@ -129,6 +131,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
         self.total_waiting_tasks += 1;
         self.next_task_id += 1;
         self.tasks.push(task);
+        self.job_sender.send(true).unwrap();
     }
 
     fn get_tasks_num(&self) -> usize {
@@ -152,6 +155,15 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
         self.total_running_tasks += 1;
         next_task
     }
+
+    fn push_shutdown_tasks(&self, num: usize) -> Result<(), String> {
+        for _ in 0..num {
+            if let Err(e) = self.job_sender.send(false) {
+                return Err(format!("{:?}", e));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A group task pool used to execute tasks in parallel.
@@ -162,7 +174,6 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
 /// 1. FIFO
 pub struct ThreadPool<T: Hash + Eq + Send + Clone + 'static> {
     meta: Arc<Mutex<ThreadPoolMeta<T>>>,
-    job_sender: Sender<bool>,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -174,7 +185,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPool<T> {
         assert!(num_threads >= 1);
         let (tx, rx) = channel();
         let rx = Arc::new(Mutex::new(rx));
-        let meta = Arc::new(Mutex::new(ThreadPoolMeta::new(algorithm)));
+        let meta = Arc::new(Mutex::new(ThreadPoolMeta::new(algorithm, tx)));
 
         let mut threads = Vec::with_capacity(num_threads);
         // Threadpool threads
@@ -184,7 +195,6 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPool<T> {
 
         ThreadPool {
             meta: meta.clone(),
-            job_sender: tx,
             threads: threads,
         }
     }
@@ -193,12 +203,9 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPool<T> {
     pub fn execute<F>(&mut self, group_id: T, job: F)
         where F: FnOnce() + Send + 'static
     {
-        {
-            let lock = self.meta.clone();
-            let mut meta = lock.lock().unwrap();
-            meta.push_task(group_id, job);
-        }
-        self.job_sender.send(true).unwrap();
+        let lock = self.meta.clone();
+        let mut meta = lock.lock().unwrap();
+        meta.push_task(group_id, job);
     }
 
     pub fn get_tasks_num(&self) -> usize {
@@ -208,11 +215,13 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPool<T> {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        for _ in 0..self.threads.len() {
-            if let Err(e) = self.job_sender.send(false) {
-                return Err(format!("{:?}", e));
-            }
+        // notify all threads to stop.
+        {
+            let lock = self.meta.clone();
+            let tasks = lock.lock().unwrap();
+            tasks.push_shutdown_tasks(self.threads.len()).unwrap();
         }
+        // wait until all threads stopped.
         while let Some(t) = self.threads.pop() {
             if let Err(e) = t.join() {
                 return Err(format!("{:?}", e));
