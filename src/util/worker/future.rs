@@ -81,9 +81,8 @@ fn poll<R, T>(mut runner: R, rx: UnboundedReceiver<Option<T>>)
             runner.run(t.unwrap(), &handle);
             Ok(())
         });
-        if core.run(f).is_err() {
-            error!("worker occurs an error");
-        }
+        // `UnboundedReceiver` never returns an error.
+        core.run(f).unwrap();
     }
     runner.shutdown();
 }
