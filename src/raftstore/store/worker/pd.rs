@@ -268,7 +268,7 @@ impl<T: PdClient> Runner<T> {
                     Ok(())
                 }
                 Ok(None) => {
-                    // split region has not yet report to pd.
+                    // splitted region has not yet reported to pd.
                     // TODO: handle merge
                     Ok(())
                 }
