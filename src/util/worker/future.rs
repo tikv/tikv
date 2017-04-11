@@ -17,17 +17,13 @@ use std::io;
 use std::fmt::Display;
 
 use futures::Stream;
-use futures::future::BoxFuture;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle};
 
 use super::Stopped;
 
 pub trait Runnable<T: Display> {
-    // TODO: return `impl Future<Item=(), Error=()>`,
-    // once RFC: Expand and stabilize `impl Trait` is merged and implemented.
-    // See more: https://github.com/rust-lang/rfcs/pull/1951
-    fn run(&mut self, t: T) -> BoxFuture<(), ()>;
+    fn run(&mut self, t: T, handle: &Handle);
     fn shutdown(&mut self) {}
 }
 
@@ -82,13 +78,12 @@ fn poll<R, T>(mut runner: R, rx: UnboundedReceiver<Option<T>>)
     let handle = core.handle();
     {
         let f = rx.take_while(|t| Ok(t.is_some())).for_each(|t| {
-            if let Some(t) = t {
-                let f = runner.run(t);
-                handle.spawn(f);
-            }
+            runner.run(t.unwrap(), &handle);
             Ok(())
         });
-        core.run(f).ok();
+        if core.run(f).is_err() {
+            error!("worker occurs an error");
+        }
     }
     runner.shutdown();
 }
@@ -156,5 +151,59 @@ impl<T: Display + Send + 'static> Worker<T> {
             warn!("failed to stop worker thread: {:?}", e);
         }
         self.handle.take()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::mpsc;
+    use std::sync::mpsc::*;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use futures::Future;
+    use tokio_timer::Timer;
+    use tokio_core::reactor::Handle;
+
+    use super::*;
+
+    struct StepRunner {
+        ch: Sender<u64>,
+    }
+
+    impl Runnable<u64> for StepRunner {
+        fn run(&mut self, step: u64, handle: &Handle) {
+            self.ch.send(step).unwrap();
+            let timer = Timer::default();
+            let f = timer.sleep(Duration::from_millis(step)).map_err(|_| ());
+            handle.spawn(f);
+        }
+
+        fn shutdown(&mut self) {
+            self.ch.send(0).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_future_worker() {
+        let mut worker = Worker::new("test-async-worker");
+        let (tx, rx) = mpsc::channel();
+        worker.start(StepRunner { ch: tx }).unwrap();
+        assert!(!worker.is_busy());
+        // The default the tick size of tokio_timer is 100ms.
+        let start = Instant::now();
+        worker.schedule(500).unwrap();
+        worker.schedule(1000).unwrap();
+        worker.schedule(1500).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 500);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1000);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1500);
+        // above three tasks are executed concurrently, should be less then 2s.
+        assert!(start.elapsed() < Duration::from_secs(2));
+        worker.stop().unwrap().join().unwrap();
+        // now worker can't handle any task
+        assert!(worker.is_busy());
+        // when shutdown, StepRunner should send back a 0.
+        assert_eq!(0, rx.recv().unwrap());
     }
 }
