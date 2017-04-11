@@ -156,7 +156,7 @@ mod tests {
 
     use kvproto::pdpb;
     use kvproto::metapb;
-    use pd::{PdClient, Result};
+    use pd::{PdClient, Result, PdFuture};
     use util::{self, HashMap};
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -196,7 +196,7 @@ mod tests {
         fn get_region(&self, _: &[u8]) -> Result<metapb::Region> {
             unimplemented!();
         }
-        fn get_region_by_id(&self, _: u64) -> Result<Option<metapb::Region>> {
+        fn get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
             unimplemented!();
         }
         fn region_heartbeat(&self,
@@ -205,16 +205,16 @@ mod tests {
                             _: Vec<pdpb::PeerStats>,
                             _: Vec<metapb::Peer>,
                             _: u64)
-                            -> Result<pdpb::RegionHeartbeatResponse> {
+                            -> PdFuture<pdpb::RegionHeartbeatResponse> {
             unimplemented!();
         }
-        fn ask_split(&self, _: metapb::Region) -> Result<pdpb::AskSplitResponse> {
+        fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
             unimplemented!();
         }
-        fn store_heartbeat(&self, _: pdpb::StoreStats) -> Result<()> {
+        fn store_heartbeat(&self, _: pdpb::StoreStats) -> PdFuture<()> {
             unimplemented!();
         }
-        fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
+        fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
             unimplemented!();
         }
     }
