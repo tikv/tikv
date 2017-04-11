@@ -16,7 +16,7 @@ use std::fmt::{self, Formatter, Display};
 
 use uuid::Uuid;
 use futures::Future;
-use futures::future::BoxFuture;
+use tokio_core::reactor::Handle;
 
 use kvproto::metapb;
 use kvproto::eraftpb::ConfChangeType;
@@ -24,7 +24,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, AdminRequest, AdminCmdType};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::pdpb;
 
-use util::worker::AsyncRunnable as Runnable;
+use util::worker::FutureRunnable as Runnable;
 use util::escape;
 use util::transport::SendCh;
 use pd::PdClient;
@@ -99,14 +99,14 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_ask_split(&self,
+                        handle: &Handle,
                         region: metapb::Region,
                         split_key: Vec<u8>,
-                        peer: metapb::Peer)
-                        -> BoxFuture<(), ()> {
+                        peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "all"]).inc();
 
         let ch = self.ch.clone();
-        self.pd_client
+        let f = self.pd_client
             .ask_split(region.clone())
             .then(move |resp| {
                 match resp {
@@ -128,23 +128,23 @@ impl<T: PdClient> Runner<T> {
                         Err(())
                     }
                 }
-            })
-            .boxed()
+            });
+        handle.spawn(f)
     }
 
     fn handle_heartbeat(&self,
+                        handle: &Handle,
                         region: metapb::Region,
                         peer: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
-                        -> BoxFuture<(), ()> {
+                        written_bytes: u64) {
         PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
 
         let ch = self.ch.clone();
 
         // Now we use put region protocol for heartbeat.
-        self.pd_client
+        let f = self.pd_client
             .region_heartbeat(region.clone(),
                               peer.clone(),
                               down_peers,
@@ -187,26 +187,23 @@ impl<T: PdClient> Runner<T> {
                         Err(())
                     }
                 }
-            })
-            .boxed()
+            });
+        handle.spawn(f);
     }
 
-    fn handle_store_heartbeat(&self, stats: pdpb::StoreStats) -> BoxFuture<(), ()> {
-        self.pd_client
+    fn handle_store_heartbeat(&self, handle: &Handle, stats: pdpb::StoreStats) {
+        let f = self.pd_client
             .store_heartbeat(stats)
             .map_err(|e| {
                 error!("store heartbeat failed {:?}", e);
-            })
-            .boxed()
+            });
+        handle.spawn(f);
     }
 
-    fn handle_report_split(&self,
-                           left: metapb::Region,
-                           right: metapb::Region)
-                           -> BoxFuture<(), ()> {
+    fn handle_report_split(&self, handle: &Handle, left: metapb::Region, right: metapb::Region) {
         PD_REQ_COUNTER_VEC.with_label_values(&["report split", "all"]).inc();
 
-        self.pd_client
+        let f = self.pd_client
             .report_split(left, right)
             .then(move |resp| {
                 match resp {
@@ -219,18 +216,18 @@ impl<T: PdClient> Runner<T> {
                         Err(())
                     }
                 }
-            })
-            .boxed()
+            });
+        handle.spawn(f);
     }
 
     fn handle_validate_peer(&self,
+                            handle: &Handle,
                             local_region: metapb::Region,
-                            peer: metapb::Peer)
-                            -> BoxFuture<(), ()> {
+                            peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["get region", "all"]).inc();
 
         let ch = self.ch.clone();
-        self.pd_client.get_region_by_id(local_region.get_id()).then(move |resp| {
+        let f = self.pd_client.get_region_by_id(local_region.get_id()).then(move |resp| {
             match resp {
                 Ok(Some(pd_region)) => {
                     PD_REQ_COUNTER_VEC.with_label_values(&["get region", "success"]).inc();
@@ -280,25 +277,31 @@ impl<T: PdClient> Runner<T> {
                     Err(())
                 }
             }
-        }).boxed()
+        });
+        handle.spawn(f);
     }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
-    fn run(&mut self, task: Task) -> BoxFuture<(), ()> {
+    fn run(&mut self, task: Task, handle: &Handle) {
         debug!("executing task {}", task);
 
         match task {
             Task::AskSplit { region, split_key, peer } => {
-                self.handle_ask_split(region, split_key, peer)
+                self.handle_ask_split(handle, region, split_key, peer)
             }
             Task::Heartbeat { region, peer, down_peers, pending_peers, written_bytes } => {
-                self.handle_heartbeat(region, peer, down_peers, pending_peers, written_bytes)
+                self.handle_heartbeat(handle,
+                                      region,
+                                      peer,
+                                      down_peers,
+                                      pending_peers,
+                                      written_bytes)
             }
-            Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),
-            Task::ReportSplit { left, right } => self.handle_report_split(left, right),
-            Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
-        }
+            Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(handle, stats),
+            Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),
+            Task::ValidatePeer { region, peer } => self.handle_validate_peer(handle, region, peer),
+        };
     }
 }
 
