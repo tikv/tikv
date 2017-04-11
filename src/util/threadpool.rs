@@ -23,7 +23,7 @@ use std::hash::Hash;
 struct Task<T> {
     // the task's number in the pool.
     // each task has a unique number,
-    // and it's always bigger than precedes one.
+    // and it's always bigger than preceding ones.
     id: u64,
     // the task's group_id.
     group_id: T,
@@ -73,6 +73,12 @@ impl<T> PartialOrd for Task<T> {
 
 pub enum ScheduleAlgorithm {
     FIFO,
+}
+
+impl Default for ScheduleAlgorithm {
+    fn default() -> ScheduleAlgorithm {
+        ScheduleAlgorithm::FIFO
+    }
 }
 
 enum TasksQueueAlgorithm<T> {
@@ -166,11 +172,10 @@ impl<T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<T> {
     }
 }
 
-/// A group task pool used to execute tasks in parallel.
-/// Spawns `concurrency` threads to process tasks.
-/// each task would be pushed into the pool,and when a thread
-/// is ready to process a task, it get a task from the waiting queue
-/// with one of the following algorithm
+/// `ThreadPool` is used to execute tasks in parallel.
+/// Each task would be pushed into the pool,and when a thread
+/// is ready to process a task, it gets a task from the waiting queue
+/// with one of the following algorithms:
 /// 1. FIFO
 pub struct ThreadPool<T: Hash + Eq + Send + Clone + 'static> {
     meta: Arc<Mutex<ThreadPoolMeta<T>>>,
@@ -322,7 +327,7 @@ mod test {
 
         // push tasks of group_with_many_tasks's job to make all thread in pool busy.
         // in order to make sure the thread would be free in sequence,
-        // these tasks should run in sequence.
+        // these tasks should be run in sequence.
         for _ in 0..concurrency {
             task_pool.execute(group_with_many_tasks, move || {
                 sleep(sleep_duration);

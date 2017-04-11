@@ -81,7 +81,7 @@ impl Host {
             last_req_id: 0,
             pool: ThreadPool::new(Some(thd_name!("endpoint-pool")),
                                   concurrency,
-                                  ScheduleAlgorithm::FIFO {}),
+                                  ScheduleAlgorithm::default()),
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
         }
     }
