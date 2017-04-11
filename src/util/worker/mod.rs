@@ -15,7 +15,7 @@
 /// Worker contains all workers that do the expensive job in background.
 
 mod metrics;
-mod async;
+mod future;
 
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle, Builder};
@@ -28,9 +28,9 @@ use std::error::Error;
 use util::SlowTimer;
 use self::metrics::*;
 
-pub use self::async::Runnable as AsyncRunnable;
-pub use self::async::Scheduler as AsyncScheduler;
-pub use self::async::Worker as AsyncWorker;
+pub use self::future::Runnable as FutureRunnable;
+pub use self::future::Scheduler as FutureScheduler;
+pub use self::future::Worker as FutureWorker;
 
 pub struct Stopped<T>(pub T);
 
@@ -274,7 +274,7 @@ mod test {
         }
     }
 
-    impl AsyncRunnable<u64> for StepRunner {
+    impl FutureRunnable<u64> for StepRunner {
         fn run(&mut self, step: u64) -> BoxFuture<(), ()> {
             self.ch.send(step).unwrap();
             let timer = Timer::default();
@@ -376,7 +376,7 @@ mod test {
 
     #[test]
     fn test_async_worker() {
-        let mut worker = AsyncWorker::new("test-async-worker");
+        let mut worker = FutureWorker::new("test-async-worker");
         let (tx, rx) = mpsc::channel();
         worker.start(StepRunner { ch: tx }).unwrap();
         assert!(!worker.is_busy());
