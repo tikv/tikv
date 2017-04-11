@@ -133,7 +133,7 @@ mod test {
     use kvproto::kvrpcpb::Context;
     use super::SnapshotStore;
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, ScanMode, KvPair, Key, Value};
+    use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, ScanMode, KvPair, Value};
     use storage::engine::{self, Engine, TEMP_DIR, Snapshot};
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -302,8 +302,7 @@ mod test {
         let result = scanner.seek(start_key).unwrap();
         let expect_key = format!("{}{}", KEY_PREFIX, START_ID + 1);
         let expect_value = expect_key.clone().into_bytes();
-        let expect: Option<(Key, Value)> = Some((make_key(expect_key.as_bytes()),
-                                                 expect_value as Value));
+        let expect = Some((make_key(expect_key.as_bytes()), expect_value as Value));
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
     }
 
