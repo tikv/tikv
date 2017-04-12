@@ -21,7 +21,6 @@
 
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
-#[macro_use]
 extern crate tikv;
 extern crate getopts;
 #[macro_use]

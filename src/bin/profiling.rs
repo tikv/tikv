@@ -73,7 +73,7 @@ mod imp {
         let mut second_file_name =
             DumpFileNameGuard::from_cstring(file.map(|f| get_file_name(f, "-sec")));
         Some(Builder::new()
-            .name(thd_name!("memory_prof"))
+            .name("memory_prof".to_owned())
             .spawn(move || {
                 // sleep some time to get the diff between two dumping.
                 thread::sleep(sleep_interval);

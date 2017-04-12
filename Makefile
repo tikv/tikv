@@ -56,8 +56,10 @@ test:
 	export RUST_BACKTRACE=1 && \
 	cargo test --features "${ENABLE_FEATURES}" ${NO_RUN} -- --nocapture && \
 	cargo test --features "${ENABLE_FEATURES}" --bench benches ${NO_RUN} -- --nocapture && \
-	export MALLOC_CONF=prof:true,prof_active:false && \
-	cargo test --features "${ENABLE_FEATURES}" ${NO_RUN} --bin tikv-server -- --nocapture --ignored
+	if [[ "`uname`" == "Linux" ]]; then \
+		export MALLOC_CONF=prof:true,prof_active:false && \
+		cargo test --features "${ENABLE_FEATURES}" ${NO_RUN} --bin tikv-server -- --nocapture --ignored; \
+	fi
 	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
 bench:

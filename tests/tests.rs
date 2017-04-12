@@ -27,6 +27,7 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
+#[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
 #[macro_use]
 extern crate log;
