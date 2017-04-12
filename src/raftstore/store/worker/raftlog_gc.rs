@@ -186,14 +186,10 @@ mod test {
                          (0, 60),
                          (60, 100))];
 
-        for tbl in tbls {
-            let task = tbl.0;
+        for (task, expected_collectd, not_exist_range, exist_range) in tbls {
             runner.run(task);
             let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-            let expected_collectd = tbl.1;
             assert_eq!(res.collected, expected_collectd);
-            let not_exist_range = tbl.2;
-            let exist_range = tbl.3;
             raft_log_must_not_exist(&db, 1, not_exist_range.0, not_exist_range.1);
             raft_log_must_exist(&db, 1, exist_range.0, exist_range.1);
         }
