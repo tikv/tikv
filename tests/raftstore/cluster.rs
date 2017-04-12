@@ -19,6 +19,7 @@ use std::{result, thread};
 
 use rocksdb::DB;
 use tempdir::TempDir;
+use futures::Future;
 
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
@@ -238,6 +239,7 @@ impl<T: Simulator> Cluster<T> {
     fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
         self.pd_client
             .get_region_by_id(region_id)
+            .wait()
             .unwrap()
             .map(|region| region.get_peers().into_iter().map(|p| p.get_store_id()).collect())
     }
@@ -559,6 +561,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         self.pd_client
             .get_region_by_id(region_id)
+            .wait()
             .unwrap()
             .unwrap()
             .take_region_epoch()

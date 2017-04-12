@@ -156,6 +156,11 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
         let cf_used_size = engine.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .expect("rocksdb is too old, missing total-sst-files-size property");
 
+        // For block cache usage
+        let block_cache_usage = engine.get_block_cache_usage_cf(handle);
+        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC.with_label_values(&[cf])
+            .set(block_cache_usage as f64);
+
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
         // families.
         STORE_ENGINE_SIZE_GAUGE_VEC.with_label_values(&[cf]).set(cf_used_size as f64);
@@ -201,6 +206,13 @@ lazy_static!{
             "tikv_engine_size_bytes",
             "Sizes of each column families.",
             &["type"]
+        ).unwrap();
+
+    pub static ref STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC: GaugeVec =
+        register_gauge_vec!(
+            "tikv_engine_block_cache_size_bytes",
+            "Usage of each column families' block cache.",
+            &["cf"]
         ).unwrap();
 
     pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: GaugeVec =
