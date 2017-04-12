@@ -322,83 +322,12 @@ impl PdClient for RpcClient {
         Ok(resp.take_region())
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
+    fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         let mut req = pdpb::GetRegionByIDRequest::new();
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let mut resp = try!(do_request(self, |client| client.GetRegionByID(req.clone())));
-        try!(check_resp_header(resp.get_header()));
-
-        if resp.has_region() {
-            Ok(Some(resp.take_region()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn region_heartbeat(&self,
-                        region: metapb::Region,
-                        leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
-                        -> Result<pdpb::RegionHeartbeatResponse> {
-        let mut req = pdpb::RegionHeartbeatRequest::new();
-        req.set_header(self.header());
-        req.set_region(region);
-        req.set_leader(leader);
-        req.set_down_peers(RepeatedField::from_vec(down_peers));
-        req.set_pending_peers(RepeatedField::from_vec(pending_peers));
-        req.set_bytes_written(written_bytes);
-
-        let resp = try!(do_request(self, |client| client.RegionHeartbeat(req.clone())));
-        try!(check_resp_header(resp.get_header()));
-
-        Ok(resp)
-    }
-
-    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
-        let mut req = pdpb::AskSplitRequest::new();
-        req.set_header(self.header());
-        req.set_region(region);
-
-        let resp = try!(do_request(self, |client| client.AskSplit(req.clone())));
-        try!(check_resp_header(resp.get_header()));
-
-        Ok(resp)
-    }
-
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
-        let mut req = pdpb::StoreHeartbeatRequest::new();
-        req.set_header(self.header());
-        req.set_stats(stats);
-
-        let resp = try!(do_request(self, |client| client.StoreHeartbeat(req.clone())));
-        try!(check_resp_header(resp.get_header()));
-
-        Ok(())
-    }
-
-    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()> {
-        let mut req = pdpb::ReportSplitRequest::new();
-        req.set_header(self.header());
-        req.set_left(left);
-        req.set_right(right);
-
-        let resp = try!(do_request(self, |client| client.ReportSplit(req.clone())));
-        try!(check_resp_header(resp.get_header()));
-
-        Ok(())
-    }
-
-    // For tests.
-    fn async_get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        let mut req = pdpb::GetRegionByIDRequest::new();
-        req.set_header(self.header());
-        req.set_region_id(region_id);
-
-        let request_factory = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
+        let executor = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
             client.GetRegionByID(req)
                 .map_err(Error::Grpc)
                 .and_then(|mut resp| {
@@ -413,7 +342,98 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, request_factory, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn region_heartbeat(&self,
+                        region: metapb::Region,
+                        leader: metapb::Peer,
+                        down_peers: Vec<pdpb::PeerStats>,
+                        pending_peers: Vec<metapb::Peer>,
+                        written_bytes: u64)
+                        -> PdFuture<pdpb::RegionHeartbeatResponse> {
+        let mut req = pdpb::RegionHeartbeatRequest::new();
+        req.set_header(self.header());
+        req.set_region(region);
+        req.set_leader(leader);
+        req.set_down_peers(RepeatedField::from_vec(down_peers));
+        req.set_pending_peers(RepeatedField::from_vec(pending_peers));
+        req.set_bytes_written(written_bytes);
+
+        let executor = |client: &PDAsyncClient, req: pdpb::RegionHeartbeatRequest| {
+            client.RegionHeartbeat(req)
+                .map_err(Error::Grpc)
+                .and_then(|resp| {
+                    try!(check_resp_header(resp.get_header()));
+                    Ok(resp)
+                })
+                .boxed()
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        let mut req = pdpb::AskSplitRequest::new();
+        req.set_header(self.header());
+        req.set_region(region);
+
+        let executor = |client: &PDAsyncClient, req: pdpb::AskSplitRequest| {
+            client.AskSplit(req)
+                .map_err(Error::Grpc)
+                .and_then(|resp| {
+                    try!(check_resp_header(resp.get_header()));
+                    Ok(resp)
+                })
+                .boxed()
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+        let mut req = pdpb::StoreHeartbeatRequest::new();
+        req.set_header(self.header());
+        req.set_stats(stats);
+
+        let executor = |client: &PDAsyncClient, req: pdpb::StoreHeartbeatRequest| {
+            client.StoreHeartbeat(req)
+                .map_err(Error::Grpc)
+                .and_then(|resp| {
+                    try!(check_resp_header(resp.get_header()));
+                    Ok(())
+                })
+                .boxed()
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()> {
+        let mut req = pdpb::ReportSplitRequest::new();
+        req.set_header(self.header());
+        req.set_left(left);
+        req.set_right(right);
+
+        let executor = |client: &PDAsyncClient, req: pdpb::ReportSplitRequest| {
+            client.ReportSplit(req)
+                .map_err(Error::Grpc)
+                .and_then(|resp| {
+                    try!(check_resp_header(resp.get_header()));
+                    Ok(())
+                })
+                .boxed()
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
 }

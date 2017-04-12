@@ -13,8 +13,6 @@
 
 use std::vec::Vec;
 
-use futures;
-use futures::Future;
 use futures::BoxFuture;
 
 mod async;
@@ -87,7 +85,7 @@ pub trait PdClient: Send + Sync {
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region>;
 
     // Get region by region id.
-    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>>;
+    fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
 
     // Leader for a region will use this to heartbeat Pd.
     fn region_heartbeat(&self,
@@ -96,20 +94,14 @@ pub trait PdClient: Send + Sync {
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
                         written_bytes: u64)
-                        -> Result<pdpb::RegionHeartbeatResponse>;
+                        -> PdFuture<pdpb::RegionHeartbeatResponse>;
 
     // Ask pd for split, pd will returns the new split region id.
-    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse>;
+    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
 
     // Send store statistics regularly.
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()>;
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()>;
 
     // Report pd the split region.
-    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> Result<()>;
-
-    // Get region by region id.
-    // For tests.
-    fn async_get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
-        futures::empty().boxed()
-    }
+    fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()>;
 }

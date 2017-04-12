@@ -13,7 +13,6 @@
 
 use std::sync::mpsc::channel;
 use std::time::Duration;
-use std::thread;
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
 use tikv::storage::{txn, engine, mvcc};
@@ -146,24 +145,21 @@ fn test_engine_leader_change_twice() {
 fn test_scheduler_leader_change_twice() {
     let mut cluster = new_server_cluster_with_cfs(0, 2, ALL_CFS);
     cluster.run();
-
     let region = cluster.get_region(b"");
     let peers = region.get_peers();
-
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let engine = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let engine = util::BlockEngine::new(engine);
+    let mut engine = util::BlockEngine::new(engine);
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
-
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peers[0].clone());
-
     let (tx, rx) = channel();
-    engine.block_snapshot();
+    let (stx, srx) = channel();
+    engine.block_snapshot(stx.clone());
     storage.async_prewrite(ctx.clone(),
                         vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
                         b"k".to_vec(),
@@ -180,8 +176,8 @@ fn test_scheduler_leader_change_twice() {
             tx.send(1).unwrap();
         })
         .unwrap();
-    // Sleep a while, the prewrite should be blocked at snapshot stage.
-    thread::sleep(Duration::from_millis(200));
+    // wait for the message, the prewrite should be blocked at snapshot stage.
+    srx.recv_timeout(Duration::from_secs(2)).unwrap();
     // Transfer leader twice, then unblock snapshot.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
