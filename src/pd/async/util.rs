@@ -106,14 +106,11 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         warn!("updating PD client, block the tokio core");
 
         let start = Instant::now();
-        let members = self.inner.rl().members.clone();
-        match try_connect_leader(&members) {
+        match try_connect_leader(&self.inner.rl().members) {
             Ok((client, members)) => {
                 let mut inner = self.inner.wl();
-                if members != inner.members {
-                    inner.client = client;
-                    inner.members = members;
-                }
+                inner.client = client;
+                inner.members = members;
                 warn!("updating PD client done, spent {:?}", start.elapsed());
             }
 
