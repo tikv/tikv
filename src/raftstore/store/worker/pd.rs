@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 
 use uuid::Uuid;
+use futures::Future;
 
 use kvproto::metapb;
 use kvproto::eraftpb::ConfChangeType;
@@ -122,7 +123,7 @@ impl<T: PdClient> Runner<T> {
     fn handle_ask_split(&self, region: metapb::Region, split_key: Vec<u8>, peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "all"]).inc();
 
-        match self.pd_client.ask_split(region.clone()) {
+        match self.pd_client.ask_split(region.clone()).wait() {
             Ok(mut resp) => {
                 info!("[region {}] try to split with new region id {} for region {:?}",
                       region.get_id(),
@@ -153,7 +154,8 @@ impl<T: PdClient> Runner<T> {
                               peer.clone(),
                               down_peers,
                               pending_peers,
-                              written_bytes) {
+                              written_bytes)
+            .wait() {
             Ok(mut resp) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
 
@@ -190,7 +192,7 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_store_heartbeat(&self, stats: pdpb::StoreStats) {
-        if let Err(e) = self.pd_client.store_heartbeat(stats) {
+        if let Err(e) = self.pd_client.store_heartbeat(stats).wait() {
             error!("store heartbeat failed {:?}", e);
         }
     }
@@ -198,7 +200,7 @@ impl<T: PdClient> Runner<T> {
     fn handle_report_split(&self, left: metapb::Region, right: metapb::Region) {
         PD_REQ_COUNTER_VEC.with_label_values(&["report split", "all"]).inc();
 
-        if let Err(e) = self.pd_client.report_split(left, right) {
+        if let Err(e) = self.pd_client.report_split(left, right).wait() {
             error!("report split failed {:?}", e);
         }
         PD_REQ_COUNTER_VEC.with_label_values(&["report split", "success"]).inc();
@@ -224,7 +226,7 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["get region", "all"]).inc();
-        match self.pd_client.get_region_by_id(local_region.get_id()) {
+        match self.pd_client.get_region_by_id(local_region.get_id()).wait() {
             Ok(Some(pd_region)) => {
                 PD_REQ_COUNTER_VEC.with_label_values(&["get region", "success"]).inc();
                 if is_epoch_stale(pd_region.get_region_epoch(),
