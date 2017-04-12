@@ -149,53 +149,54 @@ mod test {
         }
         db.write(wb).unwrap();
 
-        // gc 0..10
-        runner.run(Task {
-            engine: db.clone(),
-            region_id: region_id,
-            start_idx: 0,
-            end_idx: 10,
-        });
-        let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_eq!(res.collected, 10);
-        raft_log_must_not_exist(&db, 1, 0, 10);
-        raft_log_must_exist(&db, 1, 10, 100);
+        let tbls = vec![(Task {
+                            engine: db.clone(),
+                            region_id: region_id,
+                            start_idx: 0,
+                            end_idx: 10,
+                        },
+                         10,
+                         (0, 10),
+                         (10, 100)),
+                        (Task {
+                            engine: db.clone(),
+                            region_id: region_id,
+                            start_idx: 0,
+                            end_idx: 50,
+                        },
+                         40,
+                         (0, 50),
+                         (50, 100)),
+                        (Task {
+                            engine: db.clone(),
+                            region_id: region_id,
+                            start_idx: 50,
+                            end_idx: 50,
+                        },
+                         0,
+                         (0, 50),
+                         (50, 100)),
+                        (Task {
+                            engine: db.clone(),
+                            region_id: region_id,
+                            start_idx: 50,
+                            end_idx: 60,
+                        },
+                         10,
+                         (0, 60),
+                         (60, 100))];
 
-        // gc 10..50
-        runner.run(Task {
-            engine: db.clone(),
-            region_id: region_id,
-            start_idx: 0,
-            end_idx: 50,
-        });
-        let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_eq!(res.collected, 40);
-        raft_log_must_not_exist(&db, 1, 0, 50);
-        raft_log_must_exist(&db, 1, 50, 100);
-
-        // gc nothing
-        runner.run(Task {
-            engine: db.clone(),
-            region_id: region_id,
-            start_idx: 50,
-            end_idx: 50,
-        });
-        let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_eq!(res.collected, 0);
-        raft_log_must_not_exist(&db, 1, 0, 50);
-        raft_log_must_exist(&db, 1, 50, 100);
-
-        // 50..60
-        runner.run(Task {
-            engine: db.clone(),
-            region_id: region_id,
-            start_idx: 50,
-            end_idx: 60,
-        });
-        let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_eq!(res.collected, 10);
-        raft_log_must_not_exist(&db, 1, 0, 60);
-        raft_log_must_exist(&db, 1, 60, 100);
+        for tbl in tbls {
+            let task = tbl.0;
+            runner.run(task);
+            let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let expected_collectd = tbl.1;
+            assert_eq!(res.collected, expected_collectd);
+            let not_exist_range = tbl.2;
+            let exist_range = tbl.3;
+            raft_log_must_not_exist(&db, 1, not_exist_range.0, not_exist_range.1);
+            raft_log_must_exist(&db, 1, exist_range.0, exist_range.1);
+        }
     }
 
     fn raft_log_must_not_exist(engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
