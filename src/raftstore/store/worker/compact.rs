@@ -92,7 +92,7 @@ mod test {
     use std::thread::sleep;
     use util::rocksdb::new_engine;
     use tempdir::TempDir;
-    use storage::CF_DEFAULT;
+    use storage::CF_WRITE;
     use rocksdb::{WriteBatch, Writable};
     use super::*;
 
@@ -101,43 +101,44 @@ mod test {
     #[test]
     fn test_compact_range() {
         let path = TempDir::new("compact-range-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_WRITE]).unwrap();
         let db = Arc::new(db);
 
         let mut runner = Runner::new(db.clone());
+
+        let handle = rocksdb::get_cf_handle(&db, CF_WRITE).unwrap();
 
         // generate first sst file.
         let wb = WriteBatch::new();
         for i in 0..1000 {
             let k = format!("key_{}", i);
-            wb.put(k.as_bytes(), b"whatever content").unwrap();
+            wb.put_cf(handle, k.as_bytes(), b"whatever content").unwrap();
         }
         db.write(wb).unwrap();
-        db.flush(true).unwrap();
+        db.flush_cf(handle, true).unwrap();
 
         // generate another sst file has the same content with first sst file.
         let wb = WriteBatch::new();
         for i in 0..1000 {
             let k = format!("key_{}", i);
-            wb.put(k.as_bytes(), b"whatever content").unwrap();
+            wb.put_cf(handle, k.as_bytes(), b"whatever content").unwrap();
         }
         db.write(wb).unwrap();
-        db.flush(true).unwrap();
+        db.flush_cf(handle, true).unwrap();
 
         // get total sst files size.
-        let handle = rocksdb::get_cf_handle(&db, CF_DEFAULT).unwrap();
-        let old_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE);
+        let old_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE).unwrap();
 
         // schedule compact range task
         runner.run(Task {
-            cf_name: String::from(CF_DEFAULT),
+            cf_name: String::from(CF_WRITE),
             start_key: None,
             end_key: None,
         });
         sleep(Duration::from_secs(5));
 
         // get total sst files size after compact range.
-        let new_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE);
+        let new_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE).unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
     }
 }
