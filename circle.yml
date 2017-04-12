@@ -71,6 +71,6 @@ dependencies:
 
 test:
   override:
-    - make format && git diff-index --quiet HEAD -- || (echo please make format before creating a pr!; exit 1)
+    - make format && git diff-index --quiet HEAD -- || (echo please make format and run tests before creating a pr!; exit 1)
     - cargo test --features "default" -- --nocapture
     - cargo test --features "default" --bench benches -- --nocapture
