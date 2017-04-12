@@ -242,7 +242,7 @@ impl<T: PdClient> Runner<T> {
                                pd_region.get_region_epoch());
                         PD_VALIDATE_PEER_COUNTER_VEC.with_label_values(&["region epoch error"])
                             .inc();
-                        return Err(());
+                        return Ok(());
                     }
 
                     if pd_region.get_peers().into_iter().all(|p| p != &peer) {
