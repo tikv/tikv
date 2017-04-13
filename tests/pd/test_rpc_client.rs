@@ -149,22 +149,49 @@ fn test_retry_async() {
 }
 
 #[test]
-fn test_one_node_dead() {
-    let ep = "127.0.0.1:63081";
+fn test_restart_leader() {
+    let eps = vec![
+        "http://127.0.0.1:42978".to_owned(),
+        "http://127.0.0.1:52978".to_owned(),
+        "http://127.0.0.1:62978".to_owned(),
+    ];
 
-    // Start a mock server.
-    let se = Arc::new(Service::new(vec![ep.to_owned()]));
-    let mut _server = MockServer::run(ep, se.clone(), Some(se.clone()));
+    let se = Arc::new(Service::new(eps.clone()));
+    // Start mock servers.
+    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
+    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
+    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&format!("http://{}", ep)).unwrap();
+    let client = RpcClient::new(&eps[0]).unwrap();
+    // Put a region.
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::new();
+    store.set_id(store_id);
+
+    let peer_id = client.alloc_id().unwrap();
+    let mut peer = metapb::Peer::new();
+    peer.set_id(peer_id);
+    peer.set_store_id(store_id);
+
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.mut_peers().push(peer);
+    client.bootstrap_cluster(store.clone(), region.clone()).unwrap();
+
     let region = client.get_region_by_id(1);
     region.wait().unwrap();
 
-    // Kill the server.
-    drop(_server);
-    // Restart it again.
-    let _server = MockServer::run("127.0.0.1:63081", se.clone(), Some(se.clone()));
+    // Kill servers.
+    drop(_server_a);
+    drop(_server_b);
+    drop(_server_c);
+    // Restart them again.
+    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
+    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
+    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
     thread::sleep(Duration::from_secs(1));
 
     let region = client.get_region_by_id(1);
