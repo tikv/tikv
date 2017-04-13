@@ -438,6 +438,7 @@ pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
 }
 
 /// A simple ring queue with fixed capacity.
+#[derive(Clone, Debug)]
 pub struct RingQueue<T> {
     buf: VecDeque<T>,
     cap: usize,
@@ -517,31 +518,21 @@ impl<T: Clone> RingQueue<T> {
         }
     }
 
+    // TODO: use memcpy instead.
     pub fn extend_from_slice(&mut self, other: &[T]) {
-        let available = self.cap - self.buf.len();
-        let mut needed = other.len();
-        for p in other.into_iter().take(available) {
-            self.buf.push_back(p.to_owned());
-        }
-        if needed <= available {
-            return;
-        }
-        needed -= available;
-        let start_idx = if needed > self.cap {
-            needed = self.cap;
+        let start_idx = if other.len() >= self.cap {
+            self.buf.clear();
             other.len() - self.cap
         } else {
-            available
+            let total_len = other.len() + self.len();
+            if total_len > self.cap {
+                self.buf.drain(..total_len - self.cap);
+            }
+            0
         };
-        let (part1, part2) = self.buf.as_mut_slices();
-        let part1_len = part1.len();
-        if needed < part1_len {
-            part1[..needed].clone_from_slice(&other[start_idx..start_idx + needed]);
-            return;
+        for t in &other[start_idx..] {
+            self.buf.push_back(t.clone());
         }
-        part1.clone_from_slice(&other[start_idx..start_idx + part1_len]);
-        part2[..needed - part1_len]
-            .clone_from_slice(&other[start_idx + part1_len..start_idx + needed]);
     }
 }
 
@@ -598,6 +589,57 @@ mod tests {
             queue.swap_remove_front(0).unwrap();
         }
         assert_eq!(None, queue.swap_remove_front(0));
+    }
+
+    #[test]
+    fn test_ring_queue_to_vec() {
+        let cap = 10;
+        for pos in 0..cap {
+            let mut queue = RingQueue::with_capacity(cap);
+            for num in 0..cap + pos {
+                queue.push(num);
+            }
+            let exp: Vec<_> = (0..cap + pos).collect();
+            // now queue's start index is at pos.
+            let v = queue.to_vec(0..queue.len());
+            assert_eq!(*v, exp[pos..]);
+            for i in 0..cap {
+                queue.drain(cap - i - 1..cap - i);
+                let res = queue.to_vec(0..queue.len());
+                assert_eq!(*res, exp[pos..pos + cap - i - 1]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_ring_queue_extend() {
+        let cap = 10;
+        let buf: Vec<_> = (0..cap * 2).collect();
+        for pos in 0..cap {
+            let mut queue = RingQueue::with_capacity(cap);
+            for num in 0..cap + pos {
+                queue.push(num);
+            }
+            for init_len in (0..cap).rev() {
+                queue.drain(init_len..init_len + 1);
+                for extend_len in 0..cap * 2 {
+                    let mut test_queue = queue.clone();
+                    test_queue.extend_from_slice(&buf[..extend_len]);
+                    let res = test_queue.to_vec(0..test_queue.len());
+                    if extend_len > cap {
+                        assert_eq!(*res, buf[extend_len - cap..extend_len]);
+                    } else if init_len + extend_len > cap {
+                        let mut exp = queue.to_vec(init_len + extend_len - cap..init_len);
+                        exp.extend_from_slice(&buf[..extend_len]);
+                        assert_eq!(res, exp);
+                    } else {
+                        let mut exp = queue.to_vec(0..init_len);
+                        exp.extend_from_slice(&buf[..extend_len]);
+                        assert_eq!(res, exp);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
