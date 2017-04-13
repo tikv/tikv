@@ -223,6 +223,21 @@ impl ApplyDelegate {
             }
         }
 
+        if !self.pending_remove {
+            rocksdb::get_cf_handle(&self.engine, CF_RAFT)
+                .map_err(From::from)
+                .and_then(|handle| {
+                    wb.put_msg_cf(handle,
+                                  &keys::apply_state_key(self.region.get_id()),
+                                  &self.apply_state)
+                })
+                .unwrap_or_else(|e| {
+                    panic!("{} failed to save apply state to write batch, error: {:?}",
+                           self.tag,
+                           e);
+                });
+        }
+
         self.metrics.written_bytes += wb.data_size() as u64;
         self.metrics.written_keys += wb.count() as u64;
 
@@ -258,24 +273,13 @@ impl ApplyDelegate {
         // when a peer become leader, it will send an empty entry.
         let mut state = self.apply_state.clone();
         state.set_applied_index(index);
-        rocksdb::get_cf_handle(&self.engine, CF_RAFT)
-            .map_err(From::from)
-            .and_then(|handle| {
-                wb.put_msg_cf(handle, &keys::apply_state_key(self.region.get_id()), &state)
-            })
-            .unwrap_or_else(|e| {
-                panic!("{} failed to apply empty entry at {}: {:?}",
-                       self.tag,
-                       index,
-                       e);
-            });
         self.apply_state = state;
         self.applied_index_term = term;
         assert!(term > 0);
         while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
             cbs.push((cmd.cb.take().unwrap(),
-                      cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, term)));
+                      cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, cmd.term)));
         }
         None
     }
@@ -397,10 +401,6 @@ impl ApplyDelegate {
         });
 
         ctx.apply_state.set_applied_index(index);
-        if !self.pending_remove {
-            ctx.save(self.region.get_id())
-                .unwrap_or_else(|e| panic!("{} failed to save apply context: {:?}", self.tag, e));
-        }
 
         self.apply_state = ctx.apply_state;
         self.applied_index_term = term;
@@ -461,12 +461,12 @@ impl ApplyDelegate {
         }
     }
 
-    fn new_ctx<'a, 'b>(&self,
-                       wb: &'a mut WriteBatch,
-                       index: u64,
-                       term: u64,
-                       req: &'b RaftCmdRequest)
-                       -> ExecContext<'a, 'b> {
+    fn new_ctx<'a>(&self,
+                   wb: &'a mut WriteBatch,
+                   index: u64,
+                   term: u64,
+                   req: &'a RaftCmdRequest)
+                   -> ExecContext<'a> {
         ExecContext {
             snap: Snapshot::new(self.engine.clone()),
             apply_state: self.apply_state.clone(),
@@ -478,23 +478,13 @@ impl ApplyDelegate {
     }
 }
 
-struct ExecContext<'a, 'b> {
+struct ExecContext<'a> {
     snap: Snapshot,
     apply_state: RaftApplyState,
     wb: &'a mut WriteBatch,
-    req: &'b RaftCmdRequest,
+    req: &'a RaftCmdRequest,
     index: u64,
     term: u64,
-}
-
-impl<'a, 'b> ExecContext<'a, 'b> {
-    fn save(&self, region_id: u64) -> Result<()> {
-        let raft_cf = try!(self.snap.cf_handle(CF_RAFT));
-        try!(self.wb.put_msg_cf(raft_cf,
-                                &keys::apply_state_key(region_id),
-                                &self.apply_state));
-        Ok(())
-    }
 }
 
 // Here we implement all commands.
