@@ -146,14 +146,20 @@ pub struct Runner {
     ch: SendCh<Msg>,
     region_max_size: u64,
     split_size: u64,
+    left_derive: bool,
 }
 
 impl Runner {
-    pub fn new(ch: SendCh<Msg>, region_max_size: u64, split_size: u64) -> Runner {
+    pub fn new(ch: SendCh<Msg>,
+               region_max_size: u64,
+               split_size: u64,
+               left_derive: bool)
+               -> Runner {
         Runner {
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
+            left_derive: left_derive,
         }
     }
 }
@@ -205,7 +211,10 @@ impl Runnable<Task> for Runner {
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
             return;
         }
-        let res = self.ch.try_send(new_split_check_result(task.region_id, task.epoch, split_key));
+        let res = self.ch.try_send(new_split_check_result(task.region_id,
+                                                          task.epoch,
+                                                          split_key,
+                                                          self.left_derive));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result, err {:?}",
                   task.region_id,
@@ -216,10 +225,15 @@ impl Runnable<Task> for Runner {
     }
 }
 
-fn new_split_check_result(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
+fn new_split_check_result(region_id: u64,
+                          epoch: RegionEpoch,
+                          split_key: Vec<u8>,
+                          left_derive: bool)
+                          -> Msg {
     Msg::SplitCheckResult {
         region_id: region_id,
         epoch: epoch,
         split_key: split_key,
+        left_derive: left_derive,
     }
 }

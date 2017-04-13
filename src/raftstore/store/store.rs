@@ -402,7 +402,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
                                                        self.cfg.region_max_size,
-                                                       self.cfg.region_split_size);
+                                                       self.cfg.region_split_size,
+                                                       self.cfg.left_derive_when_split);
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(self.engine.clone(),
@@ -1285,12 +1286,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Err(Error::StaleCommand);
         }
 
-        let res = peer::check_epoch(peer.region(), msg);
+        let res = peer::check_epoch(peer.region(), msg, self.cfg.left_derive_when_split);
         if let Err(Error::StaleEpoch(msg, left_derive, mut new_regions)) = res {
             // Attach the region which might be split from the current region. But it doesn't
             // matter if the region is not split from the current region. If the region meta
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
+
+            warn!("self.region_ranges: {:?}", self.region_ranges);
+
+
             let new_region_id = if left_derive {
                 if let Some((_, &region_id)) = self.region_ranges
                     .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
@@ -1502,7 +1507,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_split_check_result(&mut self,
                              region_id: u64,
                              epoch: metapb::RegionEpoch,
-                             split_key: Vec<u8>) {
+                             split_key: Vec<u8>,
+                             left_derive: bool) {
         if split_key.is_empty() {
             error!("[region {}] split key should not be empty!!!", region_id);
             return;
@@ -1532,6 +1538,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region: region.clone(),
             split_key: key.to_vec(),
             peer: peer.peer.clone(),
+            left_derive: left_derive,
         };
 
         if let Err(e) = self.pd_worker.schedule(task) {
@@ -2018,9 +2025,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
             }
-            Msg::SplitCheckResult { region_id, epoch, split_key } => {
+            Msg::SplitCheckResult { region_id, epoch, split_key, left_derive } => {
                 info!("[region {}] split check complete.", region_id);
-                self.on_split_check_result(region_id, epoch, split_key);
+                self.on_split_check_result(region_id, epoch, split_key, left_derive);
             }
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);

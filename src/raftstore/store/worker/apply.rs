@@ -157,6 +157,8 @@ pub struct ApplyDelegate {
     term: u64,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
+    // If true, left region will derive origin region id.
+    left_derive_when_split: bool,
 }
 
 impl ApplyDelegate {
@@ -185,6 +187,7 @@ impl ApplyDelegate {
             term: reg.term,
             pending_cmds: Default::default(),
             metrics: Default::default(),
+            left_derive_when_split: reg.left_derive_when_split,
         }
     }
 
@@ -486,7 +489,7 @@ impl ApplyDelegate {
     fn exec_raft_cmd(&mut self,
                      ctx: &mut ExecContext)
                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-        try!(check_epoch(&self.region, ctx.req));
+        try!(check_epoch(&self.region, ctx.req, self.left_derive_when_split));
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx)
         } else {
@@ -954,6 +957,7 @@ pub struct Registration {
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub region: Region,
+    pub left_derive_when_split: bool,
 }
 
 impl Registration {
@@ -964,6 +968,7 @@ impl Registration {
             apply_state: peer.get_store().apply_state.clone(),
             applied_index_term: peer.get_store().applied_index_term,
             region: peer.region().clone(),
+            left_derive_when_split: peer.cfg.left_derive_when_split,
         }
     }
 }

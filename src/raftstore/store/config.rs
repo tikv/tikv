@@ -130,6 +130,9 @@ pub struct Config {
     pub raft_store_max_leader_lease: TimeDuration,
 
     pub use_sst_file_snapshot: bool,
+
+    // Left region derive origin region id when split.
+    pub left_derive_when_split: bool,
 }
 
 impl Default for Config {
@@ -167,6 +170,7 @@ impl Default for Config {
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
             raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),
             use_sst_file_snapshot: DEFAULT_USE_SST_FILE_SNAPSHOT,
+            left_derive_when_split: false,
         }
     }
 }

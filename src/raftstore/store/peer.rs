@@ -183,7 +183,7 @@ enum RequestPolicy {
 
 pub struct Peer {
     engine: Arc<DB>,
-    cfg: Rc<Config>,
+    pub cfg: Rc<Config>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
     pub peer: metapb::Peer,
     region_id: u64,
@@ -1335,19 +1335,15 @@ impl Peer {
     }
 }
 
-pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> {
+pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest, left_derive: bool) -> Result<()> {
     let (mut check_ver, mut check_conf_ver) = (false, false);
-    let mut left_derive = false;
     if req.has_admin_request() {
         match req.get_admin_request().get_cmd_type() {
             AdminCmdType::CompactLog |
             AdminCmdType::InvalidAdmin |
             AdminCmdType::ComputeHash |
             AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => {
-                check_ver = true;
-                left_derive = !req.get_admin_request().get_split().get_right_derive();
-            }
+            AdminCmdType::Split => check_ver = true,
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::TransferLeader => {
                 check_ver = true;
@@ -1486,7 +1482,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
-        try!(check_epoch(self.region(), req));
+        try!(check_epoch(self.region(), req, self.cfg.left_derive_when_split));
         let snap = Snapshot::new(self.engine.clone());
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
