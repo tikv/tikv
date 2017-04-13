@@ -35,6 +35,7 @@ dependencies = [
  "time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
  "tokio-core 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-timer 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "utime 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1040,6 +1041,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-timer"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "futures 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "slab 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "tokio-tls"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1301,6 +1311,7 @@ dependencies = [
 "checksum time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)" = "3c7ec6d62a20df54e07ab3b78b9a3932972f4b7981de295563686849eb3989af"
 "checksum tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)" = "<none>"
 "checksum tokio-core 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "3d1be481b55126f02ef88ff86748086473cb537a949fc4a8f4be403a530ae54b"
+"checksum tokio-timer 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "86f33def658c14724fc13ec6289b3875a8152ee8ae767a5b1ccbded363b03db8"
 "checksum tokio-tls 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "7a85d8a0e53d372cd25ee2e498d23d4496a318f5a1b9b3f959bfcdfac4f094d2"
 "checksum toml 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)" = "fcd27a04ca509aff336ba5eb2abc58d456f52c4ff64d9724d88acb85ead560b6"
 "checksum toml 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "736b60249cb25337bc196faa43ee12c705e426f3d55c214d73a4e7be06f92cb4"
