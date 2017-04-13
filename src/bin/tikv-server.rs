@@ -566,6 +566,14 @@ fn build_cfg(matches: &Matches,
                   "server.end-point-concurrency") {
         cfg.end_point_concurrency = adjust_end_points_by_cpu_num(total_cpu_num);
     }
+    cfg_usize(&mut cfg.end_point_txn_concurrency_on_busy,
+              config,
+              "server.end-point-txn-concurrency-on-busy");
+    assert!(cfg.end_point_txn_concurrency_on_busy <= cfg.end_point_concurrency &&
+            cfg.end_point_txn_concurrency_on_busy > 0,
+            "server.end-point-txn-concurrency-on-busy: {} is invalid, should be in [0,{}]",
+            cfg.end_point_txn_concurrency_on_busy,
+            cfg.end_point_concurrency);
     cfg_usize(&mut cfg.messages_per_tick,
               config,
               "server.messages-per-tick");
