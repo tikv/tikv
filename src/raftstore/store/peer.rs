@@ -39,7 +39,7 @@ use raftstore::store::Config;
 use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
 
-use util::worker::{Worker, Scheduler};
+use util::worker::{FutureWorker as Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes};
 use util::{clocktime, Either, HashMap, HashSet, strftimespec};
 
