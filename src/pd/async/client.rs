@@ -17,11 +17,12 @@ use std::thread;
 use std::collections::HashSet;
 
 use grpc;
+use grpc::error::GrpcError;
 use grpc::futures_grpc::GrpcFutureSend;
 use url::Url;
 use rand::{self, Rng};
 use protobuf::RepeatedField;
-use futures::Future;
+use futures::{Future, Stream};
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, ErrorType};
@@ -31,7 +32,7 @@ use kvproto::pdpb_grpc::PDAsyncClient;
 
 use util::HandyRwLock;
 
-use super::super::PdFuture;
+use super::super::{PdFuture, PdStream};
 use super::super::{Result, Error, PdClient};
 use super::util::LeaderClient;
 use super::super:: metrics::*;
@@ -346,34 +347,44 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn region_heartbeat(&self,
-                        region: metapb::Region,
-                        leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
-                        -> PdFuture<pdpb::RegionHeartbeatResponse> {
-        let mut req = pdpb::RegionHeartbeatRequest::new();
-        req.set_header(self.header());
-        req.set_region(region);
-        req.set_leader(leader);
-        req.set_down_peers(RepeatedField::from_vec(down_peers));
-        req.set_pending_peers(RepeatedField::from_vec(pending_peers));
-        req.set_bytes_written(written_bytes);
+    fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
+        where E: Send + 'static,
+              S: Stream<Item = Option<(metapb::Region,
+                                       metapb::Peer,
+                                       Vec<pdpb::PeerStats>,
+                                       Vec<metapb::Peer>,
+                                       u64)>,
+                        Error = E> + Send + 'static
+    {
+        let f = req_stream.take_while(|t| Ok(t.is_some()))
+            .map(|req| {
+                let (region, leader, down_peers, pending_peers, written_bytes) = req.unwrap();
+                let mut req = pdpb::RegionHeartbeatRequest::new();
+                // FIXME: do we need headers here?
+                // req.set_header(self.header());
+                req.set_region(region);
+                req.set_leader(leader);
+                req.set_down_peers(RepeatedField::from_vec(down_peers));
+                req.set_pending_peers(RepeatedField::from_vec(pending_peers));
+                req.set_bytes_written(written_bytes);
+                req
+            })
+            .map_err(|_| GrpcError::Other("client stream error"))
+            .boxed();
 
-        let executor = |client: &PDAsyncClient, req: pdpb::RegionHeartbeatRequest| {
-            client.RegionHeartbeat(req)
-                .map_err(Error::Grpc)
-                .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
-                    Ok(resp)
-                })
-                .boxed()
-        };
-
+        // TODO: re-establish stream after the previous connected PD failed.
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
-            .execute()
+            .inner
+            .rl()
+            .client
+            .RegionHeartbeat(f)
+            .map_err(Error::Grpc)
+            .and_then(|resp| {
+                // TODO: remove check.
+                try!(check_resp_header(resp.get_header()));
+                Ok(resp)
+            })
+            .boxed()
     }
 
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {

@@ -18,13 +18,13 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::Future;
+use futures::{Future, Stream};
 use futures::future::{ok, err};
 
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::eraftpb;
-use tikv::pd::{PdClient, Result, Error, Key, PdFuture};
+use tikv::pd::{PdClient, Result, Error, Key, PdFuture, PdStream};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
@@ -557,23 +557,26 @@ impl PdClient for TestPdClient {
         Ok(self.cluster.rl().meta.clone())
     }
 
-
-    fn region_heartbeat(&self,
-                        region: metapb::Region,
-                        leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
-                        -> PdFuture<pdpb::RegionHeartbeatResponse> {
-        if let Err(e) = self.check_bootstrap() {
-            return err(e).boxed();
-        }
-        match self.cluster
-            .wl()
-            .region_heartbeat(region, leader, down_peers, pending_peers, written_bytes) {
-            Ok(resp) => ok(resp).boxed(),
-            Err(e) => err(e).boxed(),
-        }
+    fn region_heartbeat<S, E>(&self, _: S) -> PdStream<pdpb::RegionHeartbeatResponse>
+        where E: Send + 'static,
+              S: Stream<Item = Option<(metapb::Region,
+                                       metapb::Peer,
+                                       Vec<pdpb::PeerStats>,
+                                       Vec<metapb::Peer>,
+                                       u64)>,
+                        Error = E> + Send + 'static
+    {
+        unimplemented!()
+        // FIXME: impl it!
+        // if let Err(e) = self.check_bootstrap() {
+        //     return err(e).boxed();
+        // }
+        // match self.cluster
+        //     .wl()
+        //     .region_heartbeat(region, leader, down_peers, pending_peers, written_bytes) {
+        //     Ok(resp) => ok(resp).boxed(),
+        //     Err(e) => err(e).boxed(),
+        // }
     }
 
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {

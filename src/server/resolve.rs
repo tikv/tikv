@@ -199,14 +199,16 @@ mod tests {
         fn get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
             unimplemented!();
         }
-        fn region_heartbeat(&self,
-                            _: metapb::Region,
-                            _: metapb::Peer,
-                            _: Vec<pdpb::PeerStats>,
-                            _: Vec<metapb::Peer>,
-                            _: u64)
-                            -> PdFuture<pdpb::RegionHeartbeatResponse> {
-            unimplemented!();
+        fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
+            where E: Send + 'static,
+                  S: Stream<Item = Option<(metapb::Region,
+                                           metapb::Peer,
+                                           Vec<pdpb::PeerStats>,
+                                           Vec<metapb::Peer>,
+                                           u64)>,
+                            Error = E> + Send + 'static
+        {
+            unimplemented!()
         }
         fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
             unimplemented!();

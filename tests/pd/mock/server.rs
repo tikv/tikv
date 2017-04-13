@@ -63,7 +63,6 @@ fn try_takeover<F, R, C: Mocker>(mock: &Mock<C>, f: F) -> GrpcFutureSend<R>
     }
 }
 
-#[derive(Debug)]
 struct Mock<C: Mocker> {
     handler: Arc<Service>,
     case: Option<Arc<C>>,
@@ -103,9 +102,10 @@ impl<C: Mocker> PDAsync for Mock<C> {
     }
 
     fn RegionHeartbeat(&self,
-                       req: RegionHeartbeatRequest)
-                       -> GrpcFutureSend<RegionHeartbeatResponse> {
-        try_takeover(self, |c| c.RegionHeartbeat(&req))
+                       _: GrpcStreamSend<RegionHeartbeatRequest>)
+                       -> ::grpc::futures_grpc::GrpcStreamSend<RegionHeartbeatResponse> {
+        // FIXME: mock it!
+        unimplemented!()
     }
 
     fn GetRegion(&self, _: GetRegionRequest) -> GrpcFutureSend<GetRegionResponse> {

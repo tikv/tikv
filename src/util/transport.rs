@@ -19,6 +19,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 use super::metrics::*;
 
+use futures::Stream;
+use futures::Poll;
+use futures::Async;
 use mio;
 
 const MAX_SEND_RETRY_CNT: usize = 5;
@@ -146,6 +149,19 @@ impl<T, C: Sender<T>> Clone for RetryableSendCh<T, C> {
             name: self.name,
             marker: Default::default(),
         }
+    }
+}
+
+pub struct SendChStream<T, C: Sender<T>> {
+    pub ch: RetryableSendCh<T, C>,
+}
+
+impl<T, C: Sender<T>> Stream for SendChStream<T, C> {
+    type Item = RetryableSendCh<T, C>;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        Ok(Async::Ready(Some(self.ch.clone())))
     }
 }
 

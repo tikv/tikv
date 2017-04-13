@@ -68,6 +68,7 @@ pub trait Mocker {
         None
     }
 
+    // FIXME: maybe Iterator?
     fn RegionHeartbeat(&self,
                        _: &RegionHeartbeatRequest)
                        -> Option<Result<RegionHeartbeatResponse>> {
