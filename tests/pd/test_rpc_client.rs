@@ -156,6 +156,7 @@ fn test_restart_leader() {
         "http://127.0.0.1:62978".to_owned(),
     ];
 
+    // Service has only one GetMembersResponse, so the leader never changes.
     let se = Arc::new(Service::new(eps.clone()));
     // Start mock servers.
     let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
