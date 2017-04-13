@@ -127,7 +127,8 @@ mod test {
         db.flush_cf(handle, true).unwrap();
 
         // get total sst files size.
-        let old_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE).unwrap();
+        let old_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+            .unwrap();
 
         // schedule compact range task
         runner.run(Task {
@@ -138,7 +139,8 @@ mod test {
         sleep(Duration::from_secs(5));
 
         // get total sst files size after compact range.
-        let new_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE).unwrap();
+        let new_sst_files_size = db.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
+            .unwrap();
         assert!(old_sst_files_size > new_sst_files_size);
     }
 }
