@@ -15,6 +15,7 @@
 /// Worker contains all workers that do the expensive job in background.
 
 mod metrics;
+mod future;
 
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle, Builder};
@@ -26,6 +27,10 @@ use std::error::Error;
 
 use util::SlowTimer;
 use self::metrics::*;
+
+pub use self::future::Runnable as FutureRunnable;
+pub use self::future::Scheduler as FutureScheduler;
+pub use self::future::Worker as FutureWorker;
 
 pub struct Stopped<T>(pub T);
 

@@ -98,14 +98,14 @@ impl<C: Mocker> PDAsync for Mock<C> {
         futures::future::err(GrpcError::Other("unimpl")).boxed()
     }
 
-    fn StoreHeartbeat(&self, _: StoreHeartbeatRequest) -> GrpcFutureSend<StoreHeartbeatResponse> {
-        futures::future::err(GrpcError::Other("unimpl")).boxed()
+    fn StoreHeartbeat(&self, req: StoreHeartbeatRequest) -> GrpcFutureSend<StoreHeartbeatResponse> {
+        try_takeover(self, |c| c.StoreHeartbeat(&req))
     }
 
     fn RegionHeartbeat(&self,
-                       _: RegionHeartbeatRequest)
+                       req: RegionHeartbeatRequest)
                        -> GrpcFutureSend<RegionHeartbeatResponse> {
-        futures::future::err(GrpcError::Other("unimpl")).boxed()
+        try_takeover(self, |c| c.RegionHeartbeat(&req))
     }
 
     fn GetRegion(&self, _: GetRegionRequest) -> GrpcFutureSend<GetRegionResponse> {
@@ -116,12 +116,12 @@ impl<C: Mocker> PDAsync for Mock<C> {
         try_takeover(self, |c| c.GetRegionByID(&req))
     }
 
-    fn AskSplit(&self, _: AskSplitRequest) -> GrpcFutureSend<AskSplitResponse> {
-        futures::future::err(GrpcError::Other("unimpl")).boxed()
+    fn AskSplit(&self, req: AskSplitRequest) -> GrpcFutureSend<AskSplitResponse> {
+        try_takeover(self, |c| c.AskSplit(&req))
     }
 
-    fn ReportSplit(&self, _: ReportSplitRequest) -> GrpcFutureSend<ReportSplitResponse> {
-        futures::future::err(GrpcError::Other("unimpl")).boxed()
+    fn ReportSplit(&self, req: ReportSplitRequest) -> GrpcFutureSend<ReportSplitResponse> {
+        try_takeover(self, |c| c.ReportSplit(&req))
     }
 
     fn GetClusterConfig(&self,
