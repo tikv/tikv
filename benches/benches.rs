@@ -28,6 +28,7 @@ extern crate tikv;
 extern crate time;
 
 mod channel;
+mod serialization;
 
 #[allow(dead_code)]
 #[path="../tests/util.rs"]
