@@ -1337,13 +1337,17 @@ impl Peer {
 
 pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> {
     let (mut check_ver, mut check_conf_ver) = (false, false);
+    let mut left_derive = false;
     if req.has_admin_request() {
         match req.get_admin_request().get_cmd_type() {
             AdminCmdType::CompactLog |
             AdminCmdType::InvalidAdmin |
             AdminCmdType::ComputeHash |
             AdminCmdType::VerifyHash => {}
-            AdminCmdType::Split => check_ver = true,
+            AdminCmdType::Split => {
+                check_ver = true;
+                left_derive = !req.get_admin_request().get_split().get_right_derive();
+            }
             AdminCmdType::ChangePeer => check_conf_ver = true,
             AdminCmdType::TransferLeader => {
                 check_ver = true;
@@ -1378,6 +1382,7 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
                                              region.get_id(),
                                              latest_epoch,
                                              from_epoch),
+                                     left_derive,
                                      vec![region.to_owned()]));
     }
 

@@ -1286,18 +1286,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let res = peer::check_epoch(peer.region(), msg);
-        if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach the prev region which might be split from the current region. But it doesn't
-            // matter if the prev region is not split from the current region. If the region meta
+        if let Err(Error::StaleEpoch(msg, left_derive, mut new_regions)) = res {
+            // Attach the region which might be split from the current region. But it doesn't
+            // matter if the region is not split from the current region. If the region meta
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
-            if let Some((_, &next_region_id)) = self.region_ranges
+            let new_region_id = if left_derive {
+                if let Some((_, &region_id)) = self.region_ranges
+                    .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
+                    .next() {
+                    Some(region_id)
+                } else {
+                    None
+                }
+            } else if let Some((_, &region_id)) = self.region_ranges
                 .range((Included(enc_start_key(peer.region())), Unbounded::<Key>))
                 .next() {
-                let next_region = self.region_peers[&next_region_id].region();
-                new_regions.push(next_region.to_owned());
+                Some(region_id)
+            } else {
+                None
+            };
+
+            if let Some(new_region_id) = new_region_id {
+                let new_region = self.region_peers[&new_region_id].region();
+                new_regions.push(new_region.to_owned());
             }
-            return Err(Error::StaleEpoch(msg, new_regions));
+            return Err(Error::StaleEpoch(msg, left_derive, new_regions));
         }
         res
     }
