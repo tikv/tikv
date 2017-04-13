@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,11 @@ use std::thread;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::Future;
 use kvproto::metapb;
+use kvproto::pdpb;
 
-use tikv::pd::{PdClient, RpcClient, validate_endpoints};
+use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -56,7 +58,7 @@ fn test_rpc_client() {
     let tmp_store = client.get_store(store_id).unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
-    let tmp_region = client.get_region_by_id(region_id).unwrap().unwrap();
+    let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
     let mut prev_id = 0;
@@ -65,6 +67,42 @@ fn test_rpc_client() {
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
+    }
+
+    // Only check if it works.
+    client.region_heartbeat(metapb::Region::new(),
+                          metapb::Peer::new(),
+                          vec![],
+                          vec![],
+                          0)
+        .wait()
+        .unwrap();
+    client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();
+    client.ask_split(metapb::Region::new()).wait().unwrap();
+    client.report_split(metapb::Region::new(), metapb::Region::new()).wait().unwrap();
+}
+
+#[test]
+fn test_reboot() {
+    let mut eps = vec![
+        "http://127.0.0.1:52730".to_owned(),
+    ];
+
+    let se = Arc::new(Service::new(eps.clone()));
+    let lc = Arc::new(AlreadyBootstrap::new());
+
+    let _server = MockServer::run("127.0.0.1:52730", se.clone(), Some(lc.clone()));
+    thread::sleep(Duration::from_secs(1));
+
+    let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
+
+    assert!(!client.is_cluster_bootstrapped().unwrap());
+
+    match client.bootstrap_cluster(metapb::Store::new(), metapb::Region::new()) {
+        Err(PdError::ClusterBootstrapped(_)) => (),
+        _ => {
+            panic!("failed, should return ClusterBootstrapped");
+        }
     }
 }
 
@@ -89,19 +127,41 @@ fn test_validate_endpoints() {
 }
 
 #[test]
-fn test_change_leader() {
+fn test_retry_async() {
     let mut eps = vec![
-        "http://127.0.0.1:43079".to_owned(),
-        "http://127.0.0.1:53079".to_owned(),
-        "http://127.0.0.1:63079".to_owned(),
+        "http://127.0.0.1:63080".to_owned(),
+    ];
+
+    let se = Arc::new(Service::new(eps.clone()));
+    // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
+    let lc = Arc::new(Retry::new(3));
+
+    let _server_a = MockServer::run("127.0.0.1:63080", se.clone(), Some(lc.clone()));
+
+    thread::sleep(Duration::from_secs(1));
+
+    let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
+
+    for _ in 0..5 {
+        let region = client.get_region_by_id(1);
+        region.wait().unwrap();
+    }
+}
+
+#[test]
+fn test_change_leader_async() {
+    let mut eps = vec![
+        "http://127.0.0.1:42979".to_owned(),
+        "http://127.0.0.1:52979".to_owned(),
+        "http://127.0.0.1:62979".to_owned(),
     ];
 
     let se = Arc::new(Service::new(eps.clone()));
     let lc = Arc::new(LeaderChange::new(eps.clone()));
 
-    let _server_a = MockServer::run("127.0.0.1:43079", se.clone(), Some(lc.clone()));
-    let _server_b = MockServer::run("127.0.0.1:53079", se.clone(), Some(lc.clone()));
-    let _server_c = MockServer::run("127.0.0.1:63079", se.clone(), Some(lc.clone()));
+    let _server_a = MockServer::run("127.0.0.1:42979", se.clone(), Some(lc.clone()));
+    let _server_b = MockServer::run("127.0.0.1:52979", se.clone(), Some(lc.clone()));
+    let _server_c = MockServer::run("127.0.0.1:62979", se.clone(), Some(lc.clone()));
 
     thread::sleep(Duration::from_secs(1));
 
@@ -109,7 +169,9 @@ fn test_change_leader() {
     let leader = client.get_leader();
 
     for _ in 0..5 {
-        client.is_cluster_bootstrapped().unwrap();
+        let region = client.get_region_by_id(1);
+        region.wait().ok();
+
         let new = client.get_leader();
         if new != leader {
             return;

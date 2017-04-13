@@ -72,6 +72,7 @@ const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
 const KB: u64 = 1024;
 const MB: u64 = KB * 1024;
 const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
+const SEC_TO_MS: i64 = 1000;
 
 fn sanitize_memory_usage() -> bool {
     let mut ratio = 0.0;
@@ -215,10 +216,11 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     let level_filter = logger::get_level_by_string(&level);
     if log_file_path.is_empty() {
         let w = StderrLogger;
-        logger::init_log(w, level_filter).unwrap();
+        logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     } else {
-        let w = RotatingFileLogger::new(&log_file_path).unwrap();
-        logger::init_log(w, level_filter).unwrap();
+        let w = RotatingFileLogger::new(&log_file_path)
+            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+        logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     }
 }
 
@@ -240,7 +242,7 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
-    util::monitor_threads("tikv").unwrap();
+    util::monitor_threads("tikv").unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     util::run_prometheus(Duration::from_millis(push_interval as u64),
                          &push_address,
@@ -279,7 +281,8 @@ fn check_advertise_address(addr: &str) {
 fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let rmode = get_toml_int(config, "rocksdb.wal-recovery-mode", Some(2));
-    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
+    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
     let wal_dir = get_toml_string(config, "rocksdb.wal-dir", Some("".to_owned()));
@@ -330,6 +333,25 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
         get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
+    let max_file_size = get_toml_int(config, "rocksdb.info-log-max-size", Some(0));
+    opts.set_max_log_file_size(max_file_size as u64);
+
+    // RocksDB needs seconds, but here we will get milliseconds.
+    let roll_time_secs = get_toml_int(config, "rocksdb.info-log-roll-time", Some(0)) / SEC_TO_MS;
+    opts.set_log_file_time_to_roll(roll_time_secs as u64);
+
+    let info_log_dir = get_toml_string(config, "rocksdb.info-log-dir", Some("".to_owned()));
+    if !info_log_dir.is_empty() {
+        opts.create_info_log(&info_log_dir).unwrap_or_else(|e| {
+            panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
+        })
+    }
+
+    let rate_bytes_per_sec = get_toml_int(config, "rocksdb.rate-bytes-per-sec", Some(0));
+    if rate_bytes_per_sec > 0 {
+        opts.set_ratelimiter(rate_bytes_per_sec as i64);
+    }
+
     opts
 }
 
@@ -375,7 +397,8 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let cpl = get_toml_string(config,
                               (prefix.clone() + "compression-per-level").as_str(),
                               Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()));
-    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_toml_int(config,
@@ -439,7 +462,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
     // prefix extractor(trim the timestamp at tail) for write cf.
     opt.set_prefix_extractor("FixedSuffixSliceTransform",
                               Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
-        .unwrap();
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     // create prefix bloom for memtable.
     opt.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
     opt
@@ -457,7 +480,7 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     let mut opt = get_rocksdb_cf_option(config, "raftcf", default_block_cache_size, false, false);
     opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
             Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
-        .unwrap();
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opt
 }
 
@@ -475,7 +498,8 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = "no:no:no:no:no:no:no".to_owned();
-    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_toml_int(config,
@@ -669,11 +693,14 @@ fn build_raftkv(config: &toml::Value,
     cfs_opts.insert(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem));
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine =
-        Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), db_opts, cfs_opts)
-            .unwrap());
+    let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
+                                                           .unwrap(),
+                                                       db_opts,
+                                                       cfs_opts)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
 
-    let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
+    let mut event_loop = store::create_event_loop(&cfg.raft_store)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
 
     let mut snap_path = path.clone();
@@ -683,11 +710,13 @@ fn build_raftkv(config: &toml::Value,
                                     Some(node.get_sendch()),
                                     cfg.raft_store.use_sst_file_snapshot);
 
-    node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
+    node.start(event_loop, engine.clone(), trans, snap_mgr.clone())
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
 
     (node,
-     create_raft_storage(router.clone(), engine.clone(), cfg).unwrap(),
+     create_raft_storage(router.clone(), engine.clone(), cfg)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))),
      router,
      snap_mgr,
      engine)
@@ -699,9 +728,10 @@ fn canonicalize_path(path: &str) -> String {
         exit_with_err(format!("{} is not a directory!", path));
     }
     if !p.exists() {
-        fs::create_dir_all(p).unwrap();
+        fs::create_dir_all(p).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     }
-    format!("{}", p.canonicalize().unwrap().display())
+    format!("{}",
+            p.canonicalize().unwrap_or_else(|err| exit_with_err(format!("{:?}", err))).display())
 }
 
 fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
@@ -733,7 +763,8 @@ fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String
 fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
     let labels = get_flag_string(matches, "labels")
         .unwrap_or_else(|| get_toml_string(config, "server.labels", Some("".to_owned())));
-    util::config::parse_store_labels(&labels).unwrap()
+    util::config::parse_store_labels(&labels)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
 }
 
 fn start_server<T, S>(mut server: Server<T, S>,
@@ -747,11 +778,11 @@ fn start_server<T, S>(mut server: Server<T, S>,
     let h = thread::Builder::new()
         .name("tikv-eventloop".to_owned())
         .spawn(move || {
-            server.run(&mut el).unwrap();
+            server.run(&mut el).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
         })
-        .unwrap();
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     signal_handler::handle_signal(ch, engine, backup_path);
-    h.join().unwrap();
+    h.join().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 
 fn run_raft_server(pd_client: RpcClient,
@@ -759,15 +790,17 @@ fn run_raft_server(pd_client: RpcClient,
                    backup_path: &str,
                    config: &toml::Value,
                    total_mem: u64) {
-    let mut event_loop = create_event_loop(&cfg).unwrap();
+    let mut event_loop = create_event_loop(&cfg)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
-    let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
+    let resolver = PdStoreAddrResolver::new(pd_client.clone())
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     let store_path = &cfg.storage.path;
     let mut lock_path = Path::new(store_path).to_path_buf();
     lock_path.push("LOCK");
-    let f = File::create(lock_path).unwrap();
+    let f = File::create(lock_path).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     if f.try_lock_exclusive().is_err() {
         panic!("lock {} failed, maybe another instance is using this directory.",
                store_path);
@@ -785,7 +818,7 @@ fn run_raft_server(pd_client: RpcClient,
     }
 
     info!("Start listening on {}...", cfg.addr);
-    let listener = bind(&cfg.addr).unwrap();
+    let listener = bind(&cfg.addr).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     let server_chan = ServerChannel {
         raft_router: raft_router,
@@ -798,9 +831,9 @@ fn run_raft_server(pd_client: RpcClient,
                           server_chan,
                           resolver,
                           snap_mgr)
-        .unwrap();
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     start_server(svr, event_loop, engine, backup_path);
-    node.stop().unwrap();
+    node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 
 fn main() {
@@ -907,10 +940,11 @@ fn main() {
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let cluster_id = pd_client.get_cluster_id()
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    info!("connect to PD cluster {}", cluster_id);
 
-    let total_cpu_num = cpu_num().unwrap();
+    let total_cpu_num = cpu_num().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     // return  memory in KB.
-    let mem = mem_info().unwrap();
+    let mem = mem_info().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let total_mem = mem.total * KB;
     if !sanitize_memory_usage() {
         panic!("default block cache size over total memory.");

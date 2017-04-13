@@ -22,8 +22,7 @@ use protobuf::{RepeatedField, Message};
 
 use super::Mocker;
 use super::Result;
-
-const CLUSTER_ID: u64 = 42;
+use super::DEFAULT_CLUSTER_ID as CLUSTER_ID;
 
 #[derive(Debug)]
 pub struct Service {
@@ -173,6 +172,36 @@ impl Mocker for Service {
                 Some(Ok(resp))
             }
         }
+    }
+
+    fn RegionHeartbeat(&self,
+                       _: &RegionHeartbeatRequest)
+                       -> Option<Result<RegionHeartbeatResponse>> {
+        let mut resp = RegionHeartbeatResponse::new();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn StoreHeartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
+        let mut resp = StoreHeartbeatResponse::new();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn AskSplit(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
+        let mut resp = AskSplitResponse::new();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn ReportSplit(&self, _: &ReportSplitRequest) -> Option<Result<ReportSplitResponse>> {
+        let mut resp = ReportSplitResponse::new();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
     }
 }
 
