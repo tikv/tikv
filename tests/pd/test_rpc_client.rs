@@ -149,6 +149,29 @@ fn test_retry_async() {
 }
 
 #[test]
+fn test_one_node_dead() {
+    let ep = "127.0.0.1:63081";
+
+    // Start a mock server.
+    let se = Arc::new(Service::new(vec![ep.to_owned()]));
+    let mut _server = MockServer::run(ep, se.clone(), Some(se.clone()));
+    thread::sleep(Duration::from_secs(1));
+
+    let client = RpcClient::new(&format!("http://{}", ep)).unwrap();
+    let region = client.get_region_by_id(1);
+    region.wait().unwrap();
+
+    // Kill the server.
+    drop(_server);
+    // Restart it again.
+    let _server = MockServer::run("127.0.0.1:63081", se.clone(), Some(se.clone()));
+    thread::sleep(Duration::from_secs(1));
+
+    let region = client.get_region_by_id(1);
+    region.wait().unwrap();
+}
+
+#[test]
 fn test_change_leader_async() {
     let mut eps = vec![
         "http://127.0.0.1:42979".to_owned(),
