@@ -42,6 +42,9 @@ release:
 static_release:
 	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 ROCKSDB_SYS_SSE=1  make release
 
+static_prof_release:
+	ENABLE_FEATURES=mem-profiling make static_release
+
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
 	export CI=true && \
@@ -55,7 +58,11 @@ test:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
 	cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --features "${ENABLE_FEATURES}" --bench benches ${EXTRA_CARGO_ARGS} -- --nocapture 
+	cargo test --features "${ENABLE_FEATURES}" --bench benches ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	if [[ "`uname`" == "Linux" ]]; then \
+		export MALLOC_CONF=prof:true,prof_active:false && \
+		cargo test --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+	fi
 	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
 bench:
