@@ -41,7 +41,7 @@ use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Result, Error};
 use kvproto::metapb;
-use util::worker::{Worker, Scheduler};
+use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
 use util::{rocksdb, HashMap, HashSet, RingQueue};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -114,7 +114,7 @@ pub struct Store<T, C: 'static> {
     region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
-    pd_worker: Worker<PdTask>,
+    pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
 
     pub apply_worker: Worker<ApplyTask>,
@@ -194,7 +194,7 @@ impl<T, C> Store<T, C> {
             region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
-            pd_worker: Worker::new("pd worker"),
+            pd_worker: FutureWorker::new("pd worker"),
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
@@ -410,7 +410,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
-        let raftlog_gc_runner = RaftlogGcRunner;
+        let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(self.engine.clone());
