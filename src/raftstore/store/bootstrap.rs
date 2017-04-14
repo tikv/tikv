@@ -55,24 +55,25 @@ pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()
     engine.put_msg(&ident_key, &ident)
 }
 
-// Write first region meta.
-pub fn write_region(engine: &DB, region: &metapb::Region) -> Result<()> {
+// Write first region meta and prepare data.
+pub fn write_prepare_bootstrap(engine: &DB, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::new();
     state.set_region(region.clone());
 
     let wb = WriteBatch::new();
     try!(wb.put_msg(&keys::region_state_key(region.get_id()), &state));
     try!(write_initial_state(engine, &wb, region.get_id()));
+    try!(wb.put_msg(&keys::prepare_bootstrap_key(),region));
     try!(engine.write(wb));
     Ok(())
 }
 
-// Clear first region meta.
-pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
+// Clear first region meta and prepare data.
+pub fn clear_prepare_bootstrap(engine: &DB, region_id: u64) -> Result<()> {
     let wb = WriteBatch::new();
 
     try!(wb.delete(&keys::region_state_key(region_id)));
-
+    try!(wb.delete(&keys::prepare_bootstrap_key()));
     // should clear raft initial state too.
     let raft_cf = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
     try!(wb.delete_cf(raft_cf, &keys::raft_state_key(region_id)));
@@ -82,8 +83,16 @@ pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
     Ok(())
 }
 
-// Bootstrap first region.
-pub fn bootstrap_region(engine: &DB,
+// Clear prepare data
+pub fn clear_prepare_bootstrap_data(engine: &DB) -> Result<()> {
+    let wb = WriteBatch::new();
+    try!(wb.delete(&keys::prepare_bootstrap_key()));
+    try!(engine.write(wb));
+    Ok(())
+}
+
+// Prepare bootstrap.
+pub fn prepare_bootstrap(engine: &DB,
                         store_id: u64,
                         region_id: u64,
                         peer_id: u64)
@@ -100,7 +109,7 @@ pub fn bootstrap_region(engine: &DB,
     peer.set_id(peer_id);
     region.mut_peers().push(peer);
 
-    try!(write_region(engine, &region));
+    try!(write_prepare_bootstrap(engine, &region));
 
     Ok(region)
 }

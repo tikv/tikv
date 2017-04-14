@@ -330,7 +330,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engine in self.engines.values() {
-            try!(write_region(&engine, &region));
+            try!(write_prepare_bootstrap(&engine, &region));
         }
 
         self.bootstrap_cluster(region);
@@ -350,7 +350,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        let region = bootstrap_region(&self.engines[&node_id], 1, 1, 1).unwrap();
+        let region = prepare_bootstrap(&self.engines[&node_id], 1, 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
