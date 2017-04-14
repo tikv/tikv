@@ -111,10 +111,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         match ret {
             Ok((client, members)) => {
                 let mut inner = ctx.inner.wl();
-                if members != inner.members {
-                    inner.client = client;
-                    inner.members = members;
-                }
+                inner.client = client;
+                inner.members = members;
                 warn!("updating PD client done, spent {:?}", start.elapsed());
             }
 
