@@ -183,7 +183,7 @@ enum RequestPolicy {
 
 pub struct Peer {
     engine: Arc<DB>,
-    pub cfg: Rc<Config>,
+    cfg: Rc<Config>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
     pub peer: metapb::Peer,
     region_id: u64,
@@ -1335,7 +1335,7 @@ impl Peer {
     }
 }
 
-pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest, left_derive: bool) -> Result<()> {
+pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> {
     let (mut check_ver, mut check_conf_ver) = (false, false);
     if req.has_admin_request() {
         match req.get_admin_request().get_cmd_type() {
@@ -1378,7 +1378,6 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest, left_derive: b
                                              region.get_id(),
                                              latest_epoch,
                                              from_epoch),
-                                     left_derive,
                                      vec![region.to_owned()]));
     }
 
@@ -1482,7 +1481,7 @@ impl Peer {
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
-        try!(check_epoch(self.region(), req, self.cfg.left_derive_when_split));
+        try!(check_epoch(self.region(), req));
         let snap = Snapshot::new(self.engine.clone());
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
