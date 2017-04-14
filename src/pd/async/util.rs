@@ -107,8 +107,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         warn!("updating PD client, block the tokio core");
 
         let start = Instant::now();
-        let members = ctx.inner.rl().members.clone();
-        match try_connect_leader(&members) {
+        let ret = try_connect_leader(&ctx.inner.rl().members.clone());
+        match ret {
             Ok((client, members)) => {
                 let mut inner = ctx.inner.wl();
                 if members != inner.members {
