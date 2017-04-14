@@ -555,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rwlock() {
+    fn test_rwlock_deadlock() {
         // If the test runs over 60s, then there is a deadlock.
         let mu = RwLock::new(Some(1));
         {
