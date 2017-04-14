@@ -110,10 +110,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         match try_connect_leader(&members) {
             Ok((client, members)) => {
                 let mut inner = self.inner.wl();
-                if members != inner.members {
-                    inner.client = client;
-                    inner.members = members;
-                }
+                inner.client = client;
+                inner.members = members;
                 warn!("updating PD client done, spent {:?}", start.elapsed());
             }
 
