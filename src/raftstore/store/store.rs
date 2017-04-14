@@ -400,7 +400,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_consistency_check_tick(event_loop);
         self.register_report_region_flow_tick(event_loop);
 
-        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
+        let split_check_runner = SplitCheckRunner::new(self.engine.clone(),
+                                                       self.sendch.clone(),
                                                        self.cfg.region_max_size,
                                                        self.cfg.region_split_size,
                                                        self.cfg.left_derive_when_split);
@@ -1460,7 +1461,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   peer.tag,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            let task = SplitCheckTask::new(peer.get_store());
+            let task = SplitCheckTask::new(peer.region());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
