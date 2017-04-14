@@ -33,9 +33,10 @@ use kvproto::pdpb_grpc::PDAsyncClient;
 use util::HandyRwLock;
 
 use super::super::{PdFuture, PdStream};
-use super::super::{Result, Error, PdClient};
+use super::super::{Result, Error, PdClient, RegionHeartbeat};
+use super::super::metrics::*;
+
 use super::util::LeaderClient;
-use super::super:: metrics::*;
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -348,25 +349,20 @@ impl PdClient for RpcClient {
     }
 
     fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
-        where E: Send + 'static,
-              S: Stream<Item = Option<(metapb::Region,
-                                       metapb::Peer,
-                                       Vec<pdpb::PeerStats>,
-                                       Vec<metapb::Peer>,
-                                       u64)>,
-                        Error = E> + Send + 'static
+        where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
+              E: Send + 'static
     {
         let f = req_stream.take_while(|t| Ok(t.is_some()))
-            .map(|req| {
-                let (region, leader, down_peers, pending_peers, written_bytes) = req.unwrap();
+            .map(|hb| {
+                let hb = hb.unwrap();
                 let mut req = pdpb::RegionHeartbeatRequest::new();
                 // FIXME: do we need headers here?
                 // req.set_header(self.header());
-                req.set_region(region);
-                req.set_leader(leader);
-                req.set_down_peers(RepeatedField::from_vec(down_peers));
-                req.set_pending_peers(RepeatedField::from_vec(pending_peers));
-                req.set_bytes_written(written_bytes);
+                req.set_region(hb.region);
+                req.set_leader(hb.leader);
+                req.set_down_peers(RepeatedField::from_vec(hb.down_peers));
+                req.set_pending_peers(RepeatedField::from_vec(hb.pending_peers));
+                req.set_bytes_written(hb.written_bytes);
                 req
             })
             .map_err(|_| GrpcError::Other("client stream error"))

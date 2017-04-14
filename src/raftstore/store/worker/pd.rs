@@ -27,9 +27,9 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::pdpb;
 
 use util::worker::FutureRunnable as Runnable;
-use util::escape;
-use util::transport::{SendCh, SendChStream};
-use pd::{PdClient, Error as PdError};
+use util::{escape, CloneableStream};
+use util::transport::SendCh;
+use pd::{PdClient, Error as PdError, RegionHeartbeat};
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
 
@@ -87,11 +87,7 @@ impl Display for Task {
     }
 }
 
-type RegionHeartBeatChannel = UnboundedSender<Option<(metapb::Region,
-                                                      metapb::Peer,
-                                                      Vec<pdpb::PeerStats>,
-                                                      Vec<metapb::Peer>,
-                                                      u64)>>;
+type RegionHeartBeatChannel = UnboundedSender<Option<RegionHeartbeat>>;
 
 pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
@@ -153,8 +149,13 @@ impl<T: PdClient> Runner<T> {
         if let Some(ref ch) = self.region_hb {
             PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
             let id = region.get_id();
-            if let Err(e) =
-                   ch.send(Some((region, peer, down_peers, pending_peers, written_bytes))) {
+            if let Err(e) = ch.send(Some(RegionHeartbeat {
+                region: region,
+                leader: peer,
+                down_peers: down_peers,
+                pending_peers: pending_peers,
+                written_bytes: written_bytes,
+            })) {
                 // TODO: retry here if the connection is lost?
                 debug!("[region {}] failed to send heartbeat: {:?}", id, e);
             }
@@ -163,7 +164,7 @@ impl<T: PdClient> Runner<T> {
 
         let (tx, rx) = unbounded();
         self.region_hb = Some(tx);
-        let ch_stream = SendChStream { ch: self.ch.clone() };
+        let ch_stream = CloneableStream { c: self.ch.clone() };
         let f = self.pd_client
             .region_heartbeat(rx)
             .zip(ch_stream.map_err(|_| PdError::Other(box_err!("fail to obtain a SendCh"))))

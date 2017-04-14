@@ -154,9 +154,10 @@ mod tests {
     use std::str::FromStr;
     use std::thread;
 
+    use futures::Stream;
     use kvproto::pdpb;
     use kvproto::metapb;
-    use pd::{PdClient, Result, PdFuture};
+    use pd::{PdClient, Result, PdFuture, PdStream, RegionHeartbeat};
     use util::{self, HashMap};
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -200,13 +201,8 @@ mod tests {
             unimplemented!();
         }
         fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
-            where E: Send + 'static,
-                  S: Stream<Item = Option<(metapb::Region,
-                                           metapb::Peer,
-                                           Vec<pdpb::PeerStats>,
-                                           Vec<metapb::Peer>,
-                                           u64)>,
-                            Error = E> + Send + 'static
+            where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
+                  E: Send + 'static
         {
             unimplemented!()
         }

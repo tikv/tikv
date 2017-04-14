@@ -27,6 +27,10 @@ use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
 
+use futures::Stream;
+use futures::Poll;
+use futures::Async;
+
 #[macro_use]
 pub mod macros;
 pub mod logger;
@@ -464,6 +468,19 @@ impl<T> RingQueue<T> {
 
     pub fn swap_remove_front(&mut self, pos: usize) -> Option<T> {
         self.buf.swap_remove_front(pos)
+    }
+}
+
+pub struct CloneableStream<T: Clone> {
+    pub c: T,
+}
+
+impl<T: Clone> Stream for CloneableStream<T> {
+    type Item = T;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        Ok(Async::Ready(Some(self.c.clone())))
     }
 }
 

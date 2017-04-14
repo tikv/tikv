@@ -34,6 +34,14 @@ pub type PdStream<T> = BoxStream<T, Error>;
 
 pub const INVALID_ID: u64 = 0;
 
+pub struct RegionHeartbeat {
+    pub region: metapb::Region,
+    pub leader: metapb::Peer,
+    pub down_peers: Vec<pdpb::PeerStats>,
+    pub pending_peers: Vec<metapb::Peer>,
+    pub written_bytes: u64,
+}
+
 // Client to communicate with placement driver (pd) for special cluster.
 // Because now one pd only supports one cluster, so it is no need to pass
 // cluster id in trait interface every time, so passing the cluster id when
@@ -92,13 +100,8 @@ pub trait PdClient: Send + Sync {
 
     // Leader for a region will use this to heartbeat Pd.
     fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
-        where E: Send + 'static,
-              S: Stream<Item = Option<(metapb::Region,
-                                       metapb::Peer,
-                                       Vec<pdpb::PeerStats>,
-                                       Vec<metapb::Peer>,
-                                       u64)>,
-                        Error = E> + Send + 'static;
+        where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
+              E: Send + 'static;
 
     // Ask pd for split, pd will returns the new split region id.
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
