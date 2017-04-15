@@ -14,7 +14,9 @@
 
 #[cfg(unix)]
 mod imp {
+    use std::time::Duration;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     use rocksdb::DB;
 
@@ -22,13 +24,18 @@ mod imp {
     use tikv::util::transport::SendCh;
     use prometheus::{self, Encoder, TextEncoder};
 
+    use profiling;
+
     const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
-    pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
+    const PROFILE_SLEEP_SEC: u64 = 30;
+
+    pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
+        let profiling_memory = Arc::new(AtomicBool::new(false));
         for sig in trap {
             match sig {
                 SIGTERM | SIGINT => {
@@ -63,16 +70,9 @@ mod imp {
                     }
                 }
                 SIGUSR2 => {
-                    if backup_path.is_empty() {
-                        info!("empty backup path, backup is disabled");
-                        continue;
-                    }
-
-                    info!("backup db to {}", backup_path);
-                    if let Err(e) = engine.backup_at(backup_path) {
-                        error!("fail to backup: {}", e);
-                    }
-                    info!("backup done");
+                    profiling::profile_memory(None,
+                                              &profiling_memory,
+                                              Duration::from_secs(PROFILE_SLEEP_SEC));
                 }
                 // TODO: handle more signal
                 _ => unreachable!(),
