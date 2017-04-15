@@ -200,7 +200,7 @@ mod tests {
         fn get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
             unimplemented!();
         }
-        fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
+        fn region_heartbeat<S, E>(&self, _: S) -> PdStream<pdpb::RegionHeartbeatResponse>
             where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
                   E: Send + 'static
         {

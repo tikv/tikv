@@ -34,6 +34,7 @@ pub type PdStream<T> = BoxStream<T, Error>;
 
 pub const INVALID_ID: u64 = 0;
 
+#[derive(Debug)]
 pub struct RegionHeartbeat {
     pub region: metapb::Region,
     pub leader: metapb::Peer,

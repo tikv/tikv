@@ -281,7 +281,7 @@ impl Cluster {
     }
 
     fn region_heartbeat(&mut self,
-                        region: metapb::Region,
+                        mut region: metapb::Region,
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
@@ -299,7 +299,11 @@ impl Cluster {
         }
 
         try!(self.handle_heartbeat_version(region.clone()));
-        self.handle_heartbeat_conf_ver(region, leader)
+        let mut resp = try!(self.handle_heartbeat_conf_ver(region.clone(), leader.clone()));
+        resp.set_region_id(region.get_id());
+        resp.set_region_epoch(region.take_region_epoch());
+        resp.set_target_peer(leader);
+        Ok(resp)
     }
 }
 
@@ -557,7 +561,6 @@ impl PdClient for TestPdClient {
         Ok(self.cluster.rl().meta.clone())
     }
 
-    #[allow(let_and_return)]
     fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
         where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
               E: Send + 'static
@@ -574,12 +577,11 @@ impl PdClient for TestPdClient {
                     return Err(Error::ClusterNotBootstrapped(cluster_id));
                 }
                 let hb = hb.unwrap();
-                let ret = cluster.region_heartbeat(hb.region,
-                                                   hb.leader,
-                                                   hb.down_peers,
-                                                   hb.pending_peers,
-                                                   hb.written_bytes);
-                ret
+                cluster.region_heartbeat(hb.region,
+                                         hb.leader,
+                                         hb.down_peers,
+                                         hb.pending_peers,
+                                         hb.written_bytes)
             })
             .boxed()
     }
