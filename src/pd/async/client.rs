@@ -204,7 +204,8 @@ fn do_request<F, R>(client: &RpcClient, f: F) -> Result<R>
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                match try_connect_leader(&client.leader_client.inner.rl().members) {
+                let result = try_connect_leader(&client.leader_client.inner.rl().members);
+                match result {
                     Ok((cli, mbrs)) => {
                         let mut inner = client.leader_client.inner.wl();
                         inner.client = cli;
