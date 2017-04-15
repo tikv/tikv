@@ -403,8 +403,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let split_check_runner = SplitCheckRunner::new(self.engine.clone(),
                                                        self.sendch.clone(),
                                                        self.cfg.region_max_size,
-                                                       self.cfg.region_split_size,
-                                                       self.cfg.left_derive_when_split);
+                                                       self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
         let runner = RegionRunner::new(self.engine.clone(),
@@ -1051,11 +1050,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                              region_id: u64,
                              left: metapb::Region,
                              right: metapb::Region,
-                             left_derive: bool) {
-        let (origin_region, new_region) = if left_derive {
-            (left.clone(), right.clone())
-        } else {
+                             right_derive: bool) {
+        let (origin_region, new_region) = if right_derive {
             (right.clone(), left.clone())
+        } else {
+            (left.clone(), right.clone())
         };
 
         self.region_peers.get_mut(&region_id).unwrap().mut_store().region = origin_region.clone();
@@ -1095,10 +1094,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
                     if origin_peer.is_leader() {
                         // Notify pd immediately to let it update the region meta.
-                        if left_derive {
-                            self.report_split_pd(origin_peer, &new_peer);
-                        } else {
+                        if right_derive {
                             self.report_split_pd(&new_peer, origin_peer);
+                        } else {
+                            self.report_split_pd(origin_peer, &new_peer);
                         }
                     }
                 }
@@ -1115,10 +1114,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
-                if left_derive {
+
+                // To prevent from big region, the right region need run split
+                // check again after split.
+                if right_derive {
+                    if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                        peer.size_diff_hint = self.cfg.region_check_size_diff;
+                    }
+                } else {
                     new_peer.size_diff_hint = self.cfg.region_check_size_diff;
-                } else if let Some(old_peer) = self.region_peers.get_mut(&region_id) {
-                    old_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 }
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
                 self.region_peers.insert(new_region_id, new_peer);
@@ -1191,8 +1195,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::CompactLog { first_index, state } => {
                     self.on_ready_compact_log(region_id, first_index, state)
                 }
-                ExecResult::SplitRegion { left, right, left_derive } => {
-                    self.on_ready_split_region(region_id, left, right, left_derive)
+                ExecResult::SplitRegion { left, right, right_derive } => {
+                    self.on_ready_split_region(region_id, left, right, right_derive)
                 }
                 ExecResult::ComputeHash { region, index, snap } => {
                     self.on_ready_compute_hash(region, index, snap)
@@ -1293,16 +1297,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // matter if the region is not split from the current region. If the region meta
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
-            let new_region_id = if self.cfg.left_derive_when_split {
+            let new_region_id = if self.cfg.right_derive_when_split {
                 if let Some((_, &region_id)) = self.region_ranges
-                    .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
+                    .range((Included(enc_start_key(peer.region())), Unbounded::<Key>))
                     .next() {
                     Some(region_id)
                 } else {
                     None
                 }
             } else if let Some((_, &region_id)) = self.region_ranges
-                .range((Included(enc_start_key(peer.region())), Unbounded::<Key>))
+                .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
                 .next() {
                 Some(region_id)
             } else {
@@ -1504,8 +1508,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_split_check_result(&mut self,
                              region_id: u64,
                              epoch: metapb::RegionEpoch,
-                             split_key: Vec<u8>,
-                             left_derive: bool) {
+                             split_key: Vec<u8>) {
         if split_key.is_empty() {
             error!("[region {}] split key should not be empty!!!", region_id);
             return;
@@ -1535,7 +1538,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region: region.clone(),
             split_key: key.to_vec(),
             peer: peer.peer.clone(),
-            left_derive: left_derive,
+            right_derive: self.cfg.right_derive_when_split,
         };
 
         if let Err(e) = self.pd_worker.schedule(task) {
@@ -2022,9 +2025,9 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 info!("{} receive quit message", self.tag);
                 event_loop.shutdown();
             }
-            Msg::SplitCheckResult { region_id, epoch, split_key, left_derive } => {
+            Msg::SplitCheckResult { region_id, epoch, split_key } => {
                 info!("[region {}] split check complete.", region_id);
-                self.on_split_check_result(region_id, epoch, split_key, left_derive);
+                self.on_split_check_result(region_id, epoch, split_key);
             }
             Msg::ReportUnreachable { region_id, to_peer_id } => {
                 self.on_unreachable(region_id, to_peer_id);

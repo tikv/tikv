@@ -39,8 +39,8 @@ pub enum Task {
         region: metapb::Region,
         split_key: Vec<u8>,
         peer: metapb::Peer,
-        // If true, left region derive origin region_id.
-        left_derive: bool,
+        // If true, right region derive origin region_id.
+        right_derive: bool,
     },
     Heartbeat {
         region: metapb::Region,
@@ -105,7 +105,7 @@ impl<T: PdClient> Runner<T> {
                         region: metapb::Region,
                         split_key: Vec<u8>,
                         peer: metapb::Peer,
-                        left_derive: bool) {
+                        right_derive: bool) {
         PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "all"]).inc();
 
         let ch = self.ch.clone();
@@ -123,7 +123,7 @@ impl<T: PdClient> Runner<T> {
                         let req = new_split_region_request(split_key,
                                                            resp.get_new_region_id(),
                                                            resp.take_new_peer_ids(),
-                                                           left_derive);
+                                                           right_derive);
                         send_admin_request(ch, region, peer, req);
                     }
                     Err(e) => {
@@ -286,8 +286,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
         debug!("executing task {}", task);
 
         match task {
-            Task::AskSplit { region, split_key, peer, left_derive } => {
-                self.handle_ask_split(handle, region, split_key, peer, left_derive)
+            Task::AskSplit { region, split_key, peer, right_derive } => {
+                self.handle_ask_split(handle, region, split_key, peer, right_derive)
             }
             Task::Heartbeat { region, peer, down_peers, pending_peers, written_bytes } => {
                 self.handle_heartbeat(handle,
@@ -315,14 +315,14 @@ fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> A
 fn new_split_region_request(split_key: Vec<u8>,
                             new_region_id: u64,
                             peer_ids: Vec<u64>,
-                            left_derive: bool)
+                            right_derive: bool)
                             -> AdminRequest {
     let mut req = AdminRequest::new();
     req.set_cmd_type(AdminCmdType::Split);
     req.mut_split().set_split_key(split_key);
     req.mut_split().set_new_region_id(new_region_id);
     req.mut_split().set_new_peer_ids(peer_ids);
-    req.mut_split().set_right_derive(!left_derive);
+    req.mut_split().set_right_derive(right_derive);
     req
 }
 

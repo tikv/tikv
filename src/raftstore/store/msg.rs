@@ -61,8 +61,6 @@ pub enum Msg {
         region_id: u64,
         epoch: RegionEpoch,
         split_key: Vec<u8>,
-        // left region derive the origin region_id
-        left_derive: bool,
     },
 
     ReportUnreachable { region_id: u64, to_peer_id: u64 },

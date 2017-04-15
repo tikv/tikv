@@ -105,7 +105,7 @@ pub enum ExecResult {
     SplitRegion {
         left: Region,
         right: Region,
-        left_derive: bool,
+        right_derive: bool,
     },
     ComputeHash {
         region: Region,
@@ -397,11 +397,11 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
                 ExecResult::CompactLog { .. } => {}
-                ExecResult::SplitRegion { ref left, ref right, left_derive } => {
-                    if left_derive {
-                        self.region = left.clone();
-                    } else {
+                ExecResult::SplitRegion { ref left, ref right, right_derive } => {
+                    if right_derive {
                         self.region = right.clone();
+                    } else {
+                        self.region = left.clone();
                     }
                     self.metrics.size_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
@@ -625,7 +625,7 @@ impl ApplyDelegate {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
 
         let split_req = req.get_split();
-        let left_derive = !split_req.get_right_derive();
+        let right_derive = split_req.get_right_derive();
         if !split_req.has_split_key() {
             return Err(box_err!("missing split key"));
         }
@@ -650,12 +650,12 @@ impl ApplyDelegate {
         // the right region is [split_key, end).
         let mut new_region = region.clone();
         new_region.set_id(new_region_id);
-        if left_derive {
-            region.set_end_key(split_key.to_vec());
-            new_region.set_start_key(split_key.to_vec());
-        } else {
+        if right_derive {
             region.set_start_key(split_key.to_vec());
             new_region.set_end_key(split_key.to_vec());
+        } else {
+            region.set_end_key(split_key.to_vec());
+            new_region.set_start_key(split_key.to_vec());
         }
 
         // Update new region peer ids.
@@ -685,29 +685,29 @@ impl ApplyDelegate {
             });
 
         let mut resp = AdminResponse::new();
-        if left_derive {
-            resp.mut_split().set_left(region.clone());
-            resp.mut_split().set_right(new_region.clone());
-        } else {
+        if right_derive {
             resp.mut_split().set_left(new_region.clone());
             resp.mut_split().set_right(region.clone());
+        } else {
+            resp.mut_split().set_left(region.clone());
+            resp.mut_split().set_right(new_region.clone());
         }
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 
-        if left_derive {
-            Ok((resp,
-                Some(ExecResult::SplitRegion {
-                left: region,
-                right: new_region,
-                left_derive: true,
-            })))
-        } else {
+        if right_derive {
             Ok((resp,
                 Some(ExecResult::SplitRegion {
                 left: new_region,
                 right: region,
-                left_derive: false,
+                right_derive: true,
+            })))
+        } else {
+            Ok((resp,
+                Some(ExecResult::SplitRegion {
+                left: region,
+                right: new_region,
+                right_derive: false,
             })))
         }
     }

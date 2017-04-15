@@ -133,7 +133,6 @@ mod test {
         req.set_cmd_type(AdminCmdType::Split);
         let mut split_req = SplitRequest::new();
         split_req.set_split_key(key.to_vec());
-        split_req.set_right_derive(true);
         req.set_split(split_req);
         req
     }

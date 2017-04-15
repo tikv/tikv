@@ -630,7 +630,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn ask_split(&mut self, region: &metapb::Region, split_key: &[u8], left_derive: bool) {
+    pub fn ask_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
         // Now we can't control split easily in pd, so here we use store send channel
         // directly to send the AskSplit request.
         let leader = self.leader_of_region(region.get_id()).unwrap();
@@ -639,7 +639,6 @@ impl<T: Simulator> Cluster<T> {
                 region_id: region.get_id(),
                 epoch: region.get_region_epoch().clone(),
                 split_key: data_key(split_key),
-                left_derive: left_derive,
             })
             .unwrap();
     }
@@ -651,8 +650,7 @@ impl<T: Simulator> Cluster<T> {
             // In case ask split message is ignored, we should retry.
             if try_cnt % 50 == 0 {
                 self.reset_leader_of_region(region.get_id());
-                let left_derive = self.cfg.raft_store.left_derive_when_split;
-                self.ask_split(region, split_key, left_derive);
+                self.ask_split(region, split_key);
             }
 
             if self.pd_client.check_split(region, split_key) &&

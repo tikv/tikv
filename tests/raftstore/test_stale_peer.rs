@@ -117,8 +117,8 @@ fn test_server_stale_peer_out_of_region() {
 /// In both cases, peer B would notice that the leader is missing for a long time,
 /// and it's an initialized peer without any data. It would destroy itself as
 /// as stale peer directly and should not impact other region data on the same store.
-fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, left_derive: bool) {
-    cluster.cfg.raft_store.left_derive_when_split = left_derive;
+fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+    cluster.cfg.raft_store.right_derive_when_split = right_derive;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
@@ -133,18 +133,18 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, left_der
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let engine3 = cluster.get_engine(3);
-    if left_derive {
-        must_get_equal(&engine3, b"k1", b"v1");
-        must_get_none(&engine3, b"k3");
-    } else {
+    if right_derive {
         must_get_none(&engine3, b"k1");
         must_get_equal(&engine3, b"k3", b"v3");
+    } else {
+        must_get_equal(&engine3, b"k1", b"v1");
+        must_get_none(&engine3, b"k3");
     }
 
-    let new_region = if left_derive {
-        cluster.get_region(b"k3")
-    } else {
+    let new_region = if right_derive {
         cluster.get_region(b"k1")
+    } else {
+        cluster.get_region(b"k3")
     };
     let new_region_id = new_region.get_id();
     // Block peer (3, 4) at receiving snapshot, but not the heartbeat
@@ -164,10 +164,10 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, left_der
     cluster.must_remove_region(3, new_region_id);
 
     // There must be no data on store 3 belongs to new region
-    if left_derive {
-        must_get_none(&engine3, b"k3");
-    } else {
+    if right_derive {
         must_get_none(&engine3, b"k1");
+    } else {
+        must_get_none(&engine3, b"k3");
     }
 
     // Check whether peer(3, 4) is destroyed.
@@ -178,10 +178,10 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, left_der
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // other region should not be affected.
-    if left_derive {
-        must_get_equal(&engine3, b"k1", b"v1");
-    } else {
+    if right_derive {
         must_get_equal(&engine3, b"k3", b"v3");
+    } else {
+        must_get_equal(&engine3, b"k1", b"v1");
     }
 }
 
@@ -189,26 +189,26 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, left_der
 fn test_node_stale_peer_without_data_left_derive_when_split() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    test_stale_peer_without_data(&mut cluster, true);
+    test_stale_peer_without_data(&mut cluster, false);
 }
 
 #[test]
 fn test_node_stale_peer_without_data_right_derive_when_split() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    test_stale_peer_without_data(&mut cluster, false);
+    test_stale_peer_without_data(&mut cluster, true);
 }
 
 #[test]
 fn test_server_stale_peer_without_data_left_derive_when_split() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
-    test_stale_peer_without_data(&mut cluster, true);
+    test_stale_peer_without_data(&mut cluster, false);
 }
 
 #[test]
 fn test_server_stale_peer_without_data_right_derive_when_split() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
-    test_stale_peer_without_data(&mut cluster, false);
+    test_stale_peer_without_data(&mut cluster, true);
 }

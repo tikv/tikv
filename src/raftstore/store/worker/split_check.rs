@@ -147,22 +147,19 @@ pub struct Runner<C> {
     ch: RetryableSendCh<Msg, C>,
     region_max_size: u64,
     split_size: u64,
-    left_derive: bool,
 }
 
 impl<C> Runner<C> {
     pub fn new(engine: Arc<DB>,
                ch: RetryableSendCh<Msg, C>,
                region_max_size: u64,
-               split_size: u64,
-               left_derive: bool)
+               split_size: u64)
                -> Runner<C> {
         Runner {
             engine: engine,
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
-            left_derive: left_derive,
         }
     }
 }
@@ -213,10 +210,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
             return;
         }
-        let res = self.ch.try_send(new_split_check_result(task.region_id,
-                                                          task.epoch,
-                                                          split_key,
-                                                          self.left_derive));
+        let res = self.ch.try_send(new_split_check_result(task.region_id, task.epoch, split_key));
         if let Err(e) = res {
             warn!("[region {}] failed to send check result, err {:?}",
                   task.region_id,
@@ -227,16 +221,11 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
     }
 }
 
-fn new_split_check_result(region_id: u64,
-                          epoch: RegionEpoch,
-                          split_key: Vec<u8>,
-                          left_derive: bool)
-                          -> Msg {
+fn new_split_check_result(region_id: u64, epoch: RegionEpoch, split_key: Vec<u8>) -> Msg {
     Msg::SplitCheckResult {
         region_id: region_id,
         epoch: epoch,
         split_key: split_key,
-        left_derive: left_derive,
     }
 }
 
@@ -268,7 +257,7 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let ch = RetryableSendCh::new(tx, "test-split");
-        let mut runnable = Runner::new(engine.clone(), ch, 100, 60, false);
+        let mut runnable = Runner::new(engine.clone(), ch, 100, 60);
 
         // so split key will be z0006
         for i in 0..7 {
@@ -290,7 +279,7 @@ mod tests {
 
         runnable.run(Task::new(&region));
         match rx.try_recv() {
-            Ok(Msg::SplitCheckResult { region_id, epoch, split_key, .. }) => {
+            Ok(Msg::SplitCheckResult { region_id, epoch, split_key }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(&epoch, region.get_region_epoch());
                 assert_eq!(split_key, keys::data_key(b"0006"));
@@ -309,7 +298,7 @@ mod tests {
 
         runnable.run(Task::new(&region));
         match rx.try_recv() {
-            Ok(Msg::SplitCheckResult { region_id, epoch, split_key, .. }) => {
+            Ok(Msg::SplitCheckResult { region_id, epoch, split_key }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(&epoch, region.get_region_epoch());
                 assert_eq!(split_key, keys::data_key(b"0003"));
