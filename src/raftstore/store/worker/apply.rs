@@ -132,8 +132,12 @@ fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
     notify_stale_req(tag, term, cmd.uuid, cmd.cb.take().unwrap())
 }
 
+fn gen_stale_req(uuid: Uuid, term: u64) -> RaftCmdResponse {
+    cmd_resp::err_resp(Error::StaleCommand, uuid, term)
+}
+
 pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
-    let resp = cmd_resp::err_resp(Error::StaleCommand, uuid, term);
+    let resp = gen_stale_req(uuid, term);
     info!("{} command {} is stale, skip", tag, uuid);
     cb(resp);
 }
@@ -278,8 +282,7 @@ impl ApplyDelegate {
         assert!(term > 0);
         while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
-            cbs.push((cmd.cb.take().unwrap(),
-                      cmd_resp::err_resp(Error::StaleCommand, cmd.uuid, cmd.term)));
+            cbs.push((cmd.cb.take().unwrap(), gen_stale_req(cmd.uuid, cmd.term)));
         }
         None
     }
@@ -367,7 +370,6 @@ impl ApplyDelegate {
         // Bind uuid here.
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term);
-        // cb.call_box((resp,));
         cbs.push((cb, resp));
 
         exec_result
