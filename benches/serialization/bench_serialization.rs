@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test::Bencher;
-extern crate kvproto;
 extern crate protobuf;
-use self::protobuf::Message;
-use self::kvproto::eraftpb::Entry;
-use self::kvproto::raft_cmdpb::{RaftCmdRequest, Request, CmdType};
+
+use test::Bencher;
+use protobuf::Message;
+use kvproto::eraftpb::Entry;
+use kvproto::raft_cmdpb::{RaftCmdRequest, Request, CmdType};
 use std::time::{Instant, Duration};
 use std::string::String;
 
@@ -85,43 +85,30 @@ fn print_cost(s: &str, d: Duration, count: u32) {
 
 #[bench]
 fn bench_encode_one_cmd(b: &mut Bencher) {
-    let count = 1000000;
-    let now = Instant::now();
-    for _ in 0..count {
+    b.iter(|| {
         encode_one_cmd();
-    }
-    print_cost("encode_one_cmd", now.elapsed(), count);
+    });
 }
 
 #[bench]
 fn bench_decode_one_cmd(b: &mut Bencher) {
     let result = encode_one_cmd();
-    let count = 1000000;
-    let now = Instant::now();
-    for _ in 0..count {
+    b.iter(|| {
         decode(&result);
-    }
-    print_cost("decode_one_cmd", now.elapsed(), count);
+    });
 }
 
 #[bench]
 fn bench_encode_two_cmd(b: &mut Bencher) {
-    let count = 1000000;
-
-    let now = Instant::now();
-    for _ in 0..count{
+    b.iter(|| {
         encode_two_cmd();
-    }
-    print_cost("encode_two_cmd", now.elapsed(), count);
+    });
 }
 
 #[bench]
 fn bench_decode_two_cmd(b: &mut Bencher) {
     let result = encode_two_cmd();
-    let count = 1000000;
-    let now = Instant::now();
-    for _ in 0..count {
+    b.iter(|| {
         decode(&result);
-    }
-    print_cost("decode_two_cmd", now.elapsed(), count);
+    });
 }
