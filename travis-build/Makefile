@@ -25,58 +25,37 @@ ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so:
 # TODO: use offical archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
 ${LOCAL_DIR}/bin/kcov:
 	cd /tmp && \
-	curl -L https://github.com/BusyJay/kcov/archive/busyjay/support-setting-stripped-path.tar.gz -o kcov.tar.gz && \
+	curl -L https://github.com/SimonKagstrom/kcov/archive/v33.tar.gz -o kcov.tar.gz && \
 	tar xf kcov.tar.gz && \
-	cd kcov-busyjay-support-setting-stripped-path && \
-	cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_DIR} . && \
-	make && \
-	make install
+	cd kcov-33 && \
+	if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then \
+	    cmake -G Xcode . && \
+		xcodebuild -configuration Release && \
+		cp src/Release/kcov ${LOCAL_DIR}/bin/kcov; \
+	else \
+	    cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_DIR} . && \
+		make && \
+		make install; \
+	fi
 
-ifeq ($(TRAVIS_OS_NAME),linux)
-GO_ARCH = linux
-else
-GO_ARCH = darwin
-endif
-
-${LOCAL_DIR}/bin/pd-server:
-	mkdir -p /tmp/goroot && \
-	cd /tmp/goroot && \
-	curl -L https://storage.googleapis.com/golang/go1.7.${GO_ARCH}-amd64.tar.gz -o go.tar.gz && \
-	tar xf go.tar.gz && \
-	export GOPATH=/tmp/gopath && \
-	export GOROOT=/tmp/goroot/go && \
-	export PATH=/tmp/goroot/go/bin:${PATH} && \
-	mkdir -p /tmp/gopath/src/github.com/pingcap && \
-	cd /tmp/gopath/src/github.com/pingcap && \
-	git clone --depth=1 https://github.com/pingcap/pd && \
-	cd pd && \
-	make build && \
-	mkdir -p ${LOCAL_DIR}/bin && \
-	cp bin/pd-server ${LOCAL_DIR}/bin/pd-server
-
-prepare_rust:
-	sh ~/rust/lib/rustlib/uninstall.sh && sh ~/rust-installer/rustup.sh --date=${RUSTC_DATE} --prefix=~/rust --disable-sudo --channel=nightly
-
-prepare-rustfmt: | prepare_rust
+prepare-rustfmt:
 	curl -L https://github.com/tennix/rustfmt/releases/download/v0.6/rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -o rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz && \
 	mkdir -p ${HOME}/.cargo/bin && tar xzf rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -C ${HOME}/.cargo/bin --strip-components=1
 	# cargo install --vers =0.6.0 rustfmt || exit 0
 
-prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov ${LOCAL_DIR}/bin/pd-server prepare-rustfmt | prepare_rust
+prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
 
 prepare_brew:
 	brew update && \
 	brew install gflags snappy rocksdb
 
-prepare_osx: ${LOCAL_DIR}/bin/pd-server | prepare_brew prepare_rust
+prepare_osx: prepare_brew ${LOCAL_DIR}/bin/kcov
 
 test_linux test_osx:
 	export CI=true && ${CI_BUILD_DIR}/test.sh
 
-cover_linux:
+cover_linux cover_osx:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	export RUST_TEST_THREADS=1 && \
-	grep " Running " tests.out | sed -e 's/Running//g' | xargs -n 1 -i ${LOCAL_DIR}/bin/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src --exclude-pattern tikv/src/bin --strip-path `pwd`/ target/kcov {} --nocapture
-
-cover_osx:
+	export RUST_TEST_THREADS=2 && \
+	grep " Running " tests.out | sed -e 's/Running//g' | xargs -n 1 -I {} ${LOCAL_DIR}/bin/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src --exclude-pattern tikv/src/bin --strip-path `pwd`/ target/kcov {} --nocapture

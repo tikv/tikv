@@ -328,7 +328,7 @@ impl Network {
                     return false;
                 }
                 // hups never go over the network, so don't drop them but panic
-                assert!(m.get_msg_type() != MessageType::MsgHup, "unexpected msgHup");
+                assert_ne!(m.get_msg_type(), MessageType::MsgHup, "unexpected msgHup");
                 let perc = self.dropm
                     .get(&Connem {
                         from: m.get_from(),
@@ -1457,6 +1457,46 @@ fn test_handle_heartbeat_resp() {
     assert!(msgs.is_empty());
 }
 
+// test_raft_frees_read_only_mem ensures raft will free read request from
+// ReadOnly read_index_queue and pending_read_index map.
+// related issue: https://github.com/coreos/etcd/issues/7571
+#[test]
+fn test_raft_frees_read_only_mem() {
+    let mut sm = new_test_raft(1, vec![1, 2], 5, 1, new_storage());
+    sm.become_candidate();
+    sm.become_leader();
+    let last_index = sm.raft_log.last_index();
+    sm.raft_log.commit_to(last_index);
+
+    let ctx = "ctx";
+    let vec_ctx = ctx.as_bytes().to_vec();
+
+    // leader starts linearizable read request.
+    // more info: raft dissertation 6.4, step 2.
+    let m = new_message_with_entries(2,
+                                     1,
+                                     MessageType::MsgReadIndex,
+                                     vec![new_entry(0, 0, Some(ctx))]);
+    sm.step(m).expect("");
+    let msgs = sm.read_messages();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].get_msg_type(), MessageType::MsgHeartbeat);
+    assert_eq!(msgs[0].get_context(), &vec_ctx[..]);
+    assert_eq!(sm.read_only.read_index_queue.len(), 1);
+    assert_eq!(sm.read_only.pending_read_index.len(), 1);
+    assert!(sm.read_only.pending_read_index.contains_key(&vec_ctx));
+
+    // heartbeat responses from majority of followers (1 in this case)
+    // acknowledge the authority of the leader.
+    // more info: raft dissertation 6.4, step 3.
+    let mut m = new_message(2, 1, MessageType::MsgHeartbeatResponse, 0);
+    m.set_context(vec_ctx.clone());
+    sm.step(m).expect("");
+    assert_eq!(sm.read_only.read_index_queue.len(), 0);
+    assert_eq!(sm.read_only.pending_read_index.len(), 0);
+    assert!(!sm.read_only.pending_read_index.contains_key(&vec_ctx));
+}
+
 // test_msg_append_response_wait_reset verifies the waitReset behavior of a leader
 // MsgAppResp.
 #[test]
@@ -2202,7 +2242,7 @@ fn test_bcast_beat() {
             }
             want_commit_map.remove(&m.get_to());
         }
-        if m.get_entries().len() != 0 {
+        if !m.get_entries().is_empty() {
             panic!("#{}: entries count = {}, want 0", i, m.get_entries().len());
         }
     }

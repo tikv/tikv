@@ -18,10 +18,13 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use futures::Future;
+use futures::future::{ok, err};
+
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::eraftpb;
-use tikv::pd::{PdClient, Result, Error, Key};
+use tikv::pd::{PdClient, Result, Error, Key, PdFuture};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
@@ -216,7 +219,7 @@ impl Cluster {
             // 3) pd is (1, 2), TiKV is (3)
             // 4) pd id (1), TiKV is (2, 3)
 
-            assert!(region_peer_len != cur_region_peer_len);
+            assert_ne!(region_peer_len, cur_region_peer_len);
 
             if cur_region_peer_len > region_peer_len {
                 // must pd is (1, 2), TiKV is (1)
@@ -255,7 +258,7 @@ impl Cluster {
             for store_id in self.stores.keys() {
                 if region.get_peers().iter().all(|x| x.get_store_id() != *store_id) {
                     let peer = new_peer(*store_id, self.alloc_id().unwrap());
-                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode);
+                    change_peer.set_change_type(eraftpb::ConfChangeType::AddNode.into());
                     change_peer.set_peer(peer.clone());
                     resp.set_change_peer(change_peer);
                     break;
@@ -268,7 +271,7 @@ impl Cluster {
                 .position(|x| x.get_store_id() != leader.get_store_id())
                 .unwrap();
 
-            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode);
+            change_peer.set_change_type(eraftpb::ConfChangeType::RemoveNode.into());
             change_peer.set_peer(region.get_peers()[pos].clone());
             resp.set_change_peer(change_peer);
 
@@ -281,7 +284,8 @@ impl Cluster {
                         region: metapb::Region,
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>)
+                        pending_peers: Vec<metapb::Peer>,
+                        _: u64 /* written_bytes */)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in region.get_peers() {
             self.down_peers.remove(&peer.get_id());
@@ -369,7 +373,7 @@ impl TestPdClient {
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> metapb::RegionEpoch {
-        self.get_region_by_id(region_id).unwrap().unwrap().take_region_epoch()
+        self.get_region_by_id(region_id).wait().unwrap().unwrap().take_region_epoch()
     }
 
     // Set an empty rule which nothing to do to disable default max peer count
@@ -382,7 +386,7 @@ impl TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
 
-            let region = match self.get_region_by_id(region_id).unwrap() {
+            let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
             };
@@ -395,6 +399,7 @@ impl TestPdClient {
         }
 
         let region = self.get_region_by_id(region_id)
+            .wait()
             .unwrap();
         panic!("region {:?} has no peer {:?}", region, peer);
     }
@@ -403,7 +408,7 @@ impl TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
 
-            let region = match self.get_region_by_id(region_id).unwrap() {
+            let region = match self.get_region_by_id(region_id).wait().unwrap() {
                 Some(region) => region,
                 None => continue,
             };
@@ -414,6 +419,7 @@ impl TestPdClient {
         }
 
         let region = self.get_region_by_id(region_id)
+            .wait()
             .unwrap();
         panic!("region {:?} has peer {:?}", region, peer);
     }
@@ -536,9 +542,14 @@ impl PdClient for TestPdClient {
         Err(box_err!("no region contains key {:?}", escape(key)))
     }
 
-    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
-        try!(self.check_bootstrap());
-        self.cluster.rl().get_region_by_id(region_id)
+    fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
+        if let Err(e) = self.check_bootstrap() {
+            return err(e).boxed();
+        }
+        match self.cluster.rl().get_region_by_id(region_id) {
+            Ok(resp) => ok(resp).boxed(),
+            Err(e) => err(e).boxed(),
+        }
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
@@ -551,18 +562,30 @@ impl PdClient for TestPdClient {
                         region: metapb::Region,
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>)
-                        -> Result<pdpb::RegionHeartbeatResponse> {
-        try!(self.check_bootstrap());
-        self.cluster.wl().region_heartbeat(region, leader, down_peers, pending_peers)
+                        pending_peers: Vec<metapb::Peer>,
+                        written_bytes: u64)
+                        -> PdFuture<pdpb::RegionHeartbeatResponse> {
+        if let Err(e) = self.check_bootstrap() {
+            return err(e).boxed();
+        }
+        match self.cluster
+            .wl()
+            .region_heartbeat(region, leader, down_peers, pending_peers, written_bytes) {
+            Ok(resp) => ok(resp).boxed(),
+            Err(e) => err(e).boxed(),
+        }
     }
 
-    fn ask_split(&self, region: metapb::Region) -> Result<pdpb::AskSplitResponse> {
-        try!(self.check_bootstrap());
+    fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        if let Err(e) = self.check_bootstrap() {
+            return err(e).boxed();
+        }
 
         // Must ConfVer and Version be same?
         let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap().unwrap();
-        try!(check_stale_region(&cur_region, &region));
+        if let Err(e) = check_stale_region(&cur_region, &region) {
+            return err(e).boxed();
+        }
 
         let mut resp = pdpb::AskSplitResponse::new();
         resp.set_new_region_id(self.alloc_id().unwrap());
@@ -572,23 +595,27 @@ impl PdClient for TestPdClient {
         }
         resp.set_new_peer_ids(peer_ids);
 
-        Ok(resp)
+        ok(resp).boxed()
     }
 
-    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> Result<()> {
-        try!(self.check_bootstrap());
+    fn store_heartbeat(&self, stats: pdpb::StoreStats) -> PdFuture<()> {
+        if let Err(e) = self.check_bootstrap() {
+            return err(e).boxed();
+        }
 
         // Cache it directly now.
         let store_id = stats.get_store_id();
         self.cluster.wl().store_stats.insert(store_id, stats);
 
-        Ok(())
+        ok(()).boxed()
     }
 
-    fn report_split(&self, _: metapb::Region, _: metapb::Region) -> Result<()> {
+    fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
         // pd just uses this for history show, so here we just count it.
-        try!(self.check_bootstrap());
+        if let Err(e) = self.check_bootstrap() {
+            return err(e).boxed();
+        }
         self.cluster.wl().split_count += 1;
-        Ok(())
+        ok(()).boxed()
     }
 }

@@ -12,3 +12,4 @@
 // limitations under the License.
 
 mod test_rpc_client;
+mod mock;

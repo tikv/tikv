@@ -16,7 +16,7 @@ const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
 const DEFAULT_SCHED_WORKER_POOL_SIZE: usize = 4;
-const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 500;
+const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 1000;
 
 #[derive(Clone, Debug)]
 pub struct Config {

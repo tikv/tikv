@@ -19,6 +19,7 @@ use std::{result, thread};
 
 use rocksdb::DB;
 use tempdir::TempDir;
+use futures::Future;
 
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
@@ -238,6 +239,7 @@ impl<T: Simulator> Cluster<T> {
     fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
         self.pd_client
             .get_region_by_id(region_id)
+            .wait()
             .unwrap()
             .map(|region| region.get_peers().into_iter().map(|p| p.get_store_id()).collect())
     }
@@ -559,6 +561,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         self.pd_client
             .get_region_by_id(region_id)
+            .wait()
             .unwrap()
             .unwrap()
             .take_region_epoch()
@@ -593,9 +596,10 @@ impl<T: Simulator> Cluster<T> {
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
         let resp = self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
             .unwrap();
-        assert!(resp.get_admin_response().get_cmd_type() == AdminCmdType::TransferLeader,
-                "{:?}",
-                resp);
+        assert_eq!(resp.get_admin_response().get_cmd_type(),
+                   AdminCmdType::TransferLeader,
+                   "{:?}",
+                   resp);
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {

@@ -35,29 +35,19 @@ if [[ "$TRAVIS" = "true" ]]; then
 fi
 export RUSTFLAGS=-Dwarnings
 
+if [[ `uname` == "Linux" ]]; then
+    export EXTRA_CARGO_ARGS="-j 2"
+fi
+
 if [[ "$SKIP_TESTS" != "true" ]]; then
-    # start pd
-    which pd-server
-    if [ $? -eq 0 ] && [[ "$TRAVIS" != "true" ]]; then
-        # Separate PD clusters.
-        pd-server --name="pd1" \
-            --data-dir="default.pd1" \
-            --client-urls="http://:12379" \
-            --peer-urls="http://:12380" &
-        pd-server --name="pd2" \
-            --data-dir="default.pd2" \
-            --client-urls="http://:22379" \
-            --peer-urls="http://:22380" &
-        sleep 3s
-        export PD_ENDPOINTS=127.0.0.1:12379
-        export PD_ENDPOINTS_SEP=127.0.0.1:22379
-    fi
     make test 2>&1 | tee tests.out
 else
-    NO_RUN="--no-run" make test
+    export EXTRA_CARGO_ARGS="$EXTRA_CARGO_ARGS --no-run"
+    make test
     exit $?
 fi
 status=$?
+git diff-index --quiet HEAD -- || echo "\e[35mplease run tests before creating a pr!!!\e[0m" 
 for case in `cat tests.out | python -c "import sys
 import re
 p = re.compile(\"thread '([^']+)' panicked at\")

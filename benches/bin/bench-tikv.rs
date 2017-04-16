@@ -21,6 +21,9 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
 #![allow(new_without_default)]
+// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
+#![allow(never_loop)]
+#![allow(needless_pass_by_value)]
 
 #[macro_use]
 extern crate log;
@@ -34,6 +37,7 @@ extern crate uuid;
 extern crate test;
 extern crate kvproto;
 extern crate time;
+extern crate futures;
 
 #[allow(dead_code)]
 #[path="../../tests/util.rs"]

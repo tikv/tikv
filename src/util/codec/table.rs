@@ -18,7 +18,7 @@ use tipb::schema::ColumnInfo;
 
 use util::xeval::EvalContext;
 use util::escape;
-use util::collections::{HashMap, HashSet, BuildHasherDefault};
+use util::collections::{HashMap, HashSet};
 
 use super::number::{NumberDecoder, NumberEncoder};
 use super::bytes::BytesDecoder;

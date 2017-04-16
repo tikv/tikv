@@ -65,7 +65,7 @@ pub trait Sender<T>: Clone {
     fn send(&self, t: T) -> Result<(), NotifyError<T>>;
 }
 
-impl<T> Sender<T> for mio::Sender<T> {
+impl<T: Send> Sender<T> for mio::Sender<T> {
     fn send(&self, t: T) -> Result<(), NotifyError<T>> {
         match mio::Sender::send(self, t) {
             Ok(()) => Ok(()),
@@ -87,7 +87,7 @@ impl<T> Sender<T> for mpsc::SyncSender<T> {
 }
 
 /// A channel that handle error with retry automatically.
-pub struct RetryableSendCh<T, C: Sender<T>> {
+pub struct RetryableSendCh<T, C> {
     ch: C,
     name: &'static str,
 
@@ -158,7 +158,7 @@ mod tests {
     use std::sync::mpsc::Receiver;
     use std::time::Duration;
 
-    use mio::{EventLoop, Handler, EventLoopBuilder};
+    use mio::{EventLoop, Handler, EventLoopConfig};
 
     use super::*;
 
@@ -220,9 +220,9 @@ mod tests {
 
     #[test]
     fn test_sendch_full() {
-        let mut builder = EventLoopBuilder::new();
-        builder.notify_capacity(2);
-        let mut event_loop = builder.build().unwrap();
+        let mut config = EventLoopConfig::new();
+        config.notify_capacity(2);
+        let mut event_loop = EventLoop::configured(config).unwrap();
         let ch = SendCh::new(event_loop.channel(), "test");
         let _ch = ch.clone();
         let h = thread::spawn(move || {

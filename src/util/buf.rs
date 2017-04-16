@@ -11,22 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Result, Write, Read, BufRead};
+use std::io::{Result, Write, Read, BufRead, ErrorKind};
 use std::fmt::{self, Debug, Formatter};
 use alloc::raw_vec::RawVec;
 use std::{cmp, ptr, slice, mem};
 
-use bytes::{ByteBuf, MutByteBuf, alloc};
-pub use mio::{TryRead, TryWrite};
-
 use util::escape;
-
-// `create_mem_buf` creates the buffer with fixed capacity s.
-pub fn create_mem_buf(s: usize) -> MutByteBuf {
-    unsafe {
-        ByteBuf::from_mem_ref(alloc::heap(s.next_power_of_two()), s as u32, 0, s as u32).flip()
-    }
-}
 
 /// `PipeBuffer` is useful when you want to move data from `Write` to a `Read` or vice versa.
 pub struct PipeBuffer {
@@ -62,7 +52,7 @@ impl PipeBuffer {
     }
 
     #[inline]
-    unsafe fn buf_as_slice_mut(&self) -> &mut [u8] {
+    unsafe fn buf_as_slice_mut(&mut self) -> &mut [u8] {
         slice::from_raw_parts_mut(self.buf.ptr(), self.buf.cap())
     }
 
@@ -77,6 +67,7 @@ impl PipeBuffer {
     }
 
     #[inline]
+    #[allow(len_zero)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -219,14 +210,20 @@ impl PipeBuffer {
         let mut readed;
         {
             let (left, right) = self.slice_append();
-            match try!(r.try_read(left)) {
-                None => return Ok(0),
-                Some(l) => readed = l,
+            match r.read(left) {
+                Ok(l) => readed = l,
+                Err(e) => {
+                    return if e.kind() == ErrorKind::WouldBlock {
+                        Ok(0)
+                    } else {
+                        Err(e)
+                    };
+                }
             }
             end += readed;
             if readed == left.len() && !right.is_empty() {
                 // Can't return error because r has been read into left.
-                if let Ok(Some(l)) = r.try_read(right) {
+                if let Ok(l) = r.read(right) {
                     end = l;
                     readed += l;
                 }
@@ -246,14 +243,20 @@ impl PipeBuffer {
         let mut written;
         {
             let (left, right) = self.slice();
-            match try!(w.try_write(left)) {
-                None => return Ok(0),
-                Some(l) => written = l,
+            match w.write(left) {
+                Ok(l) => written = l,
+                Err(e) => {
+                    return if e.kind() == ErrorKind::WouldBlock {
+                        Ok(0)
+                    } else {
+                        Err(e)
+                    };
+                }
             }
             start += written;
             if written == left.len() && !right.is_empty() {
                 // Can't return error because left has written into w.
-                if let Ok(Some(l)) = w.try_write(right) {
+                if let Ok(l) = w.write(right) {
                     start = l;
                     written += l;
                 }
@@ -379,14 +382,14 @@ mod tests {
                     assert_eq!(s, &expected[0..l]);
                     input = &expected[l..];
                     assert_eq!(len - l, s.read_from(&mut input).unwrap());
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
                     assert_eq!(s, expected.as_slice());
 
                     input = padding.as_slice();
                     assert_eq!(cap - len, s.read_from(&mut input).unwrap());
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
                     let mut exp = expected.clone();
                     exp.extend_from_slice(&padding[..cap - len]);
                     assert_eq!(s, exp.as_slice());
@@ -415,16 +418,16 @@ mod tests {
                     {
                         let mut buf = w.as_mut_slice();
                         assert_eq!(l, s.write_to(&mut buf).unwrap());
-                        assert!(s.start != s.buf.cap());
-                        assert!(s.end != s.buf.cap());
+                        assert_ne!(s.start, s.buf.cap());
+                        assert_ne!(s.end, s.buf.cap());
                     }
                     assert_eq!(w, &expected[..l]);
                     assert_eq!(s, &expected[l..]);
 
                     let mut w = vec![0; cap];
                     assert_eq!(len - l, s.read(&mut w).unwrap());
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
                     assert_eq!(&w[..len - l], &expected[l..]);
                 }
             }
@@ -480,8 +483,8 @@ mod tests {
                     let mut input = expect.as_slice();
                     assert_eq!(l, s.read_from(&mut input).unwrap());
                     s.shrink_to(shrink);
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
 
                     assert_eq!(shrink, s.capacity());
                     if shrink > l {
@@ -511,8 +514,8 @@ mod tests {
                     assert_eq!(init, s.read_from(&mut input).unwrap());
                     assert_eq!(s, example.as_slice());
                     s.ensure(init + l);
-                    assert!(s.start != s.buf.cap());
-                    assert!(s.end != s.buf.cap());
+                    assert_ne!(s.start, s.buf.cap());
+                    assert_ne!(s.end, s.buf.cap());
                     assert_eq!(s, example.as_slice());
                     input = expect.as_slice();
 

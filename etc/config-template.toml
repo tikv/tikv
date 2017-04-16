@@ -99,6 +99,13 @@ max-peer-down-duration = "5m"
 endpoints = ""
 
 [rocksdb]
+# RocksDB info log directory, if set, RocksDB will save the log in `info-log-dir/LOG`.
+# info-log-dir = ""
+# Maximal size of the info log, if new info log will be created if size is large than it. 
+# info-log-max-size = 0
+# Time for the info log file to roll (in seconds).
+# info-log-roll-time = "0s"
+
 # Maximum number of concurrent background compaction jobs, submitted to
 # the default LOW priority thread pool.
 max-background-compactions = 6
@@ -167,18 +174,13 @@ wal-recovery-mode = 2
 # Same as rocksdb's default value (10 min).
 stats-dump-period-sec = 600
 
-# If true, then the contents of manifest and data files are not synced
-# to stable storage. Their contents remain in the OS buffers till the
-# OS decides to flush them. This option is good for bulk-loading
-# of data. Once the bulk-loading is complete, please issue a
-# sync to the OS to flush all dirty buffers to stable storage.
-# Default false.
-# disable-data-sync = false
-
 # Due to Rocksdb FAQ: https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ,
 # If you want to use rocksdb on multi disks or spinning disks, you should set value at
 # least 2MB;
 # compaction-readahead-size = 0
+
+# Limit the disk IO of compaction and flush.
+# rate-bytes-per-sec = 0
 
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]

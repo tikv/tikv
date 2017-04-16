@@ -29,7 +29,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
-use util::collections::{HashMap, HashMapEntry as MapEntry, BuildHasherDefault};
+use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{CF_LOCK, CF_RAFT};
 use raftstore::{Result, Error};
 use raftstore::store::{Store, cmd_resp, keys, util};

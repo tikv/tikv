@@ -13,7 +13,6 @@
 
 #![crate_type = "lib"]
 #![feature(test)]
-#![feature(btree_range, collections_bound)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]
@@ -26,6 +25,9 @@
 #![allow(module_inception)]
 #![allow(should_implement_trait)]
 #![allow(large_enum_variant)]
+// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
+#![allow(never_loop)]
+#![allow(needless_pass_by_value)]
 
 #[macro_use]
 extern crate log;
@@ -33,7 +35,6 @@ extern crate log;
 extern crate quick_error;
 extern crate test;
 extern crate protobuf;
-extern crate bytes;
 extern crate byteorder;
 extern crate rand;
 extern crate mio;
@@ -60,8 +61,12 @@ extern crate backtrace;
 extern crate url;
 extern crate fs2;
 extern crate regex;
+extern crate grpc;
 extern crate fnv;
 extern crate ordermap;
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_timer;
 
 #[macro_use]
 pub mod util;

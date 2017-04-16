@@ -1,6 +1,4 @@
 machine:
-  services:
-    - docker
   environment:
     PATH: "$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
     LD_LIBRARY_PATH: "$LD_LIBRARY_PATH:$HOME/.local/lib"
@@ -10,16 +8,14 @@ machine:
     CPPFLAGS: "-I$HOME/.local/include"
     CXXFLAGS: "-I$HOME/.local/include"
     PKG_CONFIG_PATH: "$PKG_CONFIG_PATH:$HOME/.local/lib/pkgconfig"
-    RUSTC_DATE: "2017-02-12"
+    RUSTC_DATE: "2017-03-28"
     LOCAL_PREFIX: "$HOME/.local"
     # used by cargo
     LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
     RUST_TEST_THREADS: 1
     RUST_BACKTRACE: 1
     RUSTFLAGS: "-Dwarnings"
-    # used by test
-    PD_ENDPOINTS: 127.0.0.1:12379
-    PD_ENDPOINTS_SEP: 127.0.0.1:22379
+    RUSTFMT_VERSION: "v0.6.0"
   pre:
     - |
       sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
@@ -45,7 +41,7 @@ dependencies:
       else
         rustup default "nightly-${RUSTC_DATE}";
       fi
-    - test -e $HOME/.cargo/bin/cargo-fmt || cargo install --force --vers =0.6.0 rustfmt || true
+    - make -f travis-build/Makefile prepare-rustfmt
     - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         cd /tmp && \
@@ -74,10 +70,7 @@ dependencies:
 
 
 test:
-  pre:
-    - docker run -d --name pd1 -p 12379:2379 pingcap/pd --client-urls=http://0.0.0.0:2379
-    - docker run -d --name pd2 -p 22379:2379 pingcap/pd --client-urls=http://0.0.0.0:2379
   override:
-    - make format && git diff-index --quiet HEAD -- || (echo please make format before creating a pr!; exit 1)
+    - make format && git diff-index --quiet HEAD -- || (echo please make format and run tests before creating a pr!; exit 1)
     - cargo test --features "default" -- --nocapture
     - cargo test --features "default" --bench benches -- --nocapture

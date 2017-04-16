@@ -193,13 +193,14 @@ impl<'a> Cursor<'a> {
     }
 
     pub fn seek(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
-        assert!(self.scan_mode != ScanMode::Backward);
+        assert_ne!(self.scan_mode, ScanMode::Backward);
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
             try!(self.iter.validate_key(key));
             return Ok(false);
         }
 
-        if self.scan_mode == ScanMode::Forward && self.valid() && self.iter.key() >= key.encoded() {
+        if self.scan_mode == ScanMode::Forward && self.valid() &&
+           self.iter.key() >= key.encoded().as_slice() {
             return Ok(true);
         }
 
@@ -217,7 +218,7 @@ impl<'a> Cursor<'a> {
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
     pub fn near_seek(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
-        assert!(self.scan_mode != ScanMode::Backward);
+        assert_ne!(self.scan_mode, ScanMode::Backward);
         if !self.iter.valid() {
             return self.seek(key, statistics);
         }
@@ -231,10 +232,10 @@ impl<'a> Cursor<'a> {
             return Ok(false);
         }
         if ord == Ordering::Greater {
-            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded(),
+            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
                        self.seek(key, statistics));
             if self.iter.valid() {
-                if self.iter.key() < key.encoded() {
+                if self.iter.key() < key.encoded().as_slice() {
                     self.next(statistics);
                 }
             } else {
@@ -243,7 +244,7 @@ impl<'a> Cursor<'a> {
             }
         } else {
             // ord == Less
-            near_loop!(self.next(statistics) && self.iter.key() < key.encoded(),
+            near_loop!(self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
                        self.seek(key, statistics));
         }
         if !self.iter.valid() {
@@ -271,14 +272,14 @@ impl<'a> Cursor<'a> {
     }
 
     fn seek_for_prev(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
-        assert!(self.scan_mode != ScanMode::Forward);
+        assert_ne!(self.scan_mode, ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             try!(self.iter.validate_key(key));
             return Ok(false);
         }
 
         if self.scan_mode == ScanMode::Backward && self.valid() &&
-           self.iter.key() <= key.encoded() {
+           self.iter.key() <= key.encoded().as_slice() {
             return Ok(true);
         }
 
@@ -292,7 +293,7 @@ impl<'a> Cursor<'a> {
 
     /// Find the largest key that is not greater than the specific key.
     pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
-        assert!(self.scan_mode != ScanMode::Forward);
+        assert_ne!(self.scan_mode, ScanMode::Forward);
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
         }
@@ -308,10 +309,10 @@ impl<'a> Cursor<'a> {
         }
 
         if ord == Ordering::Less {
-            near_loop!(self.next(statistics) && self.iter.key() < key.encoded(),
+            near_loop!(self.next(statistics) && self.iter.key() < key.encoded().as_slice(),
                        self.seek_for_prev(key, statistics));
             if self.iter.valid() {
-                if self.iter.key() > key.encoded() {
+                if self.iter.key() > key.encoded().as_slice() {
                     self.prev(statistics);
                 }
             } else {
@@ -319,7 +320,7 @@ impl<'a> Cursor<'a> {
                 return Ok(true);
             }
         } else {
-            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded(),
+            near_loop!(self.prev(statistics) && self.iter.key() > key.encoded().as_slice(),
                        self.seek_for_prev(key, statistics));
         }
 
@@ -636,9 +637,9 @@ mod tests {
 
     macro_rules! assert_seek {
         ($cursor:ident, $func:ident, $k:expr, $res:ident) => ({
-            let msg = format!("assert_seek {} failed exp {:?}", $k, $res);
             let mut statistics = Statistics::default();
-            assert!($cursor.$func(&$k, &mut statistics).unwrap() == $res.is_some(), msg);
+            assert_eq!($cursor.$func(&$k, &mut statistics).unwrap(), $res.is_some(),
+                       "assert_seek {} failed exp {:?}", $k, $res);
             if let Some((ref k, ref v)) = $res {
                 assert_eq!($cursor.key(), bytes::encode_bytes(k.as_bytes()).as_slice());
                 assert_eq!($cursor.value(), v.as_bytes());

@@ -78,3 +78,17 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_validate() {
+        let mut cfg = Config::new();
+        assert!(cfg.validate().is_ok());
+
+        cfg.raft_store.raft_heartbeat_ticks = 0;
+        assert!(cfg.validate().is_err());
+    }
+}

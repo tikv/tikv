@@ -12,15 +12,15 @@ before_cache:
 matrix:
   include:
     - os: linux
-      rust: nightly
-      env: COMPILER=g++-4.8 RUSTC_DATE=2017-02-12 RUSTFMT_VERSION=v0.6.0 CXX=g++-4.8
+      rust: nightly-2017-03-28
+      env: COMPILER=g++-4.8 RUSTFMT_VERSION=v0.6.0 CXX=g++-4.8
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
             packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
     - os: osx
-      rust: nightly
-      env: COMPILER=clang++ RUSTC_DATE=2017-02-12 SKIP_FORMAT_CHECK=true CXX=clang++
+      rust: nightly-2017-03-28
+      env: COMPILER=clang++ SKIP_FORMAT_CHECK=true CXX=clang++
 
 install:
   - export LOCAL_DIR=$HOME/.cache/

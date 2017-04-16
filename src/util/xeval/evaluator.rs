@@ -22,7 +22,6 @@ use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
 use util::codec::mysql::DecimalDecoder;
 use util::codec::mysql::{MAX_FSP, Duration};
-use util::TryInsertWith;
 use util::codec;
 use util::collections::HashMap;
 
@@ -298,9 +297,10 @@ impl Evaluator {
 
     fn decode_value_list(&mut self, value_list_expr: &Expr) -> Result<&Vec<Datum>> {
         let p = value_list_expr as *const Expr as isize;
-        let decoded = try!(self.cached_value_list
+        let v = try!(value_list_expr.get_val().decode());
+        let decoded = self.cached_value_list
             .entry(p)
-            .or_try_insert_with(|| value_list_expr.get_val().decode()));
+            .or_insert(v);
         Ok(decoded)
     }
 

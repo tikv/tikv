@@ -23,6 +23,12 @@
 #![allow(new_without_default)]
 #![feature(const_fn)]
 
+// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
+#![allow(never_loop)]
+#![allow(needless_pass_by_value)]
+
+#[cfg(feature = "mem-profiling")]
+extern crate jemallocator;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
@@ -39,6 +45,8 @@ extern crate time;
 extern crate rustc_serialize;
 extern crate fnv;
 extern crate test;
+extern crate grpc;
+extern crate futures;
 
 mod raft;
 mod raftstore;

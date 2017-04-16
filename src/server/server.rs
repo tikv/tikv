@@ -16,10 +16,9 @@ use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
 
-use mio::{Token, Handler, EventLoop, EventLoopBuilder, EventSet, PollOpt};
+use mio::{Token, Handler, EventLoop, EventLoopConfig, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
 
-use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::msgpb::{MessageType, Message};
 use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
@@ -47,10 +46,10 @@ pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>
     where T: RaftStoreRouter,
           S: StoreAddrResolver
 {
-    let mut builder = EventLoopBuilder::new();
-    builder.notify_capacity(config.notify_capacity);
-    builder.messages_per_tick(config.messages_per_tick);
-    let el = try!(builder.build());
+    let mut loop_config = EventLoopConfig::new();
+    loop_config.notify_capacity(config.notify_capacity);
+    loop_config.messages_per_tick(config.messages_per_tick);
+    let el = try!(EventLoop::configured(loop_config));
     Ok(el)
 }
 
@@ -255,10 +254,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 try!(self.ch.raft_router.send_raft_msg(msg.take_raft()));
                 Ok(())
             }
-            MessageType::Cmd => {
-                RECV_MSG_COUNTER.with_label_values(&["cmd"]).inc();
-                self.on_raft_command(msg.take_cmd_req(), token, msg_id)
-            }
             MessageType::KvReq => {
                 RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
                 let req = msg.take_kv_req();
@@ -284,22 +279,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                              msg_id))
             }
         }
-    }
-
-    fn on_raft_command(&mut self, msg: RaftCmdRequest, token: Token, msg_id: u64) -> Result<()> {
-        trace!("handle raft command {:?}", msg);
-        let on_resp = self.make_response_cb(token, msg_id);
-        let cb = box move |resp| {
-            let mut resp_msg = Message::new();
-            resp_msg.set_msg_type(MessageType::CmdResp);
-            resp_msg.set_cmd_resp(resp);
-
-            on_resp.call_box((resp_msg,));
-        };
-
-        try!(self.ch.raft_router.send_command(msg, cb));
-
-        Ok(())
     }
 
     fn on_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
@@ -726,14 +705,15 @@ mod tests {
             raft_router: router,
             snapshot_status_sender: snapshot_status_sender,
         };
-        let mut server = Server::new(&mut event_loop,
-                                     &cfg,
-                                     listener,
-                                     storage,
-                                     ch,
-                                     resolver,
-                                     SnapManager::new("", None))
-            .unwrap();
+        let mut server =
+            Server::new(&mut event_loop,
+                        &cfg,
+                        listener,
+                        storage,
+                        ch,
+                        resolver,
+                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
+                .unwrap();
 
         for i in 0..10 {
             let mut msg = Message::new();

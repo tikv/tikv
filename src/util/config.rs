@@ -324,28 +324,28 @@ mod test {
     #[test]
     fn test_parse_readable_int() {
         // file size
-        assert!(1_024 == parse_readable_int("1KB").unwrap());
-        assert!(1_048_576 == parse_readable_int("1MB").unwrap());
-        assert!(1_073_741_824 == parse_readable_int("1GB").unwrap());
-        assert!(1_099_511_627_776 == parse_readable_int("1TB").unwrap());
-        assert!(1_125_899_906_842_624 == parse_readable_int("1PB").unwrap());
+        assert_eq!(1_024, parse_readable_int("1KB").unwrap());
+        assert_eq!(1_048_576, parse_readable_int("1MB").unwrap());
+        assert_eq!(1_073_741_824, parse_readable_int("1GB").unwrap());
+        assert_eq!(1_099_511_627_776, parse_readable_int("1TB").unwrap());
+        assert_eq!(1_125_899_906_842_624, parse_readable_int("1PB").unwrap());
 
-        assert!(1_024 == parse_readable_int("1kb").unwrap());
-        assert!(1_048_576 == parse_readable_int("1mb").unwrap());
-        assert!(1_073_741_824 == parse_readable_int("1gb").unwrap());
-        assert!(1_099_511_627_776 == parse_readable_int("1tb").unwrap());
-        assert!(1_125_899_906_842_624 == parse_readable_int("1pb").unwrap());
+        assert_eq!(1_024, parse_readable_int("1kb").unwrap());
+        assert_eq!(1_048_576, parse_readable_int("1mb").unwrap());
+        assert_eq!(1_073_741_824, parse_readable_int("1gb").unwrap());
+        assert_eq!(1_099_511_627_776, parse_readable_int("1tb").unwrap());
+        assert_eq!(1_125_899_906_842_624, parse_readable_int("1pb").unwrap());
 
-        assert!(1_536 == parse_readable_int("1.5KB").unwrap());
-        assert!(1_572_864 == parse_readable_int("1.5MB").unwrap());
-        assert!(1_610_612_736 == parse_readable_int("1.5GB").unwrap());
-        assert!(1_649_267_441_664 == parse_readable_int("1.5TB").unwrap());
-        assert!(1_688_849_860_263_936 == parse_readable_int("1.5PB").unwrap());
+        assert_eq!(1_536, parse_readable_int("1.5KB").unwrap());
+        assert_eq!(1_572_864, parse_readable_int("1.5MB").unwrap());
+        assert_eq!(1_610_612_736, parse_readable_int("1.5GB").unwrap());
+        assert_eq!(1_649_267_441_664, parse_readable_int("1.5TB").unwrap());
+        assert_eq!(1_688_849_860_263_936, parse_readable_int("1.5PB").unwrap());
 
-        assert!(100_663_296 == parse_readable_int("96MB").unwrap());
+        assert_eq!(100_663_296, parse_readable_int("96MB").unwrap());
 
-        assert!(1_429_365_116_108 == parse_readable_int("1.3TB").unwrap());
-        assert!(1_463_669_878_895_411 == parse_readable_int("1.3PB").unwrap());
+        assert_eq!(1_429_365_116_108, parse_readable_int("1.3TB").unwrap());
+        assert_eq!(1_463_669_878_895_411, parse_readable_int("1.3PB").unwrap());
 
         assert!(parse_readable_int("KB").is_err());
         assert!(parse_readable_int("MB").is_err());
@@ -354,20 +354,20 @@ mod test {
         assert!(parse_readable_int("PB").is_err());
 
         // time
-        assert!(1 == parse_readable_int("1ms").unwrap());
-        assert!(1_000 == parse_readable_int("1s").unwrap());
-        assert!(60_000 == parse_readable_int("1m").unwrap());
-        assert!(3_600_000 == parse_readable_int("1h").unwrap());
+        assert_eq!(1, parse_readable_int("1ms").unwrap());
+        assert_eq!(1_000, parse_readable_int("1s").unwrap());
+        assert_eq!(60_000, parse_readable_int("1m").unwrap());
+        assert_eq!(3_600_000, parse_readable_int("1h").unwrap());
 
-        assert!(1 == parse_readable_int("1.3ms").unwrap());
-        assert!(1_000 == parse_readable_int("1000ms").unwrap());
-        assert!(1_300 == parse_readable_int("1.3s").unwrap());
-        assert!(1_500 == parse_readable_int("1.5s").unwrap());
-        assert!(10_000 == parse_readable_int("10s").unwrap());
-        assert!(78_000 == parse_readable_int("1.3m").unwrap());
-        assert!(90_000 == parse_readable_int("1.5m").unwrap());
-        assert!(4_680_000 == parse_readable_int("1.3h").unwrap());
-        assert!(5_400_000 == parse_readable_int("1.5h").unwrap());
+        assert_eq!(1, parse_readable_int("1.3ms").unwrap());
+        assert_eq!(1_000, parse_readable_int("1000ms").unwrap());
+        assert_eq!(1_300, parse_readable_int("1.3s").unwrap());
+        assert_eq!(1_500, parse_readable_int("1.5s").unwrap());
+        assert_eq!(10_000, parse_readable_int("10s").unwrap());
+        assert_eq!(78_000, parse_readable_int("1.3m").unwrap());
+        assert_eq!(90_000, parse_readable_int("1.5m").unwrap());
+        assert_eq!(4_680_000, parse_readable_int("1.3h").unwrap());
+        assert_eq!(5_400_000, parse_readable_int("1.5h").unwrap());
 
         assert!(parse_readable_int("ms").is_err());
         assert!(parse_readable_int("s").is_err());
