@@ -1618,7 +1618,7 @@ impl<T: Storage> Raft<T> {
         self.pending_conf = false;
 
         // do not try to commit or abort transferring if there is no nodes in the cluster.
-        if self.prs.len() == 0 {
+        if self.prs.is_empty() {
             return;
         }
 

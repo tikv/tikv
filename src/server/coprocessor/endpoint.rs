@@ -669,7 +669,7 @@ impl SelectContextCore {
             for item in sel.get_group_by() {
                 try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, item.get_expr()));
             }
-            if !aggr_cols_map.len() == 0 {
+            if !aggr_cols_map.is_empty() {
                 for cond_col in cond_col_map.keys() {
                     aggr_cols_map.remove(cond_col);
                 }
