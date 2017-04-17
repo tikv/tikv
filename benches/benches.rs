@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,10 +26,8 @@ extern crate mio;
 extern crate rand;
 extern crate tikv;
 extern crate time;
-extern crate tempdir;
 extern crate protobuf;
 extern crate kvproto;
-extern crate rocksdb;
 
 mod channel;
 mod serialization;
