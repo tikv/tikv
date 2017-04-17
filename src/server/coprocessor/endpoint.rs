@@ -65,6 +65,8 @@ pub const SINGLE_GROUP: &'static [u8] = b"SingleGroup";
 
 const OUTDATED_ERROR_MSG: &'static str = "request outdated.";
 
+const ENDPOINT_IS_BUSY: &'static str = "endpoint is busy";
+
 pub struct Host {
     engine: Box<Engine>,
     sched: Scheduler<Task>,
@@ -287,7 +289,7 @@ fn err_resp(e: Error) -> Response {
             let mut errorpb = errorpb::Error::new();
             errorpb.set_message(format!("running batches reach limit {}", allow));
             let mut server_is_busy_err = ServerIsBusy::new();
-            server_is_busy_err.set_reason(String::from("endpoint is busy"));
+            server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
         }

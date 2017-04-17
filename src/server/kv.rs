@@ -32,6 +32,8 @@ use util::escape;
 
 use super::{Result, Error, OnResponse};
 
+const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
+
 pub struct StoreHandler {
     pub store: Storage,
 }
@@ -407,7 +409,7 @@ fn extract_region_error<T>(res: &StorageResult<T>) -> Option<RegionError> {
         Err(StorageError::SchedTooBusy) => {
             let mut err = RegionError::new();
             let mut server_is_busy_err = ServerIsBusy::new();
-            server_is_busy_err.set_reason(String::from("scheduler is busy"));
+            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }

@@ -28,6 +28,8 @@ use kvproto::{errorpb, metapb};
 use super::coprocessor::Error as CopError;
 use util::{escape, transport};
 
+const RAFTSTORE_IS_BUSY: &'static str = "raftstore is busy";
+
 quick_error!{
     #[derive(Debug)]
     pub enum Error {
@@ -175,7 +177,7 @@ impl Into<errorpb::Error> for Error {
             }
             Error::Transport(transport::Error::Discard(_)) => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::new();
-                server_is_busy_err.set_reason(String::from("raftstore is busy"));
+                server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
             }
             _ => {}
