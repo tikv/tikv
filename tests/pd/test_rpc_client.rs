@@ -13,13 +13,19 @@
 
 use std::thread;
 use std::sync::Arc;
+use std::sync::mpsc::channel as std_channel;
 use std::time::Duration;
 
 use futures::Future;
+use futures::Stream;
+use futures::sync::oneshot;
+use futures::sync::mpsc::unbounded;
+use tokio_core::reactor::Core;
+
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError};
+use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError, RegionHeartbeat};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -69,15 +75,46 @@ fn test_rpc_client() {
         prev_id = alloc_id;
     }
 
-    // Only check if it works.
-    // FIXME: test it!
-    // client.region_heartbeat(metapb::Region::new(),
-    //                       metapb::Peer::new(),
-    //                       vec![],
-    //                       vec![],
-    //                       0)
-    //     .wait()
-    //     .unwrap();
+    // Set a Core to run streams.
+    let (remote_tx, remote_rx) = std_channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    thread::spawn(move || {
+        let mut core = Core::new().unwrap();
+        let remote = core.remote();
+        remote_tx.send(remote).unwrap();
+        core.run(shutdown_rx).unwrap();
+    });
+    let (req_tx, req_rx) = unbounded();
+    let (resp_tx, resp_rx) = std_channel();
+    let remote = remote_rx.recv().unwrap();
+
+    // Test region heartbeat stream.
+    let f = client.region_heartbeat(req_rx)
+        .for_each(move |resp| {
+            resp_tx.send(resp).ok();
+            Ok(())
+        })
+        .map_err(|_| ()); // Do not panic the core.
+    remote.spawn(move |h| {
+        h.spawn(f);
+        Ok(())
+    });
+
+    // Send a region heartbeat req.
+    req_tx.send(Some(RegionHeartbeat {
+            region: tmp_region,
+            leader: peer,
+            down_peers: vec![],
+            pending_peers: vec![],
+            written_bytes: 0,
+        }))
+        .unwrap();
+    // Receive a region heartbeat resp.
+    resp_rx.recv().unwrap();
+    // Stop the core.
+    shutdown_tx.send(()).unwrap();
+
+    // Test other future request.
     client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();
     client.ask_split(metapb::Region::new()).wait().unwrap();
     client.report_split(metapb::Region::new(), metapb::Region::new()).wait().unwrap();
