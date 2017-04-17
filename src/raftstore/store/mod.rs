@@ -34,7 +34,8 @@ pub use self::store::{StoreChannel, Store, create_event_loop};
 pub use self::config::Config;
 pub use self::transport::Transport;
 pub use self::peer::Peer;
-pub use self::bootstrap::{bootstrap_store, prepare_bootstrap, write_prepare_bootstrap, clear_prepare_bootstrap, clear_prepare_bootstrap_data};
+pub use self::bootstrap::{bootstrap_store, prepare_bootstrap, write_prepare_bootstrap,
+                          clear_prepare_bootstrap, clear_prepare_bootstrap_state};
 pub use self::engine::{Peekable, Iterable, Mutable};
 pub use self::peer_storage::{PeerStorage, do_snapshot, SnapState, RAFT_INIT_LOG_TERM,
                              RAFT_INIT_LOG_INDEX};

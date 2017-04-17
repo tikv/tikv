@@ -37,7 +37,7 @@ pub const DATA_MAX_KEY: &'static [u8] = &[DATA_PREFIX + 1];
 
 // Following keys are all local keys, so the first byte must be 0x01.
 pub const STORE_IDENT_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x01];
-pub const PREPARE_BOOTSTRAP_KEY: &'static[u8] = &[LOCAL_PREFIX,0x02];
+pub const PREPARE_BOOTSTRAP_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x02];
 // We save two types region data in DB, for raft and other meta data.
 // When the store starts, we should iterate all region meta data to
 // construct peer, no need to travel large raft data, so we separate them
@@ -61,7 +61,7 @@ pub const REGION_STATE_SUFFIX: u8 = 0x01;
 pub fn store_ident_key() -> Vec<u8> {
     STORE_IDENT_KEY.to_vec()
 }
-pub fn prepare_bootstrap_key() -> Vec<u8>{
+pub fn prepare_bootstrap_key() -> Vec<u8> {
     PREPARE_BOOTSTRAP_KEY.to_vec()
 }
 

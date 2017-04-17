@@ -196,7 +196,7 @@ impl<C> Node<C>
         Ok(region)
     }
 
-    fn check_prepare_bootstrap_cluster(&self, engine: &DB) -> Result<()>{
+    fn check_prepare_bootstrap_cluster(&self, engine: &DB) -> Result<()> {
         let res = try!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
         if res.is_none() {
             return Ok(());
@@ -207,8 +207,8 @@ impl<C> Node<C>
             match self.pd_client.get_region(b"") {
                 Ok(region) => {
                     if region.get_id() == region_id {
-                        try!(store::clear_prepare_bootstrap_data(engine));
-                    }else{
+                        try!(store::clear_prepare_bootstrap_state(engine));
+                    } else {
                         try!(store::clear_prepare_bootstrap(engine, region_id));
                     }
                     return Ok(());
