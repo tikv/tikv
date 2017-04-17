@@ -29,7 +29,7 @@ use kvproto::pdpb;
 use util::worker::FutureRunnable as Runnable;
 use util::{escape, CloneableStream};
 use util::transport::SendCh;
-use pd::{PdClient, Error as PdError, RegionHeartbeat};
+use pd::{PdClient, RegionHeartbeat};
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
 
@@ -167,10 +167,10 @@ impl<T: PdClient> Runner<T> {
 
             let (tx, rx) = unbounded();
             self.region_hb = Some(tx);
-            let ch_stream = CloneableStream { c: self.ch.clone() };
+            let ch_stream = CloneableStream::new(self.ch.clone());
             let f = self.pd_client
                 .region_heartbeat(rx)
-                .zip(ch_stream.map_err(|_| PdError::Other(box_err!("fail to obtain a SendCh"))))
+                .zip(ch_stream)
                 .for_each(|(mut resp, ch)| {
                     // Now we use put region protocol for heartbeat.
                     PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();

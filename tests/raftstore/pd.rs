@@ -565,10 +565,10 @@ impl PdClient for TestPdClient {
         where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
               E: Send + 'static
     {
-        let c = CloneableStream { c: (self.cluster.clone(), self.cluster_id) };
+        let c = CloneableStream::new((self.cluster.clone(), self.cluster_id));
         req_stream.map_err(|_| Error::Other(box_err!("unexpected error")))
             .take_while(|t| Ok(t.is_some()))
-            .zip(c.map_err(|_| Error::Other(box_err!("fail to obtain a Cluster"))))
+            .zip(c)
             .then(|req| {
                 let (hb, c) = req.unwrap();
                 let (cluster, cluster_id) = c;
