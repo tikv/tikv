@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use futures::Future;
 use kvproto::metapb;
+use kvproto::pdpb;
 
 use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError};
 
@@ -57,7 +58,7 @@ fn test_rpc_client() {
     let tmp_store = client.get_store(store_id).unwrap();
     assert_eq!(tmp_store.get_id(), store.get_id());
 
-    let tmp_region = client.get_region_by_id(region_id).unwrap().unwrap();
+    let tmp_region = client.get_region_by_id(region_id).wait().unwrap().unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
     let mut prev_id = 0;
@@ -67,6 +68,18 @@ fn test_rpc_client() {
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
     }
+
+    // Only check if it works.
+    client.region_heartbeat(metapb::Region::new(),
+                          metapb::Peer::new(),
+                          vec![],
+                          vec![],
+                          0)
+        .wait()
+        .unwrap();
+    client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();
+    client.ask_split(metapb::Region::new()).wait().unwrap();
+    client.report_split(metapb::Region::new(), metapb::Region::new()).wait().unwrap();
 }
 
 #[test]
@@ -130,9 +143,60 @@ fn test_retry_async() {
     let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
 
     for _ in 0..5 {
-        let region = client.async_get_region_by_id(1);
+        let region = client.get_region_by_id(1);
         region.wait().unwrap();
     }
+}
+
+#[test]
+fn test_restart_leader() {
+    let eps = vec![
+        "http://127.0.0.1:42978".to_owned(),
+        "http://127.0.0.1:52978".to_owned(),
+        "http://127.0.0.1:62978".to_owned(),
+    ];
+
+    // Service has only one GetMembersResponse, so the leader never changes.
+    let se = Arc::new(Service::new(eps.clone()));
+    // Start mock servers.
+    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
+    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
+    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+
+    thread::sleep(Duration::from_secs(1));
+
+    let client = RpcClient::new(&eps[0]).unwrap();
+    // Put a region.
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::new();
+    store.set_id(store_id);
+
+    let peer_id = client.alloc_id().unwrap();
+    let mut peer = metapb::Peer::new();
+    peer.set_id(peer_id);
+    peer.set_store_id(store_id);
+
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.mut_peers().push(peer);
+    client.bootstrap_cluster(store.clone(), region.clone()).unwrap();
+
+    let region = client.get_region_by_id(1);
+    region.wait().unwrap();
+
+    // Kill servers.
+    drop(_server_a);
+    drop(_server_b);
+    drop(_server_c);
+    // Restart them again.
+    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
+    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
+    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+    thread::sleep(Duration::from_secs(1));
+
+    let region = client.get_region_by_id(1);
+    region.wait().unwrap();
 }
 
 #[test]
@@ -156,7 +220,7 @@ fn test_change_leader_async() {
     let leader = client.get_leader();
 
     for _ in 0..5 {
-        let region = client.async_get_region_by_id(1);
+        let region = client.get_region_by_id(1);
         region.wait().ok();
 
         let new = client.get_leader();

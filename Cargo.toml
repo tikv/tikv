@@ -9,10 +9,11 @@ time = "0.1"
 
 [features]
 default = []
-dev = ["clippy"]
+dev = ["clippy", "mem-profiling"]
 static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
+mem-profiling = ["jemallocator"]
 
 [lib]
 name = "tikv"
@@ -41,7 +42,7 @@ time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
 num = "0.1"
-libc = "0.2.11"
+libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
@@ -60,6 +61,8 @@ fnv = "1.0"
 sys-info = "0.4.1"
 mio = "0.5"
 futures = "0.1"
+tokio-core = "0.1"
+tokio-timer = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -81,10 +84,16 @@ features = ["nightly", "push"]
 [dependencies.grpc]
 git = "https://github.com/stepancheg/grpc-rust.git"
 
+[dependencies.jemallocator]
+git = "https://github.com/busyjay/jemallocator.git"
+branch = "dev"
+features = ["profiling"]
+optional = true
+
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
-codegen-units = 4
+codegen-units = 2
 
 # The release profile, used for `cargo build --release`
 [profile.release]

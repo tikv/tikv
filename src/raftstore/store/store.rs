@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::DB;
+use rocksdb::{DB, DBStatisticsTickerType as TickerType};
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
@@ -41,7 +41,7 @@ use protobuf::Message;
 use raft::{self, SnapshotStatus, INVALID_INDEX};
 use raftstore::{Result, Error};
 use kvproto::metapb;
-use util::worker::{Worker, Scheduler};
+use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
 use util::{rocksdb, HashMap, HashSet, RingQueue};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -76,6 +76,24 @@ pub struct StoreChannel {
     pub snapshot_status_receiver: StdReceiver<SnapshotStatusMsg>,
 }
 
+pub struct StoreStat {
+    pub region_bytes_written: LocalHistogram,
+    pub region_keys_written: LocalHistogram,
+    pub lock_cf_bytes_written: u64,
+    pub engine_total_bytes_written: u64,
+}
+
+impl Default for StoreStat {
+    fn default() -> StoreStat {
+        StoreStat {
+            region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
+            region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
+            lock_cf_bytes_written: 0,
+            engine_total_bytes_written: 0,
+        }
+    }
+}
+
 pub struct Store<T, C: 'static> {
     cfg: Rc<Config>,
     engine: Arc<DB>,
@@ -96,7 +114,7 @@ pub struct Store<T, C: 'static> {
     region_worker: Worker<RegionTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
-    pd_worker: Worker<PdTask>,
+    pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
 
     pub apply_worker: Worker<ApplyTask>,
@@ -118,9 +136,7 @@ pub struct Store<T, C: 'static> {
 
     pending_votes: RingQueue<RaftMessage>,
 
-    region_written_bytes: LocalHistogram,
-    region_written_keys: LocalHistogram,
-    lock_cf_written_bytes: u64,
+    store_stat: StoreStat,
 }
 
 pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
@@ -178,7 +194,7 @@ impl<T, C> Store<T, C> {
             region_worker: Worker::new("snapshot worker"),
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
-            pd_worker: Worker::new("pd worker"),
+            pd_worker: FutureWorker::new("pd worker"),
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
@@ -193,9 +209,7 @@ impl<T, C> Store<T, C> {
             tag: tag,
             start_time: time::get_time(),
             is_busy: false,
-            region_written_bytes: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
-            region_written_keys: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
-            lock_cf_written_bytes: 0,
+            store_stat: StoreStat::default(),
         };
         try!(s.init());
         Ok(s)
@@ -386,7 +400,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_consistency_check_tick(event_loop);
         self.register_report_region_flow_tick(event_loop);
 
-        let split_check_runner = SplitCheckRunner::new(self.sendch.clone(),
+        let split_check_runner = SplitCheckRunner::new(self.engine.clone(),
+                                                       self.sendch.clone(),
                                                        self.cfg.region_max_size,
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
@@ -396,7 +411,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
-        let raftlog_gc_runner = RaftlogGcRunner;
+        let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(self.engine.clone());
@@ -516,7 +531,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         debug!("{} async apply finish: {:?}", p.tag, res);
                         p.post_apply(&res, &mut self.pending_raft_groups);
                     }
-                    self.lock_cf_written_bytes += res.metrics.lock_cf_written_bytes;
+                    self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
                     self.on_ready_result(res.region_id, res.exec_res);
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
@@ -1065,6 +1080,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             Ok(mut new_peer) => {
                 peer = new_peer.peer.clone();
                 if let Some(left) = self.region_peers.get(&region_id) {
+                    // New peer derive write flow from parent region,
+                    // this will be used by balance write flow.
+                    new_peer.last_written_bytes = left.last_written_bytes;
+                    new_peer.written_bytes = left.written_bytes;
+                    new_peer.written_keys = left.written_keys;
+
                     campaigned = new_peer.maybe_campaign(left, &mut self.pending_raft_groups);
 
                     if left.is_leader() {
@@ -1291,20 +1312,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
+            peer.last_written_bytes = peer.written_bytes;
             if !peer.is_leader() {
                 peer.written_bytes = 0;
                 peer.written_keys = 0;
                 continue;
             }
 
-            self.region_written_bytes.observe(peer.written_bytes as f64);
-            self.region_written_keys.observe(peer.written_keys as f64);
-            peer.last_written_bytes = peer.written_bytes;
+            self.store_stat.region_bytes_written.observe(peer.written_bytes as f64);
+            self.store_stat.region_keys_written.observe(peer.written_keys as f64);
             peer.written_bytes = 0;
             peer.written_keys = 0;
         }
-        self.region_written_bytes.flush();
-        self.region_written_keys.flush();
+        self.store_stat.region_bytes_written.flush();
+        self.store_stat.region_keys_written.flush();
 
         self.register_report_region_flow_tick(event_loop);
     }
@@ -1413,7 +1434,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   peer.tag,
                   peer.size_diff_hint,
                   self.cfg.region_check_size_diff);
-            let task = SplitCheckTask::new(peer.get_store());
+            let task = SplitCheckTask::new(peer.region());
             if let Err(e) = self.split_check_worker.schedule(task) {
                 error!("{} failed to schedule split check: {}", self.tag, e);
             }
@@ -1593,6 +1614,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         stats.set_start_time(self.start_time.sec as u32);
 
+        // report store write flow to pd
+        let engine_total_bytes_written = self.engine
+            .get_statistics_ticker_count(TickerType::BytesWritten);
+        let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
+        self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
+        stats.set_bytes_written(delta);
+
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
 
@@ -1689,8 +1717,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        if self.lock_cf_written_bytes > self.cfg.lock_cf_compact_threshold {
-            self.lock_cf_written_bytes = 0;
+        if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_threshold {
+            self.store_stat.lock_cf_bytes_written = 0;
             let task = CompactTask {
                 cf_name: String::from(CF_LOCK),
                 start_key: None,
