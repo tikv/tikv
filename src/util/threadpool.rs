@@ -22,8 +22,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 pub struct Task<T> {
-    // the task's number in the pool.
-    // each task has a unique number,
+    // The task's number in the pool.Each task has a unique number,
     // and it's always bigger than preceding ones.
     id: u64,
     // the task's group_id.
@@ -31,7 +30,7 @@ pub struct Task<T> {
     task: Box<FnBox() + Send>,
 }
 
-impl<T: Hash + Eq + Send + Clone + 'static> Task<T> {
+impl<T> Task<T> {
     fn new<F>(id: u64, group_id: T, job: F) -> Task<T>
         where F: FnOnce() + Send + 'static
     {
@@ -41,20 +40,11 @@ impl<T: Hash + Eq + Send + Clone + 'static> Task<T> {
             task: Box::new(job),
         }
     }
-
-    fn group_id(&self) -> T {
-        self.group_id.clone()
-    }
 }
 
 impl<T> Ord for Task<T> {
     fn cmp(&self, right: &Task<T>) -> Ordering {
-        if self.id > right.id {
-            return Ordering::Less;
-        } else if self.id < right.id {
-            return Ordering::Greater;
-        }
-        Ordering::Equal
+        self.id.cmp(&right.id).reverse()
     }
 }
 
@@ -107,7 +97,7 @@ pub struct FairGroupsTasksQueue<T> {
     group_concurrency_on_busy: usize,
 }
 
-impl<T: Hash + Eq + Send + Clone + 'static> FairGroupsTasksQueue<T> {
+impl<T: Hash + Eq + Send + Clone> FairGroupsTasksQueue<T> {
     pub fn new(group_concurrency_on_busy: usize) -> FairGroupsTasksQueue<T> {
         FairGroupsTasksQueue {
             statistics: HashMap::default(),
@@ -121,9 +111,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> FairGroupsTasksQueue<T> {
     // return Some(task) on failed.
     #[inline]
     fn try_push_into_pending(&mut self, task: Task<T>) -> Option<Task<T>> {
-        let group_id = task.group_id();
-        self.statistics.entry(group_id.clone()).or_insert(0 as usize);
-        let mut count = self.statistics.get_mut(&group_id).unwrap();
+        let count = self.statistics.entry(task.group_id.clone()).or_insert(0);
         if *count >= self.group_concurrency_on_busy {
             return Some(task);
         }
@@ -139,8 +127,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> FairGroupsTasksQueue<T> {
             return None;
         }
         let group_id = group_id.unwrap();
-        let task = self.pop_from_waiting_queue_with_group_id(group_id.clone());
-
+        let task = self.pop_from_waiting_queue_with_group_id(&group_id);
         // update statistics since current task is going to run.
         self.statistics.entry(group_id.clone()).or_insert(0 as usize);
         let mut count = self.statistics.get_mut(&group_id).unwrap();
@@ -149,15 +136,15 @@ impl<T: Hash + Eq + Send + Clone + 'static> FairGroupsTasksQueue<T> {
     }
 
     #[inline]
-    fn pop_from_waiting_queue_with_group_id(&mut self, group_id: T) -> Task<T> {
+    fn pop_from_waiting_queue_with_group_id(&mut self, group_id: &T) -> Task<T> {
         let (empty_group_wtasks, task) = {
-            let mut waiting_tasks = self.waiting_queue.get_mut(&group_id).unwrap();
+            let mut waiting_tasks = self.waiting_queue.get_mut(group_id).unwrap();
             let task_meta = waiting_tasks.pop_front().unwrap();
             (waiting_tasks.is_empty(), task_meta)
         };
         // if waiting tasks for group is empty,remove from waiting_tasks.
         if empty_group_wtasks {
-            self.waiting_queue.remove(&group_id);
+            self.waiting_queue.remove(group_id);
         }
         task
     }
@@ -196,7 +183,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> FairGroupsTasksQueue<T> {
     }
 }
 
-impl<T: Hash + Eq + Send + Clone + 'static> ScheduleQueue<T> for FairGroupsTasksQueue<T> {
+impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for FairGroupsTasksQueue<T> {
     // push one task into queue.
     fn push(&mut self, task: Task<T>) {
         let task = self.try_push_into_pending(task);
@@ -205,7 +192,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> ScheduleQueue<T> for FairGroupsTasks
         }
         let task = task.unwrap();
         let mut group_tasks = self.waiting_queue
-            .entry(task.group_id())
+            .entry(task.group_id.clone())
             .or_insert_with(VecDeque::new);
         group_tasks.push_back(task);
     }
@@ -239,7 +226,7 @@ impl<T: Hash + Eq + Send + Clone + 'static> ScheduleQueue<T> for FairGroupsTasks
 
         // if the number of running tasks for this group is not big enough in pending,
         // get the group's first task from waiting_queue and push it into pending.
-        let group_task = self.pop_from_waiting_queue_with_group_id(group_id);
+        let group_task = self.pop_from_waiting_queue_with_group_id(&group_id);
         assert!(self.try_push_into_pending(group_task).is_none());
     }
 }
@@ -253,7 +240,7 @@ struct ThreadPoolMeta<Q, T> {
     marker: PhantomData<T>,
 }
 
-impl<Q: ScheduleQueue<T>, T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<Q, T> {
+impl<Q: ScheduleQueue<T>, T> ThreadPoolMeta<Q, T> {
     fn new(queue: Q, job_sender: Sender<bool>) -> ThreadPoolMeta<Q, T> {
         ThreadPoolMeta {
             next_task_id: 0,
@@ -367,21 +354,18 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
 }
 
 // each thread has a worker.
-struct Worker<'a, Q, T>
-    where Q: 'static,
-          T: 'static
-{
-    job_rever: &'a Arc<Mutex<Receiver<bool>>>,
-    pool_meta: &'a Arc<Mutex<ThreadPoolMeta<Q, T>>>,
+struct Worker<Q, T> {
+    job_rever: Arc<Mutex<Receiver<bool>>>,
+    pool_meta: Arc<Mutex<ThreadPoolMeta<Q, T>>>,
 }
 
-impl<'a, Q, T> Worker<'a, Q, T>
+impl<Q, T> Worker<Q, T>
     where Q: ScheduleQueue<T>,
-          T: Hash + Eq + Send + Clone + 'static
+          T: Send + Clone + 'static
 {
-    fn new(receiver: &'a Arc<Mutex<Receiver<bool>>>,
-           pool_meta: &'a Arc<Mutex<ThreadPoolMeta<Q, T>>>)
-           -> Worker<'a, Q, T> {
+    fn new(receiver: Arc<Mutex<Receiver<bool>>>,
+           pool_meta: Arc<Mutex<ThreadPoolMeta<Q, T>>>)
+           -> Worker<Q, T> {
         Worker {
             job_rever: receiver,
             pool_meta: pool_meta,
@@ -412,10 +396,10 @@ impl<'a, Q, T> Worker<'a, Q, T>
             // since `tikv` would be down on any panic happens,
             // we needn't process panic case here.
             if let Some(task) = self.get_next_task() {
-                let task_key = task.group_id();
+                let group_id = task.group_id.clone();
                 task.task.call_box(());
                 let mut meta = self.pool_meta.lock().unwrap();
-                meta.finished_task(task_key);
+                meta.finished_task(group_id);
             }
         }
     }
@@ -426,13 +410,13 @@ fn new_thread<Q, T>(name: String,
                     tasks: Arc<Mutex<ThreadPoolMeta<Q, T>>>)
                     -> JoinHandle<()>
     where Q: ScheduleQueue<T> + Send + 'static,
-          T: Hash + Eq + Send + Clone + 'static
+          T: Send + Clone + 'static
 {
     let mut builder = Builder::new();
     builder = builder.name(name.clone());
 
     builder.spawn(move || {
-            let mut worker = Worker::new(&receiver, &tasks);
+            let mut worker = Worker::new(receiver, tasks);
             worker.run();
         })
         .unwrap()
@@ -594,39 +578,39 @@ mod test {
         }
         // queue:g1,g1,g1,g1,g2,g2,g3,g3
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id(), group1);
+        assert_eq!(task.group_id, group1);
         // queue:g1,g1,g1,g2,g2,g3,g3; running:g1
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id(), group1);
+        assert_eq!(task.group_id, group1);
         // queue:g1,g1,g2,g2,g3,g3; running:g1,g1
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id(), group2);
-        // queue:g1,g1,g2,g3,g3; running:g1,g1,g2
+        assert_eq!(task.group_id, group2);
+        // queue:g1,g1,g2,g3,g3; running:g1,g1,g2'
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id(), group2);
+        assert_eq!(task.group_id, group2);
         // queue:g1,g1,g3,g3; running:g1,g1,g2,g2
         // finished one g2
         queue.finished(group2);
         // queue:g1,g1,g3,g3; running:g1,g1,g2
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id(), group3);
+        assert_eq!(task.group_id, group3);
         // queue:g1,g1,g3; running:g1,g1,g2,g3
         // finished g1
         queue.finished(group1);
         // queue:g1,g1,g3; running:g1,g2,g3
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id(), group1);
+        assert_eq!(task.group_id, group1);
         // queue:g1,g3; running:g1,g1,g2,g3
         // finished g2
         queue.finished(group2);
         // queue:g1; running:g1,g1,g3,g3
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id(), group3);
+        assert_eq!(task.group_id, group3);
         // finished g3
         queue.finished(group3);
         // queue:g1; running:g1,g1,g3
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id(), group1);
+        assert_eq!(task.group_id, group1);
     }
 
 
