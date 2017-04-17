@@ -85,32 +85,31 @@ impl<Req, Resp, F> Request<Req, Resp, F>
           F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
 {
     // Re-establish connection with PD leader in synchronized fashion.
-    fn reconnect_if_needed(self) -> PdFuture<Self> {
-        let mut ctx = self;
-        debug!("reconnect remains: {}", ctx.reconnect_count);
+    fn reconnect_if_needed(mut self) -> PdFuture<Self> {
+        debug!("reconnect remains: {}", self.reconnect_count);
 
-        if ctx.request_sent == 0 {
-            return ok(ctx).boxed();
+        if self.request_sent == 0 {
+            return ok(self).boxed();
         }
 
-        if ctx.request_sent < MAX_REQUEST_COUNT {
+        if self.request_sent < MAX_REQUEST_COUNT {
             debug!("retry on the same client");
-            return ok(ctx).boxed();
+            return ok(self).boxed();
         }
 
         // Updating client.
 
-        ctx.request_sent = 0;
-        ctx.reconnect_count -= 1;
+        self.request_sent = 0;
+        self.reconnect_count -= 1;
 
         // FIXME: should not block the core.
         warn!("updating PD client, block the tokio core");
 
         let start = Instant::now();
-        let ret = try_connect_leader(&ctx.inner.rl().members.clone());
+        let ret = try_connect_leader(&self.inner.rl().members.clone());
         match ret {
             Ok((client, members)) => {
-                let mut inner = ctx.inner.wl();
+                let mut inner = self.inner.wl();
                 inner.client = client;
                 inner.members = members;
                 warn!("updating PD client done, spent {:?}", start.elapsed());
@@ -125,34 +124,32 @@ impl<Req, Resp, F> Request<Req, Resp, F>
             }
         }
 
-        ok(ctx).boxed()
+        ok(self).boxed()
     }
 
-    fn send(self) -> PdFuture<Self> {
-        let mut ctx = self;
-        ctx.request_sent += 1;
-        debug!("request sent: {}", ctx.request_sent);
-        let r = ctx.req.clone();
-        let req = (ctx.func)(&ctx.inner.rl().client, r);
+    fn send(mut self) -> PdFuture<Self> {
+        self.request_sent += 1;
+        debug!("request sent: {}", self.request_sent);
+        let r = self.req.clone();
+        let req = (self.func)(&self.inner.rl().client, r);
         req.then(|resp| {
                 match resp {
-                    Ok(resp) => ctx.resp = Some(Ok(resp)),
+                    Ok(resp) => self.resp = Some(Ok(resp)),
                     Err(err) => {
                         error!("request failed: {:?}", err);
                     }
                 };
-                Ok(ctx)
+                Ok(self)
             })
             .boxed()
     }
 
     fn receive(self) -> Result<Loop<Self, Self>> {
-        let ctx = self;
-        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
+        let done = self.reconnect_count == 0 || self.resp.is_some();
         if done {
-            Ok(Loop::Break(ctx))
+            Ok(Loop::Break(self))
         } else {
-            Ok(Loop::Continue(ctx))
+            Ok(Loop::Continue(self))
         }
     }
 
