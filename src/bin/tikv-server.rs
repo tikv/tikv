@@ -571,9 +571,13 @@ fn build_cfg(matches: &Matches,
                   "server.end-point-concurrency") {
         cfg.end_point_concurrency = adjust_end_points_by_cpu_num(total_cpu_num);
     }
-    cfg_usize(&mut cfg.end_point_txn_concurrency_on_busy,
-              config,
-              "server.end-point-txn-concurrency-on-busy");
+    if !cfg_usize(&mut cfg.end_point_txn_concurrency_on_busy,
+                  config,
+                  "server.end-point-txn-concurrency-on-busy") {
+        cfg.init_end_point_txn_concurrency_on_busy_with_default_ratio();
+        info!("server.end-point-txn-concurrency-on-busy keep default ratio with value = {}",
+              cfg.end_point_txn_concurrency_on_busy);
+    }
     assert!(cfg.end_point_txn_concurrency_on_busy <= cfg.end_point_concurrency &&
             cfg.end_point_txn_concurrency_on_busy > 0,
             "server.end-point-txn-concurrency-on-busy: {} is invalid, should be in [1,{}]",
