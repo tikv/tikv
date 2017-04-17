@@ -72,12 +72,28 @@ impl<T> PartialOrd for Task<T> {
 }
 
 
-pub struct FairGroupsTasksQueue<T> {
-    // group_id => tasks array
-    waiting_queue: HashMap<T, VecDeque<Task<T>>>,
-    // tasks in pending.
+// `FairGroupsTasksQueue` tries to be fair between groups when schedule tasks.
+//  When one worker asks a task to run, it schedule on the following way:
+// 1. Choose the groups with it's running number less than
+//    `group_concurrency_on_busy`.
+// 2. If more than one groups meet the condition 1, running the one who
+//    comes first.
+// If no group's running number is smaller than `group_concurrency_on_busy`,
+// choose according to the following rules:
+// 1. Choose the groups with least running tasks.
+// 2. If more than one groups has the least running tasks,
+//    choose the one whose task comes first(with the minum task's ID)
+struct FairGroupsTasksQueue<T> {
+    // tasks in pending. tasks in `pending_tasks` have higher prority than
+    // tasks in waiting_queue.
     pending_tasks: BinaryHeap<Task<T>>,
-    // group_id => running_num+pending num
+    // group_id => tasks array. If `statistics[group_id]` is bigger than
+    // `group_concurrency_on_busy`(which means there may more than
+    // `group_concurrency_on_busy` tasks of the group are running), the rest
+    // of the group's tasks would be pushed into `waiting_queue[group_id]`
+    waiting_queue: HashMap<T, VecDeque<Task<T>>>,
+    // group_id => running_num+pending num. It means there may `statics[group_id]`
+    // tasks of the group are running.
     statistics: HashMap<T, usize>,
     // max num of threads each group can run on when pool is busy.
     // each value in statistics shouldn't bigger than this value.
@@ -507,65 +523,6 @@ mod test {
         }
         task_pool.stop().unwrap();
     }
-
-    #[test]
-    fn test_fair_group_for_tasks_with_same_cost() {
-        let name = Some(thd_name!("test_tasks_with_same_cost"));
-        let concurrency = 2;
-        let mut task_pool =
-            ThreadPool::new(name,
-                            concurrency,
-                            ScheduleAlgorithm::FairGroups { group_concurrency_on_busy: 1 });
-        let (jtx, jrx) = channel();
-        let group_with_many_tasks = 1001 as u64;
-        // all tasks cost the same time.
-        let sleep_duration = Duration::from_millis(50);
-        let recv_timeout_duration = Duration::from_secs(2);
-
-        // push tasks of group_with_many_tasks's job to make all thread in pool busy.
-        // in order to make sure the thread would be free in sequence,
-        // these tasks should run in sequence.
-        for _ in 0..concurrency {
-            task_pool.execute(group_with_many_tasks, move || {
-                sleep(sleep_duration);
-            });
-            // make sure the pre task is running now.
-            sleep(sleep_duration / 4);
-        }
-
-        // push 10 tasks of group_with_many_tasks's job into pool.
-        for _ in 0..10 {
-            let sender = jtx.clone();
-            task_pool.execute(group_with_many_tasks, move || {
-                sleep(sleep_duration);
-                sender.send(group_with_many_tasks).unwrap();
-            });
-        }
-
-        // push 1 task for each group_id in [0..10) into pool.
-        for group_id in 0..10 {
-            let sender = jtx.clone();
-            task_pool.execute(group_id, move || {
-                sleep(sleep_duration);
-                sender.send(group_id).unwrap();
-            });
-        }
-        // when first thread is free, since there would be another
-        // thread running group_with_many_tasks's task,and the first task which
-        // is not belong to group_with_many_tasks in the waitting queue would run first.
-        // when the second thread is free, since there is group_with_many_tasks's task
-        // is running, and the first task in the waiting queue is the
-        // group_with_many_tasks's task,so it would run. Similarly when the first is
-        // free again,it would run the task in front of the queue..
-        for id in 0..10 {
-            let first = jrx.recv_timeout(recv_timeout_duration).unwrap();
-            assert_eq!(first, id);
-            let second = jrx.recv_timeout(recv_timeout_duration).unwrap();
-            assert_eq!(second, group_with_many_tasks);
-        }
-        task_pool.stop().unwrap();
-    }
-
 
     #[test]
     fn test_fair_group_for_tasks_with_different_cost() {
