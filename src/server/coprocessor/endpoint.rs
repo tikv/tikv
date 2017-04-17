@@ -34,7 +34,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
-use util::threadpool::{ThreadPool, FairGroupsTasksQueue};
+use util::threadpool::{ThreadPool, BigGroupThrottledQueue};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
@@ -70,7 +70,7 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<FairGroupsTasksQueue<u64>, u64>,
+    pool: ThreadPool<BigGroupThrottledQueue<u64>, u64>,
     max_running_task_count: usize,
 }
 
@@ -87,7 +87,7 @@ impl Host {
             last_req_id: 0,
             pool: ThreadPool::new(thd_name!("endpoint-pool"),
                                   concurrency,
-                                  FairGroupsTasksQueue::new(txn_concurrency_on_busy)),
+                                  BigGroupThrottledQueue::new(txn_concurrency_on_busy)),
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
         }
     }

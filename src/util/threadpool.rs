@@ -69,8 +69,9 @@ pub trait ScheduleQueue<T> {
     fn finished(&mut self, group_id: T);
 }
 
-// `FairGroupsTasksQueue` tries to be fair between groups when schedule tasks.
-//  When one worker asks a task to run, it schedule on the following way:
+// `BigGroupThrottledQueue` tries to throttle group's concurrency to
+//  `group_concurrency_on_busy` when is busy.
+// When one worker asks a task to run, it schedule on the following way:
 // 1. Choose the groups with it's running number less than
 //    `group_concurrency_on_busy`.
 // 2. If more than one groups meet the condition 1, running the one who
@@ -80,7 +81,7 @@ pub trait ScheduleQueue<T> {
 // 1. Choose the groups with least running tasks.
 // 2. If more than one groups has the least running tasks,
 //    choose the one whose task comes first(with the minum task's ID)
-pub struct FairGroupsTasksQueue<T> {
+pub struct BigGroupThrottledQueue<T> {
     // tasks in pending. tasks in `pending_tasks` have higher prority than
     // tasks in waiting_queue.
     pending_tasks: BinaryHeap<Task<T>>,
@@ -97,9 +98,9 @@ pub struct FairGroupsTasksQueue<T> {
     group_concurrency_on_busy: usize,
 }
 
-impl<T: Hash + Eq + Send + Clone> FairGroupsTasksQueue<T> {
-    pub fn new(group_concurrency_on_busy: usize) -> FairGroupsTasksQueue<T> {
-        FairGroupsTasksQueue {
+impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
+    pub fn new(group_concurrency_on_busy: usize) -> BigGroupThrottledQueue<T> {
+        BigGroupThrottledQueue {
             statistics: HashMap::default(),
             waiting_queue: HashMap::default(),
             pending_tasks: BinaryHeap::new(),
@@ -183,7 +184,7 @@ impl<T: Hash + Eq + Send + Clone> FairGroupsTasksQueue<T> {
     }
 }
 
-impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for FairGroupsTasksQueue<T> {
+impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
     // push one task into queue.
     fn push(&mut self, task: Task<T>) {
         let task = self.try_push_into_pending(task);
@@ -424,7 +425,7 @@ fn new_thread<Q, T>(name: String,
 
 #[cfg(test)]
 mod test {
-    use super::{ThreadPool, FairGroupsTasksQueue, Task, ScheduleQueue};
+    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue};
     use std::thread::sleep;
     use std::time::Duration;
     use std::sync::mpsc::channel;
@@ -433,7 +434,7 @@ mod test {
     fn test_fair_group_for_tasks_with_different_cost() {
         let name = thd_name!("test_tasks_with_different_cost");
         let concurrency = 2;
-        let mut task_pool = ThreadPool::new(name, concurrency, FairGroupsTasksQueue::new(1));
+        let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(1));
         let (jtx, jrx) = channel();
         let group_with_big_task = 1001 as u64;
         let sleep_duration = Duration::from_millis(50);
@@ -481,7 +482,7 @@ mod test {
     fn test_fair_group_for_tasks_with_group_concurrency_on_busy() {
         let name = thd_name!("test_tasks_with_different_cost");
         let concurrency = 4;
-        let mut task_pool = ThreadPool::new(name, concurrency, FairGroupsTasksQueue::new(2));
+        let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(2));
         let (tx, rx) = channel();
         let sleep_duration = Duration::from_millis(50);
         let recv_timeout_duration = Duration::from_secs(2);
@@ -552,7 +553,7 @@ mod test {
     #[test]
     fn test_fair_group_queue() {
         let max_pending_task_each_group = 2;
-        let mut queue = FairGroupsTasksQueue::new(max_pending_task_each_group);
+        let mut queue = BigGroupThrottledQueue::new(max_pending_task_each_group);
         // push  4 group1 into queue
         let group1 = 1001;
         let mut id = 0;
