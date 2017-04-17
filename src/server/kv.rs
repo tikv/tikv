@@ -406,7 +406,9 @@ fn extract_region_error<T>(res: &StorageResult<T>) -> Option<RegionError> {
         }
         Err(StorageError::SchedTooBusy) => {
             let mut err = RegionError::new();
-            err.set_server_is_busy(ServerIsBusy::new());
+            let mut server_is_busy_err = ServerIsBusy::new();
+            server_is_busy_err.set_reason(String::from("[scheduler] server is busy"));
+            err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
         _ => None,
