@@ -175,7 +175,7 @@ impl Into<errorpb::Error> for Error {
             }
             Error::Transport(transport::Error::Discard(_)) => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::new();
-                server_is_busy_err.set_reason(String::from("[raftstore] server is busy"));
+                server_is_busy_err.set_reason(String::from("raftstore is busy"));
                 errorpb.set_server_is_busy(server_is_busy_err);
             }
             _ => {}
