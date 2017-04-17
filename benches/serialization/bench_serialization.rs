@@ -14,58 +14,29 @@
 extern crate protobuf;
 
 use test::Bencher;
-use protobuf::Message;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_cmdpb::{RaftCmdRequest, Request, CmdType};
-use std::time::{Instant, Duration};
 use std::string::String;
+use std::collections::HashMap;
 
-#[inline]
-fn encode_one_cmd() -> Vec<u8> {
-    let mut e = Entry::new();
-    let mut cmd = RaftCmdRequest::new();
+fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
     let mut reqs = vec![];
-
-    let mut r = Request::new();
-    r.set_cmd_type(CmdType::Put);
-    r.mut_put().set_cf(String::from("tidb"));
-    let key = Vec::from(String::from("7fd7b5b7fc628b3cd19c56daf84dbe").as_bytes());
-    r.mut_put().set_key(key);
-    let value = Vec::from(String::from("6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c").as_bytes());
-    r.mut_put().set_value(value);
-    reqs.push(r);
-
-    cmd.set_requests(protobuf::RepeatedField::from_vec(reqs));
-    let cmd_msg = protobuf::Message::write_to_bytes(&cmd).unwrap();
-    e.set_data(cmd_msg);
-    protobuf::Message::write_to_bytes(&e).unwrap()
+    for (key, value) in map {
+        let mut r = Request::new();
+        r.set_cmd_type(CmdType::Put);
+        r.mut_put().set_cf(String::from("tikv"));
+        r.mut_put().set_key(key.to_vec());
+        r.mut_put().set_value(value.to_vec());
+        reqs.push(r);
+    }
+    reqs
 }
 
-#[inline]
-fn encode_two_cmd() -> Vec<u8> {
+fn encode(reqs: &Vec<Request>) -> Vec<u8> {
     let mut e = Entry::new();
     let mut cmd = RaftCmdRequest::new();
-    let mut reqs = vec![];
-
-    let mut r = Request::new();
-    r.set_cmd_type(CmdType::Put);
-    r.mut_put().set_cf(String::from("tidb"));
-    let key = Vec::from(String::from("7fd7b5b7fc628b3cd19c56daf84dbe").as_bytes());
-    r.mut_put().set_key(key);
-    let value = Vec::from(String::from("0650bfba52").as_bytes());
-    r.mut_put().set_value(value);
-    reqs.push(r);
-
-    let mut r = Request::new();
-    r.set_cmd_type(CmdType::Put);
-    r.mut_put().set_cf(String::from("tidb"));
-    let key = Vec::from(String::from("6ba952020fbc91bad64be1ea0650bfba52e6aab4").as_bytes());
-    r.mut_put().set_key(key);
-    let value = Vec::from(String::from("6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c").as_bytes());
-    r.mut_put().set_value(value);
-    reqs.push(r);
-
-    cmd.set_requests(protobuf::RepeatedField::from_vec(reqs));
+    let cloned_reqs = reqs.clone();
+    cmd.set_requests(protobuf::RepeatedField::from_vec(cloned_reqs));
     let cmd_msg = protobuf::Message::write_to_bytes(&cmd).unwrap();
     e.set_data(cmd_msg);
     protobuf::Message::write_to_bytes(&e).unwrap()
@@ -73,42 +44,49 @@ fn encode_two_cmd() -> Vec<u8> {
 
 fn decode(data: &Vec<u8>) {
     let entry = protobuf::parse_from_bytes::<Entry>(data).unwrap();
-    let cmd = protobuf::parse_from_bytes::<RaftCmdRequest>(entry.get_data());
-}
-
-fn print_cost(s: &str, d: Duration, count: u32) {
-    let cost = (d.as_secs() * 1000) as f64 + (d.subsec_nanos() / 1000_000) as f64;
-    let cost = cost / count as f64;
-    print!("{}", s);
-    print!(" cost {}ms\t...\t", cost);
+    protobuf::parse_from_bytes::<RaftCmdRequest>(entry.get_data()).unwrap();
 }
 
 #[bench]
-fn bench_encode_one_cmd(b: &mut Bencher) {
+fn bench_encode_one(b: &mut Bencher) {
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    map.insert(b"6ba952020fbc91bad64be1ea0650bf", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    let reqs = generate_requests(&map);
     b.iter(|| {
-        encode_one_cmd();
+        encode(&reqs);
     });
 }
 
 #[bench]
-fn bench_decode_one_cmd(b: &mut Bencher) {
-    let result = encode_one_cmd();
+fn bench_decode_one(b: &mut Bencher) {
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    map.insert(b"6ba952020fbc91bad64be1ea0650bf", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    let reqs = generate_requests(&map);
+    let data = encode(&reqs);
     b.iter(|| {
-        decode(&result);
+        decode(&data);
     });
 }
 
 #[bench]
-fn bench_encode_two_cmd(b: &mut Bencher) {
+fn bench_encode_two(b: &mut Bencher) {
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    map.insert(b"7fd7b5b7fc628b3cd19c56daf84dbe", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    map.insert(b"6ba952020fbc91bad64be1ea0650bf", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    let reqs = generate_requests(&map);
     b.iter(|| {
-        encode_two_cmd();
+        encode(&reqs);
     });
 }
 
 #[bench]
-fn bench_decode_two_cmd(b: &mut Bencher) {
-    let result = encode_two_cmd();
+fn bench_decode_two(b: &mut Bencher) {
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    map.insert(b"7fd7b5b7fc628b3cd19c56daf84dbe", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    map.insert(b"6ba952020fbc91bad64be1ea0650bf", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    let reqs = generate_requests(&map);
+    let data = encode(&reqs);
     b.iter(|| {
-        decode(&result);
+        decode(&data);
     });
 }

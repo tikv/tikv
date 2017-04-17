@@ -33,7 +33,6 @@ extern crate rocksdb;
 
 mod channel;
 mod serialization;
-mod writebatch;
 
 #[allow(dead_code)]
 #[path="../tests/util.rs"]
