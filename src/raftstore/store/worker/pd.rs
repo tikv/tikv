@@ -148,20 +148,25 @@ impl<T: PdClient> Runner<T> {
                         written_bytes: u64) {
         loop {
             if let Some(ref ch) = self.region_hb {
-                PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
-                let id = region.get_id();
-                if let Err(e) = ch.send(Some(RegionHeartbeat {
+                let result = ch.send(Some(RegionHeartbeat {
                     region: region.clone(),
                     leader: peer.clone(),
                     down_peers: down_peers.clone(),
                     pending_peers: pending_peers.clone(),
                     written_bytes: written_bytes,
-                })) {
-                    // TODO: retry here if the connection is lost?
-                    // FIXME: how to ensure the connection is established.
-                    debug!("[region {}] failed to send heartbeat: {:?}", id, e);
-                } else {
-                    return;
+                }));
+                match result {
+                    Ok(_) => {
+                        PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
+                        return;
+                    }
+                    Err(e) => {
+                        // TODO: retry here if the connection is lost?
+                        //       How to ensure the connection is established.
+                        debug!("[region {}] failed to send heartbeat: {:?}",
+                               region.get_id(),
+                               e);
+                    }
                 }
             }
 
@@ -206,7 +211,7 @@ impl<T: PdClient> Runner<T> {
                     Ok(())
                 })
                 .map_err(|e| {
-                    error!("failed to send heartbeat: {:?}", e);
+                    error!("failed to send region heartbeat: {:?}", e);
                 });
             handle.spawn(f);
         }
