@@ -73,6 +73,12 @@ impl<T> PartialOrd for Task<T> {
 }
 
 
+pub trait ScheduleQueue<T> {
+    fn pop(&mut self) -> Option<Task<T>>;
+    fn push(&mut self, task: Task<T>);
+    fn finished(&mut self, group_id: T);
+}
+
 // `FairGroupsTasksQueue` tries to be fair between groups when schedule tasks.
 //  When one worker asks a task to run, it schedule on the following way:
 // 1. Choose the groups with it's running number less than
@@ -190,12 +196,6 @@ impl<T: Hash + Eq + Send + Clone + 'static> FairGroupsTasksQueue<T> {
     }
 }
 
-pub trait ScheduleQueue<T> {
-    fn pop(&mut self) -> Option<(T, Task<T>)>;
-    fn push(&mut self, task: Task<T>);
-    fn finished(&mut self, group_id: T);
-}
-
 impl<T: Hash + Eq + Send + Clone + 'static> ScheduleQueue<T> for FairGroupsTasksQueue<T> {
     // push one task into queue.
     fn push(&mut self, task: Task<T>) {
@@ -210,11 +210,11 @@ impl<T: Hash + Eq + Send + Clone + 'static> ScheduleQueue<T> for FairGroupsTasks
         group_tasks.push_back(task);
     }
 
-    fn pop(&mut self) -> Option<(T, Task<T>)> {
+    fn pop(&mut self) -> Option<Task<T>> {
         if let Some(task) = self.pending_tasks.pop() {
-            return Some((task.group_id(), task));
+            return Some(task);
         } else if let Some(task) = self.pop_task_from_waiting_queue_to_run() {
-            return Some((task.group_id(), task));
+            return Some(task);
         }
         None
     }
@@ -288,7 +288,7 @@ impl<Q: ScheduleQueue<T>, T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<
         self.tasks.finished(group_id);
     }
 
-    fn pop_next_task(&mut self) -> Option<(T, Task<T>)> {
+    fn pop_next_task(&mut self) -> Option<Task<T>> {
         let next_task = self.tasks.pop();
         if next_task.is_none() {
             return None;
@@ -312,7 +312,7 @@ impl<Q: ScheduleQueue<T>, T: Hash + Eq + Send + Clone + 'static> ThreadPoolMeta<
 /// Each task would be pushed into the pool,and when a thread
 /// is ready to process a task, it get a task from the waiting queue
 /// according the schedule queue provided in initialization.
-pub struct ThreadPool<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static> {
+pub struct ThreadPool<Q, T> {
     meta: Arc<Mutex<ThreadPoolMeta<Q, T>>>,
     threads: Vec<JoinHandle<()>>,
 }
@@ -368,8 +368,8 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
 
 // each thread has a worker.
 struct Worker<'a, Q, T>
-    where Q: ScheduleQueue<T> + 'static,
-          T: Hash + Eq + Send + Clone + 'static
+    where Q: 'static,
+          T: 'static
 {
     job_rever: &'a Arc<Mutex<Receiver<bool>>>,
     pool_meta: &'a Arc<Mutex<ThreadPoolMeta<Q, T>>>,
@@ -398,7 +398,7 @@ impl<'a, Q, T> Worker<'a, Q, T>
     }
 
     #[inline]
-    fn get_next_task(&mut self) -> Option<(T, Task<T>)> {
+    fn get_next_task(&mut self) -> Option<Task<T>> {
         // try to get task
         let mut meta = self.pool_meta.lock().unwrap();
         meta.pop_next_task()
@@ -411,7 +411,8 @@ impl<'a, Q, T> Worker<'a, Q, T>
             // handle task
             // since `tikv` would be down on any panic happens,
             // we needn't process panic case here.
-            if let Some((task_key, task)) = self.get_next_task() {
+            if let Some(task) = self.get_next_task() {
+                let task_key = task.group_id();
                 task.task.call_box(());
                 let mut meta = self.pool_meta.lock().unwrap();
                 meta.finished_task(task_key);
@@ -592,40 +593,40 @@ mod test {
             queue.push(task);
         }
         // queue:g1,g1,g1,g1,g2,g2,g3,g3
-        let (group, _) = queue.pop().unwrap();
-        assert_eq!(group, group1);
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id(), group1);
         // queue:g1,g1,g1,g2,g2,g3,g3; running:g1
-        let (group, _) = queue.pop().unwrap();
-        assert_eq!(group, group1);
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id(), group1);
         // queue:g1,g1,g2,g2,g3,g3; running:g1,g1
-        let (group, _) = queue.pop().unwrap();
-        assert_eq!(group, group2);
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id(), group2);
         // queue:g1,g1,g2,g3,g3; running:g1,g1,g2
-        let (group, _) = queue.pop().unwrap();
-        assert_eq!(group, group2);
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id(), group2);
         // queue:g1,g1,g3,g3; running:g1,g1,g2,g2
         // finished one g2
         queue.finished(group2);
         // queue:g1,g1,g3,g3; running:g1,g1,g2
-        let (group, _) = queue.pop().unwrap();
-        assert_eq!(group, group3);
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id(), group3);
         // queue:g1,g1,g3; running:g1,g1,g2,g3
         // finished g1
         queue.finished(group1);
         // queue:g1,g1,g3; running:g1,g2,g3
-        let (group, _) = queue.pop().unwrap();
-        assert_eq!(group, group1);
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id(), group1);
         // queue:g1,g3; running:g1,g1,g2,g3
         // finished g2
         queue.finished(group2);
         // queue:g1; running:g1,g1,g3,g3
-        let (group, _) = queue.pop().unwrap();
-        assert_eq!(group, group3);
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id(), group3);
         // finished g3
         queue.finished(group3);
         // queue:g1; running:g1,g1,g3
-        let (group, _) = queue.pop().unwrap();
-        assert_eq!(group, group1);
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id(), group1);
     }
 
 
