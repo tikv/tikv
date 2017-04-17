@@ -34,7 +34,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
-use util::threadpool::{ThreadPool, ScheduleAlgorithm};
+use util::threadpool::{ThreadPool, FairGroupsTasksQueue};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
@@ -68,7 +68,7 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<u64>,
+    pool: ThreadPool<FairGroupsTasksQueue<u64>, u64>,
     max_running_task_count: usize,
 }
 
@@ -83,11 +83,9 @@ impl Host {
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
-            pool: ThreadPool::new(Some(thd_name!("endpoint-pool")),
+            pool: ThreadPool::new(thd_name!("endpoint-pool"),
                                   concurrency,
-                                  ScheduleAlgorithm::FairGroups {
-                                      group_concurrency_on_busy: txn_concurrency_on_busy,
-                                  }),
+                                  FairGroupsTasksQueue::new(txn_concurrency_on_busy)),
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
         }
     }
@@ -364,8 +362,8 @@ impl TiDbEndPoint {
             on_error(e, t);
             return;
         }
-        if sel.is_err() {
-            on_error(sel.unwrap_err(), t);
+        if let Err(e) = sel {
+            on_error(e, t);
             return;
         }
         match self.handle_select(&mut t, sel.unwrap()) {
