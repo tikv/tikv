@@ -76,7 +76,7 @@ impl LeaderClient {
     // Re-establish connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) {
         let start = Instant::now();
-        let ret = try_connect_leader(&self.inner.rl().members.clone());
+        let ret = try_connect_leader(&self.inner.rl().members);
         match ret {
             Ok((client, members)) => {
                 let mut inner = self.inner.wl();
