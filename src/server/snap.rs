@@ -134,9 +134,9 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 
     // snapshot file has been validated when created, so no need to validate again.
 
-    // Ideally, we should not collect all chunks here, and send an iterator to Grpc clint to save
-    // memory. But inside grpc client, the iterator need to be move to another thread, and we can't
-    // send the snapshot away because we need to use it later.
+    // Ideally, we should not collect all chunks here, and send an iterator to Grpc client to save
+    // memory. But inside grpc client, the iterator needs to be moved to another thread, and we
+    // can't send the snapshot away because we need to use it later.
     let chunks: Vec<result::Result<SnapshotChunk, GrpcError>> = {
         let snap_chunk = SnapChunk { snap: s.as_mut() };
         let first = iter::once({

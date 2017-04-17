@@ -18,13 +18,12 @@ use futures::sync::mpsc;
 use tokio_core::reactor::Handle;
 use grpc::error::GrpcError;
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::tikvpb_grpc::TiKVAsyncClient;
-use kvproto::tikvpb_grpc::TiKVAsync;
+use kvproto::tikvpb_grpc::{TiKVAsync, TiKVAsyncClient};
 use util::worker::FutureRunnable;
 use util::{HashMap, TryInsertWith};
 use super::Result;
 
-// SendTask delivers a raft message to other store.
+// SendTask delivers a raft message to other stores.
 pub struct SendTask {
     pub addr: SocketAddr,
     pub msg: RaftMessage,
