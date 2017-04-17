@@ -27,7 +27,7 @@ recv-buffer-size = "128KB"
 # end-point-concurrency = 8
 
 # concurrency for each transaction when endpoint is busy, should be in [1,end-point-concurrency].
-# It's recommanded to set it to a quater of end-point-concurrency.
+# The recommanded value is a quater of end-point-concurrency.
 # end-point-txn-concurrency-on-busy = 2
 
 # set store capacity, if no set, use disk capacity.
