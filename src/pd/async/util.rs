@@ -19,7 +19,7 @@ use std::thread;
 
 use futures::Future;
 use futures::future::ok;
-use futures::future::{self, loop_fn, Loop};
+use futures::future::{loop_fn, Loop};
 
 use kvproto::pdpb::GetMembersResponse;
 use kvproto::pdpb_grpc::PDAsyncClient;
@@ -106,8 +106,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         warn!("updating PD client, block the tokio core");
 
         let start = Instant::now();
-        let members = self.inner.rl().members.clone();
-        match try_connect_leader(&members) {
+        let ret = try_connect_leader(&self.inner.rl().members);
+        match ret {
             Ok((client, members)) => {
                 let mut inner = self.inner.wl();
                 inner.client = client;
@@ -139,9 +139,23 @@ impl<Req, Resp, F> Request<Req, Resp, F>
                         error!("request failed: {:?}", err);
                     }
                 };
-                ok(self)
+                Ok(self)
             })
             .boxed()
+    }
+
+    fn receive(self) -> Result<Loop<Self, Self>> {
+        let done = self.reconnect_count == 0 || self.resp.is_some();
+        if done {
+            Ok(Loop::Break(self))
+        } else {
+            Ok(Loop::Continue(self))
+        }
+    }
+
+    fn post_loop(ctx: Result<Self>) -> Result<Resp> {
+        let ctx = ctx.expect("end loop with Ok(_)");
+        ctx.resp.unwrap_or_else(|| Err(box_err!("fail to request")))
     }
 
     /// Returns a Future, it is resolves once a future returned by the closure
@@ -150,24 +164,10 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         let ctx = self;
         loop_fn(ctx, |ctx| {
                 ctx.reconnect_if_needed()
-                    .and_then(|ctx| ctx.send())
-                    .and_then(|ctx| {
-                        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
-                        if done {
-                            Ok(Loop::Break(ctx))
-                        } else {
-                            Ok(Loop::Continue(ctx))
-                        }
-                    })
+                    .and_then(Self::send)
+                    .and_then(Self::receive)
             })
-            .then(|ctx| {
-                let ctx = ctx.expect("end loop with Ok(_)");
-                match ctx.resp {
-                    Some(Ok(resp)) => future::ok(resp),
-                    Some(Err(err)) => future::err(err),
-                    None => future::err(box_err!("fail to request")),
-                }
-            })
+            .then(Self::post_loop)
             .boxed()
     }
 }
