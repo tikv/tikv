@@ -23,6 +23,7 @@ use kvproto::eraftpb::MessageType as RaftMessageType;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::coprocessor::Response;
 mod handle;
+mod raft_client;
 mod conn;
 mod metrics;
 

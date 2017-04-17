@@ -18,7 +18,7 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 
 use protobuf::ProtobufError;
-
+use grpc::error::GrpcError;
 use util::codec::Error as CodecError;
 use raftstore::Error as RaftServerError;
 use storage::engine::Error as EngineError;
@@ -41,6 +41,11 @@ quick_error!{
             description(err.description())
         }
         Protobuf(err: ProtobufError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Grpc(err: GrpcError) {
             from()
             cause(err)
             description(err.description())
