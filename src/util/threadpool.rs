@@ -17,6 +17,7 @@ use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::cmp::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering as AOrdering};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
@@ -65,7 +66,10 @@ pub trait ScheduleQueue<T> {
     fn pop(&mut self) -> Option<Task<T>>;
     fn push(&mut self, task: Task<T>);
     fn on_task_finished(&mut self, group_id: &T);
+    fn on_task_started(&mut self, group_id: &T);
 }
+
+pub struct PushError<T>(pub T);
 
 // `BigGroupThrottledQueue` tries to throttle group's concurrency to
 //  `group_concurrency_on_busy` when it's busy.
@@ -95,6 +99,7 @@ pub struct BigGroupThrottledQueue<T> {
     group_concurrency_on_busy: usize,
 }
 
+
 impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
     pub fn new(group_concurrency_on_busy: usize) -> BigGroupThrottledQueue<T> {
         BigGroupThrottledQueue {
@@ -107,10 +112,10 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
 
     // Try push into pending. Return none on success,return Some(task) on failed.
     #[inline]
-    fn try_push_into_pending(&mut self, task: Task<T>) -> Result<(), Task<T>> {
+    fn try_push_into_pending(&mut self, task: Task<T>) -> Result<(), PushError<Task<T>>> {
         let count = self.group_concurrency.entry(task.group_id.clone()).or_insert(0);
         if *count >= self.group_concurrency_on_busy {
-            return Err(task);
+            return Err(PushError(task));
         }
         *count += 1;
         self.pending_tasks.push(task);
@@ -125,9 +130,6 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
         }
         let group_id = group_id.unwrap();
         let task = self.pop_from_waiting_queue_with_group_id(&group_id);
-        // update group_concurrency since the current task is going to run.
-        let mut count = self.group_concurrency.entry(group_id).or_insert(0);
-        *count += 1;
         Some(task)
     }
 
@@ -183,24 +185,28 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
 impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
     // push one task into queue.
     fn push(&mut self, task: Task<T>) {
-        let task = self.try_push_into_pending(task);
-        if task.is_ok() {
-            return;
+        if let Err(PushError(task)) = self.try_push_into_pending(task) {
+            self.waiting_queue
+                .entry(task.group_id.clone())
+                .or_insert_with(VecDeque::new)
+                .push_back(task);
         }
-        let task = task.unwrap_err();
-        self.waiting_queue
-            .entry(task.group_id.clone())
-            .or_insert_with(VecDeque::new)
-            .push_back(task);
     }
 
     fn pop(&mut self) -> Option<Task<T>> {
         if let Some(task) = self.pending_tasks.pop() {
+            let count = self.group_concurrency.entry(task.group_id.clone()).or_insert(0);
+            *count -= 1;
             return Some(task);
         } else if let Some(task) = self.pop_from_waiting_queue() {
             return Some(task);
         }
         None
+    }
+
+    fn on_task_started(&mut self, group_id: &T) {
+        let count = self.group_concurrency.entry(group_id.clone()).or_insert(0);
+        *count += 1;
     }
 
     fn on_task_finished(&mut self, group_id: &T) {
@@ -230,8 +236,6 @@ impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T>
 
 struct TaskPool<Q, T> {
     next_task_id: u64,
-    total_running_tasks: usize,
-    total_waiting_tasks: usize,
     tasks: Q,
     marker: PhantomData<T>,
     stop: bool,
@@ -241,8 +245,6 @@ impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
     fn new(queue: Q) -> TaskPool<Q, T> {
         TaskPool {
             next_task_id: 0,
-            total_running_tasks: 0,
-            total_waiting_tasks: 0,
             tasks: queue,
             marker: PhantomData,
             stop: false,
@@ -254,37 +256,30 @@ impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
         where F: FnOnce() + Send + 'static
     {
         let task = Task::new(self.next_task_id, group_id, job);
-        self.total_waiting_tasks += 1;
         self.next_task_id += 1;
         self.tasks.push(task);
     }
 
-    fn get_task_num(&self) -> usize {
-        self.total_waiting_tasks + self.total_running_tasks
-    }
-
     // on_task_finished is called when one task is on_task_finished in the
-    // thread. It will clean up the remaining information of the
-    // task in the pool.
+    // thread. It will clean up the remaining information of the task in the pool.
     fn on_task_finished(&mut self, group_id: &T) {
-        self.total_running_tasks -= 1;
         self.tasks.on_task_finished(group_id);
     }
 
-    fn pop_task(&mut self) -> Option<Task<T>> {
-        let next_task = self.tasks.pop();
-        if next_task.is_none() {
-            return None;
-        }
-        self.total_waiting_tasks -= 1;
-        self.total_running_tasks += 1;
-        next_task
+    fn on_task_started(&mut self, group_id: &T) {
+        self.tasks.on_task_started(group_id);
     }
 
+    fn pop_task(&mut self) -> Option<Task<T>> {
+        self.tasks.pop()
+    }
+
+    #[inline]
     fn stop(&mut self) {
         self.stop = true;
     }
 
+    #[inline]
     fn is_stopped(&self) -> bool {
         self.stop
     }
@@ -297,6 +292,7 @@ impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
 pub struct ThreadPool<Q, T> {
     task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
     threads: Vec<JoinHandle<()>>,
+    task_count: Arc<AtomicUsize>,
 }
 
 impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static> ThreadPool<Q, T> {
@@ -304,24 +300,25 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
         assert!(num_threads >= 1);
         let task_pool = Arc::new((Mutex::new(TaskPool::new(queue)), Condvar::new()));
         let mut threads = Vec::with_capacity(num_threads);
+        let task_count = Arc::new(AtomicUsize::new(0));
         // Threadpool threads
         for _ in 0..num_threads {
-            let thread = {
-                let mut builder = Builder::new();
-                builder = builder.name(name.clone());
-                let tasks = task_pool.clone();
-                builder.spawn(move || {
-                        let mut worker = Worker::new(tasks);
-                        worker.run();
-                    })
-                    .unwrap()
-            };
+            let mut builder = Builder::new();
+            builder = builder.name(name.clone());
+            let tasks = task_pool.clone();
+            let task_num = task_count.clone();
+            let thread = builder.spawn(move || {
+                    let mut worker = Worker::new(tasks, task_num);
+                    worker.run();
+                })
+                .unwrap();
             threads.push(thread);
         }
 
         ThreadPool {
             task_pool: task_pool,
             threads: threads,
+            task_count: task_count,
         }
     }
 
@@ -329,16 +326,16 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
     pub fn execute<F>(&mut self, group_id: T, job: F)
         where F: FnOnce() + Send + 'static
     {
+        self.task_count.fetch_add(1, AOrdering::SeqCst);
         let &(ref lock, ref cvar) = &*self.task_pool;
         let mut meta = lock.lock().unwrap();
         meta.push_task(group_id, job);
         cvar.notify_one();
     }
 
-    pub fn get_task_num(&self) -> usize {
-        let &(ref lock, _) = &*self.task_pool;
-        let meta = lock.lock().unwrap();
-        meta.get_task_num()
+    #[inline]
+    pub fn get_task_count(&self) -> usize {
+        self.task_count.load(AOrdering::SeqCst)
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
@@ -348,10 +345,15 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
             tasks.stop();
             cvar.notify_all();
         }
+        let mut err_msg = String::new();
         while let Some(t) = self.threads.pop() {
             if let Err(e) = t.join() {
-                return Err(format!("{:?}", e));
+                err_msg.push_str(format!("failed to join thread with err :{:?}", e).as_ref());
             }
+        }
+
+        if !err_msg.is_empty() {
+            return Err(err_msg);
         }
         Ok(())
     }
@@ -360,33 +362,40 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
 // each thread has a worker.
 struct Worker<Q, T> {
     task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
+    task_count: Arc<AtomicUsize>,
 }
 
 impl<Q, T> Worker<Q, T>
     where Q: ScheduleQueue<T>
 {
-    fn new(task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>) -> Worker<Q, T> {
-        Worker { task_pool: task_pool }
+    fn new(task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
+           task_count: Arc<AtomicUsize>)
+           -> Worker<Q, T> {
+        Worker {
+            task_pool: task_pool,
+            task_count: task_count,
+        }
     }
 
     // get_next_task,return (None,true) when task_pool is stopped.
     #[inline]
-    fn get_next_task(&self) -> (Option<Task<T>>, bool) {
+    fn get_next_task(&self) -> Option<Task<T>> {
         // try to receive notification.
         let &(ref lock, ref cvar) = &*self.task_pool;
         let mut task_pool = lock.lock().unwrap();
-        if task_pool.is_stopped() {
-            return (None, true);
+        loop {
+            if task_pool.is_stopped() {
+                return None;
+            }
+            if let Some(task) = task_pool.pop_task() {
+                // to reduce lock's time.
+                task_pool.on_task_started(&task.group_id);
+                return Some(task);
+            }
+            // wait new task
+            task_pool = cvar.wait(task_pool).unwrap();
         }
-        if let Some(task) = task_pool.pop_task() {
-            return (Some(task), false);
-        }
-        // wait new task
-        task_pool = cvar.wait(task_pool).unwrap();
-        if task_pool.is_stopped() {
-            return (None, true);
-        }
-        (task_pool.pop_task(), false)
+
     }
 
     fn on_task_finished(&self, group_id: &T) {
@@ -398,18 +407,13 @@ impl<Q, T> Worker<Q, T>
     fn run(&mut self) {
         // start the worker.
         // loop breaks when receive stop message.
-        loop {
+        while let Some(task) = self.get_next_task() {
             // handle task
             // since tikv would be down when any panic happens,
             // we do't need to process panic case here.
-            let (task, is_stopped) = self.get_next_task();
-            if is_stopped {
-                break;
-            }
-            if let Some(task) = task {
-                task.task.call_box(());
-                self.on_task_finished(&task.group_id)
-            }
+            task.task.call_box(());
+            self.on_task_finished(&task.group_id);
+            self.task_count.fetch_sub(1, AOrdering::SeqCst);
         }
     }
 }
@@ -435,6 +439,7 @@ mod test {
         task_pool.execute(group_with_big_task, move || {
             sleep(sleep_duration * 10);
         });
+        assert_eq!(task_pool.get_task_count(), 1);
         // make sure the big task is running.
         sleep(sleep_duration / 4);
 
@@ -569,37 +574,45 @@ mod test {
         // queue:g1, g1, g1, g1, g2, g2, g3, g3
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
+        queue.on_task_started(&group1);
         // queue: g1, g1, g1, g2, g2, g3, g3; running: g1
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
+        queue.on_task_started(&group1);
         // queue: g1, g1, g2, g2, g3, g3; running: g1, g1
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group2);
+        queue.on_task_started(&group2);
         // queue: g1, g1, g2, g3, g3; running: g1, g1, g2
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group2);
+        queue.on_task_started(&group2);
         // queue: g1, g1, g3, g3 ; running: g1, g1, g2, g2
         // finished one g2
         queue.on_task_finished(&group2);
         // queue: g1, g1, g3, g3; running: g1, g1, g2
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group3);
+        queue.on_task_started(&group3);
         // queue: g1, g1, g3; running: g1, g1, g2, g3
         // finished g1
         queue.on_task_finished(&group1);
         // queue: g1, g1, g3; running: g1, g2, g3
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
+        queue.on_task_started(&group1);
         // queue: g1, g3; running: g1, g1, g2, g3
         // finished g2
         queue.on_task_finished(&group2);
         // queue: g1; running: g1, g1, g3, g3
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group3);
+        queue.on_task_started(&group3);
         // finished g3
         queue.on_task_finished(&group3);
         // queue: g1; running: g1, g1, g3
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
+        queue.on_task_started(&group1);
     }
 }
