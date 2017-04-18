@@ -158,7 +158,8 @@ mod tests {
     use kvproto::pdpb;
     use kvproto::metapb;
     use pd::{PdClient, Result, PdFuture};
-    use util::{self, HashMap};
+    use util;
+    use util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

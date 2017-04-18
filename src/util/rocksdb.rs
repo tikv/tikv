@@ -205,7 +205,7 @@ impl SliceTransform for FixedPrefixSliceTransform {
 mod tests {
     use rocksdb::{DB, Options};
     use tempdir::TempDir;
-    use util::HashMap;
+    use util::collections::HashMap;
     use super::check_and_open;
 
     #[test]

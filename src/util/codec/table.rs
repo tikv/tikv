@@ -333,7 +333,7 @@ mod test {
     use util::codec::mysql::types;
     use util::codec::datum::{self, Datum, DatumDecoder};
     use util::codec::number::NumberEncoder;
-    use util::collections::{HashMap, HashSet, BuildHasherDefault};
+    use util::collections::{HashMap, HashSet};
 
     use super::*;
 
@@ -460,7 +460,7 @@ mod test {
 
         let bs = encode_row(vec![], &[]).unwrap();
         assert_ne!(bs.len(), 0);
-        assert!(bs.as_slice().decode_row(&Default::default(), &cols).unwrap().len() == 0);
+        assert!(bs.as_slice().decode_row(&Default::default(), &cols).unwrap().is_empty());
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert_eq!(datums.len(), 0);
     }
@@ -488,9 +488,7 @@ mod test {
         assert!(!bs.is_empty());
 
         let r = decode_index_key(&Default::default(), &bs, &col_types).unwrap();
-        assert_eq!(col_values.len(), r.len());
-        assert!(col_values.iter()
-            .all(|(key, value)| r.get(key).map_or(false, |v| *value == *v)));
+        assert_eq!(col_values, r);
 
         let mut res: (HashMap<_, _>, _) = cut_idx_key_as_owned(&bs, &col_ids);
         assert_eq!(col_encoded, res.0);
@@ -504,20 +502,14 @@ mod test {
         };
         col_ids.remove(2);
         res = cut_idx_key_as_owned(&bs, &col_ids);
-
-        assert_eq!(col_encoded.len(), res.0.len());
-        assert!(col_encoded.iter()
-            .all(|(key, value)| res.0.get(key).map_or(false, |v| *value == *v)));
-
-        assert_eq!(handle.len(), res.1.len());
-        assert!(handle.iter()
-            .all(|(key, value)| res.1.get(key).map_or(false, |v| *value == *v)));
+        assert_eq!(col_encoded, res.0);
+        assert_eq!(res.1, handle);
 
         let bs = encode_index_seek_key(1, 1, &[]);
         assert!(!bs.is_empty());
         assert!(decode_index_key(&Default::default(), &bs, &[]).unwrap().is_empty());
         res = cut_idx_key_as_owned(&bs, &[]);
-        assert_eq!(res.0.len(), 0);
+        assert!(res.0.is_empty());
         assert!(res.1.is_none());
     }
 }

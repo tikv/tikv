@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::cmp;
+use std::collections::hash_map::RandomState;
 
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
@@ -37,7 +38,7 @@ use rand;
 
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
-use tikv::util::collections::{HashMap as RaftHashMap, BuildHasherDefault};
+use tikv::util::collections::HashMap as RaftHashMap;
 
 pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
     let mut s = format!("committed: {}\n", raft_log.committed);
@@ -180,8 +181,7 @@ impl Interface {
     fn initial(&mut self, id: u64, ids: &[u64]) {
         if self.raft.is_some() {
             self.id = id;
-            self.prs = RaftHashMap::with_capacity_and_hasher(ids.len(),
-                                                             BuildHasherDefault::default());
+            self.prs = RaftHashMap::with_capacity_and_hasher(ids.len(), RandomState::new());
             for id in ids {
                 self.prs.insert(*id, Progress { ..Default::default() });
             }
