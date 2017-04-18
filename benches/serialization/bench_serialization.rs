@@ -46,10 +46,20 @@ fn decode(data: &[u8]) {
     protobuf::parse_from_bytes::<RaftCmdRequest>(entry.get_data()).unwrap();
 }
 
+fn gen_rand_str(len: usize) -> Vec<u8> {
+    let mut bstr = Vec::new();
+    for _ in 0..len {
+        bstr.push(rand::random::<u8>());
+    }
+    bstr
+}
+
 #[bench]
 fn bench_encode_one(b: &mut Bencher) {
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    map.insert(b"6ba952020fbc91bad64be1ea0650bf", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    let key = gen_rand_str(30);
+    let value = gen_rand_str(256);
+    map.insert(key.as_slice(), value.as_slice());
     let reqs = generate_requests(&map);
     b.iter(|| {
         encode(reqs.as_slice());
@@ -59,7 +69,9 @@ fn bench_encode_one(b: &mut Bencher) {
 #[bench]
 fn bench_decode_one(b: &mut Bencher) {
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    map.insert(b"6ba952020fbc91bad64be1ea0650bf", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    let key = gen_rand_str(30);
+    let value = gen_rand_str(256);
+    map.insert(key.as_slice(), value.as_slice());
     let reqs = generate_requests(&map);
     let data = encode(&reqs);
     b.iter(|| {
@@ -70,8 +82,11 @@ fn bench_decode_one(b: &mut Bencher) {
 #[bench]
 fn bench_encode_two(b: &mut Bencher) {
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    map.insert(b"7fd7b5b7fc628b3cd19c56daf84dbe", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
-    map.insert(b"6ba952020fbc91bad64be1ea0650bf", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    let key = gen_rand_str(30);
+    let value_for_lock = gen_rand_str(10);
+    let value_for_data = gen_rand_str(256);
+    map.insert(key.as_slice(), value_for_lock.as_slice());
+    map.insert(key.as_slice(), value_for_data.as_slice());
     let reqs = generate_requests(&map);
     b.iter(|| {
         encode(reqs.as_slice());
@@ -81,8 +96,11 @@ fn bench_encode_two(b: &mut Bencher) {
 #[bench]
 fn bench_decode_two(b: &mut Bencher) {
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    map.insert(b"7fd7b5b7fc628b3cd19c56daf84dbe", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
-    map.insert(b"6ba952020fbc91bad64be1ea0650bf", b"6ba952020fbc91bad64be1ea0650bfba52e6aab4049b9e4e8067b998e4581d026b0bc6d1113ab9f507aaca3a0724000e735a558d4c23b600512346d9024aa9a345e92aa1926517c4d9b16bd83e74c10d6ba952020fbc91bad64be1ea0650bfba52e6aab4024aa9a345e92aa1926517c4d9b16bd83e74c10d7fd7b5b7fc628b3c");
+    let key = gen_rand_str(30);
+    let value_for_lock = gen_rand_str(10);
+    let value_for_data = gen_rand_str(256);
+    map.insert(key.as_slice(), value_for_lock.as_slice());
+    map.insert(key.as_slice(), value_for_data.as_slice());
     let reqs = generate_requests(&map);
     let data = encode(&reqs);
     b.iter(|| {
