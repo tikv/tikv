@@ -12,8 +12,7 @@
 // limitations under the License.
 
 use std::usize;
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::{Arc, Mutex, Condvar};
 use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
@@ -62,7 +61,6 @@ impl<T> PartialOrd for Task<T> {
     }
 }
 
-
 pub trait ScheduleQueue<T> {
     fn pop(&mut self) -> Option<Task<T>>;
     fn push(&mut self, task: Task<T>);
@@ -70,31 +68,30 @@ pub trait ScheduleQueue<T> {
 }
 
 // `BigGroupThrottledQueue` tries to throttle group's concurrency to
-//  `group_concurrency_on_busy` when is busy.
-// When one worker asks a task to run, it schedule on the following way:
-// 1. Choose the groups with it's running number less than
-//    `group_concurrency_on_busy`.
-// 2. If more than one groups meet the condition 1, running the one who
+//  `group_concurrency_on_busy` when it's busy.
+// When one worker asks a task to run, it schedules in the following way:
+// 1. Find out which group has a running number that is smaller than
+//    that of `group_concurrency_on_busy`.
+// 2. If more than one group meets the first point, run the one who
 //    comes first.
-// If no group's running number is smaller than `group_concurrency_on_busy`,
-// choose according to the following rules:
-// 1. Choose the groups with least running tasks.
-// 2. If more than one groups has the least running tasks,
-//    choose the one whose task comes first(with the minum task's ID)
+// If no group meets the first point, choose according to the following rules:
+// 1. Select the groups with least running tasks.
+// 2. If more than one group meets the first point,choose the one
+//     whose task comes first(with the minimum task's ID)
 pub struct BigGroupThrottledQueue<T> {
     // tasks in pending. tasks in `pending_tasks` have higher priority than
     // tasks in waiting_queue.
     pending_tasks: BinaryHeap<Task<T>>,
     // group_id => tasks array. If `group_concurrency[group_id]` is bigger than
-    // `group_concurrency_on_busy`(which means there may more than
-    // `group_concurrency_on_busy` tasks of the group are running), the rest
-    // of the group's tasks would be pushed into `waiting_queue[group_id]`
+    // `group_concurrency_on_busy`(which means the number of on-going tasks is
+    // more than `group_concurrency_on_busy`), the rest of the group's tasks
+    // would be pushed into `waiting_queue[group_id]`
     waiting_queue: HashMap<T, VecDeque<Task<T>>>,
     // group_id => running_num+pending num. It means there may
     // `group_concurrency[group_id]` tasks of the group are running.
     group_concurrency: HashMap<T, usize>,
-    // max num of threads each group can run on when pool is busy.
-    // each value in group_concurrency shouldn't bigger than this value.
+    // The max number of threads that each group can run when the pool is busy.
+    // Each value in `group_concurrency` shouldn't be bigger than this value.
     group_concurrency_on_busy: usize,
 }
 
@@ -128,7 +125,7 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
         }
         let group_id = group_id.unwrap();
         let task = self.pop_from_waiting_queue_with_group_id(&group_id);
-        // update group_concurrency since current task is going to run.
+        // update group_concurrency since the current task is going to run.
         let mut count = self.group_concurrency.entry(group_id).or_insert(0);
         *count += 1;
         Some(task)
@@ -141,21 +138,21 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
             let task = waiting_tasks.pop_front().unwrap();
             (waiting_tasks.is_empty(), task)
         };
-        // if waiting tasks for group is empty, remove from waiting_tasks.
+        // If waiting tasks for current group is empty, remove it from `waiting_queue`.
         if waiting_tasks_is_empty {
             self.waiting_queue.remove(group_id);
         }
         task
     }
 
-    // pop_group_id_from_waiting_queue returns next task's group_id.
+    // pop_group_id_from_waiting_queue returns the next task's group_id.
     // we choose the group according to the following rules:
-    // 1. Choose the groups with least running tasks.
-    // 2. If more than one group has the least running tasks,
+    // 1. Select the groups with the least running tasks.
+    // 2. If more than one group meets the first point,
     //    choose the one whose task comes first(with the minimum task's ID)
     #[inline]
     fn pop_group_id_from_waiting_queue(&mut self) -> Option<T> {
-        // (group_id,count,task_id) the temporary best group's info with it's group_id,
+        // (group_id,count,task_id) the best current group's info with it's group_id,
         // running tasks count, front task's id in waiting queue.
         let mut next_group = None;
         for (group_id, tasks) in &self.waiting_queue {
@@ -236,19 +233,19 @@ struct TaskPool<Q, T> {
     total_running_tasks: usize,
     total_waiting_tasks: usize,
     tasks: Q,
-    job_sender: Sender<bool>,
     marker: PhantomData<T>,
+    stop: bool,
 }
 
 impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
-    fn new(queue: Q, job_sender: Sender<bool>) -> TaskPool<Q, T> {
+    fn new(queue: Q) -> TaskPool<Q, T> {
         TaskPool {
             next_task_id: 0,
             total_running_tasks: 0,
             total_waiting_tasks: 0,
-            job_sender: job_sender,
             tasks: queue,
             marker: PhantomData,
+            stop: false,
         }
     }
 
@@ -260,7 +257,6 @@ impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
         self.total_waiting_tasks += 1;
         self.next_task_id += 1;
         self.tasks.push(task);
-        self.job_sender.send(true).unwrap();
     }
 
     fn get_task_num(&self) -> usize {
@@ -285,42 +281,37 @@ impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
         next_task
     }
 
-    fn stop_tasks(&self, num: usize) -> Result<(), String> {
-        for _ in 0..num {
-            if let Err(e) = self.job_sender.send(false) {
-                return Err(format!("{:?}", e));
-            }
-        }
-        Ok(())
+    fn stop(&mut self) {
+        self.stop = true;
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stop
     }
 }
 
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it get a task from the waiting queue
-/// according the schedule queue provided in initialization.
+/// according to the schedule queue provided in initialization.
 pub struct ThreadPool<Q, T> {
-    meta: Arc<Mutex<TaskPool<Q, T>>>,
+    task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
     threads: Vec<JoinHandle<()>>,
 }
 
 impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static> ThreadPool<Q, T> {
     pub fn new(name: String, num_threads: usize, queue: Q) -> ThreadPool<Q, T> {
         assert!(num_threads >= 1);
-        let (tx, rx) = channel();
-        let rx = Arc::new(Mutex::new(rx));
-        let meta = Arc::new(Mutex::new(TaskPool::new(queue, tx)));
-
+        let task_pool = Arc::new((Mutex::new(TaskPool::new(queue)), Condvar::new()));
         let mut threads = Vec::with_capacity(num_threads);
         // Threadpool threads
         for _ in 0..num_threads {
             let thread = {
                 let mut builder = Builder::new();
                 builder = builder.name(name.clone());
-                let receiver = rx.clone();
-                let tasks = meta.clone();
+                let tasks = task_pool.clone();
                 builder.spawn(move || {
-                        let mut worker = Worker::new(receiver, tasks);
+                        let mut worker = Worker::new(tasks);
                         worker.run();
                     })
                     .unwrap()
@@ -329,7 +320,7 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
         }
 
         ThreadPool {
-            meta: meta,
+            task_pool: task_pool,
             threads: threads,
         }
     }
@@ -338,22 +329,24 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
     pub fn execute<F>(&mut self, group_id: T, job: F)
         where F: FnOnce() + Send + 'static
     {
-        let lock = self.meta.clone();
+        let &(ref lock, ref cvar) = &*self.task_pool;
         let mut meta = lock.lock().unwrap();
         meta.push_task(group_id, job);
+        cvar.notify_one();
     }
 
     pub fn get_task_num(&self) -> usize {
-        let lock = self.meta.clone();
+        let &(ref lock, _) = &*self.task_pool;
         let meta = lock.lock().unwrap();
         meta.get_task_num()
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
         {
-            let lock = self.meta.clone();
-            let tasks = lock.lock().unwrap();
-            tasks.stop_tasks(self.threads.len()).unwrap();
+            let &(ref lock, ref cvar) = &*self.task_pool;
+            let mut tasks = lock.lock().unwrap();
+            tasks.stop();
+            cvar.notify_all();
         }
         while let Some(t) = self.threads.pop() {
             if let Err(e) = t.join() {
@@ -366,51 +359,56 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
 
 // each thread has a worker.
 struct Worker<Q, T> {
-    job_rever: Arc<Mutex<Receiver<bool>>>,
-    pool_meta: Arc<Mutex<TaskPool<Q, T>>>,
+    task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
 }
 
 impl<Q, T> Worker<Q, T>
-    where Q: ScheduleQueue<T>,
-          T: Clone
+    where Q: ScheduleQueue<T>
 {
-    fn new(receiver: Arc<Mutex<Receiver<bool>>>,
-           pool_meta: Arc<Mutex<TaskPool<Q, T>>>)
-           -> Worker<Q, T> {
-        Worker {
-            job_rever: receiver,
-            pool_meta: pool_meta,
-        }
+    fn new(task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>) -> Worker<Q, T> {
+        Worker { task_pool: task_pool }
     }
 
-    // wait to receive info from job_receiver,
-    // return false when get stop msg
+    // get_next_task,return (None,true) when task_pool is stopped.
     #[inline]
-    fn wait(&self) -> bool {
+    fn get_next_task(&self) -> (Option<Task<T>>, bool) {
         // try to receive notification.
-        let job_receiver = self.job_rever.lock().unwrap();
-        job_receiver.recv().unwrap()
+        let &(ref lock, ref cvar) = &*self.task_pool;
+        let mut task_pool = lock.lock().unwrap();
+        if task_pool.is_stopped() {
+            return (None, true);
+        }
+        if let Some(task) = task_pool.pop_task() {
+            return (Some(task), false);
+        }
+        // wait new task
+        task_pool = cvar.wait(task_pool).unwrap();
+        if task_pool.is_stopped() {
+            return (None, true);
+        }
+        (task_pool.pop_task(), false)
     }
 
-    #[inline]
-    fn get_next_task(&mut self) -> Option<Task<T>> {
-        // try to get task
-        let mut meta = self.pool_meta.lock().unwrap();
-        meta.pop_task()
+    fn on_task_finished(&self, group_id: &T) {
+        let &(ref lock, _) = &*self.task_pool;
+        let mut task_pool = lock.lock().unwrap();
+        task_pool.on_task_finished(group_id);
     }
 
     fn run(&mut self) {
         // start the worker.
-        // loop breaks on receiving stop message.
-        while self.wait() {
+        // loop breaks when receive stop message.
+        loop {
             // handle task
-            // since tikv would be down on any panic happens,
-            // we needn't process panic case here.
-            if let Some(task) = self.get_next_task() {
-                // let group_id = task.group_id.clone();
+            // since tikv would be down when any panic happens,
+            // we do't need to process panic case here.
+            let (task, is_stopped) = self.get_next_task();
+            if is_stopped {
+                break;
+            }
+            if let Some(task) = task {
                 task.task.call_box(());
-                let mut meta = self.pool_meta.lock().unwrap();
-                meta.on_task_finished(&task.group_id);
+                self.on_task_finished(&task.group_id)
             }
         }
     }
@@ -457,11 +455,11 @@ mod test {
             });
         }
 
-        // since there exist a long task of group_with_big_task is runnging,
-        // the other thread would always run other group's tasks in sequence.
-        for id in 0..10 {
+        // Since a long task of `group_with_big_task` is running,
+        // the other threads shouldn't running group_with_big_task's task.
+        for _ in 0..10 {
             let group_id = jrx.recv_timeout(recv_timeout_duration).unwrap();
-            assert_eq!(group_id, id);
+            assert_ne!(group_id, group_with_big_task);
         }
 
         for _ in 0..10 {
@@ -487,9 +485,7 @@ mod test {
             });
         }
 
-        // make sure each thread free on different time.
-
-        // push 4 txn1 into pool,each need sleep_duration.
+        // push 4 txn1 into pool and each needs `sleep_duration`.
         for _ in 0..4 {
             let tx = tx.clone();
             task_pool.execute(group1, move || {
@@ -508,7 +504,7 @@ mod test {
             });
         }
 
-        // push 2 txn3 into pool, each need 2*sleep_duration.
+        // push 2 txn3 into pool and each needs `2*sleep_duration`.
         let group3 = 1003;
         for _ in 0..2 {
             let tx = tx.clone();
@@ -518,12 +514,12 @@ mod test {
             });
         }
 
-        // txn11,txn12,txn13,txn14,txn21,txn22,txn31,txn32
-        // first 4 task during [0,sleep_duration] should be
-        // {txn11,txn12,txn21,txn22}.Since txn1 finished before than txn2,
-        // 4 task during [sleep_duration,2*sleep_duration] should be
-        // {txn13,txn14,txn21,txn22}. During [2*sleep_duration,3*sleep_duration],
-        // the running task should be {txn31,txn32}
+        // txn11, txn12, txn13, txn14, txn21, txn22, txn31, txn32
+        // first 4 tasks during [0,sleep_duration] should be
+        // {txn11, txn12, txn21, txn22 }. Since txn1 is finished before txn2,
+        // 4 tasks during [sleep_duration,2*sleep_duration] should be
+        // {txn13, txn14, txn21, txn22 }. During [2*sleep_duration,3*sleep_duration],
+        // the running task should be {txn31, txn32}
         assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
         assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
         let mut group2_num = 0;
@@ -547,7 +543,7 @@ mod test {
     fn test_fair_group_queue() {
         let max_pending_task_each_group = 2;
         let mut queue = BigGroupThrottledQueue::new(max_pending_task_each_group);
-        // push  4 group1 into queue
+        // push 4 group1 into queue
         let group1 = 1001;
         let mut id = 0;
         for _ in 0..4 {
@@ -570,42 +566,40 @@ mod test {
             id += 1;
             queue.push(task);
         }
-        // queue:g1,g1,g1,g1,g2,g2,g3,g3
+        // queue:g1, g1, g1, g1, g2, g2, g3, g3
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
-        // queue:g1,g1,g1,g2,g2,g3,g3; running:g1
+        // queue: g1, g1, g1, g2, g2, g3, g3; running: g1
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
-        // queue:g1,g1,g2,g2,g3,g3; running:g1,g1
+        // queue: g1, g1, g2, g2, g3, g3; running: g1, g1
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group2);
-        // queue:g1,g1,g2,g3,g3; running:g1,g1,g2'
+        // queue: g1, g1, g2, g3, g3; running: g1, g1, g2
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group2);
-        // queue:g1,g1,g3,g3; running:g1,g1,g2,g2
+        // queue: g1, g1, g3, g3 ; running: g1, g1, g2, g2
         // finished one g2
         queue.on_task_finished(&group2);
-        // queue:g1,g1,g3,g3; running:g1,g1,g2
+        // queue: g1, g1, g3, g3; running: g1, g1, g2
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group3);
-        // queue:g1,g1,g3; running:g1,g1,g2,g3
+        // queue: g1, g1, g3; running: g1, g1, g2, g3
         // finished g1
         queue.on_task_finished(&group1);
-        // queue:g1,g1,g3; running:g1,g2,g3
+        // queue: g1, g1, g3; running: g1, g2, g3
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
-        // queue:g1,g3; running:g1,g1,g2,g3
+        // queue: g1, g3; running: g1, g1, g2, g3
         // finished g2
         queue.on_task_finished(&group2);
-        // queue:g1; running:g1,g1,g3,g3
+        // queue: g1; running: g1, g1, g3, g3
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group3);
         // finished g3
         queue.on_task_finished(&group3);
-        // queue:g1; running:g1,g1,g3
+        // queue: g1; running: g1, g1, g3
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
     }
-
-
 }
