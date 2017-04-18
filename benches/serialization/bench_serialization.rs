@@ -16,8 +16,17 @@ extern crate protobuf;
 use std::string::String;
 use std::collections::HashMap;
 use test::Bencher;
+use rand;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_cmdpb::{RaftCmdRequest, Request, CmdType};
+
+fn gen_rand_str(len: usize) -> Vec<u8> {
+    let mut bstr = Vec::new();
+    for _ in 0..len {
+        bstr.push(rand::random::<u8>());
+    }
+    bstr
+}
 
 fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
     let mut reqs = vec![];
@@ -46,19 +55,11 @@ fn decode(data: &[u8]) {
     protobuf::parse_from_bytes::<RaftCmdRequest>(entry.get_data()).unwrap();
 }
 
-fn gen_rand_str(len: usize) -> Vec<u8> {
-    let mut bstr = Vec::new();
-    for _ in 0..len {
-        bstr.push(rand::random::<u8>());
-    }
-    bstr
-}
-
 #[bench]
 fn bench_encode_one(b: &mut Bencher) {
-    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
     let key = gen_rand_str(30);
     let value = gen_rand_str(256);
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
     map.insert(key.as_slice(), value.as_slice());
     let reqs = generate_requests(&map);
     b.iter(|| {
@@ -68,9 +69,9 @@ fn bench_encode_one(b: &mut Bencher) {
 
 #[bench]
 fn bench_decode_one(b: &mut Bencher) {
-    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
     let key = gen_rand_str(30);
     let value = gen_rand_str(256);
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
     map.insert(key.as_slice(), value.as_slice());
     let reqs = generate_requests(&map);
     let data = encode(&reqs);
@@ -81,12 +82,13 @@ fn bench_decode_one(b: &mut Bencher) {
 
 #[bench]
 fn bench_encode_two(b: &mut Bencher) {
-    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    let key = gen_rand_str(30);
+    let key_for_lock = gen_rand_str(30);
     let value_for_lock = gen_rand_str(10);
+    let key_for_data = gen_rand_str(30);
     let value_for_data = gen_rand_str(256);
-    map.insert(key.as_slice(), value_for_lock.as_slice());
-    map.insert(key.as_slice(), value_for_data.as_slice());
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    map.insert(key_for_lock.as_slice(), value_for_lock.as_slice());
+    map.insert(key_for_data.as_slice(), value_for_data.as_slice());
     let reqs = generate_requests(&map);
     b.iter(|| {
         encode(reqs.as_slice());
@@ -95,15 +97,17 @@ fn bench_encode_two(b: &mut Bencher) {
 
 #[bench]
 fn bench_decode_two(b: &mut Bencher) {
-    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    let key = gen_rand_str(30);
+    let key_for_lock = gen_rand_str(30);
     let value_for_lock = gen_rand_str(10);
+    let key_for_data = gen_rand_str(30);
     let value_for_data = gen_rand_str(256);
-    map.insert(key.as_slice(), value_for_lock.as_slice());
-    map.insert(key.as_slice(), value_for_data.as_slice());
+    let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
+    map.insert(key_for_lock.as_slice(), value_for_lock.as_slice());
+    map.insert(key_for_data.as_slice(), value_for_data.as_slice());
     let reqs = generate_requests(&map);
     let data = encode(&reqs);
     b.iter(|| {
         decode(data.as_slice());
     });
 }
+
