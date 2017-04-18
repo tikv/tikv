@@ -5,7 +5,7 @@ use test::Bencher;
 
 use tikv::storage::engine::{self, Engine, Statistics, ScanMode};
 use tikv::storage::mvcc::{MvccReader, MvccTxn};
-use tikv::storage::txn::{SnapshotStore, StoreScanner};
+use tikv::storage::txn::SnapshotStore;
 use tikv::storage::{make_key, Options, ALL_CFS, Mutation};
 use kvproto::kvrpcpb::Context;
 
@@ -115,7 +115,7 @@ fn bench_mvcc_reverse_scan_1000_keys(b: &mut Bencher, key_only: bool) {
     let mut snap = SnapshotStore::new(snapshot.as_ref(), u64::MAX);
 
     b.iter(|| {
-        let mut scanner = snap.scanner(ScanMode::Backward, key_only, None, &mut statistics);
+        let mut scanner = snap.scanner(ScanMode::Backward, key_only, None, &mut statistics).unwrap();
         scanner.reverse_scan(make_key(b"key_b"), 1000);
     });
 }
@@ -141,7 +141,7 @@ fn bench_mvcc_scan_1000_keys(b: &mut Bencher, key_only: bool) {
     let mut snap = SnapshotStore::new(snapshot.as_ref(), u64::MAX);
 
     b.iter(|| {
-        let mut scanner = snap.scanner(ScanMode::Forward, key_only, None, &mut statistics);
+        let mut scanner = snap.scanner(ScanMode::Forward, key_only, None, &mut statistics).unwrap();
         scanner.scan(make_key(b"key_a"), 1000);
     });
 }
@@ -161,17 +161,17 @@ fn bench_txn_prewrite(b: &mut Bencher) {
     let path = TempDir::new("bench_mvcc_txn_prewrite").unwrap();
     let engine = engine::new_local_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
 
-    let mut statistics = Statistics::default();
     let ctx = Context::new();
     let snapshot = engine.snapshot(&ctx).unwrap();
     let mut ts: u64 = 1;
     let v = b"this is some content of value";
 
     b.iter(|| {
+        let mut statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
-        let key = make_key(format!("key_a_{}", ts).as_bytes());
-        txn.prewrite(Mutation::Put((key.clone(), v)),
-                     key,
+        let key = format!("key_a_{}", ts);
+        txn.prewrite(Mutation::Put((make_key(key.clone().as_bytes()), v.to_vec())),
+                     key.as_bytes(),
                      &Options::default())
         .unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
@@ -184,7 +184,6 @@ fn bench_txn_prewrite_commit(b: &mut Bencher) {
     let path = TempDir::new("bench_mvcc_txn_prewrite_commit").unwrap();
     let engine = engine::new_local_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
 
-    let mut statistics = Statistics::default();
     let ctx = Context::new();
     let snapshot = engine.snapshot(&ctx).unwrap();
     let mut ts: u64 = 1;
@@ -192,18 +191,20 @@ fn bench_txn_prewrite_commit(b: &mut Bencher) {
 
     b.iter(|| {
         // prewrite
+        let mut statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
-        let key = make_key(format!("key_a_{}", ts).as_bytes());
-        txn.prewrite(Mutation::Put((key.clone(), v.to_vec())),
+        let key = format!("key_a_{}", ts);
+        txn.prewrite(Mutation::Put((make_key(key.clone().as_bytes()), v.to_vec())),
                      key.clone().as_bytes(),
                      &Options::default())
         .unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
 
         // commit
+        let mut statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts , None);
         ts = ts + 1;
-        txn.commit(&key, ts).unwrap();
+        txn.commit(&make_key(key.as_bytes()), ts).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
 
         ts = ts + 1;
