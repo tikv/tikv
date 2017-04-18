@@ -28,6 +28,8 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 use tikv::raftstore::store::snap::v1::{Snap as SnapV1};
 use tikv::raftstore::store::snap::v2::{Snap as SnapV2};
 
+const MB: usize = 1024 * 1024;
+
 fn init_db(path: &str, target_size: usize) -> (TempDir, Arc<DB>) {
     let path = TempDir::new(path).unwrap();
     let db = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
@@ -60,7 +62,7 @@ fn gen_region(store_id: u64, peer_id: u64, region_id: u64, start_key: &[u8], end
 
 #[bench]
 fn bench_gen_snap_v1(b: &mut Bencher) {
-    let (path, db) = init_db("bench_gen_snapshot", 1 * 1024 * 1024);
+    let (path, db) = init_db("bench_gen_snapshot", 10 * MB);
     let snapshot = DbSnapshot::new(db.clone());
 
     b.iter(|| {
@@ -79,7 +81,7 @@ fn bench_gen_snap_v1(b: &mut Bencher) {
 
 #[bench]
 fn bench_gen_snap_v2(b: &mut Bencher) {
-    let (path, db) = init_db("bench_gen_snapshot", 1 * 1024 * 1024);
+    let (path, db) = init_db("bench_gen_snapshot", 10 * MB);
     let snapshot = DbSnapshot::new(db.clone());
 
     b.iter(|| {
@@ -98,7 +100,7 @@ fn bench_gen_snap_v2(b: &mut Bencher) {
 
 #[bench]
 fn bench_validate_snap_v1(b: &mut Bencher) {
-    let (path, db) = init_db("bench_validate_snapshot", 1 * 1024 * 1024);
+    let (path, db) = init_db("bench_validate_snapshot", 10 * MB);
     let snapshot = DbSnapshot::new(db.clone());
     let key = SnapKey::new(1, 1, 1);
     let size_track = Arc::new(RwLock::new(0));
@@ -118,7 +120,7 @@ fn bench_validate_snap_v1(b: &mut Bencher) {
 
 #[bench]
 fn bench_validate_snap_v2(b: &mut Bencher) {
-    let (path, db) = init_db("bench_validate_snapshot", 1 * 1024 * 1024);
+    let (path, db) = init_db("bench_validate_snapshot", 10 * MB);
     let snapshot = DbSnapshot::new(db.clone());
     let key = SnapKey::new(1, 1, 1);
     let size_track = Arc::new(RwLock::new(0));
