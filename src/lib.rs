@@ -64,7 +64,12 @@ extern crate regex;
 extern crate grpc;
 extern crate fnv;
 extern crate futures;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+extern crate toml;
 
+pub mod config;
 #[macro_use]
 pub mod util;
 pub mod raft;
