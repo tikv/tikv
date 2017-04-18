@@ -107,14 +107,14 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
 
     // Try push into pending. Return none on success,return Some(task) on failed.
     #[inline]
-    fn try_push_into_pending(&mut self, task: Task<T>) -> Option<Task<T>> {
+    fn try_push_into_pending(&mut self, task: Task<T>) -> Result<(), Task<T>> {
         let count = self.group_concurrency.entry(task.group_id.clone()).or_insert(0);
         if *count >= self.group_concurrency_on_busy {
-            return Some(task);
+            return Err(task);
         }
         *count += 1;
         self.pending_tasks.push(task);
-        None
+        Ok(())
     }
 
     #[inline]
@@ -146,7 +146,7 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
     }
 
     // pop_group_id_from_waiting_queue returns the next task's group_id.
-    // we choose the group according to the following rules:
+    // we choose group according to the following rules:
     // 1. Select the groups with the least running tasks.
     // 2. If more than one group meets the first point,
     //    choose the one whose task comes first(with the minimum task's ID)
@@ -173,7 +173,7 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
             }
         }
         if let Some((group_id, _, _)) = next_group {
-            return Some((*group_id).clone());
+            return Some(group_id.clone());
         }
         // no task in waiting.
         None
@@ -184,10 +184,10 @@ impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T>
     // push one task into queue.
     fn push(&mut self, task: Task<T>) {
         let task = self.try_push_into_pending(task);
-        if task.is_none() {
+        if task.is_ok() {
             return;
         }
-        let task = task.unwrap();
+        let task = task.unwrap_err();
         self.waiting_queue
             .entry(task.group_id.clone())
             .or_insert_with(VecDeque::new)
@@ -224,7 +224,7 @@ impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T>
         // if the number of running tasks for this group is not big enough in pending,
         // get the group's first task from waiting_queue and push it into pending.
         let group_task = self.pop_from_waiting_queue_with_group_id(group_id);
-        assert!(self.try_push_into_pending(group_task).is_none());
+        assert!(self.try_push_into_pending(group_task).is_ok());
     }
 }
 
@@ -494,7 +494,7 @@ mod test {
             });
         }
 
-        // push 2 txn2 into pool,each need 2*sleep_duration.
+        // push 2 txn2 into pool and each needs 2*sleep_duration.
         let group2 = 1002;
         for _ in 0..2 {
             let tx = tx.clone();
