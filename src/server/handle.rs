@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
 use grpc::futures_grpc::{GrpcStreamSend, GrpcFutureSend};
 use grpc::error::GrpcError;
 use mio::Token;
@@ -31,6 +32,9 @@ use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use util::worker::{Worker, Scheduler};
 use util::buf::PipeBuffer;
 use storage::{self, Storage, Key, Options, Mutation};
+use storage::txn::Error as TxnError;
+use storage::mvcc::Error as MvccError;
+use storage::engine::Error as EngineError;
 use super::transport::RaftStoreRouter;
 use super::coprocessor::{RequestTask, EndPointTask, EndPointHost};
 use super::snap::Task as SnapTask;
@@ -468,10 +472,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
             .boxed()
     }
 }
-
-use storage::txn::Error as TxnError;
-use storage::mvcc::Error as MvccError;
-use storage::engine::Error as EngineError;
 
 fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
     use storage::Error;
