@@ -56,7 +56,6 @@ impl RpcClient {
         header
     }
 
-    // For tests
     pub fn get_leader(&self) -> Member {
         self.leader_client.get_leader()
     }
@@ -64,9 +63,10 @@ impl RpcClient {
 
 impl fmt::Debug for RpcClient {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt,
-               "PD gRPC Client connects to cluster {:?}",
-               self.cluster_id)
+        fmt.debug_struct("RpcClient")
+            .field("cluster_id", &self.cluster_id)
+            .field("leader", &self.get_leader())
+            .finish()
     }
 }
 
