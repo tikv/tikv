@@ -22,7 +22,7 @@ use tikv::util::rocksdb::new_engine;
 use tikv::storage::ALL_CFS;
 use tikv::raftstore::store::engine::{Snapshot as DbSnapshot};
 use tikv::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-use tikv::raftstore::store::snap::{SnapKey, SnapshotStatistics, ApplyOptions};
+use tikv::raftstore::store::snap::{SnapKey, SnapshotStatistics, ApplyOptions, Snapshot};
 use kvproto::metapb::{Region, Peer};
 use kvproto::raft_serverpb::RaftSnapshotData;
 use tikv::raftstore::store::snap::v1::{Snap as SnapV1};
@@ -58,19 +58,16 @@ fn gen_region(store_id: u64, peer_id: u64, region_id: u64, start_key: &[u8], end
     region
 }
 
-fn bench_gen_snap(b: &mut Bencher, v1: bool) {
-    let (path, db) = init_db("bench_gen_snapshot", 100 * 1024 * 1024);
+#[bench]
+fn bench_gen_snap_v1(b: &mut Bencher) {
+    let (path, db) = init_db("bench_gen_snapshot", 1 * 1024 * 1024);
     let snapshot = DbSnapshot::new(db.clone());
 
     b.iter(|| {
         let key = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
         let snap_dir = TempDir::new("snap_dir").unwrap();
-        let snap = if v1 {
-            SnapV1::new_for_writing(snap_dir.path(), size_track.clone(), true, &key).unwrap()
-        } else {
-            SnapV2::new_for_building(snap_dir.path(), &key, &snapshot, size_track.clone()).unwrap()
-        };
+        let mut snap = SnapV1::new_for_writing(snap_dir.path(), size_track.clone(), true, &key).unwrap();
         let region = gen_region(1, 1, 1, b"key_a", b"key_b");
 
         let mut snap_data = RaftSnapshotData::new();
@@ -81,27 +78,52 @@ fn bench_gen_snap(b: &mut Bencher, v1: bool) {
 }
 
 #[bench]
-fn bench_gen_snap_v1(b: &mut Bencher) {
-    bench_gen_snap(b, true);
-}
-
-#[bench]
 fn bench_gen_snap_v2(b: &mut Bencher) {
-    bench_gen_snap(b, false);
+    let (path, db) = init_db("bench_gen_snapshot", 1 * 1024 * 1024);
+    let snapshot = DbSnapshot::new(db.clone());
+
+    b.iter(|| {
+        let key = SnapKey::new(1, 1, 1);
+        let size_track = Arc::new(RwLock::new(0));
+        let snap_dir = TempDir::new("snap_dir").unwrap();
+        let mut snap = SnapV2::new_for_building(snap_dir.path(), &key, &snapshot, size_track.clone()).unwrap();
+        let region = gen_region(1, 1, 1, b"key_a", b"key_b");
+
+        let mut snap_data = RaftSnapshotData::new();
+        snap_data.set_region(region.clone());
+        let mut stat = SnapshotStatistics::new();
+        snap.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+    });
 }
 
 #[bench]
-fn bench_validate_snap(b: &mut Bencher, v1: bool) {
-    let (path, db) = init_db("bench_validate_snapshot", 100 * 1024 * 1024);
+fn bench_validate_snap_v1(b: &mut Bencher) {
+    let (path, db) = init_db("bench_validate_snapshot", 1 * 1024 * 1024);
     let snapshot = DbSnapshot::new(db.clone());
     let key = SnapKey::new(1, 1, 1);
     let size_track = Arc::new(RwLock::new(0));
     let snap_dir = TempDir::new("snap_dir").unwrap();
-    let snap = if v1 {
-        SnapV1::new_for_writing(snap_dir.path(), size_track.clone(), true, &key).unwrap()
-    } else {
-        SnapV2::new_for_building(snap_dir.path(), &key, &snapshot, size_track.clone()).unwrap()
-    };
+    let mut snap = SnapV1::new_for_writing(snap_dir.path(), size_track.clone(), true, &key).unwrap();
+    let region = gen_region(1, 1, 1, b"key_a", b"key_b");
+
+    let mut snap_data = RaftSnapshotData::new();
+    snap_data.set_region(region.clone());
+    let mut stat = SnapshotStatistics::new();
+        snap.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+
+    b.iter(|| {
+        snap.get_validation_reader().and_then(|r| r.validate()).unwrap();
+    });
+}
+
+#[bench]
+fn bench_validate_snap_v2(b: &mut Bencher) {
+    let (path, db) = init_db("bench_validate_snapshot", 1 * 1024 * 1024);
+    let snapshot = DbSnapshot::new(db.clone());
+    let key = SnapKey::new(1, 1, 1);
+    let size_track = Arc::new(RwLock::new(0));
+    let snap_dir = TempDir::new("snap_dir").unwrap();
+    let mut snap = SnapV2::new_for_building(snap_dir.path(), &key, &snapshot, size_track.clone()).unwrap();
     let region = gen_region(1, 1, 1, b"key_a", b"key_b");
 
     let mut snap_data = RaftSnapshotData::new();
@@ -110,21 +132,6 @@ fn bench_validate_snap(b: &mut Bencher, v1: bool) {
     snap.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
 
     b.iter(|| {
-        if v1 {
-            snap.get_validation_reader().and_then(|r| r.validate()).unwrap();
-        } else {
-            let mut reader = snap.get_validation_reader().unwrap();
-            reader.validate().unwrap();
-        }
+            snap.validate().unwrap();
     });
-}
-
-#[bench]
-fn bench_validate_snap_v1(b: &mut Bencher) {
-    bench_validate_snap(b, true);
-}
-
-#[bench]
-fn bench_validate_snap_v2(b: &mut Bencher) {
-    bench_validate_snap(b, false);
 }

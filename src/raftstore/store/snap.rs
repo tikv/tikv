@@ -327,7 +327,7 @@ pub mod v1 {
         }
 
         /// Get a validation reader.
-        fn get_validation_reader(&self) -> io::Result<SnapValidationReader> {
+        pub fn get_validation_reader(&self) -> io::Result<SnapValidationReader> {
             SnapValidationReader::open(self.path())
         }
 
