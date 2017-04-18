@@ -1,4 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
+// Copyright 2016 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -682,8 +682,7 @@ impl SelectContextCore {
             for item in sel.get_order_by() {
                 try!(collect_col_in_expr(&mut topn_col_map, select_cols, item.get_expr()))
             }
-            topn_cols = topn_col_map.clone().into_iter().map(|(_, v)| v).collect();
-            topn_col_map.clear();
+            topn_cols = topn_col_map.into_iter().map(|(_, v)| v).collect();
             order_by_cols.extend_from_slice(sel.get_order_by())
         }
 
