@@ -23,6 +23,9 @@ pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_END_POINT_CONCURRENCY: usize = 8;
+const DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO: f64 = 0.25;
+const DEFAULT_END_POINT_TXN_CONCURRENCY: usize =
+    ((DEFAULT_END_POINT_CONCURRENCY as f64) * DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 const DEFAULT_SEND_BUFFER_SIZE: usize = 128 * 1024;
 const DEFAULT_RECV_BUFFER_SIZE: usize = 128 * 1024;
@@ -47,6 +50,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub raft_store: RaftStoreConfig,
     pub end_point_concurrency: usize,
+    pub end_point_txn_concurrency_on_busy: usize,
 }
 
 impl Default for Config {
@@ -61,6 +65,7 @@ impl Default for Config {
             send_buffer_size: DEFAULT_SEND_BUFFER_SIZE,
             recv_buffer_size: DEFAULT_RECV_BUFFER_SIZE,
             end_point_concurrency: DEFAULT_END_POINT_CONCURRENCY,
+            end_point_txn_concurrency_on_busy: DEFAULT_END_POINT_TXN_CONCURRENCY,
             storage: StorageConfig::default(),
             raft_store: RaftStoreConfig::default(),
         }
@@ -77,6 +82,15 @@ impl Config {
 
         Ok(())
     }
+
+    pub fn reset_end_point_txn_concurrency_on_busy(&mut self) {
+        self.end_point_txn_concurrency_on_busy =
+            ((self.end_point_concurrency as f64) *
+             DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
+        if self.end_point_txn_concurrency_on_busy == 0 {
+            self.end_point_txn_concurrency_on_busy = 1;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -90,5 +104,18 @@ mod tests {
 
         cfg.raft_store.raft_heartbeat_ticks = 0;
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_end_point_txn_concurrency_on_busy() {
+        let mut cfg = Config::new();
+        let expect = ((cfg.end_point_concurrency as f64) *
+                      DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
+        cfg.end_point_concurrency = 18;
+        cfg.reset_end_point_txn_concurrency_on_busy();
+        let expect = ((cfg.end_point_concurrency as f64) *
+                      DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
     }
 }

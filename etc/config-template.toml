@@ -26,6 +26,10 @@ recv-buffer-size = "128KB"
 # size of thread pool for endpoint task, should less than total cpu cores.
 # end-point-concurrency = 8
 
+# concurrency for each transaction when endpoint is busy, should be in [1,end-point-concurrency].
+# The recommanded value is a quater of end-point-concurrency.
+# end-point-txn-concurrency-on-busy = 2
+
 # set store capacity, if no set, use disk capacity.
 # capacity = 0
 

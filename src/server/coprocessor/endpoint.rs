@@ -16,8 +16,6 @@ use std::collections::BinaryHeap;
 use std::collections::hash_map::Entry;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::Ordering as CmpOrdering;
 use std::cell::RefCell;
@@ -26,7 +24,6 @@ use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
-use threadpool::ThreadPool;
 use kvproto::msgpb::{MessageType, Message};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
@@ -37,6 +34,7 @@ use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
+use util::threadpool::{ThreadPool, BigGroupThrottledQueue};
 use util::worker::{BatchRunnable, Scheduler};
 use server::OnResponse;
 
@@ -72,22 +70,25 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool,
+    pool: ThreadPool<BigGroupThrottledQueue<u64>, u64>,
     max_running_task_count: usize,
-    // count the tasks that have been scheduled to pool but not finished yet.
-    running_count: Arc<AtomicUsize>,
 }
 
 impl Host {
-    pub fn new(engine: Box<Engine>, scheduler: Scheduler<Task>, concurrency: usize) -> Host {
+    pub fn new(engine: Box<Engine>,
+               scheduler: Scheduler<Task>,
+               concurrency: usize,
+               txn_concurrency_on_busy: usize)
+               -> Host {
         Host {
             engine: engine,
             sched: scheduler,
             reqs: HashMap::default(),
             last_req_id: 0,
+            pool: ThreadPool::new(thd_name!("endpoint-pool"),
+                                  concurrency,
+                                  BigGroupThrottledQueue::new(txn_concurrency_on_busy)),
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
-            pool: ThreadPool::new_with_name(thd_name!("endpoint-pool"), concurrency),
-            running_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -133,6 +134,11 @@ impl RequestTask {
     }
 
     #[inline]
+    pub fn start_ts(&self) -> Option<u64> {
+        self.start_ts
+    }
+
+    #[inline]
     fn check_outdated(&self) -> Result<()> {
         check_if_outdated(self.deadline, self.req.get_tp())
     }
@@ -174,6 +180,22 @@ impl RequestTask {
                   inefficiency,
                   self.req.get_ranges().len(),
                   self.req.get_ranges().get(0));
+        }
+    }
+
+    pub fn parse_sel(&mut self) -> Result<SelectRequest> {
+        let tp = self.req.get_tp();
+        match tp {
+            REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
+                let mut sel = SelectRequest::new();
+                if let Err(e) = sel.merge_from_bytes(self.req.get_data()) {
+                    return Err(box_err!(e));
+                }
+                let start_ts = sel.get_start_ts();
+                self.start_ts = Some(start_ts);
+                Ok(sel)
+            }
+            _ => Err(box_err!("unsupported tp {}", tp)),
         }
     }
 }
@@ -222,19 +244,17 @@ impl BatchRunnable<Task> for Host {
                         }
                     };
                     let len = reqs.len() as f64;
-                    let running_count = self.running_count.clone();
-                    if running_count.load(Ordering::SeqCst) >= self.max_running_task_count {
+                    if self.pool.get_task_num() >= self.max_running_task_count {
                         notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
                         continue;
                     }
-                    running_count.fetch_add(reqs.len(), Ordering::SeqCst);
                     COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
-                    for req in reqs {
-                        let running_count = running_count.clone();
+                    for mut req in reqs {
                         let end_point = TiDbEndPoint::new(snap.clone());
-                        self.pool.execute(move || {
-                            end_point.handle_request(req);
-                            running_count.fetch_sub(1, Ordering::SeqCst);
+                        let sel = req.parse_sel();
+                        let txn_id = req.start_ts.unwrap_or_default();
+                        self.pool.execute(txn_id, move || {
+                            end_point.handle_request(req, sel);
                             COPR_PENDING_REQS.with_label_values(&["select"]).sub(1.0);
                         });
                     }
@@ -255,6 +275,10 @@ impl BatchRunnable<Task> for Host {
             }
             self.reqs.insert(id, reqs);
         }
+    }
+
+    fn shutdown(&mut self) {
+        self.pool.stop().unwrap();
     }
 }
 
@@ -337,31 +361,21 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask) {
+    pub fn handle_request(&self, mut t: RequestTask, sel: Result<SelectRequest>) {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
             on_error(e, t);
             return;
         }
-        let tp = t.req.get_tp();
-        match tp {
-            REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
-                let mut sel = SelectRequest::new();
-                if let Err(e) = sel.merge_from_bytes(t.req.get_data()) {
-                    on_error(box_err!(e), t);
-                    return;
-                }
-                let start_ts = sel.get_start_ts();
-                t.start_ts = Some(start_ts);
-                match self.handle_select(&mut t, sel) {
-                    Ok(r) => respond(r, t),
-                    Err(e) => on_error(e, t),
-                }
-            }
-            _ => on_error(box_err!("unsupported tp {}", tp), t),
+        if let Err(e) = sel {
+            on_error(e, t);
+            return;
+        }
+        match self.handle_select(&mut t, sel.unwrap()) {
+            Ok(r) => respond(r, t),
+            Err(e) => on_error(e, t),
         }
     }
-
     pub fn handle_select(&self, t: &mut RequestTask, sel: SelectRequest) -> Result<Response> {
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
@@ -1178,7 +1192,7 @@ mod tests {
     fn test_req_outdated() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let end_point = Host::new(engine, worker.scheduler(), 1);
+        let end_point = Host::new(engine, worker.scheduler(), 1, 1);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(),
@@ -1198,7 +1212,7 @@ mod tests {
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut end_point = Host::new(engine, worker.scheduler(), 1);
+        let mut end_point = Host::new(engine, worker.scheduler(), 1, 1);
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
