@@ -410,6 +410,66 @@ fn test_server_after_remove_itself() {
     test_after_remove_itself(&mut cluster);
 }
 
+fn test_tombstone_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+    let r1 = cluster.bootstrap_conf_change();
+    cluster.start();
+    let pd_client = cluster.pd_client.clone();
+
+    // test steps:
+    // 1. peers 1,2,3; 1 is leader
+    // 2. peer 3 partition
+    // 3. conf change, remove peer 3
+    // 4. partition recover
+    // leader 1 won't append log to peer 3 because it was removed from cluster
+    // peer 3 requests vote for leader because it doesn't know it's removed
+    // will this disrupt cluster?
+    // 5. pd decides to add peer 4 for region, which uses the same store as peer 3
+    // will peer 4 join and bring stale data to cluster?
+
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let (key, value) = (b"k1", b"v1");
+    cluster.must_put(key, value);
+
+    cluster.partition(vec![1, 2], vec![3]);
+
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    cluster.reset_transport_hooks();
+
+    let detail1 = cluster.region_detail(1, 1);
+    for peer in detail1.get_region().get_peers() {
+        assert!(peer.get_store_id() != 3);
+    }
+    // what should I check?
+    // peer 3 send request to cluster and the later ignored?
+
+    cluster.must_put(key, b"v2");
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let key_not_exist = b"k2";
+    cluster.must_put(key_not_exist, b"value");
+    must_get_equal(&cluster.get_engine(3), key_not_exist, b"value");
+
+    // if the new key exists in engine, the previous put key to "v2"
+    // must have been applied
+    must_get_equal(&cluster.get_engine(3), key, b"v2");
+}
+
+#[test]
+fn test_server_tombstone_peer() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    test_tombstone_peer(&mut cluster);
+}
+
+#[test]
+fn test_node_tombstone_peer() {
+    let count = 3;
+    let mut cluster = new_node_cluster(0, count);
+    test_tombstone_peer(&mut cluster);
+}
+
 fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
