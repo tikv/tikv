@@ -13,32 +13,29 @@
 
 use std::collections::{HashMap, HashSet};
 use std::thread::{self, Builder};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex, RwLock};
-use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
-use std::io::ErrorKind;
 use std::boxed::FnBox;
+use std::io::ErrorKind;
 
 use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
+use tikv::server::{ServerChannel, Server, ServerTransport, create_event_loop, Msg};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
-use tikv::util::codec::rpc;
 use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, ALL_CFS};
-use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
+use kvproto::tikvpb_grpc::{TiKVClient, TiKV};
 
 use super::pd::TestPdClient;
-use super::util::sleep_ms;
 use super::transport_simulate::*;
 
 type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
@@ -48,13 +45,12 @@ pub struct ServerCluster {
     senders: HashMap<u64, SendCh<Msg>>,
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
-    conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
+    conns: Mutex<HashMap<SocketAddr, Vec<TiKVClient>>>,
     sim_trans: HashMap<u64, SimulateServerTransport>,
     store_chs: HashMap<u64, SendCh<StoreMsg>>,
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
 
-    msg_id: AtomicUsize,
     pd_client: Arc<TestPdClient>,
 }
 
@@ -67,7 +63,6 @@ impl ServerCluster {
             addrs: HashMap::new(),
             sim_trans: HashMap::new(),
             conns: Mutex::new(HashMap::new()),
-            msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
             store_chs: HashMap::new(),
             storages: HashMap::new(),
@@ -75,12 +70,7 @@ impl ServerCluster {
         }
     }
 
-    fn alloc_msg_id(&self) -> u64 {
-        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
-    }
-
-
-    fn pool_get(&self, addr: &SocketAddr) -> Result<TcpStream> {
+    fn pool_get(&self, addr: &SocketAddr) -> Result<TiKVClient> {
         {
             let mut conns = self.conns
                 .lock()
@@ -93,11 +83,12 @@ impl ServerCluster {
             }
         }
 
-        let conn = make_std_tcp_conn(addr).unwrap();
-        Ok(conn)
+        let host = format!("{}", addr.ip());
+        let cli = TiKVClient::new(&*host, addr.port(), false, Default::default()).unwrap();
+        Ok(cli)
     }
 
-    fn pool_put(&self, addr: &SocketAddr, conn: TcpStream) {
+    fn pool_put(&self, addr: &SocketAddr, conn: TiKVClient) {
         let mut conns = self.conns
             .lock()
             .unwrap();
@@ -132,9 +123,10 @@ impl Simulator for ServerCluster {
         let listener;
         let mut try_cnt = 0;
         loop {
-            match bind(&cfg.addr) {
-                Err(server::Error::Io(ref e)) if e.kind() == ErrorKind::AddrInUse &&
-                                                 try_cnt < 100 => sleep_ms(10),
+            match TcpListener::bind(&cfg.addr) {
+                Err(ref e) if e.kind() == ErrorKind::AddrInUse && try_cnt < 100 => {
+                    thread::sleep(Duration::from_millis(10))
+                }
                 Ok(l) => {
                     listener = l;
                     break;
@@ -145,6 +137,7 @@ impl Simulator for ServerCluster {
         }
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
+        drop(listener);
 
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop(&cfg).unwrap();
@@ -186,7 +179,6 @@ impl Simulator for ServerCluster {
         };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
-                                     listener,
                                      store,
                                      server_chan,
                                      resolver,
@@ -194,6 +186,7 @@ impl Simulator for ServerCluster {
             .unwrap();
 
         let ch = server.get_sendch();
+        let addr = server.listening_addr();
 
         let t = Builder::new()
             .name(thd_name!(format!("server-{}", node_id)))
@@ -217,12 +210,7 @@ impl Simulator for ServerCluster {
     fn stop_node(&mut self, node_id: u64) {
         let (mut node, h) = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
-        let addr = &self.addrs[&node_id];
         let _ = self.store_chs.remove(&node_id).unwrap();
-        self.conns
-            .lock()
-            .unwrap()
-            .remove(addr);
 
         ch.try_send(Msg::Quit).unwrap();
         node.stop().unwrap();
@@ -254,11 +242,9 @@ impl Simulator for ServerCluster {
         let store_id = raft_msg.get_to_peer().get_store_id();
         let addr = &self.addrs[&store_id];
 
-        let mut conn = self.pool_get(addr).unwrap();
-        conn.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
-        try!(rpc::encode_msg(&mut conn, self.alloc_msg_id(), &raft_msg));
-
-        self.pool_put(addr, conn);
+        let cli = self.pool_get(addr).unwrap();
+        cli.Raft(box vec![Ok(raft_msg)].into_iter()).unwrap();
+        self.pool_put(addr, cli);
 
         Ok(())
     }
