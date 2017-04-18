@@ -166,7 +166,7 @@ pub fn copy_snapshot(mut from: Box<Snapshot>, mut to: Box<Snapshot>) -> io::Resu
     Ok(())
 }
 
-mod v1 {
+pub mod v1 {
     use std::cmp;
     use std::io::{self, Read, Write, ErrorKind};
     use std::fs::{self, File, OpenOptions, Metadata};
@@ -665,7 +665,7 @@ mod v1 {
     }
 }
 
-mod v2 {
+pub mod v2 {
     use std::io::{self, Read, Write, ErrorKind};
     use std::fs::{self, File, OpenOptions, Metadata};
     use std::path::PathBuf;
@@ -1007,7 +1007,8 @@ mod v2 {
                     SST_FILE_SUFFIX)
         }
 
-        fn validate(&self) -> RaftStoreResult<()> {
+        // pub just for bench test.
+        pub fn validate(&self) -> RaftStoreResult<()> {
             for cf_file in &self.cf_files {
                 if cf_file.size == 0 {
                     // Skip empty file. The checksum of this cf file should be 0 and

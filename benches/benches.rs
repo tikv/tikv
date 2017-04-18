@@ -26,7 +26,11 @@ extern crate mio;
 extern crate rand;
 extern crate tikv;
 extern crate time;
+extern crate rocksdb;
+extern crate tempdir;
+extern crate kvproto;
 
+mod snap;
 mod channel;
 
 #[allow(dead_code)]

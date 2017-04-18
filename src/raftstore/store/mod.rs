@@ -19,11 +19,11 @@ pub mod transport;
 pub mod bootstrap;
 pub mod cmd_resp;
 pub mod util;
+pub mod snap;
+pub mod peer_storage;
 
 mod store;
 mod peer;
-mod peer_storage;
-mod snap;
 mod worker;
 mod metrics;
 mod engine_metrics;
