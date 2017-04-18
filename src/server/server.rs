@@ -11,32 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::option::Option;
 use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
-
-use mio::{Token, Handler, EventLoop, EventLoopConfig, EventSet, PollOpt};
-use mio::tcp::{TcpListener, TcpStream};
-
+use mio::{Handler, EventLoop, EventLoopConfig};
+use grpc::server::GrpcServerConf;
+use kvproto::tikvpb_grpc::*;
 use util::worker::{Stopped, Worker};
+use util::worker::FutureWorker;
 use util::transport::SendCh;
+use util::{HashMap, HashSet};
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use raft::SnapshotStatus;
-use util::sockopt::SocketOpt;
-use util::{HashMap, HashSet};
 
 use super::{Msg, ConnData};
-use super::conn::Conn;
 use super::{Result, Config};
+use super::handle::Handle;
+use super::raft_client::{SendTask, SendRunner};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use super::metrics::*;
-
-const SERVER_TOKEN: Token = Token(1);
-const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 
 pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
@@ -49,12 +45,6 @@ pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>
     Ok(el)
 }
 
-pub fn bind(addr: &str) -> Result<TcpListener> {
-    let laddr = try!(addr.parse());
-    let listener = try!(TcpListener::bind(&laddr));
-    Ok(listener)
-}
-
 // A helper structure to bundle all senders for messages to raftstore.
 pub struct ServerChannel<T: RaftStoreRouter + 'static> {
     pub raft_router: T,
@@ -62,22 +52,14 @@ pub struct ServerChannel<T: RaftStoreRouter + 'static> {
 }
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
-    listener: TcpListener,
-    // We use HashMap instead of common use mio slab to avoid token reusing.
-    // In our raft server, a client with token 1 sends a raft command, we will
-    // propose this command, execute it then send the response to the client with
-    // token 1. But before the response, the client connection is broken and another
-    // new client connects, mio slab may reuse the token 1 for it. So the subsequent
-    // response will be sent to the new client.
-    // To avoid this, we use the HashMap instead and can guarantee the token id is
-    // unique and can't be reused.
-    conns: HashMap<Token, Conn>,
-    conn_token_counter: usize,
     sendch: SendCh<Msg>,
 
-    // store id -> Token
+    grpc_server: Option<TiKVAsyncServer>,
+    local_addr: SocketAddr,
+
+    // store id -> addr
     // This is for communicating with other raft stores.
-    store_tokens: HashMap<u64, Token>,
+    store_addrs: HashMap<u64, SocketAddr>,
     store_resolving: HashSet<u64>,
 
     ch: ServerChannel<T>,
@@ -85,9 +67,9 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
-    resolver: S,
+    raft_msg_worker: FutureWorker<SendTask>,
 
-    cfg: Config,
+    resolver: S,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -98,32 +80,37 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // Node and then pass it here.
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
-               listener: TcpListener,
-               _: Storage,
+               storage: Storage,
                ch: ServerChannel<T>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
-        try!(event_loop.register(&listener,
-                                 SERVER_TOKEN,
-                                 EventSet::readable(),
-                                 PollOpt::edge()));
-
         let sendch = SendCh::new(event_loop.channel(), "raft-server");
         let snap_worker = Worker::new("snap-handler");
+        let raft_msg_worker = FutureWorker::new("raft-msg-worker");
+
+        let mut h = Handle::new(storage,
+                                cfg.end_point_concurrency,
+                                ch.raft_router.clone(),
+                                snap_worker.scheduler());
+        try!(h.run());
+        let mut conf = GrpcServerConf::default();
+        conf.http.no_delay = Some(true);
+        conf.http.thread_name = Some("grpc-server".to_owned());
+        let grpc_server = TiKVAsyncServer::new(cfg.addr.to_owned(), conf, h);
+        let addr = grpc_server.local_addr().to_owned();
 
         let svr = Server {
-            listener: listener,
             sendch: sendch,
-            conns: HashMap::default(),
-            conn_token_counter: FIRST_CUSTOM_TOKEN.as_usize(),
-            store_tokens: HashMap::default(),
+            grpc_server: Some(grpc_server),
+            local_addr: addr,
+            store_addrs: HashMap::default(),
             store_resolving: HashSet::default(),
             ch: ch,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
+            raft_msg_worker: raft_msg_worker,
             resolver: resolver,
-            cfg: cfg.clone(),
         };
 
         Ok(svr)
@@ -133,6 +120,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
+        box_try!(self.raft_msg_worker.start(SendRunner::default()));
 
         info!("TiKV is ready to serve");
 
@@ -147,181 +135,17 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // Return listening address, this may only be used for outer test
     // to get the real address because we may use "127.0.0.1:0"
     // in test to avoid port conflict.
-    pub fn listening_addr(&self) -> Result<SocketAddr> {
-        let addr = try!(self.listener.local_addr());
-        Ok(addr)
+    pub fn listening_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 
-    fn remove_conn(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
-        let conn = self.conns.remove(&token);
-        CONNECTION_GAUGE.set(self.conns.len() as f64);
-        match conn {
-            Some(mut conn) => {
-                debug!("remove connection token {:?}", token);
-                // if connected to remote store, remove this too.
-                if let Some(store_id) = conn.store_id {
-                    warn!("remove store connection for store {} with token {:?}",
-                          store_id,
-                          token);
-                    self.store_tokens.remove(&store_id);
-                }
-
-                if let Err(e) = event_loop.deregister(&conn.sock) {
-                    error!("deregister conn err {:?}", e);
-                }
-
-                conn.close();
-            }
-            None => {
-                debug!("missing connection for token {}", token.as_usize());
-            }
+    fn write_data(&mut self, addr: SocketAddr, data: ConnData) {
+        if let Err(e) = self.raft_msg_worker.schedule(SendTask {
+            addr: addr,
+            msg: data.msg,
+        }) {
+            error!("send raft msg err {:?}", e);
         }
-    }
-
-    fn add_new_conn(&mut self,
-                    event_loop: &mut EventLoop<Self>,
-                    sock: TcpStream,
-                    store_id: Option<u64>)
-                    -> Result<Token> {
-        let new_token = Token(self.conn_token_counter);
-        self.conn_token_counter += 1;
-
-        // TODO: check conn max capacity.
-
-        try!(sock.set_nodelay(true));
-        try!(sock.set_send_buffer_size(self.cfg.send_buffer_size));
-        try!(sock.set_recv_buffer_size(self.cfg.recv_buffer_size));
-
-        try!(event_loop.register(&sock,
-                                 new_token,
-                                 EventSet::readable() | EventSet::hup(),
-                                 PollOpt::edge()));
-
-        let conn = Conn::new(sock, new_token, store_id, self.snap_worker.scheduler());
-        self.conns.insert(new_token, conn);
-        debug!("register conn {:?}", new_token);
-
-        CONNECTION_GAUGE.set(self.conns.len() as f64);
-
-        Ok(new_token)
-    }
-
-    fn on_conn_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) -> Result<()> {
-        let msgs = try!(match self.conns.get_mut(&token) {
-            None => {
-                debug!("missing conn for token {:?}", token);
-                return Ok(());
-            }
-            Some(conn) => conn.on_readable(event_loop),
-        });
-
-        if msgs.is_empty() {
-            // Read no message, no need to handle.
-            return Ok(());
-        }
-
-        for msg in msgs {
-            try!(self.on_conn_msg(token, msg))
-        }
-
-        Ok(())
-    }
-
-    fn on_conn_msg(&mut self, _: Token, data: ConnData) -> Result<()> {
-        RECV_MSG_COUNTER.with_label_values(&["raft"]).inc();
-        try!(self.ch.raft_router.send_raft_msg(data.msg));
-        Ok(())
-    }
-
-    fn on_readable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
-        match token {
-            SERVER_TOKEN => {
-                loop {
-                    // For edge trigger, we must accept all connections until None.
-                    let sock = match self.listener.accept() {
-                        Err(e) => {
-                            error!("accept error: {:?}", e);
-                            return;
-                        }
-                        Ok(None) => {
-                            debug!("no connection, accept later.");
-                            return;
-                        }
-                        Ok(Some((sock, addr))) => {
-                            debug!("accept conn {}", addr);
-                            sock
-                        }
-                    };
-
-                    if let Err(e) = self.add_new_conn(event_loop, sock, None) {
-                        error!("register conn err {:?}", e);
-                    }
-                }
-            }
-            token => {
-                if let Err(e) = self.on_conn_readable(event_loop, token) {
-                    debug!("handle read conn for token {:?} err {:?}, remove", token, e);
-                    self.remove_conn(event_loop, token);
-                }
-            }
-
-        }
-    }
-
-    fn on_writable(&mut self, event_loop: &mut EventLoop<Self>, token: Token) {
-        let res = match self.conns.get_mut(&token) {
-            None => {
-                debug!("missing conn for token {:?}", token);
-                return;
-            }
-            Some(conn) => conn.on_writable(event_loop),
-        };
-
-        if let Err(e) = res {
-            debug!("handle write conn err {:?}, remove", e);
-            self.remove_conn(event_loop, token);
-        }
-    }
-
-    fn write_data(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
-        let res = match self.conns.get_mut(&token) {
-            None => {
-                debug!("missing conn for token {:?}", token);
-                return;
-            }
-            Some(conn) => conn.append_write_buf(event_loop, data),
-        };
-
-        if let Err(e) = res {
-            debug!("handle write data err {:?}, remove", e);
-            self.remove_conn(event_loop, token);
-        }
-    }
-
-    fn try_connect(&mut self,
-                   event_loop: &mut EventLoop<Self>,
-                   sock_addr: SocketAddr,
-                   store_id_opt: Option<u64>)
-                   -> Result<Token> {
-        let sock = try!(TcpStream::connect(&sock_addr));
-        let token = try!(self.add_new_conn(event_loop, sock, store_id_opt));
-        Ok(token)
-    }
-
-    fn connect_store(&mut self,
-                     event_loop: &mut EventLoop<Self>,
-                     store_id: u64,
-                     sock_addr: SocketAddr)
-                     -> Result<Token> {
-        // We may already create the connection before.
-        if let Some(token) = self.store_tokens.get(&store_id).cloned() {
-            debug!("token already exists for store {}, reuse", store_id);
-            return Ok(token);
-        }
-
-        let token = try!(self.try_connect(event_loop, sock_addr, Some(store_id)));
-        self.store_tokens.insert(store_id, token);
-        Ok(token)
     }
 
     fn resolve_store(&mut self, store_id: u64, data: ConnData) {
@@ -353,15 +177,15 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
-    fn send_store(&mut self, event_loop: &mut EventLoop<Self>, store_id: u64, data: ConnData) {
+    fn send_store(&mut self, store_id: u64, data: ConnData) {
         if data.is_snapshot() {
             RESOLVE_STORE_COUNTER.with_label_values(&["snap"]).inc();
             return self.resolve_store(store_id, data);
         }
 
         // check the corresponding token for store.
-        if let Some(token) = self.store_tokens.get(&store_id).cloned() {
-            return self.write_data(event_loop, token, data);
+        if let Some(addr) = self.store_addrs.get(&store_id).cloned() {
+            return self.write_data(addr, data);
         }
 
         // No connection, try to resolve it.
@@ -381,46 +205,28 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         self.resolve_store(store_id, data);
     }
 
-    fn on_resolve_failed(&mut self, store_id: u64, sock_addr: Result<SocketAddr>, data: ConnData) {
-        let e = sock_addr.unwrap_err();
-        debug!("resolve store {} address failed {:?}", store_id, e);
-
-        self.report_unreachable(data)
-    }
-
-    fn on_resolve_result(&mut self,
-                         event_loop: &mut EventLoop<Self>,
-                         store_id: u64,
-                         sock_addr: Result<SocketAddr>,
-                         data: ConnData) {
+    fn on_resolve_result(&mut self, store_id: u64, sock_addr: Result<SocketAddr>, data: ConnData) {
         if !data.is_snapshot() {
             // clear resolving.
             self.store_resolving.remove(&store_id);
         }
 
-        if sock_addr.is_err() {
+        if let Err(e) = sock_addr {
             RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-            return self.on_resolve_failed(store_id, sock_addr, data);
+            debug!("resolve store {} address failed {:?}", store_id, e);
+            return self.report_unreachable(data);
         }
 
         RESOLVE_STORE_COUNTER.with_label_values(&["success"]).inc();
         let sock_addr = sock_addr.unwrap();
         info!("resolve store {} address ok, addr {}", store_id, sock_addr);
+        self.store_addrs.insert(store_id, sock_addr);
 
         if data.is_snapshot() {
             return self.send_snapshot_sock(sock_addr, data);
         }
 
-        let token = match self.connect_store(event_loop, store_id, sock_addr) {
-            Ok(token) => token,
-            Err(e) => {
-                self.report_unreachable(data);
-                error!("connect store {} err {:?}", store_id, e);
-                return;
-            }
-        };
-
-        self.write_data(event_loop, token, data)
+        self.write_data(sock_addr, data)
     }
 
     fn new_snapshot_reporter(&self, data: &ConnData) -> SnapshotReporter {
@@ -462,38 +268,15 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
     type Timeout = Msg;
     type Message = Msg;
 
-    fn ready(&mut self, event_loop: &mut EventLoop<Self>, token: Token, events: EventSet) {
-        if events.is_error() {
-            self.remove_conn(event_loop, token);
-            return;
-        }
-
-        if events.is_readable() {
-            self.on_readable(event_loop, token);
-        }
-
-        if events.is_writable() {
-            self.on_writable(event_loop, token);
-        }
-
-        if events.is_hup() {
-            self.remove_conn(event_loop, token);
-        }
-    }
-
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
         match msg {
             Msg::Quit => event_loop.shutdown(),
-            Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
+            Msg::SendStore { store_id, data } => self.send_store(store_id, data),
             Msg::ResolveResult { store_id, sock_addr, data } => {
-                self.on_resolve_result(event_loop, store_id, sock_addr, data)
+                self.on_resolve_result(store_id, sock_addr, data)
             }
-            Msg::CloseConn { token } => self.remove_conn(event_loop, token),
+            Msg::CloseConn { .. } => {}
         }
-    }
-
-    fn timeout(&mut self, _: &mut EventLoop<Self>, _: Msg) {
-        // nothing to do now.
     }
 
     fn interrupted(&mut self, _: &mut EventLoop<Self>) {
@@ -508,6 +291,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         // TODO: handle quit server if event_loop is_running() returns false.
         if !el.is_running() {
             self.snap_worker.stop();
+            self.raft_msg_worker.stop();
+            self.grpc_server.take();
         }
     }
 }
@@ -548,12 +333,10 @@ impl SnapshotReporter {
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use mio::tcp::TcpListener;
 
     use super::*;
     use super::super::{Msg, ConnData, Result, Config};
@@ -565,12 +348,12 @@ mod tests {
     use raftstore::store::Msg as StoreMsg;
 
     struct MockResolver {
-        addr: SocketAddr,
+        addr: Arc<Mutex<Option<SocketAddr>>>,
     }
 
     impl StoreAddrResolver for MockResolver {
         fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
-            cb.call_box((Ok(self.addr),));
+            cb.call_box((self.addr.lock().unwrap().ok_or(box_err!("not set")),));
             Ok(())
         }
     }
@@ -610,12 +393,8 @@ mod tests {
 
     #[test]
     fn test_peer_resolve() {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let listener = TcpListener::bind(&addr).unwrap();
-
-        let resolver = MockResolver { addr: listener.local_addr().unwrap() };
-
-        let cfg = Config::new();
+        let mut cfg = Config::new();
+        cfg.addr = "127.0.0.1:0".to_owned();
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let mut storage = Storage::new(&cfg.storage).unwrap();
         storage.start(&cfg.storage).unwrap();
@@ -630,15 +409,16 @@ mod tests {
             raft_router: router,
             snapshot_status_sender: snapshot_status_sender,
         };
+        let addr = Arc::new(Mutex::new(None));
         let mut server =
             Server::new(&mut event_loop,
                         &cfg,
-                        listener,
                         storage,
                         ch,
-                        resolver,
+                        MockResolver { addr: addr.clone() },
                         SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
                 .unwrap();
+        *addr.lock().unwrap() = Some(server.listening_addr());
 
         for i in 0..10 {
             if i % 2 == 1 {
@@ -649,7 +429,7 @@ mod tests {
 
         let ch = server.get_sendch();
         let h = thread::spawn(move || {
-            event_loop.run(&mut server).unwrap();
+            server.run(&mut event_loop).unwrap();
         });
 
         ch.try_send(Msg::SendStore {
