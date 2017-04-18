@@ -30,7 +30,7 @@ fn writebatch(db: &DB, round: usize, batch_keys: usize) {
 fn bench_writebatch_impl(b: &mut Bencher, batch_keys: usize) {
     let path = TempDir::new("/tmp/rocksdb_write_batch_bench").unwrap();
     let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
-    let key_count = 1<<13;
+    let key_count = 1 << 13;
     let round = key_count / batch_keys;
     b.iter(|| {
         writebatch(&db, round, batch_keys);
