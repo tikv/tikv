@@ -15,7 +15,6 @@ use test::Bencher;
 use tempdir::TempDir;
 use rocksdb::{DB, WriteBatch, Writable};
 
-#[allow(dead_code)]
 fn writebatch(db: &DB, round: usize, batch_keys: usize) {
     let v = b"operators are syntactic sugar for calls to methods of built-in traits";
     for r in 0..round {
@@ -28,7 +27,6 @@ fn writebatch(db: &DB, round: usize, batch_keys: usize) {
     }
 }
 
-#[allow(dead_code)]
 fn bench_writebatch_impl(b: &mut Bencher, batch_keys: usize) {
     let path = TempDir::new("/tmp/rocksdb_write_batch_bench").unwrap();
     let db = DB::open_default(path.path().to_str().unwrap()).unwrap();
