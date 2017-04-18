@@ -132,13 +132,13 @@ fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
     notify_stale_req(tag, term, cmd.uuid, cmd.cb.take().unwrap())
 }
 
-fn gen_stale_req(uuid: Uuid, term: u64) -> RaftCmdResponse {
+fn gen_stale_req(tag: &str, uuid: Uuid, term: u64) -> RaftCmdResponse {
+    info!("{} command {} is stale, skip", tag, uuid);
     cmd_resp::err_resp(Error::StaleCommand, uuid, term)
 }
 
 pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
-    let resp = gen_stale_req(uuid, term);
-    info!("{} command {} is stale, skip", tag, uuid);
+    let resp = gen_stale_req(tag, uuid, term);
     cb(resp);
 }
 
@@ -250,7 +250,7 @@ impl ApplyDelegate {
             .write(wb)
             .unwrap_or_else(|e| panic!("{} failed to write to engine, error: {:?}", self.tag, e));
         for (cb, resp) in cbs {
-            cb.call_box((resp,));
+            cb(resp);
         }
 
         slow_log!(t,
@@ -282,7 +282,7 @@ impl ApplyDelegate {
         assert!(term > 0);
         while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
-            cbs.push((cmd.cb.take().unwrap(), gen_stale_req(cmd.uuid, cmd.term)));
+            cbs.push((cmd.cb.take().unwrap(), gen_stale_req(&self.tag, cmd.uuid, cmd.term)));
         }
         None
     }
