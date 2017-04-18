@@ -83,7 +83,7 @@ impl Config {
         Ok(())
     }
 
-    pub fn init_end_point_txn_concurrency_on_busy_with_default_ratio(&mut self) {
+    pub fn reset_end_point_txn_concurrency_on_busy(&mut self) {
         self.end_point_txn_concurrency_on_busy =
             ((self.end_point_concurrency as f64) *
              DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
@@ -104,5 +104,18 @@ mod tests {
 
         cfg.raft_store.raft_heartbeat_ticks = 0;
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_end_point_txn_concurrency_on_busy() {
+        let mut cfg = Config::new();
+        let expect = ((cfg.end_point_concurrency as f64) *
+                      DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
+        cfg.end_point_concurrency = 18;
+        cfg.reset_end_point_txn_concurrency_on_busy();
+        let expect = ((cfg.end_point_concurrency as f64) *
+                      DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
     }
 }

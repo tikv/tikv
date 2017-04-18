@@ -133,6 +133,7 @@ impl RequestTask {
         }
     }
 
+    #[inline]
     pub fn start_ts(&self) -> Option<u64> {
         self.start_ts
     }
@@ -243,7 +244,7 @@ impl BatchRunnable<Task> for Host {
                         }
                     };
                     let len = reqs.len() as f64;
-                    if self.pool.get_tasks_num() >= self.max_running_task_count {
+                    if self.pool.get_task_num() >= self.max_running_task_count {
                         notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
                         continue;
                     }
