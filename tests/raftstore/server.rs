@@ -239,9 +239,6 @@ impl Simulator for ServerCluster {
     }
 
     fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
-        println!("send raft msg type: {:?}",
-                 raft_msg.get_message().get_msg_type());
-
         let store_id = raft_msg.get_to_peer().get_store_id();
         let addr = &self.addrs[&store_id];
 
