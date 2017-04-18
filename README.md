@@ -51,6 +51,32 @@ If you want to dive into TiDB, see [development build guide](https://github.com/
 + Learn the [configuration explanations](https://github.com/pingcap/docs/blob/master/op-guide/configuration.md).
 + Use [Docker](https://github.com/pingcap/docs/blob/master/op-guide/docker-deployment.md) to run the TiDB project.
 
+### Install Tips
+
+```
+# 1. Install rust nightly.
+curl -s https://static.rust-lang.org/rustup.sh | sh -s -- --channel=nightly
+
+# 2. Install RocksDB
+# Please view RocksDB's offical install document at https://github.com/facebook/rocksdb/blob/master/INSTALL.md . It's important to note, upgrade your GCC to version at least 4.7 to get C++11 support.
+wget https://github.com/facebook/rocksdb/archive/rocksdb-4.3.1.tar.gz
+tar -xzvf rocksdb-4.3.1.tar.gz
+
+# [optional step] clone the newest version of RocksDB
+git clone https://github.com/facebook/rocksdb.git
+
+cd rocksdb
+make shared_lib
+cp librocksdb.so* /usr/lib64/
+
+# 3. Install tikv 
+git clone https://github.com/pingcap/tikv.git
+cd tikv
+make
+
+# 4. Have a fun!
+```
+
 ### Contributing
 
 See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the contribution workflow.
@@ -58,7 +84,6 @@ See [CONTRIBUTING](./CONTRIBUTING.md) for details on submitting patches and the 
 ### License
 
 TiKV is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for details.
-
 
 ### Acknowledgments
 - Thanks [etcd](https://github.com/coreos/etcd) for providing some great open source tools.
