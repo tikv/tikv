@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -468,7 +468,7 @@ mod test {
         }
 
         let map = parse_store_labels("").unwrap();
-        assert_eq!(map.is_empty());
+        assert!(map.is_empty());
 
         let map = parse_store_labels("a=0").unwrap();
         assert_eq!(map.get("a").unwrap(), "0");

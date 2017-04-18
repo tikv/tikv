@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -297,10 +297,9 @@ impl Evaluator {
 
     fn decode_value_list(&mut self, value_list_expr: &Expr) -> Result<&Vec<Datum>> {
         let p = value_list_expr as *const Expr as isize;
-        let v = try!(value_list_expr.get_val().decode());
         let decoded = self.cached_value_list
             .entry(p)
-            .or_insert(v);
+            .or_insert(value_list_expr.get_val().decode().unwrap());
         Ok(decoded)
     }
 

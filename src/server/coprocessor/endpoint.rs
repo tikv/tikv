@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -673,11 +673,9 @@ impl SelectContextCore {
                 for cond_col in cond_col_map.keys() {
                     aggr_cols_map.remove(cond_col);
                 }
-                aggr_cols = aggr_cols_map.clone().into_iter().map(|(_, v)| v).collect();
-                aggr_cols_map.clear();
+                aggr_cols = aggr_cols_map.into_iter().map(|(_, v)| v).collect();
             }
-            cond_cols = cond_col_map.clone().into_iter().map(|(_, v)| v).collect();
-            cond_col_map.clear();
+            cond_cols = cond_col_map.into_iter().map(|(_, v)| v).collect();
 
             // get topn cols
             let mut topn_col_map = HashMap::default();
