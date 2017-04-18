@@ -33,7 +33,7 @@ use kvproto::pdpb_grpc::{PDAsyncClient, PDAsync};
 use util::HandyRwLock;
 
 use super::super::{Result, Error, PdFuture};
-use super::super:: metrics::*;
+use super::super::metrics::PD_SEND_MSG_HISTOGRAM;
 
 pub struct Inner {
     client: PDAsyncClient,
@@ -187,7 +187,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
 }
 
 /// Do a request in synchronized fashion.
-pub fn sync_request<F, R>(client: &LeaderClient, f: F, retry: usize) -> Result<R>
+pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, f: F) -> Result<R>
     where F: Fn(&PDAsyncClient) -> GrpcFutureSend<R>
 {
     for _ in 0..retry {

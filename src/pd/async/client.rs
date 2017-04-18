@@ -22,7 +22,7 @@ use kvproto::pdpb_grpc::{PDAsync, PDAsyncClient};
 
 use super::super::PdFuture;
 use super::super::{Result, Error, PdClient};
-use super::util::*;
+use super::util::{validate_endpoints, sync_request, check_resp_header, LeaderClient};
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -81,8 +81,8 @@ impl PdClient for RpcClient {
         req.set_region(region);
 
         let resp = try!(sync_request(&self.leader_client,
-                                     |client| client.Bootstrap(req.clone()),
-                                     LEADER_CHANGE_RETRY));
+                                     LEADER_CHANGE_RETRY,
+                                     |client| client.Bootstrap(req.clone())));
         try!(check_resp_header(resp.get_header()));
         Ok(())
     }
@@ -92,8 +92,8 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let resp = try!(sync_request(&self.leader_client,
-                                     |client| client.IsBootstrapped(req.clone()),
-                                     LEADER_CHANGE_RETRY));
+                                     LEADER_CHANGE_RETRY,
+                                     |client| client.IsBootstrapped(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.get_bootstrapped())
@@ -104,8 +104,8 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let resp = try!(sync_request(&self.leader_client,
-                                     |client| client.AllocID(req.clone()),
-                                     LEADER_CHANGE_RETRY));
+                                     LEADER_CHANGE_RETRY,
+                                     |client| client.AllocID(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.get_id())
@@ -117,8 +117,8 @@ impl PdClient for RpcClient {
         req.set_store(store);
 
         let resp = try!(sync_request(&self.leader_client,
-                                     |client| client.PutStore(req.clone()),
-                                     LEADER_CHANGE_RETRY));
+                                     LEADER_CHANGE_RETRY,
+                                     |client| client.PutStore(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(())
@@ -130,8 +130,8 @@ impl PdClient for RpcClient {
         req.set_store_id(store_id);
 
         let mut resp = try!(sync_request(&self.leader_client,
-                                         |client| client.GetStore(req.clone()),
-                                         LEADER_CHANGE_RETRY));
+                                         LEADER_CHANGE_RETRY,
+                                         |client| client.GetStore(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_store())
@@ -142,8 +142,8 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let mut resp = try!(sync_request(&self.leader_client,
-                                         |client| client.GetClusterConfig(req.clone()),
-                                         LEADER_CHANGE_RETRY));
+                                         LEADER_CHANGE_RETRY,
+                                         |client| client.GetClusterConfig(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_cluster())
@@ -155,8 +155,8 @@ impl PdClient for RpcClient {
         req.set_region_key(key.to_vec());
 
         let mut resp = try!(sync_request(&self.leader_client,
-                                         |client| client.GetRegion(req.clone()),
-                                         LEADER_CHANGE_RETRY));
+                                         LEADER_CHANGE_RETRY,
+                                         |client| client.GetRegion(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_region())
