@@ -187,15 +187,14 @@ impl<Req, Resp, F> Request<Req, Resp, F>
 }
 
 /// Do a request in synchronized fashion.
-pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, f: F) -> Result<R>
+pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
     where F: Fn(&PDAsyncClient) -> GrpcFutureSend<R>
 {
     for _ in 0..retry {
         let r = {
-            let timer = PD_SEND_MSG_HISTOGRAM.start_timer();
-            let r = f(&client.inner.rl().client).wait();
-            timer.observe_duration();
-            r
+            let _timer = PD_SEND_MSG_HISTOGRAM.start_timer(); // observe on dropping.
+            let f = func(&client.inner.rl().client);
+            f.wait()
         };
 
         match r {
