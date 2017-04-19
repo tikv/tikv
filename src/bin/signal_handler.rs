@@ -14,28 +14,28 @@
 
 #[cfg(unix)]
 mod imp {
-    use std::time::Duration;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
 
     use rocksdb::DB;
+    use libc;
 
     use tikv::server::Msg;
     use tikv::util::transport::SendCh;
     use prometheus::{self, Encoder, TextEncoder};
+
+    // Real-time signals
+    const TOGGLE_PROF_SIG: libc::c_int = 40;
+    const DUMP_PROF_SIG: libc::c_int = 41;
 
     use profiling;
 
     const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
-    const PROFILE_SLEEP_SEC: u64 = 30;
-
-    pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
+    pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
-        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
-        let profiling_memory = Arc::new(AtomicBool::new(false));
+        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2, TOGGLE_PROF_SIG, DUMP_PROF_SIG]);
         for sig in trap {
             match sig {
                 SIGTERM | SIGINT => {
@@ -70,10 +70,23 @@ mod imp {
                     }
                 }
                 SIGUSR2 => {
-                    profiling::profile_memory(None,
-                                              &profiling_memory,
-                                              Duration::from_secs(PROFILE_SLEEP_SEC));
+                    if backup_path.is_empty() {
+                        info!("empty backup path, backup is disabled");
+                        continue;
+                    }
+
+                    info!("backup db to {}", backup_path);
+                    if let Err(e) = engine.backup_at(backup_path) {
+                        error!("fail to backup: {}", e);
+                    }
+                    info!("backup done");
                 }
+                TOGGLE_PROF_SIG => {
+                    if let Err(e) = profiling::toggle_prof() {
+                        error!("failed to toggle memory profiling: {}", e);
+                    }
+                }
+                DUMP_PROF_SIG => profiling::dump_prof(None),
                 // TODO: handle more signal
                 _ => unreachable!(),
             }
