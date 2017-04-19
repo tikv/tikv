@@ -307,6 +307,28 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
+    pub fn check_regions_number(&self, len: u32) {
+        assert_eq!(self.pd_client.get_regions_number().unwrap(), len)
+    }
+
+    // For test when a node is already bootstraped the cluster with the first region
+    // But another node may request bootstrap at same time and get is_bootstrap false
+    // Add Region but not set bootstrap to true
+    pub fn add_first_region(&self) -> Result<()> {
+        let mut region = metapb::Region::new();
+        let region_id = self.pd_client.alloc_id().unwrap();
+        let peer_id = self.pd_client.alloc_id().unwrap();
+        region.set_id(region_id);
+        region.set_start_key(keys::EMPTY_KEY.to_vec());
+        region.set_end_key(keys::EMPTY_KEY.to_vec());
+        region.mut_region_epoch().set_version(1);
+        region.mut_region_epoch().set_conf_ver(1);
+        let peer = new_peer(peer_id, peer_id);
+        region.mut_peers().push(peer.clone());
+        self.pd_client.add_region(&region);
+        Ok(())
+    }
+
     // Multiple nodes with fixed node id, like node 1, 2, .. 5,
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.

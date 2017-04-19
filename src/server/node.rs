@@ -196,20 +196,35 @@ impl<C> Node<C>
         Ok(region)
     }
 
+    fn check_region_epoch(&self, region: metapb::Region, other: metapb::Region) -> bool {
+        let epoch = region.get_region_epoch();
+        let other_epoch = other.get_region_epoch();
+        if epoch.get_conf_ver() != other_epoch.get_conf_ver() {
+            return false;
+        }
+        if epoch.get_version() != other_epoch.get_version() {
+            return false;
+        }
+        true
+    }
+
     fn check_prepare_bootstrap_cluster(&self, engine: &DB) -> Result<()> {
         let res = try!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
         if res.is_none() {
             return Ok(());
         }
 
-        let region_id = res.unwrap().get_id();
+        let first_region = res.unwrap();
         for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
             match self.pd_client.get_region(b"") {
                 Ok(region) => {
-                    if region.get_id() == region_id {
+                    if region.get_id() == first_region.get_id() {
+                        if !self.check_region_epoch(region.clone(), first_region.clone()) {
+                            return Err(box_err!("first region epoch inconsistent with pd info"));
+                        }
                         try!(store::clear_prepare_bootstrap_state(engine));
                     } else {
-                        try!(store::clear_prepare_bootstrap(engine, region_id));
+                        try!(store::clear_prepare_bootstrap(engine, region.get_id()));
                     }
                     return Ok(());
                 }
@@ -234,6 +249,9 @@ impl<C> Node<C>
             // TODO: should we clean region for other errors too?
             Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
+                if let Err(e) = store::clear_prepare_bootstrap_state(engine) {
+                    warn!("clear prepare bootstrap state failed: {:?}", e);
+                }
                 info!("bootstrap cluster {} ok", self.cluster_id);
                 Ok(())
             }
