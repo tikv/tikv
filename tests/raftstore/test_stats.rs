@@ -137,9 +137,11 @@ fn must_detect_snap(pd_client: &Arc<TestPdClient>) {
     for _ in 0..200 {
         sleep_ms(10);
 
-        if let Some(stats) = pd_client.get_store_stats(1) {
-            if stats.get_sending_snap_count() > 0 || stats.get_receiving_snap_count() > 0 {
-                return;
+        for id in 1..3 {
+            if let Some(stats) = pd_client.get_store_stats(id) {
+                if stats.get_sending_snap_count() > 0 || stats.get_receiving_snap_count() > 0 {
+                    return;
+                }
             }
         }
     }
