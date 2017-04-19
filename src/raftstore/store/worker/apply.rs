@@ -222,24 +222,34 @@ impl ApplyDelegate {
                 }
             };
 
+            // When encounter ComputeHash cmd, we must flush the writebatch to engine immediately.
+            if let Some(ref exec_result) = res {
+                if let ExecResult::ComputeHash { .. } = *exec_result {
+                    // add apply state to write batch
+                    self.write_apply_state(&mut wb);
+
+                    // flush to engine
+                    self.engine
+                        .write(wb)
+                        .unwrap_or_else(|e| {
+                            panic!("{} failed to write to engine, error: {:?}", self.tag, e)
+                        });
+
+                    // call callback
+                    for (cb, resp) in cbs.drain(..) {
+                        cb(resp);
+                    }
+                    wb = WriteBatch::new();
+                }
+            }
+
             if let Some(res) = res {
                 results.push(res);
             }
         }
 
         if !self.pending_remove {
-            rocksdb::get_cf_handle(&self.engine, CF_RAFT)
-                .map_err(From::from)
-                .and_then(|handle| {
-                    wb.put_msg_cf(handle,
-                                  &keys::apply_state_key(self.region.get_id()),
-                                  &self.apply_state)
-                })
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save apply state to write batch, error: {:?}",
-                           self.tag,
-                           e);
-                });
+            self.write_apply_state(&mut wb);
         }
 
         self.metrics.written_bytes += wb.data_size() as u64;
@@ -258,6 +268,21 @@ impl ApplyDelegate {
                   self.tag,
                   committed_count);
         results
+    }
+
+    fn write_apply_state(&mut self, wb: &mut WriteBatch) {
+        rocksdb::get_cf_handle(&self.engine, CF_RAFT)
+            .map_err(From::from)
+            .and_then(|handle| {
+                wb.put_msg_cf(handle,
+                              &keys::apply_state_key(self.region.get_id()),
+                              &self.apply_state)
+            })
+            .unwrap_or_else(|e| {
+                panic!("{} failed to save apply state to write batch, error: {:?}",
+                       self.tag,
+                       e);
+            });
     }
 
     fn handle_raft_entry_normal(&mut self,
