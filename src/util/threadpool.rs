@@ -124,11 +124,20 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
 
     #[inline]
     fn pop_from_waiting_queue(&mut self) -> Option<Task<T>> {
-        let group_id = self.pop_group_id_from_waiting_queue();
-        if group_id.is_none() {
-            return None;
-        }
-        let group_id = group_id.unwrap();
+        let group_id = {
+            let best_group = self.waiting_queue
+                .iter()
+                .map(|(group_id, waiting_queue)| {
+                    (self.group_concurrency[group_id], waiting_queue[0].id, group_id)
+                })
+                .min();
+            if let Some((_, _, group_id)) = best_group {
+                group_id.clone()
+            } else {
+                return None;
+            }
+        };
+
         let task = self.pop_from_waiting_queue_with_group_id(&group_id);
         Some(task)
     }
@@ -145,25 +154,6 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
             self.waiting_queue.remove(group_id);
         }
         task
-    }
-
-    // pop_group_id_from_waiting_queue returns the next task's group_id.
-    // we choose group according to the following rules:
-    // 1. Select the groups with the least running tasks.
-    // 2. If more than one group meets the first point,
-    //    choose the one whose task comes first(with the minimum task's ID)
-    #[inline]
-    fn pop_group_id_from_waiting_queue(&mut self) -> Option<T> {
-        let data = self.waiting_queue
-            .iter()
-            .map(|(group_id, waiting_queue)| {
-                (self.group_concurrency[group_id], waiting_queue[0].id, group_id)
-            })
-            .min();
-        if let Some((_, _, group_id)) = data {
-            return Some(group_id.clone());
-        }
-        None
     }
 }
 
