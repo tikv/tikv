@@ -1196,8 +1196,8 @@ mod tests {
     use super::*;
     use storage::{CF_WRITE, ALL_CFS};
 
-    pub fn create_tmp_engine(label: &str) -> (TempDir, Arc<DB>) {
-        let path = TempDir::new(label).unwrap();
+    pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
+        let path = TempDir::new(path).unwrap();
         let db = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
         (path, db)
     }
@@ -1252,7 +1252,7 @@ mod tests {
                                  box move |resp| {
                                      resp_tx.send(resp).unwrap();
                                  }));
-        // non registered region should be ignored and notify failed.
+        // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_region_not_found());
