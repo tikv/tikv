@@ -13,10 +13,9 @@
 
 use std::sync::mpsc::channel;
 use std::time::Duration;
-use std::thread;
 use tikv::util::HandyRwLock;
 use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
-use tikv::storage::{txn, engine};
+use tikv::storage::{txn, engine, mvcc};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::server::new_server_cluster_with_cfs;
@@ -52,6 +51,25 @@ fn test_raft_storage() {
     assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
     assert!(storage.scan(ctx.clone(), key.clone(), 1, false, 20).is_err());
     assert!(storage.scan_lock(ctx.clone(), 20).is_err());
+}
+
+#[test]
+fn test_raft_storage_rollback_before_prewrite() {
+    let (_cluster, storage, ctx) = new_raft_storage();
+    let ret = storage.rollback(ctx.clone(), vec![make_key(b"key")], 10);
+    assert!(ret.is_ok());
+    let ret = storage.prewrite(ctx.clone(),
+                               vec![Mutation::Put((make_key(b"key"), b"value".to_vec()))],
+                               b"key".to_vec(),
+                               10);
+    assert!(ret.is_err());
+    let err = ret.unwrap_err();
+    match err {
+        storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict)) => {}
+        _ => {
+            panic!("expect WriteConflict error, but got {:?}", err);
+        }
+    }
 }
 
 #[test]
@@ -127,24 +145,21 @@ fn test_engine_leader_change_twice() {
 fn test_scheduler_leader_change_twice() {
     let mut cluster = new_server_cluster_with_cfs(0, 2, ALL_CFS);
     cluster.run();
-
     let region = cluster.get_region(b"");
     let peers = region.get_peers();
-
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let engine = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let engine = util::BlockEngine::new(engine);
+    let mut engine = util::BlockEngine::new(engine);
     let config = Config::default();
     let mut storage = Storage::from_engine(engine.clone(), &config).unwrap();
     storage.start(&config).unwrap();
-
     let mut ctx = Context::new();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peers[0].clone());
-
     let (tx, rx) = channel();
-    engine.block_snapshot();
+    let (stx, srx) = channel();
+    engine.block_snapshot(stx.clone());
     storage.async_prewrite(ctx.clone(),
                         vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
                         b"k".to_vec(),
@@ -161,8 +176,8 @@ fn test_scheduler_leader_change_twice() {
             tx.send(1).unwrap();
         })
         .unwrap();
-    // Sleep a while, the prewrite should be blocked at snapshot stage.
-    thread::sleep(Duration::from_millis(200));
+    // wait for the message, the prewrite should be blocked at snapshot stage.
+    srx.recv_timeout(Duration::from_secs(2)).unwrap();
     // Transfer leader twice, then unblock snapshot.
     cluster.must_transfer_leader(region.get_id(), peers[1].clone());
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());

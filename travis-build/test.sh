@@ -35,13 +35,19 @@ if [[ "$TRAVIS" = "true" ]]; then
 fi
 export RUSTFLAGS=-Dwarnings
 
+if [[ `uname` == "Linux" ]]; then
+    export EXTRA_CARGO_ARGS="-j 2"
+fi
+
 if [[ "$SKIP_TESTS" != "true" ]]; then
     make test 2>&1 | tee tests.out
 else
-    NO_RUN="--no-run" make test
+    export EXTRA_CARGO_ARGS="$EXTRA_CARGO_ARGS --no-run"
+    make test
     exit $?
 fi
 status=$?
+git diff-index --quiet HEAD -- || echo "\e[35mplease run tests before creating a pr!!!\e[0m" 
 for case in `cat tests.out | python -c "import sys
 import re
 p = re.compile(\"thread '([^']+)' panicked at\")

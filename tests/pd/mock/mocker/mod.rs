@@ -21,11 +21,17 @@ use kvproto::pdpb::*;
 
 mod service;
 mod split;
+mod bootstrap;
 mod leader_change;
+mod retry;
 
 pub use self::service::Service;
 pub use self::split::Split;
+pub use self::bootstrap::AlreadyBootstrap;
 pub use self::leader_change::LeaderChange;
+pub use self::retry::Retry;
+
+pub const DEFAULT_CLUSTER_ID: u64 = 42;
 
 pub type Result<T> = result::Result<T, GrpcError>;
 

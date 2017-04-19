@@ -17,6 +17,7 @@ use std::io;
 use std::{slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
+use time::{self, Timespec};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -308,6 +309,14 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
+// Returns the formatted string for a specified time in local timezone.
+pub fn strftimespec(t: Timespec) -> String {
+    let tm = time::at(t);
+    let mut s = time::strftime("%Y/%m/%d %H:%M:%S", &tm).unwrap();
+    s += &format!(".{:03}", t.nsec / 1_000_000);
+    s
+}
+
 pub fn get_tag_from_thread_name() -> Option<String> {
     thread::current().name().and_then(|name| name.split("::").skip(1).last()).map(From::from)
 }
@@ -465,6 +474,7 @@ mod tests {
     use std::rc::Rc;
     use std::{f64, cmp};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use time;
     use super::*;
 
     #[test]
@@ -526,10 +536,47 @@ mod tests {
     }
 
     #[test]
+    fn test_strftimespec() {
+        let s = "2016/08/30 15:40:07".to_owned();
+        let mut tm = time::strptime(&s, "%Y/%m/%d %H:%M:%S").unwrap();
+        // `tm` is of UTC timezone. Set the timezone of `tm` to be local timezone,
+        // so that we get a `tm` of local timezone.
+        let ltm = tm.to_local();
+        tm.tm_utcoff = ltm.tm_utcoff;
+        assert_eq!(strftimespec(tm.to_timespec()), s + ".000");
+    }
+
+    #[test]
     fn test_defer() {
         let should_panic = Rc::new(AtomicBool::new(true));
         let sp = should_panic.clone();
         defer!(assert!(!sp.load(Ordering::SeqCst)));
         should_panic.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_rwlock_deadlock() {
+        // If the test runs over 60s, then there is a deadlock.
+        let mu = RwLock::new(Some(1));
+        {
+            let _clone = foo(&mu.rl());
+            let mut data = mu.wl();
+            assert!(data.is_some());
+            *data = None;
+        }
+
+        {
+            match foo(&mu.rl()) {
+                Some(_) | None => {
+                    let res = mu.try_write();
+                    assert!(res.is_err());
+                }
+            }
+        }
+
+        #[allow(clone_on_copy)]
+        fn foo(a: &Option<usize>) -> Option<usize> {
+            a.clone()
+        }
     }
 }
