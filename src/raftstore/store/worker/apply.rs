@@ -142,7 +142,7 @@ pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
     cb(resp);
 }
 
-fn should_flush_to_engine_immediately(res: &Option<ExecResult>) -> bool {
+fn should_flush_to_engine(res: &Option<ExecResult>) -> bool {
     // When encounter ComputeHash cmd, we must flush the writebatch to engine immediately.
     if let Some(ref exec_result) = *res {
         if let ExecResult::ComputeHash { .. } = *exec_result {
@@ -232,7 +232,7 @@ impl ApplyDelegate {
                 }
             };
 
-            if should_flush_to_engine_immediately(&res) {
+            if should_flush_to_engine(&res) {
                 self.write_apply_state(&mut wb);
 
                 // flush to engine
