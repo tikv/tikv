@@ -21,9 +21,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::Ordering as CmpOrdering;
 use std::cell::RefCell;
-use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta, ByItem};
+use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::{Expr, ExprType, ByItem};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use threadpool::ThreadPool;
@@ -406,7 +406,7 @@ fn to_pb_error(err: &Error) -> select::Error {
     e
 }
 
-fn prefix_next(key: &[u8]) -> Vec<u8> {
+pub fn prefix_next(key: &[u8]) -> Vec<u8> {
     let mut nk = key.to_vec();
     if nk.is_empty() {
         nk.push(0);
@@ -430,7 +430,7 @@ fn prefix_next(key: &[u8]) -> Vec<u8> {
 }
 
 /// `is_point` checks if the key range represents a point.
-fn is_point(range: &KeyRange) -> bool {
+pub fn is_point(range: &KeyRange) -> bool {
     range.get_end() == &*prefix_next(range.get_start())
 }
 
@@ -1153,8 +1153,7 @@ mod tests {
     use kvproto::coprocessor::Request;
     use kvproto::msgpb::MessageType;
 
-    use tipb::expression::{Expr, ExprType};
-    use tipb::select::ByItem;
+    use tipb::expression::{Expr, ExprType, ByItem};
 
     use util::codec::number::*;
     use util::codec::Datum;
