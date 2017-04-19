@@ -1147,8 +1147,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("notify pd with split left {:?}, right {:?}",
               left_region,
               right_region);
-        left.heartbeat_pd(&self.pd_worker);
         right.heartbeat_pd(&self.pd_worker);
+        left.heartbeat_pd(&self.pd_worker);
 
         // Now pd only uses ReportSplit for history operation show,
         // so we send it independently here.
