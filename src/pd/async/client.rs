@@ -21,8 +21,6 @@ use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::pdpb_grpc::{PDAsync, PDAsyncClient};
 
-use util::HandyRwLock;
-
 use super::super::{PdFuture, PdStream};
 use super::super::{Result, Error, PdClient, RegionHeartbeat};
 use super::util::{validate_endpoints, sync_request, check_resp_header, LeaderClient};
@@ -193,12 +191,12 @@ impl PdClient for RpcClient {
         where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
               E: Send + 'static
     {
+        let header = self.header();
         let f = req_stream.take_while(|t| Ok(t.is_some()))
-            .map(|hb| {
+            .map(move |hb| {
                 let hb = hb.unwrap();
                 let mut req = pdpb::RegionHeartbeatRequest::new();
-                // FIXME: do we need headers here?
-                // req.set_header(self.header());
+                req.set_header(header.clone());
                 req.set_region(hb.region);
                 req.set_leader(hb.leader);
                 req.set_down_peers(RepeatedField::from_vec(hb.down_peers));
@@ -211,8 +209,7 @@ impl PdClient for RpcClient {
 
         // TODO: re-establish stream after the previous connected PD failed.
         self.leader_client
-            .inner
-            .rl()
+            .get_client()
             .client
             .RegionHeartbeat(f)
             .map_err(Error::Grpc)
@@ -283,5 +280,9 @@ impl PdClient for RpcClient {
         self.leader_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
+    }
+
+    fn reconnect(&self) {
+        self.leader_client.reconnect();
     }
 }

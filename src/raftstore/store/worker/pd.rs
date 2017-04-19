@@ -161,15 +161,15 @@ impl<T: PdClient> Runner<T> {
                         return;
                     }
                     Err(e) => {
-                        // TODO: retry here if the connection is lost?
-                        //       How to ensure the connection is established.
                         debug!("[region {}] failed to send heartbeat: {:?}",
                                region.get_id(),
                                e);
+                        self.pd_client.reconnect()
                     }
                 }
             }
 
+            println!("[PdWorker] build region heartbeat streaming\n\n\n\n\n\n\n");
             let (tx, rx) = unbounded();
             self.region_hb = Some(tx);
             let ch_stream = CloneableStream::new(self.ch.clone());
@@ -179,6 +179,7 @@ impl<T: PdClient> Runner<T> {
                 .for_each(|(mut resp, ch)| {
                     // Now we use put region protocol for heartbeat.
                     PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
+                    println!("[PdWorker] receive region heartbeat response\n\n\n\n\n\n\n");
 
                     if resp.has_change_peer() {
                         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]).inc();

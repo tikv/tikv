@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::RwLockReadGuard;
 use std::time::Instant;
 use std::time::Duration;
 use std::thread;
@@ -42,7 +43,7 @@ pub struct Inner {
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
-    pub inner: Arc<RwLock<Inner>>,
+    inner: Arc<RwLock<Inner>>,
 }
 
 impl LeaderClient {
@@ -71,6 +72,10 @@ impl LeaderClient {
 
     pub fn get_leader(&self) -> Member {
         self.inner.rl().members.get_leader().clone()
+    }
+
+    pub fn get_client(&self) -> RwLockReadGuard<Inner> {
+        self.inner.rl()
     }
 
     // Re-establish connection with PD leader in synchronized fashion.

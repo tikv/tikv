@@ -628,4 +628,7 @@ impl PdClient for TestPdClient {
         self.cluster.wl().split_count += 1;
         ok(()).boxed()
     }
+    fn reconnect(&self) {
+        unimplemented!()
+    }
 }
