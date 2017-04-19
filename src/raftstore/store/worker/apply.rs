@@ -142,6 +142,16 @@ pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
     cb(resp);
 }
 
+fn should_flush_to_engine_immediately(res: &Option<ExecResult>) -> bool {
+    // When encounter ComputeHash cmd, we must flush the writebatch to engine immediately.
+    if let Some(ref exec_result) = *res {
+        if let ExecResult::ComputeHash { .. } = *exec_result {
+            return true;
+        }
+    }
+    false
+}
+
 pub struct ApplyDelegate {
     // peer_id
     id: u64,
@@ -222,25 +232,21 @@ impl ApplyDelegate {
                 }
             };
 
-            // When encounter ComputeHash cmd, we must flush the writebatch to engine immediately.
-            if let Some(ref exec_result) = res {
-                if let ExecResult::ComputeHash { .. } = *exec_result {
-                    // add apply state to write batch
-                    self.write_apply_state(&mut wb);
+            if should_flush_to_engine_immediately(&res) {
+                self.write_apply_state(&mut wb);
 
-                    // flush to engine
-                    self.engine
-                        .write(wb)
-                        .unwrap_or_else(|e| {
-                            panic!("{} failed to write to engine, error: {:?}", self.tag, e)
-                        });
+                // flush to engine
+                self.engine
+                    .write(wb)
+                    .unwrap_or_else(|e| {
+                        panic!("{} failed to write to engine, error: {:?}", self.tag, e)
+                    });
 
-                    // call callback
-                    for (cb, resp) in cbs.drain(..) {
-                        cb(resp);
-                    }
-                    wb = WriteBatch::new();
+                // call callback
+                for (cb, resp) in cbs.drain(..) {
+                    cb(resp);
                 }
+                wb = WriteBatch::new();
             }
 
             if let Some(res) = res {
