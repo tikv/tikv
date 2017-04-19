@@ -1297,29 +1297,32 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             // matter if the region is not split from the current region. If the region meta
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
-            let new_region_id = if self.cfg.right_derive_when_split {
-                if let Some((_, &region_id)) = self.region_ranges
-                    .range((Included(enc_start_key(peer.region())), Unbounded::<Key>))
-                    .next() {
-                    Some(region_id)
-                } else {
-                    None
-                }
-            } else if let Some((_, &region_id)) = self.region_ranges
-                .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
-                .next() {
-                Some(region_id)
-            } else {
-                None
-            };
-
-            if let Some(new_region_id) = new_region_id {
-                let new_region = self.region_peers[&new_region_id].region();
-                new_regions.push(new_region.to_owned());
+            let sibling_region_id = self.find_sibling_region(peer.region());
+            if let Some(sibling_region_id) = sibling_region_id {
+                let sibling_region = self.region_peers[&sibling_region_id].region();
+                new_regions.push(sibling_region.to_owned());
             }
             return Err(Error::StaleEpoch(msg, new_regions));
         }
         res
+    }
+
+    pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {
+        if self.cfg.right_derive_when_split {
+            if let Some((_, &region_id)) = self.region_ranges
+                .range((Included(enc_start_key(region)), Unbounded::<Key>))
+                .next() {
+                Some(region_id)
+            } else {
+                None
+            }
+        } else if let Some((_, &region_id)) = self.region_ranges
+            .range((Excluded(enc_end_key(region)), Unbounded::<Key>))
+            .next() {
+            Some(region_id)
+        } else {
+            None
+        }
     }
 
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {
