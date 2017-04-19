@@ -17,7 +17,7 @@ use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::cmp::Ordering;
-use std::sync::atomic::{AtomicUsize, Ordering as AOrdering};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
@@ -25,7 +25,7 @@ pub struct Task<T> {
     // The task's number in the pool. Each task has a unique number,
     // and it's always bigger than preceding ones.
     id: u64,
-    // the task's group_id.
+    // which group the task belongs to.
     group_id: T,
     task: Box<FnBox() + Send>,
 }
@@ -100,7 +100,7 @@ pub struct BigGroupThrottledQueue<T> {
 }
 
 
-impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
+impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     pub fn new(group_concurrency_on_busy: usize) -> BigGroupThrottledQueue<T> {
         BigGroupThrottledQueue {
             group_concurrency: HashMap::new(),
@@ -154,35 +154,20 @@ impl<T: Hash + Eq + Send + Clone> BigGroupThrottledQueue<T> {
     //    choose the one whose task comes first(with the minimum task's ID)
     #[inline]
     fn pop_group_id_from_waiting_queue(&mut self) -> Option<T> {
-        // (group_id,count,task_id) the best current group's info with it's group_id,
-        // running tasks count, front task's id in waiting queue.
-        let mut next_group = None;
-        for (group_id, tasks) in &self.waiting_queue {
-            let front_task_id = tasks[0].id;
-            assert!(self.group_concurrency.contains_key(group_id));
-            let count = self.group_concurrency[group_id];
-            if next_group.is_none() {
-                next_group = Some((group_id, count, front_task_id));
-                continue;
-            }
-            let (_, pre_count, pre_task_id) = next_group.unwrap();
-            if pre_count > count {
-                next_group = Some((group_id, count, front_task_id));
-                continue;
-            }
-            if pre_count == count && pre_task_id > front_task_id {
-                next_group = Some((group_id, count, front_task_id));
-            }
-        }
-        if let Some((group_id, _, _)) = next_group {
+        let data = self.waiting_queue
+            .iter()
+            .map(|(group_id, waiting_queue)| {
+                (self.group_concurrency[group_id], waiting_queue[0].id, group_id)
+            })
+            .min();
+        if let Some((_, _, group_id)) = data {
             return Some(group_id.clone());
         }
-        // no task in waiting.
         None
     }
 }
 
-impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
+impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
     // push one task into queue.
     fn push(&mut self, task: Task<T>) {
         if let Err(PushError(task)) = self.try_push_into_pending(task) {
@@ -195,7 +180,7 @@ impl<T: Hash + Eq + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T>
 
     fn pop(&mut self) -> Option<Task<T>> {
         if let Some(task) = self.pending_tasks.pop() {
-            let count = self.group_concurrency.entry(task.group_id.clone()).or_insert(0);
+            let count = self.group_concurrency.get_mut(&task.group_id).unwrap();
             *count -= 1;
             return Some(task);
         } else if let Some(task) = self.pop_from_waiting_queue() {
@@ -303,11 +288,11 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
         let task_count = Arc::new(AtomicUsize::new(0));
         // Threadpool threads
         for _ in 0..num_threads {
-            let mut builder = Builder::new();
-            builder = builder.name(name.clone());
             let tasks = task_pool.clone();
             let task_num = task_count.clone();
-            let thread = builder.spawn(move || {
+            let thread = Builder::new()
+                .name(name.clone())
+                .spawn(move || {
                     let mut worker = Worker::new(tasks, task_num);
                     worker.run();
                 })
@@ -326,7 +311,7 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
     pub fn execute<F>(&mut self, group_id: T, job: F)
         where F: FnOnce() + Send + 'static
     {
-        self.task_count.fetch_add(1, AOrdering::SeqCst);
+        self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
         let &(ref lock, ref cvar) = &*self.task_pool;
         let mut meta = lock.lock().unwrap();
         meta.push_task(group_id, job);
@@ -335,7 +320,7 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
 
     #[inline]
     pub fn get_task_count(&self) -> usize {
-        self.task_count.load(AOrdering::SeqCst)
+        self.task_count.load(AtomicOrdering::SeqCst)
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
@@ -410,10 +395,11 @@ impl<Q, T> Worker<Q, T>
         while let Some(task) = self.get_next_task() {
             // handle task
             // since tikv would be down when any panic happens,
-            // we do't need to process panic case here.
-            task.task.call_box(());
+            // we don't need to process panic case here.
+            // task.task.call_box(());
+            (task.task)();
             self.on_task_finished(&task.group_id);
-            self.task_count.fetch_sub(1, AOrdering::SeqCst);
+            self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
         }
     }
 }
