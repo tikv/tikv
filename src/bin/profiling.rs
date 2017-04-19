@@ -102,12 +102,11 @@ mod imp {
     use std::time::Duration;
     use std::thread::JoinHandle;
 
-    pub fn profile_memory(_: Option<&str>,
-                          _: &Arc<AtomicBool>,
-                          _: Duration)
-                          -> Option<JoinHandle<()>> {
-        None
+    pub fn toggle_prof() -> Result<bool, i32> {
+        Ok(false)
     }
+
+    pub fn dump_prof(_: Option<&str>) {}
 }
 
 pub use self::imp::*;
