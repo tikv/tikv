@@ -439,7 +439,7 @@ mod test {
         task_pool.execute(group_with_big_task, move || {
             sleep(sleep_duration * 10);
         });
-        assert_eq!(task_pool.get_task_count(), 1);
+
         // make sure the big task is running.
         sleep(sleep_duration / 4);
 
@@ -542,6 +542,36 @@ mod test {
         assert_eq!(group2_num, 2);
         assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
         assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
+    }
+
+    #[test]
+    fn test_get_task_count() {
+        let name = thd_name!("test_get_task_count");
+        let concurrency = 1;
+        let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(1));
+        let (tx, rx) = channel();
+        let sleep_duration = Duration::from_millis(50);
+        let recv_timeout_duration = Duration::from_secs(2);
+        let group_num = 4;
+        let mut task_num = 0;
+        for gid in 0..group_num {
+            let txer = tx.clone();
+            task_pool.execute(gid, move || {
+                sleep(sleep_duration);
+                txer.send(gid).unwrap();
+            });
+            task_num += 1;
+            assert_eq!(task_pool.get_task_count(), task_num);
+        }
+
+        for gid in 0..group_num {
+            assert_eq!(gid, rx.recv_timeout(recv_timeout_duration).unwrap());
+            // to make sure the task was finished and count has been changed.
+            sleep(sleep_duration / 2);
+            task_num -= 1;
+            assert_eq!(task_pool.get_task_count(), task_num);
+        }
+        task_pool.stop().unwrap();
     }
 
     #[test]
