@@ -42,9 +42,8 @@ mod imp {
     pub fn toggle_prof() -> Result<bool, i32> {
         let mut enabled = false;
         unsafe {
-            jemallocator::mallctl_fetch(PROFILE_ACTIVE, &mut enabled).and_then(|_| {
-                jemallocator::mallctl_set(PROFILE_ACTIVE, !enabled)
-            })?;
+            try!(jemallocator::mallctl_fetch(PROFILE_ACTIVE, &mut enabled)
+                .and_then(|_| jemallocator::mallctl_set(PROFILE_ACTIVE, !enabled)));
         }
         if enabled {
             info!("memory profiling is disabled");
@@ -58,6 +57,12 @@ mod imp {
     ///
     /// If `path` is `None`, will dump it in the working directory with a auto-generated name.
     pub fn dump_prof(path: Option<&str>) {
+        unsafe {
+            if let Err(e) = jemallocator::mallctl_set(PROFILE_ACTIVE, true) {
+                error!("failed to activate profiling: {}", e);
+                return;
+            }
+        }
         let mut c_path = DumpPathGuard::from_cstring(path.map(|p| CString::new(p).unwrap()));
         let res = unsafe { jemallocator::mallctl_set(PROFILE_DUMP, c_path.get_mut_ptr()) };
         match res {
@@ -84,13 +89,18 @@ mod imp {
         #[ignore]
         fn test_profiling_memory() {
             let dir = TempDir::new("test_profiling").unwrap();
-            let os_path = dir.path().to_path_buf().join("test.dump").into_os_string();
+            let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-
             assert_eq!(super::toggle_prof(), Ok(true));
             super::dump_prof(Some(&path));
+
+            let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
+            let path = os_path.into_string().unwrap();
+            assert_eq!(super::toggle_prof(), Ok(false));
+            super::dump_prof(Some(&path));
+
             let files = fs::read_dir(dir.path()).unwrap().count();
-            assert_eq!(files, 1);
+            assert_eq!(files, 2);
         }
     }
 }
