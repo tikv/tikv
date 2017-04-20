@@ -11,9 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod tablescan;
 use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
+
+pub mod tablescan;
+
 
 pub trait Executor {
     fn next(&mut self) -> Result<Option<(i64, RowColsDict)>>;

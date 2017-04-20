@@ -37,6 +37,7 @@ struct TableScanExec<'a> {
 
 
 impl<'a> TableScanExec<'a> {
+    #[allow(dead_code)] //TODO:remove it
     pub fn new(executor: TableScan,
                key_ranges: Vec<KeyRange>,
                store: SnapshotStore<'a>,
@@ -68,6 +69,7 @@ impl<'a> TableScanExec<'a> {
             statistics: statistics,
         }
     }
+
     fn get_row_from_point(&mut self) -> Result<Option<(i64, RowColsDict)>> {
         let range = &self.key_ranges[self.cursor];
         let value = match try!(self.store
@@ -184,7 +186,7 @@ mod test {
     use storage::{make_key, Mutation, ALL_CFS, Options, Statistics};
     use storage::engine::{self, Engine, TEMP_DIR, Snapshot};
     use protobuf::RepeatedField;
-    use server::coprocessor::endpoint::{is_point,prefix_next};
+    use server::coprocessor::endpoint::{is_point, prefix_next};
 
     const TABLE_ID: i64 = 1;
     const START_TS: u64 = 10;
@@ -209,14 +211,14 @@ mod test {
     struct Data {
         data: Vec<(Vec<u8>, Vec<u8>)>,
         pk: Vec<u8>,
-        //encode_data[row_id][column_id]=>value
-        encode_data: Vec<HashMap<i64,Vec<u8>>>,
-       
+        // encode_data[row_id][column_id]=>value
+        encode_data: Vec<HashMap<i64, Vec<u8>>>,
+
         cols: Vec<ColumnInfo>,
     }
 
     impl Data {
-        fn get_prev_2_cols(&self)->Vec<ColumnInfo>{
+        fn get_prev_2_cols(&self) -> Vec<ColumnInfo> {
             let col1 = self.cols[0].clone();
             let col2 = self.cols[1].clone();
             vec![col1, col2]
@@ -244,7 +246,7 @@ mod test {
                 .map(|(k, v)| {
                     let f = flatten(v.clone()).unwrap();
                     let value = datum::encode_value(&[f]).unwrap();
-                    encode_value.insert(*k,value);
+                    encode_value.insert(*k, value);
                     v.clone()
                 })
                 .collect();
@@ -327,59 +329,21 @@ mod test {
     }
 
     #[inline]
-    fn get_region(start:i64,end:i64)->(Vec<u8>,Vec<u8>) {
+    fn get_region(start: i64, end: i64) -> (Vec<u8>, Vec<u8>) {
         let mut start_buf = Vec::with_capacity(8);
         start_buf.encode_i64(start).unwrap();
         let mut end_buf = Vec::with_capacity(8);
         end_buf.encode_i64(end).unwrap();
-        (start_buf,end_buf)
+        (start_buf, end_buf)
     }
 
     #[inline]
-    fn get_range(start:i64,end:i64)->KeyRange {
+    fn get_range(start: i64, end: i64) -> KeyRange {
         let mut key_range = KeyRange::new();
-        let (left,right) = get_region(start,end);
+        let (left, right) = get_region(start, end);
         key_range.set_start(table::encode_row_key(TABLE_ID, &left));
         key_range.set_end(table::encode_row_key(TABLE_ID, &right));
         key_range
-    }
-
-    #[test]
-    fn test_scan_executor() {
-        let test_store = TestStore::new();
-        let store = test_store.store();
-        let mut statistics = Statistics::default();
-        let mut table_scan = TableScan::new();
-        // prepare cols
-        let cols = test_store.data.get_prev_2_cols();
-        let col_req = RepeatedField::from_vec(cols.clone());
-        table_scan.set_columns(col_req);
-        
-        // prepare region_start/region_end
-        let (region_start,region_end) = get_region(i64::MIN,i64::MAX);
-        // prepare range
-        let range = get_range(i64::MIN,i64::MAX);
-        let key_ranges = vec![range];
-
-        let mut table_scanner = TableScanExec::new(table_scan,
-                                                   key_ranges,
-                                                   store,
-                                                   region_start,
-                                                   region_end,
-                                                   &mut statistics);
-
-        for col_id in 0..KEY_NUMBER {
-            let (handler, data) = table_scanner.next().unwrap().unwrap();
-            assert_eq!(handler, col_id as i64);
-            assert_eq!(data.len(), cols.len());
-            let ref encode_data = test_store.data.encode_data[col_id];
-            for col in &cols {
-                let cid = col.get_column_id();
-                let v = data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid],v.to_vec());
-            }
-        }
-        assert!(table_scanner.next().unwrap().is_none());
     }
 
     #[test]
@@ -392,9 +356,9 @@ mod test {
         let cols = test_store.data.get_prev_2_cols();
         let col_req = RepeatedField::from_vec(cols.clone());
         table_scan.set_columns(col_req);
-        
+
         // prepare region_start/region_end
-        let (region_start,region_end) = get_region(i64::MIN,i64::MAX);
+        let (region_start, region_end) = get_region(i64::MIN, i64::MAX);
 
         let point_handler = 0 as i64;
         // prepare range
@@ -416,17 +380,17 @@ mod test {
         let (handler, data) = table_scanner.next().unwrap().unwrap();
         assert_eq!(handler, point_handler);
         assert_eq!(data.len(), cols.len());
-        let ref encode_data = test_store.data.encode_data[0];
+        let encode_data = &test_store.data.encode_data[0];
         for col in &cols {
-                let cid = col.get_column_id();
-                let v = data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid],v.to_vec());
+            let cid = col.get_column_id();
+            let v = data.get(cid).unwrap();
+            assert_eq!(encode_data[&cid], v.to_vec());
         }
         assert!(table_scanner.next().unwrap().is_none());
     }
 
     #[test]
-    fn test_multiple_range(){
+    fn test_multiple_ranges() {
         let test_store = TestStore::new();
         let store = test_store.store();
         let mut statistics = Statistics::default();
@@ -435,14 +399,14 @@ mod test {
         let cols = test_store.data.get_prev_2_cols();
         let col_req = RepeatedField::from_vec(cols.clone());
         table_scan.set_columns(col_req);
-        
+
         // prepare region_start/region_end
-        let (region_start,region_end) = get_region(i64::MIN,i64::MAX);
+        let (region_start, region_end) = get_region(i64::MIN, i64::MAX);
         // prepare range
-        let r1 = get_range(i64::MIN,0);
-        let r2 = get_range(0,(KEY_NUMBER/2) as i64);
-        let r3 = get_range((KEY_NUMBER/2) as i64,i64::MAX);
-        let key_ranges = vec![r1,r2,r3];
+        let r1 = get_range(i64::MIN, 0);
+        let r2 = get_range(0, (KEY_NUMBER / 2) as i64);
+        let r3 = get_range((KEY_NUMBER / 2) as i64, i64::MAX);
+        let key_ranges = vec![r1, r2, r3];
 
         let mut table_scanner = TableScanExec::new(table_scan,
                                                    key_ranges,
@@ -455,11 +419,11 @@ mod test {
             let (handler, data) = table_scanner.next().unwrap().unwrap();
             assert_eq!(handler, col_id as i64);
             assert_eq!(data.len(), cols.len());
-            let ref encode_data = test_store.data.encode_data[col_id];
+            let encode_data = &test_store.data.encode_data[col_id];
             for col in &cols {
                 let cid = col.get_column_id();
                 let v = data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid],v.to_vec());
+                assert_eq!(encode_data[&cid], v.to_vec());
             }
         }
         assert!(table_scanner.next().unwrap().is_none());
@@ -475,11 +439,11 @@ mod test {
         let cols = test_store.data.get_prev_2_cols();
         let col_req = RepeatedField::from_vec(cols.clone());
         table_scan.set_columns(col_req);
-        
+
         // prepare region_start/region_end
-        let (region_start,region_end) = get_region(i64::MIN,i64::MAX);
+        let (region_start, region_end) = get_region(i64::MIN, i64::MAX);
         // prepare range
-        let range = get_range(i64::MIN,i64::MAX);
+        let range = get_range(i64::MIN, i64::MAX);
         let key_ranges = vec![range];
 
         table_scan.set_desc(true);
@@ -496,11 +460,11 @@ mod test {
             let (handler, data) = table_scanner.next().unwrap().unwrap();
             assert_eq!(handler, col_id as i64);
             assert_eq!(data.len(), 2);
-            let ref encode_data = test_store.data.encode_data[col_id];
+            let encode_data = &test_store.data.encode_data[col_id];
             for col in &cols {
                 let cid = col.get_column_id();
                 let v = data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid],v.to_vec());
+                assert_eq!(encode_data[&cid], v.to_vec());
             }
         }
         assert!(table_scanner.next().unwrap().is_none());
