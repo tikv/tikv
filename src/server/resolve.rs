@@ -154,9 +154,10 @@ mod tests {
     use std::str::FromStr;
     use std::thread;
 
+    use futures::Stream;
     use kvproto::pdpb;
     use kvproto::metapb;
-    use pd::{PdClient, Result, PdFuture};
+    use pd::{PdClient, Result, PdFuture, PdStream, RegionHeartbeat};
     use util::{self, HashMap};
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -199,14 +200,11 @@ mod tests {
         fn get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
             unimplemented!();
         }
-        fn region_heartbeat(&self,
-                            _: metapb::Region,
-                            _: metapb::Peer,
-                            _: Vec<pdpb::PeerStats>,
-                            _: Vec<metapb::Peer>,
-                            _: u64)
-                            -> PdFuture<pdpb::RegionHeartbeatResponse> {
-            unimplemented!();
+        fn region_heartbeat<S, E>(&self, _: S) -> PdStream<pdpb::RegionHeartbeatResponse>
+            where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
+                  E: Send + 'static
+        {
+            unimplemented!()
         }
         fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
             unimplemented!();
@@ -216,6 +214,9 @@ mod tests {
         }
         fn report_split(&self, _: metapb::Region, _: metapb::Region) -> PdFuture<()> {
             unimplemented!();
+        }
+        fn reconnect(&self) {
+            unimplemented!()
         }
     }
 

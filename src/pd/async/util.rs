@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::RwLockReadGuard;
 use std::time::Instant;
 use std::time::Duration;
 use std::thread;
@@ -36,8 +37,8 @@ use super::super::{Result, Error, PdFuture};
 use super::super::metrics::PD_SEND_MSG_HISTOGRAM;
 
 pub struct Inner {
-    client: PDAsyncClient,
-    members: GetMembersResponse,
+    pub client: PDAsyncClient,
+    pub members: GetMembersResponse,
 }
 
 /// A leader client doing requests asynchronous.
@@ -71,6 +72,10 @@ impl LeaderClient {
 
     pub fn get_leader(&self) -> Member {
         self.inner.rl().members.get_leader().clone()
+    }
+
+    pub fn get_client(&self) -> RwLockReadGuard<Inner> {
+        self.inner.rl()
     }
 
     // Re-establish connection with PD leader in synchronized fashion.

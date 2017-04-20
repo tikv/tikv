@@ -15,19 +15,19 @@
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::RwLock;
+use std::sync::{RwLock, Arc};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::Future;
+use futures::{Future, Stream};
 use futures::future::{ok, err};
 
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::eraftpb;
-use tikv::pd::{PdClient, Result, Error, Key, PdFuture};
+use tikv::pd::{PdClient, Result, Error, Key, RegionHeartbeat, PdFuture, PdStream};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
-use tikv::util::{HandyRwLock, escape};
+use tikv::util::{HandyRwLock, escape, CloneableStream};
 use super::util::*;
 
 // Rule is just for special test which we want do more accurate control
@@ -281,7 +281,7 @@ impl Cluster {
     }
 
     fn region_heartbeat(&mut self,
-                        region: metapb::Region,
+                        mut region: metapb::Region,
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
@@ -299,7 +299,11 @@ impl Cluster {
         }
 
         try!(self.handle_heartbeat_version(region.clone()));
-        self.handle_heartbeat_conf_ver(region, leader)
+        let mut resp = try!(self.handle_heartbeat_conf_ver(region.clone(), leader.clone()));
+        resp.set_region_id(region.get_id());
+        resp.set_region_epoch(region.take_region_epoch());
+        resp.set_target_peer(leader);
+        Ok(resp)
     }
 }
 
@@ -339,14 +343,14 @@ fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::P
 
 pub struct TestPdClient {
     cluster_id: u64,
-    cluster: RwLock<Cluster>,
+    cluster: Arc<RwLock<Cluster>>,
 }
 
 impl TestPdClient {
     pub fn new(cluster_id: u64) -> TestPdClient {
         TestPdClient {
             cluster_id: cluster_id,
-            cluster: RwLock::new(Cluster::new(cluster_id)),
+            cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
         }
     }
 
@@ -557,23 +561,29 @@ impl PdClient for TestPdClient {
         Ok(self.cluster.rl().meta.clone())
     }
 
-
-    fn region_heartbeat(&self,
-                        region: metapb::Region,
-                        leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
-                        -> PdFuture<pdpb::RegionHeartbeatResponse> {
-        if let Err(e) = self.check_bootstrap() {
-            return err(e).boxed();
-        }
-        match self.cluster
-            .wl()
-            .region_heartbeat(region, leader, down_peers, pending_peers, written_bytes) {
-            Ok(resp) => ok(resp).boxed(),
-            Err(e) => err(e).boxed(),
-        }
+    fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
+        where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
+              E: Send + 'static
+    {
+        let c = CloneableStream::new((self.cluster.clone(), self.cluster_id));
+        req_stream.map_err(|_| Error::Other(box_err!("unexpected error")))
+            .take_while(|t| Ok(t.is_some()))
+            .zip(c)
+            .then(|req| {
+                let (hb, c) = req.unwrap();
+                let (cluster, cluster_id) = c;
+                let mut cluster = cluster.wl();
+                if cluster.stores.is_empty() {
+                    return Err(Error::ClusterNotBootstrapped(cluster_id));
+                }
+                let hb = hb.unwrap();
+                cluster.region_heartbeat(hb.region,
+                                         hb.leader,
+                                         hb.down_peers,
+                                         hb.pending_peers,
+                                         hb.written_bytes)
+            })
+            .boxed()
     }
 
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
@@ -617,5 +627,8 @@ impl PdClient for TestPdClient {
         }
         self.cluster.wl().split_count += 1;
         ok(()).boxed()
+    }
+    fn reconnect(&self) {
+        unimplemented!()
     }
 }

@@ -16,12 +16,15 @@ use std::net::ToSocketAddrs;
 
 use futures;
 use futures::Future;
+use futures::Stream;
 
 use grpc::error::GrpcError;
 use grpc::futures_grpc::{GrpcFutureSend, GrpcStreamSend};
 
 use kvproto::pdpb::*;
 use kvproto::pdpb_grpc::{PDAsync, PDAsyncServer};
+
+use tikv::util::CloneableStream;
 
 use super::Mocker;
 use super::mocker::Service;
@@ -63,13 +66,21 @@ fn try_takeover<F, R, C: Mocker>(mock: &Mock<C>, f: F) -> GrpcFutureSend<R>
     }
 }
 
-#[derive(Debug)]
-struct Mock<C: Mocker> {
+impl<C: Mocker + 'static> Clone for Mock<C> {
+    fn clone(&self) -> Self {
+        Mock {
+            handler: self.handler.clone(),
+            case: self.case.as_ref().and_then(|c| Some(c.clone())),
+        }
+    }
+}
+
+struct Mock<C: Mocker + 'static> {
     handler: Arc<Service>,
     case: Option<Arc<C>>,
 }
 
-impl<C: Mocker> PDAsync for Mock<C> {
+impl<C: Mocker + 'static> PDAsync for Mock<C> {
     fn GetMembers(&self, req: GetMembersRequest) -> GrpcFutureSend<GetMembersResponse> {
         try_takeover(self, |c| c.GetMembers(&req))
     }
@@ -103,9 +114,10 @@ impl<C: Mocker> PDAsync for Mock<C> {
     }
 
     fn RegionHeartbeat(&self,
-                       req: RegionHeartbeatRequest)
-                       -> GrpcFutureSend<RegionHeartbeatResponse> {
-        try_takeover(self, |c| c.RegionHeartbeat(&req))
+                       req_stream: GrpcStreamSend<RegionHeartbeatRequest>)
+                       -> ::grpc::futures_grpc::GrpcStreamSend<RegionHeartbeatResponse> {
+        let m = CloneableStream::new(self.clone());
+        req_stream.zip(m).and_then(|(req, m)| try_takeover(&m, |c| c.RegionHeartbeat(&req))).boxed()
     }
 
     fn GetRegion(&self, _: GetRegionRequest) -> GrpcFutureSend<GetRegionResponse> {

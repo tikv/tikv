@@ -14,6 +14,8 @@
 use std::vec::Vec;
 
 use futures::BoxFuture;
+use futures::Stream;
+use futures::stream::BoxStream;
 
 mod async;
 mod metrics;
@@ -28,8 +30,18 @@ use kvproto::pdpb;
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<T, Error>;
+pub type PdStream<T> = BoxStream<T, Error>;
 
 pub const INVALID_ID: u64 = 0;
+
+#[derive(Debug)]
+pub struct RegionHeartbeat {
+    pub region: metapb::Region,
+    pub leader: metapb::Peer,
+    pub down_peers: Vec<pdpb::PeerStats>,
+    pub pending_peers: Vec<metapb::Peer>,
+    pub written_bytes: u64,
+}
 
 // Client to communicate with placement driver (pd) for special cluster.
 // Because now one pd only supports one cluster, so it is no need to pass
@@ -88,13 +100,9 @@ pub trait PdClient: Send + Sync {
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
 
     // Leader for a region will use this to heartbeat Pd.
-    fn region_heartbeat(&self,
-                        region: metapb::Region,
-                        leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
-                        -> PdFuture<pdpb::RegionHeartbeatResponse>;
+    fn region_heartbeat<S, E>(&self, req_stream: S) -> PdStream<pdpb::RegionHeartbeatResponse>
+        where S: Stream<Item = Option<RegionHeartbeat>, Error = E> + Send + 'static,
+              E: Send + 'static;
 
     // Ask pd for split, pd will returns the new split region id.
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
@@ -104,4 +112,7 @@ pub trait PdClient: Send + Sync {
 
     // Report pd the split region.
     fn report_split(&self, left: metapb::Region, right: metapb::Region) -> PdFuture<()>;
+
+    // Reconnect to remote PD servers.
+    fn reconnect(&self);
 }

@@ -16,6 +16,8 @@ use std::fmt::{self, Formatter, Display};
 
 use uuid::Uuid;
 use futures::Future;
+use futures::Stream;
+use futures::sync::mpsc::{unbounded, UnboundedSender};
 use tokio_core::reactor::Handle;
 
 use kvproto::metapb;
@@ -25,9 +27,9 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::pdpb;
 
 use util::worker::FutureRunnable as Runnable;
-use util::escape;
+use util::{escape, CloneableStream};
 use util::transport::SendCh;
-use pd::PdClient;
+use pd::{PdClient, RegionHeartbeat};
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
 
@@ -85,9 +87,12 @@ impl Display for Task {
     }
 }
 
+type RegionHeartBeatChannel = UnboundedSender<Option<RegionHeartbeat>>;
+
 pub struct Runner<T: PdClient> {
     pd_client: Arc<T>,
     ch: SendCh<Msg>,
+    region_hb: Option<RegionHeartBeatChannel>,
 }
 
 impl<T: PdClient> Runner<T> {
@@ -95,12 +100,13 @@ impl<T: PdClient> Runner<T> {
         Runner {
             pd_client: pd_client,
             ch: ch,
+            region_hb: None,
         }
     }
 
     fn handle_ask_split(&self,
                         handle: &Handle,
-                        region: metapb::Region,
+                        mut region: metapb::Region,
                         split_key: Vec<u8>,
                         peer: metapb::Peer) {
         PD_REQ_COUNTER_VEC.with_label_values(&["ask split", "all"]).inc();
@@ -120,7 +126,9 @@ impl<T: PdClient> Runner<T> {
                         let req = new_split_region_request(split_key,
                                                            resp.get_new_region_id(),
                                                            resp.take_new_peer_ids());
-                        send_admin_request(ch, region, peer, req);
+                        let region_id = region.get_id();
+                        let region_epoch = region.take_region_epoch();
+                        send_admin_request(ch, region_id, region_epoch, peer, req);
                     }
                     Err(e) => {
                         debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
@@ -131,62 +139,81 @@ impl<T: PdClient> Runner<T> {
         handle.spawn(f)
     }
 
-    fn handle_heartbeat(&self,
+    fn handle_heartbeat(&mut self,
                         handle: &Handle,
                         region: metapb::Region,
                         peer: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
                         written_bytes: u64) {
-        PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
-
-        let ch = self.ch.clone();
-
-        // Now we use put region protocol for heartbeat.
-        let f = self.pd_client
-            .region_heartbeat(region.clone(),
-                              peer.clone(),
-                              down_peers,
-                              pending_peers,
-                              written_bytes)
-            .then(move |resp| {
-                match resp {
-                    Ok(mut resp) => {
-                        PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
-
-                        if resp.has_change_peer() {
-                            PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]).inc();
-
-                            let mut change_peer = resp.take_change_peer();
-                            info!("[region {}] try to change peer {:?} {:?} for region {:?}",
-                                  region.get_id(),
-                                  change_peer.get_change_type(),
-                                  change_peer.get_peer(),
-                                  region);
-                            let req = new_change_peer_request(change_peer.get_change_type().into(),
-                                                              change_peer.take_peer());
-                            send_admin_request(ch, region, peer, req);
-                        } else if resp.has_transfer_leader() {
-                            PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]).inc();
-
-                            let mut transfer_leader = resp.take_transfer_leader();
-                            info!("[region {}] try to transfer leader from {:?} to {:?}",
-                                  region.get_id(),
-                                  peer,
-                                  transfer_leader.get_peer());
-                            let req = new_transfer_leader_request(transfer_leader.take_peer());
-                            send_admin_request(ch, region, peer, req)
-                        }
+        loop {
+            if let Some(ref ch) = self.region_hb {
+                let result = ch.send(Some(RegionHeartbeat {
+                    region: region.clone(),
+                    leader: peer.clone(),
+                    down_peers: down_peers.clone(),
+                    pending_peers: pending_peers.clone(),
+                    written_bytes: written_bytes,
+                }));
+                match result {
+                    Ok(_) => {
+                        PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
+                        return;
                     }
                     Err(e) => {
                         debug!("[region {}] failed to send heartbeat: {:?}",
                                region.get_id(),
                                e);
+                        self.pd_client.reconnect()
                     }
                 }
-                Ok(())
-            });
-        handle.spawn(f);
+            }
+
+            let (tx, rx) = unbounded();
+            self.region_hb = Some(tx);
+            let ch_stream = CloneableStream::new(self.ch.clone());
+            let f = self.pd_client
+                .region_heartbeat(rx)
+                .zip(ch_stream)
+                .for_each(|(mut resp, ch)| {
+                    // Now we use put region protocol for heartbeat.
+                    PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
+
+                    if resp.has_change_peer() {
+                        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]).inc();
+
+                        let mut change_peer = resp.take_change_peer();
+                        let region_id = resp.get_region_id();
+                        let region_epoch = resp.take_region_epoch();
+                        let peer = resp.take_target_peer();
+                        info!("[region {}] try to change peer {:?} {:?}",
+                              region_id,
+                              change_peer.get_change_type(),
+                              change_peer.get_peer());
+                        let req = new_change_peer_request(change_peer.get_change_type().into(),
+                                                          change_peer.take_peer());
+                        send_admin_request(ch, region_id, region_epoch, peer, req);
+                    } else if resp.has_transfer_leader() {
+                        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["transfer leader"]).inc();
+
+                        let region_id = resp.get_region_id();
+                        let region_epoch = resp.take_region_epoch();
+                        let peer = resp.take_target_peer();
+                        let mut transfer_leader = resp.take_transfer_leader();
+                        info!("[region {}] try to transfer leader from {:?} to {:?}",
+                              region_id,
+                              peer,
+                              transfer_leader.get_peer());
+                        let req = new_transfer_leader_request(transfer_leader.take_peer());
+                        send_admin_request(ch, region_id, region_epoch, peer, req);
+                    }
+                    Ok(())
+                })
+                .map_err(|e| {
+                    error!("failed to send region heartbeat: {:?}", e);
+                });
+            handle.spawn(f);
+        }
     }
 
     fn handle_store_heartbeat(&self, handle: &Handle, stats: pdpb::StoreStats) {
@@ -328,15 +355,14 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
 }
 
 fn send_admin_request(ch: SendCh<Msg>,
-                      mut region: metapb::Region,
+                      region_id: u64,
+                      region_epoch: metapb::RegionEpoch,
                       peer: metapb::Peer,
                       request: AdminRequest) {
-    let region_id = region.get_id();
     let cmd_type = request.get_cmd_type();
-
     let mut req = RaftCmdRequest::new();
     req.mut_header().set_region_id(region_id);
-    req.mut_header().set_region_epoch(region.take_region_epoch());
+    req.mut_header().set_region_epoch(region_epoch);
     req.mut_header().set_peer(peer);
     req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
 

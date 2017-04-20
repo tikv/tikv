@@ -20,12 +20,16 @@ use std::time::{Duration, Instant};
 use time::{self, Timespec};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-
+use std::marker::PhantomData;
 use std::collections::vec_deque::{Iter, VecDeque};
 
 use prometheus;
 use rand::{self, ThreadRng};
 use protobuf::Message;
+
+use futures::Stream;
+use futures::Poll;
+use futures::Async;
 
 #[macro_use]
 pub mod macros;
@@ -464,6 +468,30 @@ impl<T> RingQueue<T> {
 
     pub fn swap_remove_front(&mut self, pos: usize) -> Option<T> {
         self.buf.swap_remove_front(pos)
+    }
+}
+
+/// A simple wrapper, transfroms a `Clone` into a `Stream`.
+pub struct CloneableStream<T: Clone, E> {
+    t: T,
+    _error: PhantomData<E>,
+}
+
+impl<T: Clone, E> CloneableStream<T, E> {
+    pub fn new(t: T) -> Self {
+        CloneableStream {
+            t: t,
+            _error: PhantomData,
+        }
+    }
+}
+
+impl<T: Clone, E> Stream for CloneableStream<T, E> {
+    type Item = T;
+    type Error = E;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        Ok(Async::Ready(Some(self.t.clone())))
     }
 }
 

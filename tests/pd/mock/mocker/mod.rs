@@ -35,7 +35,7 @@ pub const DEFAULT_CLUSTER_ID: u64 = 42;
 
 pub type Result<T> = result::Result<T, GrpcError>;
 
-pub trait Mocker {
+pub trait Mocker: Sync + Send {
     fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         None
     }
