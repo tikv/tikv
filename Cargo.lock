@@ -434,7 +434,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#0811f27579a1070546c4d5496bf3f6fa62cec750"
+source = "git+https://github.com/pingcap/kvproto.git#0671142ca3dfbdddb4a61e815486834a4695cd02"
 dependencies = [
  "futures 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -475,7 +475,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#73a86f7136904b2d93c4264caafa66ef3abce0a6"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3d49265a12b1b7371b35ad142f34debd99090aef"
 dependencies = [
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -801,7 +801,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#73a86f7136904b2d93c4264caafa66ef3abce0a6"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3d49265a12b1b7371b35ad142f34debd99090aef"
 dependencies = [
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
