@@ -34,7 +34,7 @@ mod imp {
     pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, backup_path: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
-        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2, TOGGLE_PROF_SIG, DUMP_PROF_SIG]);
+        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2, TOGGLE_PROF_SIG]);
         for sig in trap {
             match sig {
                 SIGTERM | SIGINT => {
