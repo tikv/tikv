@@ -111,6 +111,28 @@ pub enum ExecResult {
     VerifyHash { index: u64, hash: Vec<u8> },
 }
 
+struct ApplyContext {
+    pub wb: Option<WriteBatch>,
+    pub cbs: Vec<(Callback, RaftCmdResponse)>,
+}
+
+impl ApplyContext {
+    fn new(cap: usize) -> ApplyContext {
+        ApplyContext {
+            wb: Some(WriteBatch::new()),
+            cbs: Vec::with_capacity(cap),
+        }
+    }
+
+    pub fn wb_mut(&mut self) -> &mut WriteBatch {
+        self.wb.as_mut().unwrap()
+    }
+
+    pub fn wb_ref(&self) -> &WriteBatch {
+        self.wb.as_ref().unwrap()
+    }
+}
+
 /// Call the callback of `cmd` that the region is removed.
 fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     notify_req_region_removed(region_id, peer_id, cmd.uuid, cmd.cb.take().unwrap());
@@ -142,12 +164,11 @@ pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
     cb(resp);
 }
 
-fn should_flush_to_engine(res: &Option<ExecResult>) -> bool {
+fn should_flush_to_engine(cmd: &RaftCmdRequest) -> bool {
     // When encounter ComputeHash cmd, we must flush the writebatch to engine immediately.
-    if let Some(ref exec_result) = *res {
-        if let ExecResult::ComputeHash { .. } = *exec_result {
-            return true;
-        }
+    if cmd.has_admin_request() &&
+       cmd.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash {
+        return true;
     }
     false
 }
@@ -209,8 +230,7 @@ impl ApplyDelegate {
         let mut results = vec![];
         let committed_count = committed_entries.len();
 
-        let mut wb = WriteBatch::new();
-        let mut cbs = Vec::with_capacity(committed_count);
+        let mut apply_ctx = ApplyContext::new(committed_count);
         for entry in committed_entries {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
@@ -226,28 +246,11 @@ impl ApplyDelegate {
             }
 
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(&mut wb, &mut cbs, entry),
+                EntryType::EntryNormal => self.handle_raft_entry_normal(&mut apply_ctx, entry),
                 EntryType::EntryConfChange => {
-                    self.handle_raft_entry_conf_change(&mut wb, &mut cbs, entry)
+                    self.handle_raft_entry_conf_change(&mut apply_ctx, entry)
                 }
             };
-
-            if should_flush_to_engine(&res) {
-                self.write_apply_state(&mut wb);
-
-                // flush to engine
-                self.engine
-                    .write(wb)
-                    .unwrap_or_else(|e| {
-                        panic!("{} failed to write to engine, error: {:?}", self.tag, e)
-                    });
-
-                // call callback
-                for (cb, resp) in cbs.drain(..) {
-                    cb(resp);
-                }
-                wb = WriteBatch::new();
-            }
 
             if let Some(res) = res {
                 results.push(res);
@@ -255,17 +258,17 @@ impl ApplyDelegate {
         }
 
         if !self.pending_remove {
-            self.write_apply_state(&mut wb);
+            self.write_apply_state(apply_ctx.wb_mut());
         }
 
-        self.metrics.written_bytes += wb.data_size() as u64;
-        self.metrics.written_keys += wb.count() as u64;
+        self.metrics.written_bytes += apply_ctx.wb_ref().data_size() as u64;
+        self.metrics.written_keys += apply_ctx.wb_ref().count() as u64;
 
         // Write to storage and call callbacks
         self.engine
-            .write(wb)
+            .write(apply_ctx.wb.take().unwrap())
             .unwrap_or_else(|e| panic!("{} failed to write to engine, error: {:?}", self.tag, e));
-        for (cb, resp) in cbs {
+        for (cb, resp) in apply_ctx.cbs {
             cb(resp);
         }
 
@@ -292,8 +295,7 @@ impl ApplyDelegate {
     }
 
     fn handle_raft_entry_normal(&mut self,
-                                wb: &mut WriteBatch,
-                                cbs: &mut Vec<(Callback, RaftCmdResponse)>,
+                                apply_ctx: &mut ApplyContext,
                                 entry: Entry)
                                 -> Option<ExecResult> {
         let index = entry.get_index();
@@ -302,7 +304,25 @@ impl ApplyDelegate {
 
         if !data.is_empty() {
             let cmd = parse_data_at(data, index, &self.tag);
-            return self.process_raft_cmd(wb, cbs, index, term, cmd);
+
+            if should_flush_to_engine(&cmd) {
+                self.write_apply_state(apply_ctx.wb_mut());
+
+                // flush to engine
+                self.engine
+                    .write(apply_ctx.wb.take().unwrap())
+                    .unwrap_or_else(|e| {
+                        panic!("{} failed to write to engine, error: {:?}", self.tag, e)
+                    });
+
+                // call callback
+                for (cb, resp) in apply_ctx.cbs.drain(..) {
+                    cb(resp);
+                }
+                apply_ctx.wb = Some(WriteBatch::new());
+            }
+
+            return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
 
         // when a peer become leader, it will send an empty entry.
@@ -313,35 +333,37 @@ impl ApplyDelegate {
         assert!(term > 0);
         while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
-            cbs.push((cmd.cb.take().unwrap(), gen_stale_req(&self.tag, cmd.uuid, cmd.term)));
+            apply_ctx.cbs
+                .push((cmd.cb.take().unwrap(), gen_stale_req(&self.tag, cmd.uuid, cmd.term)));
         }
         None
     }
 
     fn handle_raft_entry_conf_change(&mut self,
-                                     wb: &mut WriteBatch,
-                                     cbs: &mut Vec<(Callback, RaftCmdResponse)>,
+                                     apply_ctx: &mut ApplyContext,
                                      entry: Entry)
                                      -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        Some(self.process_raft_cmd(wb, cbs, index, term, cmd).map_or_else(|| {
-            // If failed, tell raft that the config change was aborted.
-            ExecResult::ChangePeer(Default::default())
-        }, |mut res| {
-            if let ExecResult::ChangePeer(ref mut cp) = res {
-                cp.conf_change = conf_change;
-            } else {
-                panic!("{} unexpected result {:?} for conf change {:?} at {}",
-                       self.tag,
-                       res,
-                       conf_change,
-                       index);
-            }
-            res
-        }))
+        Some(self.process_raft_cmd(apply_ctx, index, term, cmd)
+            .map_or_else(|| {
+                             // If failed, tell raft that the config change was aborted.
+                             ExecResult::ChangePeer(Default::default())
+                         },
+                         |mut res| {
+                if let ExecResult::ChangePeer(ref mut cp) = res {
+                    cp.conf_change = conf_change;
+                } else {
+                    panic!("{} unexpected result {:?} for conf change {:?} at {}",
+                           self.tag,
+                           res,
+                           conf_change,
+                           index);
+                }
+                res
+            }))
     }
 
     fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
@@ -368,8 +390,7 @@ impl ApplyDelegate {
     }
 
     fn process_raft_cmd(&mut self,
-                        wb: &mut WriteBatch,
-                        cbs: &mut Vec<(Callback, RaftCmdResponse)>,
+                        apply_ctx: &mut ApplyContext,
                         index: u64,
                         term: u64,
                         cmd: RaftCmdRequest)
@@ -382,7 +403,7 @@ impl ApplyDelegate {
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cmd_cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
-        let (mut resp, exec_result) = self.apply_raft_cmd(wb, index, term, &cmd);
+        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
         timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
@@ -401,7 +422,7 @@ impl ApplyDelegate {
         // Bind uuid here.
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term);
-        cbs.push((cb, resp));
+        apply_ctx.cbs.push((cb, resp));
 
         exec_result
     }
