@@ -251,9 +251,7 @@ impl<C> Node<C>
             // TODO: should we clean region for other errors too?
             Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
-                if let Err(e) = store::clear_prepare_bootstrap_state(engine) {
-                    warn!("clear prepare bootstrap state failed: {:?}", e);
-                }
+                try!(store::clear_prepare_bootstrap_state(engine));
                 info!("bootstrap cluster {} ok", self.cluster_id);
                 Ok(())
             }
