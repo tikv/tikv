@@ -149,6 +149,57 @@ fn test_retry_async() {
 }
 
 #[test]
+fn test_restart_leader() {
+    let eps = vec![
+        "http://127.0.0.1:42978".to_owned(),
+        "http://127.0.0.1:52978".to_owned(),
+        "http://127.0.0.1:62978".to_owned(),
+    ];
+
+    // Service has only one GetMembersResponse, so the leader never changes.
+    let se = Arc::new(Service::new(eps.clone()));
+    // Start mock servers.
+    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
+    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
+    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+
+    thread::sleep(Duration::from_secs(1));
+
+    let client = RpcClient::new(&eps[0]).unwrap();
+    // Put a region.
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::new();
+    store.set_id(store_id);
+
+    let peer_id = client.alloc_id().unwrap();
+    let mut peer = metapb::Peer::new();
+    peer.set_id(peer_id);
+    peer.set_store_id(store_id);
+
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.mut_peers().push(peer);
+    client.bootstrap_cluster(store.clone(), region.clone()).unwrap();
+
+    let region = client.get_region_by_id(1);
+    region.wait().unwrap();
+
+    // Kill servers.
+    drop(_server_a);
+    drop(_server_b);
+    drop(_server_c);
+    // Restart them again.
+    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
+    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
+    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+    thread::sleep(Duration::from_secs(1));
+
+    let region = client.get_region_by_id(1);
+    region.wait().unwrap();
+}
+
+#[test]
 fn test_change_leader_async() {
     let mut eps = vec![
         "http://127.0.0.1:42979".to_owned(),
