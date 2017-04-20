@@ -462,7 +462,7 @@ mod test {
         assert_ne!(bs.len(), 0);
         assert!(bs.as_slice().decode_row(&Default::default(), &cols).unwrap().is_empty());
         datums = cut_row_as_owned(&bs, &col_id_set);
-        assert_eq!(datums.len(), 0);
+        assert!(datums.is_empty());
     }
 
     #[test]
