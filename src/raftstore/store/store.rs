@@ -1308,21 +1308,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {
-        if self.cfg.right_derive_when_split {
-            if let Some((_, &region_id)) = self.region_ranges
-                .range((Included(enc_start_key(region)), Unbounded::<Key>))
-                .next() {
-                Some(region_id)
-            } else {
-                None
-            }
-        } else if let Some((_, &region_id)) = self.region_ranges
-            .range((Excluded(enc_end_key(region)), Unbounded::<Key>))
-            .next() {
-            Some(region_id)
+        let start = if self.cfg.right_derive_when_split {
+            Included(enc_start_key(region))
         } else {
-            None
-        }
+            Excluded(enc_end_key(region))
+        };
+        self.region_ranges.range((start, Unbounded::<Key>)).next().map(|(_, &region_id)| region_id)
     }
 
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {
