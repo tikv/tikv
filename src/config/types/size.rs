@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Copyright of origin human-size-rs project
+
 // Copyright (C) 2017 Thomas de Zeeuw
 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -30,7 +32,6 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
-
 
 use std::str::FromStr;
 use std::cmp::{PartialOrd, Ordering};
@@ -66,11 +67,6 @@ pub struct Size {
 }
 
 impl Size {
-    /// Create a new size. If the value can't be representated in [`u32`], use a
-    /// bigger [`Multiple`].
-    ///
-    /// [`u32`]: https://doc.rust-lang.org/nightly/std/primitive.u32.html
-    /// [`Multiple`]: enum.Multiple.html
     pub fn new(value: u64, multiple: Multiple) -> Size {
         Size {
             value: value,
@@ -168,13 +164,7 @@ impl fmt::Display for Size {
 /// sized integers. To convert the size into a string the [`Display`] trait is
 /// implemented.
 ///
-/// [`Byte`]: enum.Multiple.html#variant.Byte
-/// [`Kilobyte`]: enum.Multiple.html#variant.Kilobyte
-/// [`Kibibyte`]: enum.Multiple.html#variant.Kibibyte
-/// [`Size`]: struct.Size.html
-/// [`FromStr`]: https://doc.rust-lang.org/nightly/core/str/trait.FromStr.html
-/// [`TryInto`]: https://doc.rust-lang.org/nightly/core/convert/trait.TryInto.html
-/// [`Display`]: https://doc.rust-lang.org/nightly/core/fmt/trait.Display.html
+///
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Multiple {
     /// Represents a single byte, value * 1, "B" when parsing text.

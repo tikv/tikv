@@ -14,7 +14,7 @@
 use std::fmt;
 
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
-use serde::de::{self, Visitor, SeqVisitor};
+use serde::de::{self, Visitor, SeqVisitor, Error};
 use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 // https://github.com/facebook/rocksdb/wiki/WAL-Recovery-Modes
@@ -66,5 +66,88 @@ impl Deserialize for WalRecoveryMode {
         where D: Deserializer
     {
         deserializer.deserialize_i32(WalRecoveryModeVisitor)
+    }
+}
+
+
+
+pub mod db_compression_types {
+    use std::fmt;
+    use std::iter::FromIterator;
+
+    use rocksdb::DBCompressionType;
+    use serde::{Serialize, Serializer, Deserialize, Deserializer};
+    use serde::de::{self, Visitor, SeqVisitor, Error};
+
+
+    pub struct CompressionPerLevel(Vec<DBCompressionType>);
+
+    impl CompressionPerLevel {
+        fn no_compression() -> CompressionPerLevel {
+            CompressionPerLevel(vec![DBCompressionType::DBNo; 7])
+        }
+    }
+
+    impl Default for CompressionPerLevel {
+        fn default() -> CompressionPerLevel {
+            CompressionPerLevel(vec![DBCompressionType::DBLz4; 7])
+        }
+    }
+
+    impl fmt::Display for CompressionPerLevel {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            let raw = self.0
+                .iter()
+                .map(|tp| {
+                    match *tp {
+                        DBCompressionType::DBNo => "no",
+                        DBCompressionType::DBLz4 => "lz4",
+                        DBCompressionType::DBSnappy => "snappy",
+                        DBCompressionType::DBZlib => "zlib",
+                        DBCompressionType::DBBz2 => "bzip2",
+                        DBCompressionType::DBLz4hc => "lz4hc",
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(":");
+            write!(f, "{}", raw)
+        }
+    }
+
+    impl fmt::Debug for CompressionPerLevel {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "CompressionPerLevel({})", self)
+        }
+    }
+
+    /// serde serialize interface for CompressionPerLevel
+    impl Serialize for CompressionPerLevel {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where S: Serializer
+        {
+            serializer.serialize_str(&format!("{}", self))
+        }
+    }
+
+    /// serde deserialize interface for CompressionPerLevel
+    impl Deserialize for CompressionPerLevel {
+        fn deserialize<D>(deserializer: D) -> Result<CompressionPerLevel, D::Error>
+            where D: Deserializer
+        {
+            let raw = try!(String::deserialize(deserializer));
+            let it = raw.split(':')
+                .map(|tp| {
+                    match tp.to_lowercase().as_ref() {
+                        "no" => Ok(DBCompressionType::DBNo),
+                        "snappy" => Ok(DBCompressionType::DBSnappy),
+                        "zlib" => Ok(DBCompressionType::DBZlib),
+                        "bzip2" => Ok(DBCompressionType::DBBz2),
+                        "lz4" => Ok(DBCompressionType::DBLz4),
+                        "lz4hc" => Ok(DBCompressionType::DBLz4hc),
+                        _ => Err(D::Error::custom(format!("unknown db compression type {}", tp))),
+                    }
+                });
+            Result::from_iter(it).map(CompressionPerLevel)
+        }
     }
 }

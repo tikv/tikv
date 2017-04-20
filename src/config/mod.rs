@@ -12,69 +12,95 @@
 // limitations under the License.
 
 use std::fmt;
-use std::path::PathBuf;
-use std::net::SocketAddrV4;
+use std::path::{Path, PathBuf};
+use std::net::SocketAddr;
 use std::time::Duration;
+use std::fs::File;
+use std::io::Read;
 
 use regex::RegexBuilder;
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
 use serde::de::{self, Visitor};
+use toml;
 
-use self::types::{Size, ServerLabels, WalRecoveryMode};
+use self::types::{Size, ServerLabels, WalRecoveryMode, CompressionPerLevel};
+use self::errors::ConfigError;
 
+
+mod errors;
 mod types;
+
+
+
+pub fn parse_toml_file<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError> {
+    let mut config_file = try!(File::open(path.as_ref()));
+    let mut raw = String::new();
+    try!(config_file.read_to_string(&mut raw));
+    Ok(try!(toml::from_str(&raw)))
+}
+
+pub fn validate(conf: &Config) -> Result<(), ConfigError> {
+    try!(conf.raft_store.validate());
+    Err(ConfigError::Validate("error".to_owned()))
+}
 
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
-// #[serde(default)]
 pub struct Config {
-    server: ServerConfig,
-    metric: MetricConfig,
+    pub server: ServerConfig,
+    pub metric: MetricConfig,
 
     #[serde(rename = "raftstore")]
-    raft_store: RaftStoreConfig,
-    rocksdb: RocksdbConfig,
-    storage: StorageConfig,
+    pub raft_store: RaftStoreConfig,
+    pub rocksdb: RocksdbConfig,
+    pub storage: StorageConfig,
 
-    #[serde(rename = "pd")]
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, rename = "pd")]
     pd_depercated: Option<PdConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default, rename_all = "kebab-case")]
-struct ServerConfig {
+pub struct ServerConfig {
     #[serde(default, skip_serializing, skip_deserializing)]
-    cluster_id: Option<u64>,
+    pub cluster_id: Option<u64>,
 
-    // TODO: IPv6 support via std::net::SocketAddr
-    addr: SocketAddrV4,
-
+    /// Server listening address.
+    pub addr: SocketAddr,
+    /// Server advertise listening address for outer communication.
+    /// If not set, we will use listening address instead.
     #[serde(deserialize_with = "types::deserialize_opt_addr")]
-    advertise_addr: Option<SocketAddrV4>,
+    pub advertise_addr: Option<SocketAddr>,
 
     #[serde(with = "types::addrs")]
-    pd_endpoints: Vec<SocketAddrV4>,
+    pub pd_endpoints: Vec<SocketAddr>,
 
-    data_dir: PathBuf,
+    pub data_dir: PathBuf,
 
-    labels: ServerLabels,
+    /// Server labels to specify some attributes about this server.
+    pub labels: ServerLabels,
 
-    log_level: String,
+    pub log_file: Option<PathBuf>,
+    pub log_level: String,
 
-    notify_capacity: usize,
-    messages_per_tick: usize,
-    send_buffer_size: Size,
-    recv_buffer_size: Size,
+    pub notify_capacity: usize,
+    pub messages_per_tick: usize,
+    pub send_buffer_size: Size,
+    pub recv_buffer_size: Size,
 
-    end_point_concurrency: u32,
-    capacity: Size,
-    backup: PathBuf,
+    pub end_point_concurrency: u32,
+    pub capacity: Size,
+    pub backup: PathBuf,
 
-    #[serde(rename = "store")]
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, rename = "store")]
     store_deprecated: Option<PathBuf>,
+}
+
+impl ServerConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        Ok(())
+    }
 }
 
 impl Default for ServerConfig {
@@ -86,12 +112,14 @@ impl Default for ServerConfig {
             data_dir: PathBuf::from("/tmp/tikv"),
             labels: ServerLabels::default(),
             pd_endpoints: Vec::new(),
+            log_file: None,
             log_level: "info".to_owned(),
             notify_capacity: 40960,
             messages_per_tick: 4096,
             send_buffer_size: Size::kibibyte(128),
             recv_buffer_size: Size::kibibyte(128),
-            end_point_concurrency: 0,
+            end_point_concurrency: 8,
+
             capacity: Size::default(),
             backup: PathBuf::from("/tmp/backup"),
 
@@ -101,14 +129,13 @@ impl Default for ServerConfig {
 }
 
 
-
 #[derive(Serialize, Deserialize, Debug)]
-struct MetricConfig {
+pub struct MetricConfig {
     #[serde(with = "types::duration")]
-    interval: Duration,
+    pub interval: Duration,
     #[serde(deserialize_with = "types::deserialize_opt_addr")]
-    address: Option<SocketAddrV4>,
-    job: String,
+    pub address: Option<SocketAddr>,
+    pub job: String,
 }
 
 impl Default for MetricConfig {
@@ -215,6 +242,44 @@ pub struct RaftStoreConfig {
     pub use_sst_file_snapshot: bool, // false
 }
 
+impl RaftStoreConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.raft_heartbeat_ticks == 0 {
+            return Err(ConfigError::from("heartbeat tick must greater than 0".to_owned()));
+        }
+
+        if self.raft_election_timeout_ticks <= self.raft_heartbeat_ticks {
+            return Err(ConfigError::from("election tick must be greater than heartbeat tick".to_owned()));
+        }
+
+        if self.raft_log_gc_threshold < 1 {
+            return Err(ConfigError::from(format!("raft log gc threshold must >= 1, not {}",
+                                               self.raft_log_gc_threshold)));
+        }
+
+        if self.raft_log_gc_size_limit.as_bytes() == 0 {
+            return Err(ConfigError::from("raft log gc size limit should large than 0".to_owned()));
+        }
+
+        if self.region_max_size < self.region_split_size {
+            return Err(ConfigError::from(format!("region max size {} must >= split size {}",
+                                               self.region_max_size,
+                                               self.region_split_size)));
+        }
+
+        let election_timeout = self.raft_base_tick_interval.as_secs() *
+                               self.raft_election_timeout_ticks as u64;
+        let lease = self.raft_store_max_leader_lease.as_secs();
+        if election_timeout < lease {
+            return Err(ConfigError::from(format!("election timeout {} ms is less than lease {} ms",
+                                               election_timeout,
+                                               lease)));
+        }
+
+        Ok(())
+    }
+}
+
 const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
 
 impl Default for RaftStoreConfig {
@@ -257,46 +322,47 @@ impl Default for RaftStoreConfig {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PdConfig {
-    endpoints: String,
+    #[serde(with = "types::addrs")]
+    endpoints: Vec<SocketAddr>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default, rename_all = "kebab-case")]
-struct RocksdbConfig {
-    wal_recovery_mode: WalRecoveryMode,
+pub struct RocksdbConfig {
+    pub wal_recovery_mode: WalRecoveryMode,
 
-    wal_dir: Option<PathBuf>,
-    wal_ttl_seconds: u64,
-    wal_size_limit: Size,
+    pub wal_dir: Option<PathBuf>,
+    pub wal_ttl_seconds: u64,
+    pub wal_size_limit: Size,
 
-    max_total_wal_size: Size,
+    pub max_total_wal_size: Size,
 
-    max_background_compactions: i32,
-    max_background_flushes: i32,
-    max_manifest_file_size: Size,
+    pub max_background_compactions: i32,
+    pub max_background_flushes: i32,
+    pub max_manifest_file_size: Size,
 
-    create_if_missing: bool,
+    pub create_if_missing: bool,
 
-    max_open_files: i32,
-    enable_statistics: bool,
+    pub max_open_files: i32,
+    pub enable_statistics: bool,
 
     #[serde(with = "types::duration")]
-    stats_dump_period_sec: Duration,
+    pub stats_dump_period_sec: Duration,
 
-    compaction_readahead_size: Size,
+    pub compaction_readahead_size: Size,
 
-    info_log_max_size: Size,
+    pub info_log_max_size: Size,
     #[serde(with = "types::duration")]
-    info_log_roll_time: Duration,
-    info_log_dir: Option<PathBuf>,
+    pub info_log_roll_time: Duration,
+    pub info_log_dir: Option<PathBuf>,
 
-    rate_bytes_per_sec: i64,
+    pub rate_bytes_per_sec: Size,
 
-    // cf
-    defaultcf: ColumnFamilyConfig,
-    writecf: ColumnFamilyConfig,
-    raftcf: ColumnFamilyConfig,
-    lockcf: ColumnFamilyConfig,
+    // column families
+    pub defaultcf: ColumnFamilyConfig,
+    pub writecf: ColumnFamilyConfig,
+    pub raftcf: ColumnFamilyConfig,
+    pub lockcf: ColumnFamilyConfig,
 }
 
 impl Default for RocksdbConfig {
@@ -327,7 +393,7 @@ impl Default for RocksdbConfig {
             info_log_roll_time: Duration::default(),
             info_log_dir: None,
 
-            rate_bytes_per_sec: 0,
+            rate_bytes_per_sec: Size::default(),
 
             defaultcf: ColumnFamilyConfig::default(),
             writecf: ColumnFamilyConfig::default(),
@@ -340,37 +406,37 @@ impl Default for RocksdbConfig {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default, rename_all = "kebab-case")]
-struct ColumnFamilyConfig {
-    block_size: Size, // 64KiB
-    block_cache_size: Size,
-    cache_index_and_filter_blocks: bool, // true
+pub struct ColumnFamilyConfig {
+    pub block_size: Size, // 64KiB
+    pub block_cache_size: Size,
+    pub cache_index_and_filter_blocks: bool, // true
 
-    bloom_filter_bits_per_key: i32, // 10
-    block_based_bloom_filter: bool, // false
+    pub bloom_filter_bits_per_key: i32, // 10
+    pub block_based_bloom_filter: bool, // false
 
-    compression_per_level: String,
+    pub compression_per_level: CompressionPerLevel,
 
-    write_buffer_size: Size, // 128MiB
+    pub write_buffer_size: Size, // 128MiB
 
-    max_write_buffer_number: i32, // 5
-    min_write_buffer_number_to_merge: i32, // 1
+    pub max_write_buffer_number: i32, // 5
+    pub min_write_buffer_number_to_merge: i32, // 1
 
-    max_bytes_for_level_base: Size, // 128MiB
-    target_file_size_base: Size, // 32MiB
+    pub max_bytes_for_level_base: Size, // 128MiB
+    pub target_file_size_base: Size, // 32MiB
 
-    level0_slowdown_writes_trigger: i32, // 20
-    level0_stop_writes_trigger: i32, // 36
+    pub level0_slowdown_writes_trigger: i32, // 20
+    pub level0_stop_writes_trigger: i32, // 36
 }
 
 impl Default for ColumnFamilyConfig {
     fn default() -> Self {
         ColumnFamilyConfig {
             block_size: Size::kibibyte(64),
-            block_cache_size: Size::default(), // TODO: calculate
+            block_cache_size: Size::default(),
             cache_index_and_filter_blocks: true,
             bloom_filter_bits_per_key: 10,
             block_based_bloom_filter: false,
-            compression_per_level: "lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned(),
+            compression_per_level: CompressionPerLevel::default(),
             write_buffer_size: Size::mebibyte(128),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
@@ -391,12 +457,12 @@ const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 1000;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default, rename_all = "kebab-case")]
-struct StorageConfig {
-    scheduler_notify_capacity: usize,
-    scheduler_messages_per_tick: usize,
-    scheduler_concurrency: usize,
-    scheduler_worker_pool_size: usize,
-    scheduler_too_busy_threshold: usize,
+pub struct StorageConfig {
+    pub scheduler_notify_capacity: usize,
+    pub scheduler_messages_per_tick: usize,
+    pub scheduler_concurrency: usize,
+    pub scheduler_worker_pool_size: usize,
+    pub scheduler_too_busy_threshold: usize,
 }
 
 impl Default for StorageConfig {
@@ -405,8 +471,10 @@ impl Default for StorageConfig {
             scheduler_notify_capacity: 10240,
             scheduler_messages_per_tick: 1024,
             scheduler_concurrency: 102400,
-            scheduler_worker_pool_size: 4, // TODO: calculate
+            scheduler_worker_pool_size: 4,
             scheduler_too_busy_threshold: 1000,
         }
     }
 }
+
+

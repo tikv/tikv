@@ -12,14 +12,14 @@
 // limitations under the License.
 
 use std::fmt;
-use std::net::SocketAddrV4;
+use std::net::SocketAddr;
 use std::iter::FromIterator;
 
 use regex::RegexBuilder;
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
 use serde::de::{self, Visitor, SeqVisitor};
 
-pub fn serialize<S>(addrs: &[SocketAddrV4], serializer: S) -> Result<S::Ok, S::Error>
+pub fn serialize<S>(addrs: &[SocketAddr], serializer: S) -> Result<S::Ok, S::Error>
     where S: Serializer
 {
     let it = addrs.iter().cloned();
@@ -29,17 +29,18 @@ pub fn serialize<S>(addrs: &[SocketAddrV4], serializer: S) -> Result<S::Ok, S::E
 struct AddrsVisitor;
 
 impl Visitor for AddrsVisitor {
-    type Value = Vec<SocketAddrV4>;
+    type Value = Vec<SocketAddr>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("list for addrs or string splitted by comma")
     }
 
-    fn visit_str<E>(self, value: &str) -> Result<Vec<SocketAddrV4>, E>
+    fn visit_str<E>(self, value: &str) -> Result<Vec<SocketAddr>, E>
         where E: de::Error
     {
         Result::from_iter(value.split(',')
-                .map(|s| s.parse()))
+                          .filter(|s| !s.trim().is_empty())
+                          .map(|s| s.parse()))
             .map_err(|e| E::custom(format!("error parsing addrs: {:?}", e)))
     }
 
@@ -54,7 +55,7 @@ impl Visitor for AddrsVisitor {
     }
 }
 
-pub fn deserialize<D>(deserializer: D) -> Result<Vec<SocketAddrV4>, D::Error>
+pub fn deserialize<D>(deserializer: D) -> Result<Vec<SocketAddr>, D::Error>
     where D: Deserializer
 {
     deserializer.deserialize(AddrsVisitor)

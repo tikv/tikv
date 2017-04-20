@@ -18,7 +18,7 @@ use std::error::Error;
 use std::num::ParseIntError;
 use std::fmt;
 use std::time::Duration;
-use std::net::SocketAddrV4;
+use std::net::SocketAddr;
 use std::iter::FromIterator;
 
 use regex::RegexBuilder;
@@ -28,6 +28,7 @@ use serde::de::{self, Visitor, SeqVisitor};
 pub use self::labels::ServerLabels;
 pub use self::size::Size;
 pub use self::rocksdb::WalRecoveryMode;
+pub use self::rocksdb::db_compression_types::CompressionPerLevel;
 
 pub mod labels;
 pub mod size;
@@ -36,7 +37,7 @@ pub mod addrs;
 pub mod rocksdb;
 
 
-pub fn deserialize_opt_addr<D>(deserializer: D) -> Result<Option<SocketAddrV4>, D::Error>
+pub fn deserialize_opt_addr<D>(deserializer: D) -> Result<Option<SocketAddr>, D::Error>
     where D: Deserializer
 {
     let opt_str = try!(Option::<String>::deserialize(deserializer));

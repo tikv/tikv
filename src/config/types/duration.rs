@@ -51,7 +51,7 @@ impl Visitor for DurationVisitor {
             .build()
             .unwrap();
 
-        let caps = re.captures(value).unwrap();
+        let caps = try!(re.captures(value).ok_or_else(|| E::custom(format!("error parsing: {:?}", value))));
 
         let value = caps["value"].parse().map_err(|e| E::custom(format!("error parsing: {:?}", e)));
         let unit = caps["unit"].to_lowercase();
@@ -75,5 +75,5 @@ impl Visitor for DurationVisitor {
 pub fn deserialize<D>(deserializer: D) -> Result<Duration, D::Error>
     where D: Deserializer
 {
-    deserializer.deserialize_str(DurationVisitor)
+    deserializer.deserialize(DurationVisitor)
 }

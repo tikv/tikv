@@ -14,6 +14,7 @@
 
 use std::fmt;
 use std::collections::HashMap;
+use std::iter::FromIterator;
 
 use regex::RegexBuilder;
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
@@ -62,34 +63,26 @@ impl Visitor for ServerLabelsVisitor {
             .unwrap();
 
         let mut malformed: Vec<String> = vec![];
-        let labels = value.split(',')
-            .filter(|seg| {
-                if seg.is_empty() {
-                    false
-                } else if !pattern.is_match(seg) {
-                    // FIXME: to_owned() not works.
-                    malformed.push(seg.to_string());
-                    false
+        let it = value.split(',')
+            .map(|seg| {
+                if pattern.is_match(seg) {
+                    Ok(seg)
                 } else {
-                    true
+                    Err(format!("bad format {:?}", seg))
                 }
+            });
+        Result::from_iter(it)
+            .map(|segs: Vec<&str>| {
+                segs.iter()
+                    .map(|kv| {
+                        let mut it = kv.split('=')
+                            .map(|s| s.trim().to_lowercase());
+                        (it.next().unwrap(), it.next().unwrap())
+                    })
+                    .collect::<HashMap<_, _>>()
             })
-            .map(|kv| {
-                let pairs = kv.split('=')
-                    .map(|s| s.trim())
-                    .collect::<Vec<_>>();
-                match &pairs[..] {
-                    &[first, second] => (first.to_lowercase(), second.to_lowercase()),
-                    _ => unreachable!(),
-                }
-            })
-            .collect::<HashMap<_, _>>();
-
-        if malformed.is_empty() {
-            Ok(ServerLabels(labels))
-        } else {
-            Err(E::custom(format!("malformed kv pairs: {:?}", malformed)))
-        }
+            .map(ServerLabels)
+            .map_err(E::custom)
     }
 }
 
