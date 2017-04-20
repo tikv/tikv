@@ -16,24 +16,25 @@ extern crate protobuf;
 use std::string::String;
 use std::collections::HashMap;
 use test::Bencher;
-use rand;
+use rand::{Rng, thread_rng};
+use protobuf::Message;
 use kvproto::eraftpb::Entry;
 use kvproto::raft_cmdpb::{RaftCmdRequest, Request, CmdType};
 
+#[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
-    let mut bstr = Vec::new();
-    for _ in 0..len {
-        bstr.push(rand::random::<u8>());
-    }
-    bstr
+    let mut rand_str = vec![0; len];
+    thread_rng().fill_bytes(&mut rand_str);
+    rand_str
 }
 
+#[inline]
 fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
     let mut reqs = vec![];
     for (key, value) in map {
         let mut r = Request::new();
         r.set_cmd_type(CmdType::Put);
-        r.mut_put().set_cf(String::from("tikv"));
+        r.mut_put().set_cf("tikv".to_owned());
         r.mut_put().set_key(key.to_vec());
         r.mut_put().set_value(value.to_vec());
         reqs.push(r);
@@ -41,17 +42,19 @@ fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
     reqs
 }
 
-fn encode(reqs: &[Request]) -> Vec<u8> {
+fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
     let mut e = Entry::new();
     let mut cmd = RaftCmdRequest::new();
-    cmd.set_requests(protobuf::RepeatedField::from_vec(reqs.to_vec()));
-    let cmd_msg = protobuf::Message::write_to_bytes(&cmd).unwrap();
+    let reqs = generate_requests(map);
+    cmd.set_requests(protobuf::RepeatedField::from_vec(reqs));
+    let cmd_msg = cmd.write_to_bytes().unwrap();
     e.set_data(cmd_msg);
-    protobuf::Message::write_to_bytes(&e).unwrap()
+    e.write_to_bytes().unwrap()
 }
 
 fn decode(data: &[u8]) {
-    let entry = protobuf::parse_from_bytes::<Entry>(data).unwrap();
+    let mut entry = Entry::new();
+    entry.merge_from_bytes(data);
     protobuf::parse_from_bytes::<RaftCmdRequest>(entry.get_data()).unwrap();
 }
 
@@ -60,10 +63,9 @@ fn bench_encode_one(b: &mut Bencher) {
     let key = gen_rand_str(30);
     let value = gen_rand_str(256);
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    map.insert(key.as_slice(), value.as_slice());
-    let reqs = generate_requests(&map);
+    map.insert(&key, &value);
     b.iter(|| {
-        encode(reqs.as_slice());
+        encode(&map);
     });
 }
 
@@ -72,11 +74,10 @@ fn bench_decode_one(b: &mut Bencher) {
     let key = gen_rand_str(30);
     let value = gen_rand_str(256);
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    map.insert(key.as_slice(), value.as_slice());
-    let reqs = generate_requests(&map);
-    let data = encode(&reqs);
+    map.insert(&key, &value);
+    let data = encode(&map);
     b.iter(|| {
-        decode(data.as_slice());
+        decode(&data);
     });
 }
 
@@ -87,11 +88,10 @@ fn bench_encode_two(b: &mut Bencher) {
     let key_for_data = gen_rand_str(30);
     let value_for_data = gen_rand_str(256);
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    map.insert(key_for_lock.as_slice(), value_for_lock.as_slice());
-    map.insert(key_for_data.as_slice(), value_for_data.as_slice());
-    let reqs = generate_requests(&map);
+    map.insert(&key_for_lock, &value_for_lock);
+    map.insert(&key_for_data, &value_for_data);
     b.iter(|| {
-        encode(reqs.as_slice());
+        encode(&map);
     });
 }
 
@@ -102,12 +102,10 @@ fn bench_decode_two(b: &mut Bencher) {
     let key_for_data = gen_rand_str(30);
     let value_for_data = gen_rand_str(256);
     let mut map: HashMap<&[u8], &[u8]> = HashMap::new();
-    map.insert(key_for_lock.as_slice(), value_for_lock.as_slice());
-    map.insert(key_for_data.as_slice(), value_for_data.as_slice());
-    let reqs = generate_requests(&map);
-    let data = encode(&reqs);
+    map.insert(&key_for_lock, &value_for_lock);
+    map.insert(&key_for_data, &value_for_data);
+    let data = encode(&map);
     b.iter(|| {
-        decode(data.as_slice());
+        decode(&data);
     });
 }
-
