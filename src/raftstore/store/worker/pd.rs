@@ -181,7 +181,6 @@ impl<T: PdClient> Runner<T> {
 
                     if resp.has_change_peer() {
                         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["change peer"]).inc();
-                        panic!("[PdWorker] has_change_peer");
 
                         let mut change_peer = resp.take_change_peer();
                         let region_id = resp.get_region_id();
