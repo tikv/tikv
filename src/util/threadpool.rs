@@ -91,8 +91,8 @@ pub struct BigGroupThrottledQueue<T> {
     // more than `group_concurrency_on_busy`), the rest of the group's tasks
     // would be pushed into `waiting_queue[group_id]`
     waiting_queue: HashMap<T, VecDeque<Task<T>>>,
-    // group_id => running_num+pending_num(in `pending_tasks`). It means there may
-    // `group_concurrency[group_id]` tasks of the group are running.
+    // group_id => running_num+pending_num(in `pending_tasks`). It means at most
+    // `group_concurrency[group_id]` tasks of the group may be running
     group_concurrency: HashMap<T, usize>,
     // The maximum number of threads that each group can run when the pool is busy.
     // Each value in `group_concurrency` shouldn't be bigger than this value.
