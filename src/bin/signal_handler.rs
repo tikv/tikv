@@ -25,7 +25,6 @@ mod imp {
 
     // Real-time signals
     const TOGGLE_PROF_SIG: libc::c_int = 40;
-    const DUMP_PROF_SIG: libc::c_int = 41;
 
     use profiling;
 
@@ -69,24 +68,12 @@ mod imp {
                         info!("{}", v)
                     }
                 }
-                SIGUSR2 => {
-                    if backup_path.is_empty() {
-                        info!("empty backup path, backup is disabled");
-                        continue;
-                    }
-
-                    info!("backup db to {}", backup_path);
-                    if let Err(e) = engine.backup_at(backup_path) {
-                        error!("fail to backup: {}", e);
-                    }
-                    info!("backup done");
-                }
+                SIGUSR2 => profiling::dump_prof(None),
                 TOGGLE_PROF_SIG => {
                     if let Err(e) = profiling::toggle_prof() {
                         error!("failed to toggle memory profiling: {}", e);
                     }
                 }
-                DUMP_PROF_SIG => profiling::dump_prof(None),
                 // TODO: handle more signal
                 _ => unreachable!(),
             }
