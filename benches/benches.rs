@@ -26,8 +26,11 @@ extern crate mio;
 extern crate rand;
 extern crate tikv;
 extern crate time;
+extern crate protobuf;
+extern crate kvproto;
 
 mod channel;
+mod serialization;
 
 #[allow(dead_code)]
 #[path="../tests/util.rs"]
