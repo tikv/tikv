@@ -394,6 +394,7 @@ mod test {
     use std::thread::sleep;
     use std::time::Duration;
     use std::sync::mpsc::channel;
+    use std::sync::{Arc, Condvar, Mutex};
 
     #[test]
     fn test_for_tasks_with_different_cost() {
@@ -449,9 +450,14 @@ mod test {
         let sleep_duration = Duration::from_millis(50);
         let recv_timeout_duration = Duration::from_secs(2);
         let group1 = 1001;
+        let push_tasks_cond = Arc::new((Mutex::new(()), Condvar::new()));
+
+        // Make all threads busy util all test tasks had been pushed into the pool.
         for gid in 0..concurrency {
+            let listener = push_tasks_cond.clone();
             task_pool.execute(gid, move || {
-                sleep(sleep_duration);
+                let &(ref lock, ref cvar) = &*listener;
+                cvar.wait_timeout(lock.lock().unwrap(), recv_timeout_duration).unwrap();
             });
         }
 
@@ -483,6 +489,10 @@ mod test {
                 tx.send(group3).unwrap();
             });
         }
+
+        // Notify all threads that all test tasks had been pushed into the pool.
+        push_tasks_cond.1.notify_all();
+
 
         // The tasks in pool:{txn11, txn12, txn13, txn14, txn21, txn22, txn31, txn32}.
         // First 4 tasks running during [0,sleep_duration] should be {txn11, txn12,
