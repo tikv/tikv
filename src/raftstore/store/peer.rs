@@ -40,7 +40,7 @@ use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker as Worker, Scheduler};
-use raftstore::store::worker::{ApplyTask, ApplyRes};
+use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either, HashMap, HashSet, strftimespec};
 
 use pd::INVALID_ID;
@@ -707,7 +707,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready) {
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -738,8 +738,7 @@ impl Peer {
             }
             if !committed_entries.is_empty() {
                 self.last_ready_idx = committed_entries.last().unwrap().get_index();
-                let apply_task = ApplyTask::apply(self.region_id, self.term(), committed_entries);
-                self.apply_scheduler.schedule(apply_task).unwrap();
+                apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
 

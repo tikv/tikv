@@ -40,6 +40,7 @@ use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state
 use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
 use raftstore::store::metrics::*;
 
+const WRITE_BATCH_RECORMAND_KEYS: usize = 128;
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -117,10 +118,10 @@ struct ApplyContext {
 }
 
 impl ApplyContext {
-    fn new(cap: usize) -> ApplyContext {
+    fn new() -> ApplyContext {
         ApplyContext {
             wb: Some(WriteBatch::new()),
-            cbs: Vec::with_capacity(cap),
+            cbs: vec![],
         }
     }
 
@@ -164,12 +165,17 @@ pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
     cb(resp);
 }
 
-fn should_flush_to_engine(cmd: &RaftCmdRequest) -> bool {
+fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     // When encounter ComputeHash cmd, we must flush the writebatch to engine immediately.
     if cmd.has_admin_request() &&
        cmd.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash {
         return true;
     }
+
+    if wb_keys >= WRITE_BATCH_RECORMAND_KEYS {
+        return true;
+    }
+
     false
 }
 
@@ -219,7 +225,10 @@ impl ApplyDelegate {
         }
     }
 
-    fn handle_raft_committed_entries(&mut self, committed_entries: Vec<Entry>) -> Vec<ExecResult> {
+    fn handle_raft_committed_entries(&mut self,
+                                     apply_ctx: &mut ApplyContext,
+                                     committed_entries: Vec<Entry>)
+                                     -> Vec<ExecResult> {
         if committed_entries.is_empty() {
             return vec![];
         }
@@ -230,7 +239,6 @@ impl ApplyDelegate {
         let mut results = vec![];
         let committed_count = committed_entries.len();
 
-        let mut apply_ctx = ApplyContext::new(committed_count);
         for entry in committed_entries {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
@@ -246,10 +254,8 @@ impl ApplyDelegate {
             }
 
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(&mut apply_ctx, entry),
-                EntryType::EntryConfChange => {
-                    self.handle_raft_entry_conf_change(&mut apply_ctx, entry)
-                }
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, entry),
+                EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, entry),
             };
 
             if let Some(res) = res {
@@ -264,13 +270,13 @@ impl ApplyDelegate {
         self.metrics.written_bytes += apply_ctx.wb_ref().data_size() as u64;
         self.metrics.written_keys += apply_ctx.wb_ref().count() as u64;
 
-        // Write to storage and call callbacks
-        self.engine
-            .write(apply_ctx.wb.take().unwrap())
-            .unwrap_or_else(|e| panic!("{} failed to write to engine, error: {:?}", self.tag, e));
-        for (cb, resp) in apply_ctx.cbs {
-            cb(resp);
-        }
+        //        // Write to storage and call callbacks
+        //        self.engine
+        //            .write(apply_ctx.wb.take().unwrap())
+        //            .unwrap_or_else(|e| panic!("{} failed to write to engine, error: {:?}", self.tag, e));
+        //        for (cb, resp) in apply_ctx.cbs {
+        //            cb(resp);
+        //        }
 
         slow_log!(t,
                   "{} handle ready {} committed entries",
@@ -305,7 +311,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = parse_data_at(data, index, &self.tag);
 
-            if should_flush_to_engine(&cmd) {
+            if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
                 self.write_apply_state(apply_ctx.wb_mut());
 
                 // flush to engine
@@ -989,6 +995,16 @@ pub struct Apply {
     entries: Vec<Entry>,
 }
 
+impl Apply {
+    pub fn new(region_id: u64, term: u64, entries: Vec<Entry>) -> Apply {
+        Apply {
+            region_id: region_id,
+            term: term,
+            entries: entries,
+        }
+    }
+}
+
 pub struct Registration {
     pub id: u64,
     pub term: u64,
@@ -1024,19 +1040,15 @@ pub struct Destroy {
 
 /// region related task.
 pub enum Task {
-    Apply(Apply),
+    Apply(Vec<Apply>),
     Registration(Registration),
     Propose(Propose),
     Destroy(Destroy),
 }
 
 impl Task {
-    pub fn apply(region_id: u64, term: u64, entries: Vec<Entry>) -> Task {
-        Task::Apply(Apply {
-            region_id: region_id,
-            term: term,
-            entries: entries,
-        })
+    pub fn apply(apply: Vec<Apply>) -> Task {
+        Task::Apply(apply)
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -1068,7 +1080,7 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Apply(ref a) => write!(f, "[region {}] async apply", a.region_id),
+            Task::Apply(ref a) => write!(f, "async apply len {}", a.len()),
             Task::Propose(ref p) => write!(f, "[region {}] propose", p.region_id),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
@@ -1100,7 +1112,7 @@ pub struct ApplyRes {
 }
 
 pub enum TaskRes {
-    Apply(ApplyRes),
+    Apply(Vec<ApplyRes>),
     Destroy(ApplyDelegate),
 }
 
@@ -1124,40 +1136,54 @@ impl Runner {
         }
     }
 
-    fn handle_apply(&mut self, apply: Apply) {
-        if apply.entries.is_empty() {
-            return;
-        }
-        let mut e = match self.delegates.entry(apply.region_id) {
-            MapEntry::Vacant(_) => {
-                error!("[region {}] is missing", apply.region_id);
-                return;
+    fn handle_apply(&mut self, applys: Vec<Apply>) {
+        let mut applys_res = Vec::with_capacity(applys.len());
+        let mut apply_ctx = ApplyContext::new();
+        for apply in applys {
+            if apply.entries.is_empty() {
+                continue;
             }
-            MapEntry::Occupied(e) => e,
-        };
-        {
-            let delegate = e.get_mut();
-            delegate.metrics = ApplyMetrics::default();
-            delegate.term = apply.term;
-            let results = delegate.handle_raft_committed_entries(apply.entries);
+            let mut e = match self.delegates.entry(apply.region_id) {
+                MapEntry::Vacant(_) => {
+                    error!("[region {}] is missing", apply.region_id);
+                    continue;
+                }
+                MapEntry::Occupied(e) => e,
+            };
+            {
+                let delegate = e.get_mut();
+                delegate.metrics = ApplyMetrics::default();
+                delegate.term = apply.term;
+                let results = delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
 
-            if delegate.pending_remove {
-                delegate.destroy();
-            }
+                if delegate.pending_remove {
+                    delegate.destroy();
+                }
 
-            self.notifier
-                .send(TaskRes::Apply(ApplyRes {
+                applys_res.push(ApplyRes {
                     region_id: apply.region_id,
                     apply_state: delegate.apply_state.clone(),
                     exec_res: results,
                     metrics: delegate.metrics.clone(),
                     applied_index_term: delegate.applied_index_term,
-                }))
-                .unwrap();
+                });
+
+
+            }
+            if e.get().pending_remove {
+                e.remove();
+            }
         }
-        if e.get().pending_remove {
-            e.remove();
+
+        // Write to storage and call callbacks
+        self.db
+            .write(apply_ctx.wb.take().unwrap())
+            .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
+        for (cb, resp) in apply_ctx.cbs {
+            cb(resp);
         }
+
+        self.notifier.send(TaskRes::Apply(applys_res)).unwrap();
     }
 
     fn handle_propose(&mut self, p: Propose) {
