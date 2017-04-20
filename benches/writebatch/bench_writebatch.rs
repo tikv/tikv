@@ -91,4 +91,3 @@ fn bench_writebatch_512(b: &mut Bencher) {
 fn bench_writebatch_1024(b: &mut Bencher) {
     bench_writebatch_impl(b, 1024);
 }
-
