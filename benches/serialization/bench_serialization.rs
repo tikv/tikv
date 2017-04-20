@@ -13,7 +13,6 @@
 
 extern crate protobuf;
 
-use std::string::String;
 use std::collections::HashMap;
 use test::Bencher;
 use rand::{Rng, thread_rng};
@@ -54,8 +53,9 @@ fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
 
 fn decode(data: &[u8]) {
     let mut entry = Entry::new();
-    entry.merge_from_bytes(data);
-    protobuf::parse_from_bytes::<RaftCmdRequest>(entry.get_data()).unwrap();
+    entry.merge_from_bytes(data).unwrap();
+    let mut cmd = RaftCmdRequest::new();
+    cmd.merge_from_bytes(entry.get_data()).unwrap();
 }
 
 #[bench]
