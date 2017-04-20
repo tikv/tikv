@@ -368,7 +368,6 @@ impl<Q, T> Worker<Q, T>
             // wait for new task
             task_pool = cvar.wait(task_pool).unwrap();
         }
-
     }
 
     fn on_task_finished(&self, group_id: &T) {
@@ -397,7 +396,7 @@ mod test {
     use std::sync::mpsc::channel;
 
     #[test]
-    fn test_fair_group_for_tasks_with_different_cost() {
+    fn test_for_tasks_with_different_cost() {
         let name = thd_name!("test_tasks_with_different_cost");
         let concurrency = 2;
         let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(1));
@@ -410,9 +409,6 @@ mod test {
         task_pool.execute(group_with_big_task, move || {
             sleep(sleep_duration * 10);
         });
-
-        // Make sure the big task is running.
-        sleep(sleep_duration / 4);
 
         for group_id in 0..10 {
             let sender = jtx.clone();
@@ -445,15 +441,14 @@ mod test {
     }
 
     #[test]
-    fn test_fair_group_for_tasks_with_group_concurrency_on_busy() {
-        let name = thd_name!("test_tasks_with_different_cost");
+    fn test_for_tasks_with_group_concurrency_on_busy() {
+        let name = thd_name!("test_for_tasks_with_group_concurrency_on_busy");
         let concurrency = 4;
         let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(2));
         let (tx, rx) = channel();
         let sleep_duration = Duration::from_millis(50);
         let recv_timeout_duration = Duration::from_secs(2);
         let group1 = 1001;
-
         for gid in 0..concurrency {
             task_pool.execute(gid, move || {
                 sleep(sleep_duration);
@@ -545,8 +540,8 @@ mod test {
     }
 
     #[test]
-    fn test_fair_group_queue() {
-        let max_pending_task_each_group = 2;
+    fn test_throttled_queue() {
+        let max_pending_task_each_group = 1;
         let mut queue = BigGroupThrottledQueue::new(max_pending_task_each_group);
         // Push 4 tasks of `group1` into queue
         let group1 = 1001;
@@ -557,62 +552,38 @@ mod test {
             queue.push(task);
         }
 
-        // Push 2 tasks of `group2` into queue.
+        // Push 4 tasks of `group2` into queue.
         let group2 = 1002;
-        for _ in 0..2 {
+        for _ in 0..4 {
             let task = Task::new(id, group2, move || {});
             id += 1;
             queue.push(task);
         }
-        // Push 2 tasks of `group3` into queue.
-        let group3 = 1003;
-        for _ in 0..2 {
-            let task = Task::new(id, group3, move || {});
-            id += 1;
-            queue.push(task);
-        }
-        // queue:g1, g1, g1, g1, g2, g2, g3, g3
+
+        // queue: g1, g1, g1, g1, g2, g2, g2, g2. As all groups has a running number that is
+        // smaller than that of group_concurrency_on_busy, and g1 comes first.
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group1);
         queue.on_task_started(&group1);
-        // queue: g1, g1, g1, g2, g2, g3, g3; running: g1
-        let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group1);
-        queue.on_task_started(&group1);
-        // queue: g1, g1, g2, g2, g3, g3; running: g1, g1
+
+        // queue: g1, g1, g1, g2, g2, g2, g2; running:g1.
+        // only g2 has a running number that is smaller than that of group_concurrency_on_busy.
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group2);
         queue.on_task_started(&group2);
-        // queue: g1, g1, g2, g3, g3; running: g1, g1, g2
+
+        // queue: g1, g1, g1, g2, g2, g2; running:g1,g2. Since no group has a running number
+        // smaller than `group_concurrency_on_busy`, and each group's running number is
+        // the same, choose g1 since it comes first.
+        let task = queue.pop().unwrap();
+        assert_eq!(task.group_id, group1);
+        queue.on_task_started(&group1);
+
+        // queue:g1, g1, g2, g2, g2; running:g1,g2,g1. Since no group has a running number
+        // smaller than `group_concurrency_on_busy`, and the running number of g2 is smaller,
+        // choose g2 since it comes first.
         let task = queue.pop().unwrap();
         assert_eq!(task.group_id, group2);
         queue.on_task_started(&group2);
-        // queue: g1, g1, g3, g3 ; running: g1, g1, g2, g2
-        // finish one g2
-        queue.on_task_finished(&group2);
-        // queue: g1, g1, g3, g3; running: g1, g1, g2
-        let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group3);
-        queue.on_task_started(&group3);
-        // queue: g1, g1, g3; running: g1, g1, g2, g3
-        // finish one g1
-        queue.on_task_finished(&group1);
-        // queue: g1, g1, g3; running: g1, g2, g3
-        let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group1);
-        queue.on_task_started(&group1);
-        // queue: g1, g3; running: g1, g1, g2, g3
-        // finish one g2
-        queue.on_task_finished(&group2);
-        // queue: g1; running: g1, g1, g3, g3
-        let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group3);
-        queue.on_task_started(&group3);
-        // finish one g3
-        queue.on_task_finished(&group3);
-        // queue: g1; running: g1, g1, g3
-        let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group1);
-        queue.on_task_started(&group1);
     }
 }
