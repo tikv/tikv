@@ -85,9 +85,7 @@ pub fn clear_prepare_bootstrap(engine: &DB, region_id: u64) -> Result<()> {
 
 // Clear prepare state
 pub fn clear_prepare_bootstrap_state(engine: &DB) -> Result<()> {
-    let wb = WriteBatch::new();
-    try!(wb.delete(&keys::prepare_bootstrap_key()));
-    try!(engine.write(wb));
+    try!(engine.delete(&keys::prepare_bootstrap_key()));
     Ok(())
 }
 

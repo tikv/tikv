@@ -61,6 +61,7 @@ pub const REGION_STATE_SUFFIX: u8 = 0x01;
 pub fn store_ident_key() -> Vec<u8> {
     STORE_IDENT_KEY.to_vec()
 }
+
 pub fn prepare_bootstrap_key() -> Vec<u8> {
     PREPARE_BOOTSTRAP_KEY.to_vec()
 }
