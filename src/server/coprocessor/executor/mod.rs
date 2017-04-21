@@ -17,7 +17,6 @@ use server::coprocessor::Result;
 mod base_scanner;
 pub mod table_scan;
 
-
 pub trait Executor {
     fn next(&mut self) -> Result<Option<(i64, RowColsDict)>>;
 }
