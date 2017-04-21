@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::fmt::Write;
 
 pub struct Task<T> {
     // The task's id in the pool. Each task has a unique id,
@@ -260,7 +261,7 @@ impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
 
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
-/// is ready to process a task, it get a task from the pool
+/// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
 pub struct ThreadPool<Q, T> {
     task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
@@ -321,9 +322,10 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
         let mut err_msg = String::new();
         while let Some(t) = self.threads.pop() {
             if let Err(e) = t.join() {
-                err_msg.push_str(format!("failed to join thread with err :{:?}", e).as_ref());
+                write!(&mut err_msg, "failed to join thread with err :{:?}", e).unwrap();
             }
         }
+
 
         if !err_msg.is_empty() {
             return Err(err_msg);
@@ -377,7 +379,7 @@ impl<Q, T> Worker<Q, T>
     }
 
     fn run(&mut self) {
-        // Start the worker.Loop breaks when receive stop message.
+        // Start the worker. Loop breaks when receive stop message.
         while let Some(task) = self.get_next_task() {
             // Since tikv would be down when any panic happens,
             // we don't need to process panic case here.
@@ -452,7 +454,7 @@ mod test {
         let group1 = 1001;
         let push_tasks_cond = Arc::new((Mutex::new(()), Condvar::new()));
 
-        // Make all threads busy util all test tasks had been pushed into the pool.
+        // Make all threads busy until all test tasks had been pushed into the pool.
         for gid in 0..concurrency {
             let listener = push_tasks_cond.clone();
             task_pool.execute(gid, move || {
@@ -494,12 +496,12 @@ mod test {
         push_tasks_cond.1.notify_all();
 
 
-        // The tasks in pool:{txn11, txn12, txn13, txn14, txn21, txn22, txn31, txn32}.
-        // First 4 tasks running during [0,sleep_duration] should be {txn11, txn12,
-        // txn21, txn22 }. Since txn1 would be finished before txn2. Next 4 tasks
-        // running during [sleep_duration,2*sleep_duration] should be {txn13, txn14,
-        // txn21, txn22 }. During [2*sleep_duration,3*sleep_duration],the running
-        // tasks should be {txn31, txn32}
+        // The tasks in pool: {txn11, txn12, txn13, txn14, txn21, txn22, txn31, txn32}.
+        // First 4 tasks running during [0,sleep_duration] should be
+        // {txn11, txn12,txn21, txn22 }. Since txn1 would be finished before txn2.
+        // Next 4 tasks running during [sleep_duration,2*sleep_duration] should be
+        // {txn13, txn14, txn21, txn22 }. During [2*sleep_duration,3*sleep_duration],
+        // the running tasks should be {txn31, txn32}
         assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
         assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
         let mut group2_num = 0;
@@ -541,7 +543,7 @@ mod test {
 
         for gid in 0..group_num {
             assert_eq!(gid, rx.recv_timeout(recv_timeout_duration).unwrap());
-            // To make sure the task was finished and count has been changed.
+            // To make sure the task is finished and count has been changed.
             sleep(sleep_duration / 2);
             task_num -= 1;
             assert_eq!(task_pool.get_task_count(), task_num);
