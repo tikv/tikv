@@ -19,6 +19,24 @@ use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
 
+fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, written: bool) {
+    for engine in cluster.engines.values() {
+        let lock_handle = engine.cf_handle(CF_LOCK).unwrap();
+        engine.flush_cf(lock_handle, true).unwrap();
+    }
+    // Wait for compaction.
+    sleep_ms(interval * 2);
+    for engine in cluster.engines.values() {
+        let compact_write_bytes =
+            engine.get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
+        if written {
+            assert!(compact_write_bytes > 0);
+        } else {
+            assert_eq!(compact_write_bytes, 0);
+        }
+    }
+}
+
 fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     let interval = 500;
     // set lock_cf_compact_interval.
@@ -27,35 +45,19 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.lock_cf_compact_threshold = 100;
     cluster.run();
 
-    for i in 1..9 {
+    // not reach lock_cf_compact_threshold, so there is no compaction.
+    for i in 0..50 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
     }
+    flush_then_check(cluster, interval, false);
 
-    // wait for reach the lock_cf_compact_interval, but not reach
-    // lock_cf_compact_threshold, so there is no compaction.
-    sleep_ms(interval * 2);
-
-    for engine in cluster.engines.values() {
-        let compact_write_bytes =
-            engine.get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
-        assert_eq!(compact_write_bytes, 0);
-    }
-
-    for i in 10..999 {
+    // not reach lock_cf_compact_threshold, so there is no compaction.
+    for i in 0..50 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
     }
-
-    // wait for reach the lock_cf_compact_interval, and reach
-    // lock_cf_compact_threshold, fire compaction.
-    sleep_ms(interval * 2);
-
-    for engine in cluster.engines.values() {
-        let compact_write_bytes =
-            engine.get_statistics_ticker_count(DBStatisticsTickerType::CompactWriteBytes);
-        assert!(compact_write_bytes > 0);
-    }
+    flush_then_check(cluster, interval, true);
 }
 
 #[test]

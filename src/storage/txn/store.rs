@@ -127,3 +127,200 @@ impl<'a> StoreScanner<'a> {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use kvproto::kvrpcpb::Context;
+    use super::SnapshotStore;
+    use storage::mvcc::MvccTxn;
+    use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, ScanMode, KvPair, Value};
+    use storage::engine::{self, Engine, TEMP_DIR, Snapshot};
+
+    const KEY_PREFIX: &str = "key_prefix";
+    const START_TS: u64 = 10;
+    const COMMIT_TS: u64 = 20;
+    const START_ID: u64 = 1000;
+
+    struct TestStore {
+        keys: Vec<String>,
+        snapshot: Box<Snapshot>,
+        ctx: Context,
+        engine: Box<Engine>,
+    }
+
+    impl TestStore {
+        fn new(key_num: u64) -> TestStore {
+            let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+            let keys: Vec<String> =
+                (START_ID..START_ID + key_num).map(|i| format!("{}{}", KEY_PREFIX, i)).collect();
+            let ctx = Context::new();
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut store = TestStore {
+                keys: keys,
+                snapshot: snapshot,
+                ctx: ctx,
+                engine: engine,
+            };
+            store.init_data();
+            store
+        }
+
+        #[inline]
+        fn init_data(&mut self) {
+            let primary_key = format!("{}{}", KEY_PREFIX, START_ID);
+            let pk = primary_key.as_bytes();
+            let mut statistics = Statistics::default();
+            // do prewrite.
+            {
+                let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
+                for key in &self.keys {
+                    let key = key.as_bytes();
+                    txn.prewrite(Mutation::Put((make_key(key), key.to_vec())),
+                                  pk,
+                                  &Options::default())
+                        .unwrap();
+                }
+                self.engine.write(&self.ctx, txn.modifies()).unwrap();
+            }
+            self.refresh_snapshot();
+            // do commit
+            {
+                let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
+                for key in &self.keys {
+                    let key = key.as_bytes();
+                    txn.commit(&make_key(key), COMMIT_TS).unwrap();
+                }
+                self.engine.write(&self.ctx, txn.modifies()).unwrap();
+
+            }
+            self.refresh_snapshot();
+        }
+
+        #[inline]
+        fn refresh_snapshot(&mut self) {
+            self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
+        }
+
+        fn store(&self) -> SnapshotStore {
+            SnapshotStore::new(self.snapshot.as_ref(), COMMIT_TS + 1)
+        }
+    }
+
+
+    #[test]
+    fn test_snapshot_store_get() {
+        let key_num = 100;
+        let store = TestStore::new(key_num);
+        let snapshot_store = store.store();
+        let mut statistics = Statistics::default();
+        for key in &store.keys {
+            let key = key.as_bytes();
+            let data = snapshot_store.get(&make_key(key), &mut statistics).unwrap();
+            assert!(data.is_some(), "{:?} expect some, but got none", key);
+        }
+    }
+
+    #[test]
+    fn test_snapshot_store_batch_get() {
+        let key_num = 100;
+        let store = TestStore::new(key_num);
+        let snapshot_store = store.store();
+        let mut statistics = Statistics::default();
+        let mut keys_list = Vec::new();
+        for key in &store.keys {
+            keys_list.push(make_key(key.as_bytes()));
+        }
+        let data = snapshot_store.batch_get(&keys_list, &mut statistics);
+        assert!(data.is_ok(), "expect ok,while got {:?}", data.unwrap_err());
+        for item in data.unwrap() {
+            let item = item.unwrap();
+            assert!(item.is_some(), "item expect some while get none");
+        }
+    }
+
+    #[test]
+    fn test_snapshot_store_scan() {
+        let key_num = 100;
+        let store = TestStore::new(key_num);
+        let snapshot_store = store.store();
+        let mut statistics = Statistics::default();
+        let mut scanner = snapshot_store.scanner(ScanMode::Forward, false, None, &mut statistics)
+            .unwrap();
+
+        let key = format!("{}{}", KEY_PREFIX, START_ID);
+        let start_key = make_key(key.as_bytes());
+        let half = (key_num / 2) as usize;
+        let expect = &store.keys[0..half];
+        let result = scanner.scan(start_key, half).unwrap();
+        let result: Vec<Option<KvPair>> = result.into_iter()
+            .map(Result::ok)
+            .collect();
+        let expect: Vec<Option<KvPair>> = expect.into_iter()
+            .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
+            .collect();
+        assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+    }
+
+
+    #[test]
+    fn test_snapshot_store_reverse_scan() {
+        let key_num = 100;
+        let store = TestStore::new(key_num);
+        let snapshot_store = store.store();
+        let mut statistics = Statistics::default();
+        let mut scanner = snapshot_store.scanner(ScanMode::Backward, false, None, &mut statistics)
+            .unwrap();
+
+        let half = (key_num / 2) as usize;
+        let key = format!("{}{}", KEY_PREFIX, START_ID + (half as u64) - 1);
+        let start_key = make_key(key.as_bytes());
+        let expect = &store.keys[0..half - 1];
+        let result = scanner.reverse_scan(start_key, half).unwrap();
+        let result: Vec<Option<KvPair>> = result.into_iter()
+            .map(Result::ok)
+            .collect();
+
+        let mut expect: Vec<Option<KvPair>> = expect.into_iter()
+            .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
+            .collect();
+        expect.reverse();
+
+        assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+    }
+
+    #[test]
+    fn test_snapshot_store_seek() {
+        let key_num = 100;
+        let store = TestStore::new(key_num);
+        let snapshot_store = store.store();
+        let mut statistics = Statistics::default();
+        let mut scanner = snapshot_store.scanner(ScanMode::Forward, false, None, &mut statistics)
+            .unwrap();
+
+        let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
+        let start_key = make_key(key.as_bytes());
+        let result = scanner.seek(start_key).unwrap();
+        let expect_key = format!("{}{}", KEY_PREFIX, START_ID + 1);
+        let expect_value = expect_key.clone().into_bytes();
+        let expect = Some((make_key(expect_key.as_bytes()), expect_value as Value));
+        assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+    }
+
+    #[test]
+    fn test_snapshot_store_reverse_seek() {
+        let key_num = 100;
+        let store = TestStore::new(key_num);
+        let snapshot_store = store.store();
+        let mut statistics = Statistics::default();
+        let mut scanner = snapshot_store.scanner(ScanMode::Backward, false, None, &mut statistics)
+            .unwrap();
+
+        let key = format!("{}{}aaa", KEY_PREFIX, START_ID);
+        let start_key = make_key(key.as_bytes());
+        let result = scanner.reverse_seek(start_key).unwrap();
+        let expect_key = format!("{}{}", KEY_PREFIX, START_ID);
+        let expect_value = expect_key.clone().into_bytes();
+        let expect = Some((make_key(expect_key.as_bytes()), expect_value as Value));
+        assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
+    }
+}
