@@ -416,7 +416,7 @@ mod test {
         assert!(!bs.is_empty());
 
         let r = bs.as_slice().decode_row(&Default::default(), &cols).unwrap();
-        assert_eq!(row.len(), r.len());
+        assert!(row.is_empty());
         assert!(row.iter()
             .all(|(key, value)| r.get(key).map_or(false, |v| *value == *v)));
 
@@ -446,7 +446,7 @@ mod test {
         let r = bs.as_slice().decode_row(&Default::default(), &cols).unwrap();
         row.remove(&3);
 
-        assert_eq!(row.len(), r.len());
+        assert!(row.is_empty());
         assert!(row.iter()
             .all(|(key, value)| r.get(key).map_or(false, |v| *value == *v)));
 
@@ -459,7 +459,7 @@ mod test {
             .all(|(key, value)| datums.get(key).map_or(false, |v| *value == *v)));
 
         let bs = encode_row(vec![], &[]).unwrap();
-        assert_ne!(bs.len(), 0);
+        assert!(!bs.is_empty());
         assert!(bs.as_slice().decode_row(&Default::default(), &cols).unwrap().is_empty());
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert!(datums.is_empty());

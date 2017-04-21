@@ -181,7 +181,7 @@ impl Interface {
     fn initial(&mut self, id: u64, ids: &[u64]) {
         if self.raft.is_some() {
             self.id = id;
-            self.prs = RaftHashMap::with_capacity_and_hasher(ids.len(), RandomState::new());
+            self.prs = RaftHashMap::with_capacity(ids.len());
             for id in ids {
                 self.prs.insert(*id, Progress { ..Default::default() });
             }
