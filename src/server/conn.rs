@@ -271,9 +271,20 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
+        if !self.send_buffer.is_empty() {
+            msg.encode_to(&mut self.send_buffer).unwrap();
+            // We have registered it aleady, no need to register again.
+            return Ok(());
+        }
+
         msg.encode_to(&mut self.send_buffer).unwrap();
 
-        if !self.interest.is_writable() {
+        // We don't care error here, because buffer ensures the written point will
+        // be updated properly. If the connection is not valid, it should be reported
+        // again in the following operations.
+        let _ = self.send_buffer.write_to(&mut self.sock);
+
+        if !self.send_buffer.is_empty() {
             // re-register writable if we have not,
             // if registered, we can only remove this flag when
             // writing all data in writable function.
