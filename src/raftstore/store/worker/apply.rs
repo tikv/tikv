@@ -13,11 +13,9 @@
 
 
 use std::sync::Arc;
-use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::collections::VecDeque;
-use std::collections::hash_map::Entry as MapEntry;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use uuid::Uuid;
@@ -31,6 +29,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
+use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{CF_LOCK, CF_RAFT};
 use raftstore::{Result, Error};
 use raftstore::store::{Store, cmd_resp, keys, util};
