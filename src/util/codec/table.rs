@@ -416,47 +416,31 @@ mod test {
         assert!(!bs.is_empty());
 
         let r = bs.as_slice().decode_row(&Default::default(), &cols).unwrap();
-        assert!(row.is_empty());
-        assert!(row.iter()
-            .all(|(key, value)| r.get(key).map_or(false, |v| *value == *v)));
+        assert_eq!(row, r);
 
         let mut datums: HashMap<_, _>;
         datums = cut_row_as_owned(&bs, &col_id_set);
-        assert_eq!(col_encoded.len(), datums.len());
-        assert!(col_encoded.iter()
-            .all(|(key, value)| datums.get(key).map_or(false, |v| *value == *v)));
-
+        assert_eq!(col_encoded, datums);
 
         cols.insert(4, new_col_info(types::FLOAT));
         let r = bs.as_slice().decode_row(&Default::default(), &cols).unwrap();
-        assert_eq!(row.len(), r.len());
-        assert!(row.iter()
-            .all(|(key, value)| r.get(key).map_or(false, |v| *value == *v)));
+        assert_eq!(row, r);
 
         col_id_set.insert(4);
         datums = cut_row_as_owned(&bs, &col_id_set);
-
-        assert_eq!(col_encoded.len(), datums.len());
-        assert!(col_encoded.iter()
-            .all(|(key, value)| datums.get(key).map_or(false, |v| *value == *v)));
-
+        assert_eq!(col_encoded, datums);
 
         cols.remove(&4);
         cols.remove(&3);
         let r = bs.as_slice().decode_row(&Default::default(), &cols).unwrap();
         row.remove(&3);
-
-        assert!(row.is_empty());
-        assert!(row.iter()
-            .all(|(key, value)| r.get(key).map_or(false, |v| *value == *v)));
+        assert_eq!(row, r);
 
         col_id_set.remove(&3);
         col_id_set.remove(&4);
         datums = cut_row_as_owned(&bs, &col_id_set);
         col_encoded.remove(&3);
-        assert_eq!(col_encoded.len(), datums.len());
-        assert!(col_encoded.iter()
-            .all(|(key, value)| datums.get(key).map_or(false, |v| *value == *v)));
+        assert_eq!(col_encoded, datums);
 
         let bs = encode_row(vec![], &[]).unwrap();
         assert!(!bs.is_empty());
