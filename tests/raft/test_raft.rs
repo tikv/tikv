@@ -29,7 +29,6 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::cmp;
-use std::collections::hash_map::RandomState;
 
 use protobuf::{self, RepeatedField};
 use kvproto::eraftpb::{Entry, Message, MessageType, HardState, Snapshot, ConfState, EntryType,
