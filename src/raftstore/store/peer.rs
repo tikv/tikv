@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::collections::hash_map::Values;
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
@@ -41,7 +40,8 @@ use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker as Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes};
-use util::{clocktime, Either, HashMap, HashSet, strftimespec};
+use util::{clocktime, Either, strftimespec};
+use util::collections::{HashMap, HashSet, HashMapValues as Values};
 
 use pd::INVALID_ID;
 
