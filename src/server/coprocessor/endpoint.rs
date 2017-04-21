@@ -13,7 +13,6 @@
 
 use std::usize;
 use std::collections::BinaryHeap;
-use std::collections::hash_map::Entry;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -36,8 +35,9 @@ use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
 use util::xeval::{Evaluator, EvalContext};
-use util::{escape, duration_to_ms, duration_to_sec, Either, HashMap, HashSet};
+use util::{escape, duration_to_ms, duration_to_sec, Either};
 use util::worker::{BatchRunnable, Scheduler};
+use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use server::OnResponse;
 
 use super::{Error, Result};
@@ -677,16 +677,16 @@ impl SelectContextCore {
                 for cond_col in cond_col_map.keys() {
                     aggr_cols_map.remove(cond_col);
                 }
-                aggr_cols = aggr_cols_map.drain().map(|(_, v)| v).collect();
+                aggr_cols = aggr_cols_map.into_iter().map(|(_, v)| v).collect();
             }
-            cond_cols = cond_col_map.drain().map(|(_, v)| v).collect();
+            cond_cols = cond_col_map.into_iter().map(|(_, v)| v).collect();
 
             // get topn cols
             let mut topn_col_map = HashMap::default();
             for item in sel.get_order_by() {
                 try!(collect_col_in_expr(&mut topn_col_map, select_cols, item.get_expr()))
             }
-            topn_cols = topn_col_map.drain().map(|(_, v)| v).collect();
+            topn_cols = topn_col_map.into_iter().map(|(_, v)| v).collect();
             order_by_cols.extend_from_slice(sel.get_order_by())
         }
 
@@ -1159,7 +1159,7 @@ mod tests {
     use util::codec::Datum;
     use util::xeval::EvalContext;
     use util::codec::table::RowColsDict;
-    use util::HashMap;
+    use util::collections::HashMap;
 
     use std::rc::Rc;
     use std::sync::*;
