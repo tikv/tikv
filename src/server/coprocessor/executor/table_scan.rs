@@ -15,136 +15,77 @@ use server::coprocessor::endpoint::{prefix_next, is_point};
 use server::coprocessor::Result;
 use tipb::executor::TableScan;
 use kvproto::coprocessor::KeyRange;
-use storage::{Key, SnapshotStore, Statistics, ScanMode};
+use storage::{SnapshotStore, Statistics};
 use util::codec::table;
 use util::codec::table::RowColsDict;
 use util::HashSet;
 use super::Executor;
+use super::base_scanner::BaseScanner;
 
 struct TableScanExec<'a> {
-    executor: TableScan,
+    meta: TableScan,
     col_ids: HashSet<i64>,
-    key_ranges: Vec<KeyRange>,
-    store: SnapshotStore<'a>,
     cursor: usize,
-    seek_key: Option<Vec<u8>>,
-    scan_mode: ScanMode,
-    upper_bound: Option<Vec<u8>>,
-    region_start: Vec<u8>,
-    region_end: Vec<u8>,
-    statistics: &'a mut Statistics,
+    key_ranges: Vec<KeyRange>,
+    scanner: BaseScanner<'a>,
 }
-
 
 impl<'a> TableScanExec<'a> {
     #[allow(dead_code)] //TODO:remove it
-    pub fn new(executor: TableScan,
+    pub fn new(meta: TableScan,
                key_ranges: Vec<KeyRange>,
                store: SnapshotStore<'a>,
                region_start: Vec<u8>,
                region_end: Vec<u8>,
                statistics: &'a mut Statistics)
                -> TableScanExec<'a> {
-        let col_ids = executor.get_columns()
+        let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
             .collect();
-        let scan_mode = if executor.get_desc() {
-            ScanMode::Backward
-        } else {
-            ScanMode::Forward
-        };
+        let scanner = BaseScanner::new(meta.get_desc(),
+                                       false,
+                                       store,
+                                       region_start,
+                                       region_end,
+                                       statistics);
         TableScanExec {
-            executor: executor,
+            meta: meta,
             col_ids: col_ids,
+            scanner: scanner,
             key_ranges: key_ranges,
-            store: store,
             cursor: 0,
-            seek_key: None,
-            scan_mode: scan_mode,
-            upper_bound: None,
-            region_start: region_start,
-            region_end: region_end,
-            statistics: statistics,
         }
-    }
-
-    fn get_row_from_point(&mut self) -> Result<Option<(i64, RowColsDict)>> {
-        let range = &self.key_ranges[self.cursor];
-        let value = match try!(self.store
-            .get(&Key::from_raw(range.get_start()), &mut self.statistics)) {
-            None => return Ok(None),
-            Some(v) => v,
-        };
-        let values = box_try!(table::cut_row(value, &self.col_ids));
-        let h = box_try!(table::decode_handle(range.get_start()));
-        Ok(Some((h, values)))
     }
 
     fn get_row_from_range(&mut self) -> Result<Option<(i64, RowColsDict)>> {
-        self.init_seek_key_and_upper_bound();
         let range = &self.key_ranges[self.cursor];
-        if range.get_start() > range.get_end() {
-            return Ok(None);
-        }
-        let desc = self.executor.get_desc();
-        let mut scanner = try!(self.store.scanner(self.scan_mode,
-                                                  false,
-                                                  self.upper_bound.clone(),
-                                                  self.statistics));
-        let seek_key = self.seek_key.clone().unwrap();
-        let kv = if desc {
-            try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
-        } else {
-            try!(scanner.seek(Key::from_raw(&seek_key)))
-        };
-
+        let kv = box_try!(self.scanner.get_row_from_range(range));
         let (key, value) = match kv {
-            Some((key, value)) => (box_try!(key.raw()), value),
+            Some((key, value)) => (key, value),
             None => return Ok(None),
         };
-
         let h = box_try!(table::decode_handle(&key));
-        let row_data = {
-            box_try!(table::cut_row(value, &self.col_ids))
-        };
-
-        let seek_key = if desc {
+        let row_data = box_try!(table::cut_row(value, &self.col_ids));
+        let seek_key = if self.meta.get_desc() {
             box_try!(table::truncate_as_row_key(&key)).to_vec()
         } else {
             prefix_next(&key)
         };
-        self.seek_key = Some(seek_key);
+        self.scanner.set_seek_key(Some(seek_key));
         Ok(Some((h, row_data)))
     }
 
-    fn init_seek_key_and_upper_bound(&mut self) {
-        if self.seek_key.is_some() {
-            return;
+    fn get_row_from_point(&mut self) -> Result<Option<(i64, RowColsDict)>> {
+        let key = self.key_ranges[self.cursor].get_start();
+        let value = box_try!(self.scanner.get_row_from_point(key));
+        if let Some(value) = value {
+            let values = box_try!(table::cut_row(value, &self.col_ids));
+            let h = box_try!(table::decode_handle(self.key_ranges[self.cursor].get_start()));
+            return Ok(Some((h, values)));
         }
-        let range = &self.key_ranges[self.cursor];
-        self.upper_bound = None;
-        if self.executor.get_desc() {
-            let range_end = range.get_end().to_vec();
-            self.seek_key = if self.region_end.is_empty() || range_end < self.region_end {
-                Some(self.region_end.clone())
-            } else {
-                Some(range_end)
-            };
-            return;
-        }
-
-        if range.has_end() {
-            self.upper_bound = Some(Key::from_raw(range.get_end()).encoded().clone());
-        }
-
-        let range_start = range.get_start().to_vec();
-        self.seek_key = if range_start > self.region_start {
-            Some(range_start)
-        } else {
-            Some(self.region_start.clone())
-        };
+        Ok(None)
     }
 }
 
@@ -154,14 +95,14 @@ impl<'a> Executor for TableScanExec<'a> {
             // let range = &self.key_ranges[self.cursor];
             if is_point(&self.key_ranges[self.cursor]) {
                 let data = box_try!(self.get_row_from_point());
-                self.seek_key = None;
+                self.scanner.set_seek_key(None);
                 self.cursor += 1;
                 return Ok(data);
             }
 
             let data = box_try!(self.get_row_from_range());
             if data.is_none() {
-                self.seek_key = None;
+                self.scanner.set_seek_key(None);
                 self.cursor += 1;
                 continue;
             }

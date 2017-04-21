@@ -14,7 +14,8 @@
 use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
 
-pub mod tablescan;
+mod base_scanner;
+pub mod table_scan;
 
 
 pub trait Executor {
