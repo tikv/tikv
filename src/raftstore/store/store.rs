@@ -526,7 +526,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn poll_apply(&mut self) {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
-                Ok(ApplyTaskRes::Apply(multi_res)) => {
+                Ok(ApplyTaskRes::Applys(multi_res)) => {
                     for res in multi_res {
                         if let Some(p) = self.region_peers.get_mut(&res.region_id) {
                             debug!("{} async apply finish: {:?}", p.tag, res);
@@ -931,7 +931,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.on_ready_apply_snapshot(apply_result);
             }
         }
-        self.apply_worker.schedule(ApplyTask::apply(apply_tasks)).unwrap();
+        self.apply_worker.schedule(ApplyTask::applys(apply_tasks)).unwrap();
 
         let dur = t.elapsed();
         if !self.is_busy {
