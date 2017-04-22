@@ -39,7 +39,7 @@ use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state
 use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
 use raftstore::store::metrics::*;
 
-const WRITE_BATCH_RECOMMENDED_KEYS: usize = 128;
+const WRITE_BATCH_MAX_KEYS: usize = 128;
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -172,7 +172,7 @@ fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     }
 
     // When write batch contains more than `recommended` keys, flush the batch to engine.
-    if wb_keys >= WRITE_BATCH_RECOMMENDED_KEYS {
+    if wb_keys >= WRITE_BATCH_MAX_KEYS {
         return true;
     }
 
@@ -277,7 +277,7 @@ impl ApplyDelegate {
         results
     }
 
-    fn write_apply_state(&mut self, wb: &mut WriteBatch) {
+    fn write_apply_state(&self, wb: &mut WriteBatch) {
         rocksdb::get_cf_handle(&self.engine, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
