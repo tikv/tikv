@@ -11,8 +11,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod client;
-mod util;
-
-pub use self::client::RpcClient;
-pub use self::util::validate_endpoints;
+mod bench_serialization;
