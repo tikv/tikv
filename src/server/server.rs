@@ -26,7 +26,7 @@ use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use raft::SnapshotStatus;
 use util::sockopt::SocketOpt;
-use util::{HashMap, HashSet};
+use util::collections::{HashMap, HashSet};
 
 use super::{Msg, ConnData};
 use super::conn::Conn;

@@ -17,7 +17,7 @@ use std::path::Path;
 use storage::CF_DEFAULT;
 use rocksdb::{DB, Options, SliceTransform};
 
-use super::{HashSet, HashMap};
+use super::collections::{HashSet, HashMap};
 
 pub use rocksdb::CFHandle;
 
@@ -205,7 +205,7 @@ impl SliceTransform for FixedPrefixSliceTransform {
 mod tests {
     use rocksdb::{DB, Options};
     use tempdir::TempDir;
-    use util::HashMap;
+    use util::collections::HashMap;
     use super::check_and_open;
 
     #[test]
