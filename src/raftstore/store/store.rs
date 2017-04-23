@@ -1118,9 +1118,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // To prevent from big region, the right region need run split
                 // check again after split.
                 if right_derive {
-                    if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                        peer.size_diff_hint = self.cfg.region_check_size_diff;
-                    }
+                    self.region_peers.get_mut(&region_id).unwrap().size_diff_hint = self.cfg
+                        .region_check_size_diff;
+
                 } else {
                     new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 }
