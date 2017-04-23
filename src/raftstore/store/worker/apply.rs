@@ -277,7 +277,7 @@ impl ApplyDelegate {
         results
     }
 
-    fn write_apply_state(&self, wb: &mut WriteBatch) {
+    fn write_apply_state(&self, wb: &WriteBatch) {
         rocksdb::get_cf_handle(&self.engine, CF_RAFT)
             .map_err(From::from)
             .and_then(|handle| {
