@@ -15,7 +15,7 @@ use std::usize;
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
-use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::collections::{BinaryHeap, BTreeMap, HashMap, VecDeque};
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::hash::Hash;
@@ -91,7 +91,7 @@ pub struct BigGroupThrottledQueue<T> {
     // `group_concurrency_on_busy`(which means the number of on-going tasks is
     // more than `group_concurrency_on_busy`), the rest of the group's tasks
     // would be pushed into `waiting_queue[group_id]`
-    waiting_queue: HashMap<T, VecDeque<Task<T>>>,
+    waiting_queue: BTreeMap<T, VecDeque<Task<T>>>,
     // group_id => running_num+pending_num(in `pending_tasks`). It means at most
     // `group_concurrency[group_id]` tasks of the group may be running
     group_concurrency: HashMap<T, usize>,
@@ -105,7 +105,7 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     pub fn new(group_concurrency_on_busy: usize) -> BigGroupThrottledQueue<T> {
         BigGroupThrottledQueue {
             group_concurrency: HashMap::new(),
-            waiting_queue: HashMap::new(),
+            waiting_queue: BTreeMap::new(),
             pending_tasks: BinaryHeap::new(),
             group_concurrency_on_busy: group_concurrency_on_busy,
         }
@@ -126,6 +126,8 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     #[inline]
     fn pop_from_waiting_queue(&mut self) -> Option<Task<T>> {
         let group_id = {
+            // Groups in waiting_queue wouldn't too much, so iterate the map
+            // is quick.
             let best_group = self.waiting_queue
                 .iter()
                 .map(|(group_id, waiting_queue)| {
@@ -320,13 +322,11 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
             cvar.notify_all();
         }
         let mut err_msg = String::new();
-        while let Some(t) = self.threads.pop() {
+        for t in self.threads.drain(..) {
             if let Err(e) = t.join() {
-                write!(&mut err_msg, "failed to join thread with err :{:?}", e).unwrap();
+                write!(&mut err_msg, "Failed to join thread with err: {:?};", e).unwrap();
             }
         }
-
-
         if !err_msg.is_empty() {
             return Err(err_msg);
         }
@@ -397,6 +397,7 @@ mod test {
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn test_for_tasks_with_different_cost() {
@@ -453,13 +454,18 @@ mod test {
         let recv_timeout_duration = Duration::from_secs(2);
         let group1 = 1001;
         let push_tasks_cond = Arc::new((Mutex::new(()), Condvar::new()));
+        let push_finished = Arc::new(AtomicBool::new(false));
 
         // Make all threads busy until all test tasks had been pushed into the pool.
         for gid in 0..concurrency {
             let listener = push_tasks_cond.clone();
+            let push_finished = push_finished.clone();
             task_pool.execute(gid, move || {
                 let &(ref lock, ref cvar) = &*listener;
-                cvar.wait_timeout(lock.lock().unwrap(), recv_timeout_duration).unwrap();
+                // conv needn't start to wait if noitification is sended.
+                if !push_finished.load(Ordering::SeqCst) {
+                    cvar.wait_timeout(lock.lock().unwrap(), recv_timeout_duration).unwrap();
+                }
             });
         }
 
@@ -495,6 +501,8 @@ mod test {
         // Notify all threads that all test tasks had been pushed into the pool.
         push_tasks_cond.1.notify_all();
 
+        // conv needn't start to wait if noitification is sended.
+        push_finished.store(true, Ordering::SeqCst);
 
         // The tasks in pool: {txn11, txn12, txn13, txn14, txn21, txn22, txn31, txn32}.
         // First 4 tasks running during [0,sleep_duration] should be
