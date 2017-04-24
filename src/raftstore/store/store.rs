@@ -1120,7 +1120,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if right_derive {
                     self.region_peers.get_mut(&region_id).unwrap().size_diff_hint = self.cfg
                         .region_check_size_diff;
-
                 } else {
                     new_peer.size_diff_hint = self.cfg.region_check_size_diff;
                 }
