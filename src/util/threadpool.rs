@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::fmt::Write;
+use std::fmt::{self, Write, Debug, Formatter};
 use super::collections::HashMap;
 
 pub struct Task<T> {
@@ -28,17 +28,23 @@ pub struct Task<T> {
     // and it's always bigger than preceding ones.
     id: u64,
     // which group the task belongs to.
-    group_id: T,
+    gid: T,
     task: Box<FnBox() + Send>,
 }
 
+impl<T: Debug> Debug for Task<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "task_id:{},group_id:{:?}", self.id, self.gid)
+    }
+}
+
 impl<T> Task<T> {
-    fn new<F>(id: u64, group_id: T, job: F) -> Task<T>
+    fn new<F>(id: u64, gid: T, job: F) -> Task<T>
         where F: FnOnce() + Send + 'static
     {
         Task {
             id: id,
-            group_id: group_id,
+            gid: gid,
             task: Box::new(job),
         }
     }
@@ -64,14 +70,15 @@ impl<T> PartialOrd for Task<T> {
     }
 }
 
-pub trait ScheduleQueue<T> {
+pub trait ScheduleQueue<T: Debug> {
     fn pop(&mut self) -> Option<Task<T>>;
     fn push(&mut self, task: Task<T>);
-    fn on_task_finished(&mut self, group_id: &T);
-    fn on_task_started(&mut self, group_id: &T);
+    fn on_task_finished(&mut self, gid: &T);
+    fn on_task_started(&mut self, gid: &T);
 }
 
-pub struct ReachConcurrencyLimit<T>(pub T);
+#[derive(Debug)]
+pub struct ReachConcurrencyLimit<T: Debug>(pub T);
 
 struct GroupStatisticsItem {
     running_count: usize,
@@ -86,7 +93,7 @@ impl GroupStatisticsItem {
         }
     }
 
-    fn total(&self) -> usize {
+    fn sum(&self) -> usize {
         self.running_count + self.high_pri_queue_count
     }
 }
@@ -106,20 +113,20 @@ pub struct BigGroupThrottledQueue<T> {
     // The Tasks in `high_pri_queue` have higher priority than
     // tasks in `low_pri_queue`.
     high_pri_queue: BinaryHeap<Task<T>>,
-    // group_id => tasks array. If `group_statistics[group_id]` is bigger than
+    // gid => tasks array. If `group_statistics[gid]` is bigger than
     // `group_concurrency_limit`(which means the number of on-going tasks is
     // more than `group_concurrency_limit`), the rest of the group's tasks
-    // would be pushed into `low_pri_queue[group_id]`
+    // would be pushed into `low_pri_queue[gid]`
     low_pri_queue: HashMap<T, VecDeque<Task<T>>>,
-    // group_id => running_num+pending_num(in `high_pri_queue`). It means at most
-    // `group_statistics[group_id]` tasks of the group may be running
+    // gid => running_num+pending_num(in `high_pri_queue`). It means at most
+    // `group_statistics[gid]` tasks of the group may be running
     group_statistics: HashMap<T, GroupStatisticsItem>,
     // The maximum number of threads that each group can run when the pool is busy.
     // Each value in `group_statistics` shouldn't be bigger than this value.
     group_concurrency_limit: usize,
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
+impl<T: Debug + Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     pub fn new(group_concurrency_limit: usize) -> BigGroupThrottledQueue<T> {
         BigGroupThrottledQueue {
             high_pri_queue: BinaryHeap::new(),
@@ -135,9 +142,9 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
                                     task: Task<T>)
                                     -> Result<(), ReachConcurrencyLimit<Task<T>>> {
         let mut statistics = self.group_statistics
-            .entry(task.group_id.clone())
+            .entry(task.gid.clone())
             .or_insert(GroupStatisticsItem::new());
-        if statistics.total() >= self.group_concurrency_limit {
+        if statistics.sum() >= self.group_concurrency_limit {
             return Err(ReachConcurrencyLimit(task));
         }
         self.high_pri_queue.push(task);
@@ -147,46 +154,46 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
 
     #[inline]
     fn pop_from_low_pri_queue(&mut self) -> Option<Task<T>> {
-        let group_id = {
+        let gid = {
             // Groups in low_pri_queue wouldn't too much, so iterate the map
             // is quick.
             let best_group = self.low_pri_queue
                 .iter()
-                .map(|(group_id, low_pri_queue)| {
-                    (self.group_statistics[group_id].total(), low_pri_queue[0].id, group_id)
+                .map(|(gid, low_pri_queue)| {
+                    (self.group_statistics[gid].sum(), low_pri_queue[0].id, gid)
                 })
                 .min();
-            if let Some((_, _, group_id)) = best_group {
-                group_id.clone()
+            if let Some((_, _, gid)) = best_group {
+                gid.clone()
             } else {
                 return None;
             }
         };
 
-        let task = self.pop_from_low_pri_queue_by_group_id(&group_id);
+        let task = self.pop_from_low_pri_queue_by_group_id(&gid);
         Some(task)
     }
 
     #[inline]
-    fn pop_from_low_pri_queue_by_group_id(&mut self, group_id: &T) -> Task<T> {
+    fn pop_from_low_pri_queue_by_group_id(&mut self, gid: &T) -> Task<T> {
         let (empty_after_pop, task) = {
-            let mut waiting_tasks = self.low_pri_queue.get_mut(group_id).unwrap();
+            let mut waiting_tasks = self.low_pri_queue.get_mut(gid).unwrap();
             let task = waiting_tasks.pop_front().unwrap();
             (waiting_tasks.is_empty(), task)
         };
 
         if empty_after_pop {
-            self.low_pri_queue.remove(group_id);
+            self.low_pri_queue.remove(gid);
         }
         task
     }
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
+impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
     fn push(&mut self, task: Task<T>) {
         if let Err(ReachConcurrencyLimit(task)) = self.try_push_into_high_pri_queue(task) {
             self.low_pri_queue
-                .entry(task.group_id.clone())
+                .entry(task.gid.clone())
                 .or_insert_with(VecDeque::new)
                 .push_back(task);
         }
@@ -194,7 +201,7 @@ impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQu
 
     fn pop(&mut self) -> Option<Task<T>> {
         if let Some(task) = self.high_pri_queue.pop() {
-            let mut statistics = self.group_statistics.get_mut(&task.group_id).unwrap();
+            let mut statistics = self.group_statistics.get_mut(&task.gid).unwrap();
             statistics.high_pri_queue_count -= 1;
             return Some(task);
         } else if let Some(task) = self.pop_from_low_pri_queue() {
@@ -203,33 +210,33 @@ impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQu
         None
     }
 
-    fn on_task_started(&mut self, group_id: &T) {
+    fn on_task_started(&mut self, gid: &T) {
         let mut statistics =
-            self.group_statistics.entry(group_id.clone()).or_insert(GroupStatisticsItem::new());
+            self.group_statistics.entry(gid.clone()).or_insert(GroupStatisticsItem::new());
         statistics.running_count += 1
     }
 
-    fn on_task_finished(&mut self, group_id: &T) {
+    fn on_task_finished(&mut self, gid: &T) {
         let count = {
-            let mut statistics = self.group_statistics.get_mut(group_id).unwrap();
+            let mut statistics = self.group_statistics.get_mut(gid).unwrap();
             statistics.running_count -= 1;
-            statistics.total()
+            statistics.sum()
         };
         if count == 0 {
-            self.group_statistics.remove(group_id);
+            self.group_statistics.remove(gid);
         } else if count >= self.group_concurrency_limit {
             // If the number of running tasks for this group is big enough.
             return;
         }
 
-        if !self.low_pri_queue.contains_key(group_id) {
+        if !self.low_pri_queue.contains_key(gid) {
             return;
         }
 
-        // If the value of `group_statistics[group_id]` is not big enough, pop
-        // a task from `low_pri_queue[group_id]` and push it into `high_pri_queue`.
-        let group_task = self.pop_from_low_pri_queue_by_group_id(group_id);
-        assert!(self.try_push_into_high_pri_queue(group_task).is_ok());
+        // If the value of `group_statistics[gid]` is not big enough, pop
+        // a task from `low_pri_queue[gid]` and push it into `high_pri_queue`.
+        let group_task = self.pop_from_low_pri_queue_by_group_id(gid);
+        self.try_push_into_high_pri_queue(group_task).unwrap();
     }
 }
 
@@ -240,7 +247,7 @@ struct TaskPool<Q, T> {
     stop: bool,
 }
 
-impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
+impl<Q: ScheduleQueue<T>, T: Debug> TaskPool<Q, T> {
     fn new(queue: Q) -> TaskPool<Q, T> {
         TaskPool {
             next_task_id: 0,
@@ -251,22 +258,22 @@ impl<Q: ScheduleQueue<T>, T> TaskPool<Q, T> {
     }
 
     // `push_task` pushes a new task into pool.
-    fn push_task<F>(&mut self, group_id: T, job: F)
+    fn push_task<F>(&mut self, gid: T, job: F)
         where F: FnOnce() + Send + 'static
     {
-        let task = Task::new(self.next_task_id, group_id, job);
+        let task = Task::new(self.next_task_id, gid, job);
         self.next_task_id += 1;
         self.task_queue.push(task);
     }
 
     // `on_task_finished` is called when the thread finished a task.
     // It will clean up the remaining information of the task.
-    fn on_task_finished(&mut self, group_id: &T) {
-        self.task_queue.on_task_finished(group_id);
+    fn on_task_finished(&mut self, gid: &T) {
+        self.task_queue.on_task_finished(gid);
     }
 
-    fn on_task_started(&mut self, group_id: &T) {
-        self.task_queue.on_task_started(group_id);
+    fn on_task_started(&mut self, gid: &T) {
+        self.task_queue.on_task_started(gid);
     }
 
     fn pop_task(&mut self) -> Option<Task<T>> {
@@ -294,7 +301,10 @@ pub struct ThreadPool<Q, T> {
     task_count: Arc<AtomicUsize>,
 }
 
-impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static> ThreadPool<Q, T> {
+impl<Q, T> ThreadPool<Q, T>
+    where Q: ScheduleQueue<T> + Send + 'static,
+          T: Hash + Eq + Send + Clone + 'static + Debug
+{
     pub fn new(name: String, num_threads: usize, queue: Q) -> ThreadPool<Q, T> {
         assert!(num_threads >= 1);
         let task_pool = Arc::new((Mutex::new(TaskPool::new(queue)), Condvar::new()));
@@ -321,12 +331,12 @@ impl<Q: ScheduleQueue<T> + Send + 'static, T: Hash + Eq + Send + Clone + 'static
         }
     }
 
-    pub fn execute<F>(&mut self, group_id: T, job: F)
+    pub fn execute<F>(&mut self, gid: T, job: F)
         where F: FnOnce() + Send + 'static
     {
         let &(ref lock, ref cvar) = &*self.task_pool;
         let mut meta = lock.lock().unwrap();
-        meta.push_task(group_id, job);
+        meta.push_task(gid, job);
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
         cvar.notify_one();
     }
@@ -363,7 +373,8 @@ struct Worker<Q, T> {
 }
 
 impl<Q, T> Worker<Q, T>
-    where Q: ScheduleQueue<T>
+    where Q: ScheduleQueue<T>,
+          T: Debug
 {
     fn new(task_pool: Arc<(Mutex<TaskPool<Q, T>>, Condvar)>,
            task_count: Arc<AtomicUsize>)
@@ -389,7 +400,7 @@ impl<Q, T> Worker<Q, T>
                 //  1. To reduce lock's time;
                 //  2. For some schedula_queue,on_task_started should be
                 //  in the same lock with `pop_task` for the thread safety.
-                task_pool.on_task_started(&task.group_id);
+                task_pool.on_task_started(&task.gid);
                 return Some(task);
             }
             // wait for new task
@@ -397,10 +408,10 @@ impl<Q, T> Worker<Q, T>
         }
     }
 
-    fn on_task_finished(&self, group_id: &T) {
+    fn on_task_finished(&self, gid: &T) {
         let &(ref lock, _) = &*self.task_pool;
         let mut task_pool = lock.lock().unwrap();
-        task_pool.on_task_finished(group_id);
+        task_pool.on_task_finished(gid);
     }
 
     fn run(&mut self) {
@@ -409,7 +420,7 @@ impl<Q, T> Worker<Q, T>
             // Since tikv would be down when any panic happens,
             // we don't need to process panic case here.
             (task.task)();
-            self.on_task_finished(&task.group_id);
+            self.on_task_finished(&task.gid);
             self.task_count.fetch_sub(1, AtomicOrdering::SeqCst);
         }
     }
@@ -439,11 +450,11 @@ mod test {
             sleep(sleep_duration * 10);
         });
 
-        for group_id in 0..10 {
+        for gid in 0..10 {
             let sender = jtx.clone();
-            task_pool.execute(group_id, move || {
+            task_pool.execute(gid, move || {
                 sleep(sleep_duration);
-                sender.send(group_id).unwrap();
+                sender.send(gid).unwrap();
             });
         }
 
@@ -458,8 +469,8 @@ mod test {
         // Since a long task of `group_with_big_task` is running,
         // the other threads shouldn't run any task of `group_with_big_task`.
         for _ in 0..10 {
-            let group_id = jrx.recv_timeout(recv_timeout_duration).unwrap();
-            assert_ne!(group_id, group_with_big_task);
+            let gid = jrx.recv_timeout(recv_timeout_duration).unwrap();
+            assert_ne!(gid, group_with_big_task);
         }
 
         for _ in 0..10 {
@@ -608,27 +619,27 @@ mod test {
         // queue: g1, g1, g1, g1, g2, g2, g2, g2. As all groups has a running number that is
         // smaller than that of group_concurrency_limit, and g1 comes first.
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group1);
+        assert_eq!(task.gid, group1);
         queue.on_task_started(&group1);
 
         // queue: g1, g1, g1, g2, g2, g2, g2; running:g1.
         // only g2 has a running number that is smaller than that of group_concurrency_limit.
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group2);
+        assert_eq!(task.gid, group2);
         queue.on_task_started(&group2);
 
         // queue: g1, g1, g1, g2, g2, g2; running:g1,g2. Since no group has a running number
         // smaller than `group_concurrency_limit`, and each group's running number is
         // the same, choose g1 since it comes first.
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group1);
+        assert_eq!(task.gid, group1);
         queue.on_task_started(&group1);
 
         // queue:g1, g1, g2, g2, g2; running:g1,g2,g1. Since no group has a running number
         // smaller than `group_concurrency_limit`, and the running number of g2 is smaller,
         // choose g2 since it comes first.
         let task = queue.pop().unwrap();
-        assert_eq!(task.group_id, group2);
+        assert_eq!(task.gid, group2);
         queue.on_task_started(&group2);
     }
 }
