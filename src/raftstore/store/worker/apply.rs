@@ -121,7 +121,11 @@ pub enum ExecResult {
         state: RaftTruncatedState,
         first_index: u64,
     },
-    SplitRegion { left: Region, right: Region },
+    SplitRegion {
+        left: Region,
+        right: Region,
+        right_derive: bool,
+    },
     ComputeHash {
         region: Region,
         index: u64,
@@ -413,8 +417,12 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
                 ExecResult::CompactLog { .. } => {}
-                ExecResult::SplitRegion { ref left, .. } => {
-                    self.region = left.clone();
+                ExecResult::SplitRegion { ref left, ref right, right_derive } => {
+                    if right_derive {
+                        self.region = right.clone();
+                    } else {
+                        self.region = left.clone();
+                    }
                     self.metrics.size_diff_hint = 0;
                     self.metrics.delete_keys_hint = 0;
                 }
@@ -637,6 +645,7 @@ impl ApplyDelegate {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
 
         let split_req = req.get_split();
+        let right_derive = split_req.get_right_derive();
         if !split_req.has_split_key() {
             return Err(box_err!("missing split key"));
         }
@@ -657,13 +666,17 @@ impl ApplyDelegate {
         // TODO: check new region id validation.
         let new_region_id = split_req.get_new_region_id();
 
-        // After split, the origin region key range is [start_key, split_key),
-        // the new split region is [split_key, end).
+        // After split, the left region key range is [start_key, split_key),
+        // the right region is [split_key, end).
         let mut new_region = region.clone();
-        region.set_end_key(split_key.to_vec());
-
-        new_region.set_start_key(split_key.to_vec());
         new_region.set_id(new_region_id);
+        if right_derive {
+            region.set_start_key(split_key.to_vec());
+            new_region.set_end_key(split_key.to_vec());
+        } else {
+            region.set_end_key(split_key.to_vec());
+            new_region.set_start_key(split_key.to_vec());
+        }
 
         // Update new region peer ids.
         let new_peer_ids = split_req.get_new_peer_ids();
@@ -692,16 +705,31 @@ impl ApplyDelegate {
             });
 
         let mut resp = AdminResponse::new();
-        resp.mut_split().set_left(region.clone());
-        resp.mut_split().set_right(new_region.clone());
+        if right_derive {
+            resp.mut_split().set_left(new_region.clone());
+            resp.mut_split().set_right(region.clone());
+        } else {
+            resp.mut_split().set_left(region.clone());
+            resp.mut_split().set_right(new_region.clone());
+        }
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "success"]).inc();
 
-        Ok((resp,
-            Some(ExecResult::SplitRegion {
-            left: region,
-            right: new_region,
-        })))
+        if right_derive {
+            Ok((resp,
+                Some(ExecResult::SplitRegion {
+                left: new_region,
+                right: region,
+                right_derive: true,
+            })))
+        } else {
+            Ok((resp,
+                Some(ExecResult::SplitRegion {
+                left: region,
+                right: new_region,
+                right_derive: false,
+            })))
+        }
     }
 
     fn exec_compact_log(&mut self,

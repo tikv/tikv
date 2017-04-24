@@ -30,7 +30,8 @@ use super::transport_simulate::*;
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
 
-fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+    cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
 
     let pd_client = cluster.pd_client.clone();
@@ -52,7 +53,12 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         let left = pd_client.get_region(left_key).unwrap();
         let right = pd_client.get_region(right_key).unwrap();
 
-        assert_eq!(region.get_id(), left.get_id());
+        assert_eq!(region.get_id(),
+                   if right_derive {
+                       right.get_id()
+                   } else {
+                       left.get_id()
+                   });
         assert_eq!(region.get_start_key(), left.get_start_key());
         assert_eq!(left.get_end_key(), right.get_start_key());
         assert_eq!(region.get_end_key(), right.get_end_key());
@@ -79,17 +85,31 @@ fn test_base_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_base_split_region() {
+fn test_node_base_split_region_left_derive() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_base_split_region(&mut cluster);
+    test_base_split_region(&mut cluster, false);
 }
 
 #[test]
-fn test_server_base_split_region() {
+fn test_node_base_split_region_right_derive() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_base_split_region(&mut cluster, true);
+}
+
+#[test]
+fn test_server_base_split_region_left_derive() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    test_base_split_region(&mut cluster);
+    test_base_split_region(&mut cluster, false);
+}
+
+#[test]
+fn test_server_base_split_region_right_derive() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    test_base_split_region(&mut cluster, true);
 }
 
 /// Keep puting random kvs until specified size limit is reached.
@@ -517,7 +537,8 @@ fn test_node_split_region_diff_check() {
     test_split_region_diff_check(&mut cluster);
 }
 
-fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+    cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = cluster.pd_client.clone();
     let old = pd_client.get_region(b"k1").unwrap();
@@ -533,20 +554,37 @@ fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>) {
     let resp = cluster.call_command_on_leader(get, Duration::from_secs(5)).unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_stale_epoch());
-    assert_eq!(resp.get_header().get_error().get_stale_epoch().get_new_regions(),
-               &[left, right]);
+    if right_derive {
+        assert_eq!(resp.get_header().get_error().get_stale_epoch().get_new_regions(),
+                   &[right, left]);
+    } else {
+        assert_eq!(resp.get_header().get_error().get_stale_epoch().get_new_regions(),
+                   &[left, right]);
+    }
 }
 
 #[test]
-fn test_server_split_stale_epoch() {
+fn test_server_split_stale_epoch_left_derive() {
     let mut cluster = new_server_cluster(0, 3);
-    test_split_stale_epoch(&mut cluster);
+    test_split_stale_epoch(&mut cluster, false);
 }
 
 #[test]
-fn test_node_split_stale_epoch() {
+fn test_server_split_stale_epoch_right_derive() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_split_stale_epoch(&mut cluster, true);
+}
+
+#[test]
+fn test_node_split_stale_epoch_left_derive() {
     let mut cluster = new_node_cluster(0, 3);
-    test_split_stale_epoch(&mut cluster);
+    test_split_stale_epoch(&mut cluster, false);
+}
+
+#[test]
+fn test_node_split_stale_epoch_right_derive() {
+    let mut cluster = new_node_cluster(0, 3);
+    test_split_stale_epoch(&mut cluster, true);
 }
 
 
