@@ -14,6 +14,30 @@
 use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
 
+#[allow(dead_code)] //TODO:remove it
+pub struct Row {
+    handler: i64,
+    data: RowColsDict,
+}
+
+#[allow(dead_code)] //TODO:remove it
+impl Row {
+    pub fn new(handler: i64, data: RowColsDict) -> Row {
+        Row {
+            handler: handler,
+            data: data,
+        }
+    }
+
+    pub fn get_mut_data(&mut self) -> (&mut RowColsDict) {
+        &mut self.data
+    }
+
+    pub fn get_data(self) -> RowColsDict {
+        self.data
+    }
+}
+
 pub trait Executor {
-    fn next(&mut self) -> Result<Option<(i64, RowColsDict)>>;
+    fn next(&mut self) -> Result<Option<Row>>;
 }
