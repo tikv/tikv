@@ -75,19 +75,19 @@ pub struct PushError<T>(pub T);
 
 struct GroupStatisticsItem {
     running_count: usize,
-    queue1_count: usize,
+    high_pri_queue_count: usize,
 }
 
 impl GroupStatisticsItem {
     fn new() -> GroupStatisticsItem {
         GroupStatisticsItem {
             running_count: 0,
-            queue1_count: 0,
+            high_pri_queue_count: 0,
         }
     }
 
     fn total(&self) -> usize {
-        self.queue1_count + self.running_count
+        self.high_pri_queue_count + self.running_count
     }
 }
 
@@ -104,15 +104,15 @@ impl GroupStatisticsItem {
 // 2. If more than one group meets the first point,choose the one
 //     whose task comes first(with the minimum task's ID)
 pub struct BigGroupThrottledQueue<T> {
-    // The Tasks in `high_priority_queue` have higher priority than
-    // tasks in `low_priority_queue`.
-    high_priority_queue: BinaryHeap<Task<T>>,
+    // The Tasks in `high_pri_queue` have higher priority than
+    // tasks in `low_pri_queue`.
+    high_pri_queue: BinaryHeap<Task<T>>,
     // group_id => tasks array. If `group_statistics[group_id]` is bigger than
     // `group_concurrency_limit`(which means the number of on-going tasks is
     // more than `group_concurrency_limit`), the rest of the group's tasks
-    // would be pushed into `low_priority_queue[group_id]`
-    low_priority_queue: HashMap<T, VecDeque<Task<T>>>,
-    // group_id => running_num+pending_num(in `high_priority_queue`). It means at most
+    // would be pushed into `low_pri_queue[group_id]`
+    low_pri_queue: HashMap<T, VecDeque<Task<T>>>,
+    // group_id => running_num+pending_num(in `high_pri_queue`). It means at most
     // `group_statistics[group_id]` tasks of the group may be running
     group_statistics: HashMap<T, GroupStatisticsItem>,
     // The maximum number of threads that each group can run when the pool is busy.
@@ -125,35 +125,35 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     pub fn new(group_concurrency_limit: usize) -> BigGroupThrottledQueue<T> {
         BigGroupThrottledQueue {
             group_statistics: HashMap::new(),
-            low_priority_queue: HashMap::new(),
-            high_priority_queue: BinaryHeap::new(),
+            low_pri_queue: HashMap::new(),
+            high_pri_queue: BinaryHeap::new(),
             group_concurrency_limit: group_concurrency_limit,
         }
     }
 
     // Try push into high priority queue. Return none on success,return PushError(task) on failed.
     #[inline]
-    fn try_push_into_high_pro_queue(&mut self, task: Task<T>) -> Result<(), PushError<Task<T>>> {
+    fn try_push_into_high_pri_queue(&mut self, task: Task<T>) -> Result<(), PushError<Task<T>>> {
         let statistics = self.group_statistics
             .entry(task.group_id.clone())
             .or_insert(GroupStatisticsItem::new());
         if statistics.total() >= self.group_concurrency_limit {
             return Err(PushError(task));
         }
-        self.high_priority_queue.push(task);
-        statistics.queue1_count += 1;
+        self.high_pri_queue.push(task);
+        statistics.high_pri_queue_count += 1;
         Ok(())
     }
 
     #[inline]
-    fn pop_from_low_priority_queue(&mut self) -> Option<Task<T>> {
+    fn pop_from_low_pri_queue(&mut self) -> Option<Task<T>> {
         let group_id = {
-            // Groups in low_priority_queue wouldn't too much, so iterate the map
+            // Groups in low_pri_queue wouldn't too much, so iterate the map
             // is quick.
-            let best_group = self.low_priority_queue
+            let best_group = self.low_pri_queue
                 .iter()
-                .map(|(group_id, low_priority_queue)| {
-                    (self.group_statistics[group_id].total(), low_priority_queue[0].id, group_id)
+                .map(|(group_id, low_pri_queue)| {
+                    (self.group_statistics[group_id].total(), low_pri_queue[0].id, group_id)
                 })
                 .min();
             if let Some((_, _, group_id)) = best_group {
@@ -170,13 +170,13 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     #[inline]
     fn pop_from_low_pri_queue_by_group_id(&mut self, group_id: &T) -> Task<T> {
         let (empty_after_pop, task) = {
-            let mut waiting_tasks = self.low_priority_queue.get_mut(group_id).unwrap();
+            let mut waiting_tasks = self.low_pri_queue.get_mut(group_id).unwrap();
             let task = waiting_tasks.pop_front().unwrap();
             (waiting_tasks.is_empty(), task)
         };
 
         if empty_after_pop {
-            self.low_priority_queue.remove(group_id);
+            self.low_pri_queue.remove(group_id);
         }
         task
     }
@@ -184,8 +184,8 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
 
 impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
     fn push(&mut self, task: Task<T>) {
-        if let Err(PushError(task)) = self.try_push_into_high_pro_queue(task) {
-            self.low_priority_queue
+        if let Err(PushError(task)) = self.try_push_into_high_pri_queue(task) {
+            self.low_pri_queue
                 .entry(task.group_id.clone())
                 .or_insert_with(VecDeque::new)
                 .push_back(task);
@@ -193,11 +193,11 @@ impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQu
     }
 
     fn pop(&mut self) -> Option<Task<T>> {
-        if let Some(task) = self.high_priority_queue.pop() {
+        if let Some(task) = self.high_pri_queue.pop() {
             let statistics = self.group_statistics.get_mut(&task.group_id).unwrap();
-            statistics.queue1_count -= 1;
+            statistics.high_pri_queue_count -= 1;
             return Some(task);
-        } else if let Some(task) = self.pop_from_low_priority_queue() {
+        } else if let Some(task) = self.pop_from_low_pri_queue() {
             return Some(task);
         }
         None
@@ -222,14 +222,14 @@ impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQu
             return;
         }
 
-        if !self.low_priority_queue.contains_key(group_id) {
+        if !self.low_pri_queue.contains_key(group_id) {
             return;
         }
 
         // If the value of `group_statistics[group_id]` is not big enough, pop
-        // a task from `low_priority_queue[group_id]` and push it into `high_priority_queue`.
+        // a task from `low_pri_queue[group_id]` and push it into `high_pri_queue`.
         let group_task = self.pop_from_low_pri_queue_by_group_id(group_id);
-        assert!(self.try_push_into_high_pro_queue(group_task).is_ok());
+        assert!(self.try_push_into_high_pri_queue(group_task).is_ok());
     }
 }
 
