@@ -71,7 +71,7 @@ pub trait ScheduleQueue<T> {
     fn on_task_started(&mut self, group_id: &T);
 }
 
-pub struct PushError<T>(pub T);
+pub struct ReachConcurrencyLimit<T>(pub T);
 
 struct GroupStatisticsItem {
     running_count: usize,
@@ -87,10 +87,9 @@ impl GroupStatisticsItem {
     }
 
     fn total(&self) -> usize {
-        self.high_pri_queue_count + self.running_count
+        self.running_count + self.high_pri_queue_count
     }
 }
-
 
 // `BigGroupThrottledQueue` tries to throttle group's concurrency to
 //  `group_concurrency_limit` when all threads are busy.
@@ -120,25 +119,26 @@ pub struct BigGroupThrottledQueue<T> {
     group_concurrency_limit: usize,
 }
 
-
 impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     pub fn new(group_concurrency_limit: usize) -> BigGroupThrottledQueue<T> {
         BigGroupThrottledQueue {
-            group_statistics: HashMap::new(),
-            low_pri_queue: HashMap::new(),
             high_pri_queue: BinaryHeap::new(),
+            low_pri_queue: HashMap::new(),
+            group_statistics: HashMap::new(),
             group_concurrency_limit: group_concurrency_limit,
         }
     }
 
     // Try push into high priority queue. Return none on success,return PushError(task) on failed.
     #[inline]
-    fn try_push_into_high_pri_queue(&mut self, task: Task<T>) -> Result<(), PushError<Task<T>>> {
-        let statistics = self.group_statistics
+    fn try_push_into_high_pri_queue(&mut self,
+                                    task: Task<T>)
+                                    -> Result<(), ReachConcurrencyLimit<Task<T>>> {
+        let mut statistics = self.group_statistics
             .entry(task.group_id.clone())
             .or_insert(GroupStatisticsItem::new());
         if statistics.total() >= self.group_concurrency_limit {
-            return Err(PushError(task));
+            return Err(ReachConcurrencyLimit(task));
         }
         self.high_pri_queue.push(task);
         statistics.high_pri_queue_count += 1;
@@ -184,7 +184,7 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
 
 impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
     fn push(&mut self, task: Task<T>) {
-        if let Err(PushError(task)) = self.try_push_into_high_pri_queue(task) {
+        if let Err(ReachConcurrencyLimit(task)) = self.try_push_into_high_pri_queue(task) {
             self.low_pri_queue
                 .entry(task.group_id.clone())
                 .or_insert_with(VecDeque::new)
@@ -194,7 +194,7 @@ impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQu
 
     fn pop(&mut self) -> Option<Task<T>> {
         if let Some(task) = self.high_pri_queue.pop() {
-            let statistics = self.group_statistics.get_mut(&task.group_id).unwrap();
+            let mut statistics = self.group_statistics.get_mut(&task.group_id).unwrap();
             statistics.high_pri_queue_count -= 1;
             return Some(task);
         } else if let Some(task) = self.pop_from_low_pri_queue() {
@@ -204,7 +204,7 @@ impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQu
     }
 
     fn on_task_started(&mut self, group_id: &T) {
-        let statistics =
+        let mut statistics =
             self.group_statistics.entry(group_id.clone()).or_insert(GroupStatisticsItem::new());
         statistics.running_count += 1
     }
