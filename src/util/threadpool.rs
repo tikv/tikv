@@ -27,6 +27,7 @@ pub struct Task<T> {
     // The task's id in the pool. Each task has a unique id,
     // and it's always bigger than preceding ones.
     id: u64,
+
     // which group the task belongs to.
     gid: T,
     task: Box<FnBox() + Send>,
@@ -113,14 +114,16 @@ pub struct BigGroupThrottledQueue<T> {
     // The Tasks in `high_pri_queue` have higher priority than
     // tasks in `low_pri_queue`.
     high_pri_queue: BinaryHeap<Task<T>>,
+
     // gid => tasks array. If `group_statistics[gid]` is bigger than
     // `group_concurrency_limit`(which means the number of on-going tasks is
     // more than `group_concurrency_limit`), the rest of the group's tasks
     // would be pushed into `low_pri_queue[gid]`
     low_pri_queue: HashMap<T, VecDeque<Task<T>>>,
-    // gid => running_num+pending_num(in `high_pri_queue`). It means at most
-    // `group_statistics[gid]` tasks of the group may be running
+
+    // gid => (running_count,high_pri_queue_count)
     group_statistics: HashMap<T, GroupStatisticsItem>,
+
     // The maximum number of threads that each group can run when the pool is busy.
     // Each value in `group_statistics` shouldn't be bigger than this value.
     group_concurrency_limit: usize,
@@ -170,12 +173,12 @@ impl<T: Debug + Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
             }
         };
 
-        let task = self.pop_from_low_pri_queue_by_group_id(&gid);
+        let task = self.pop_from_low_pri_queue_by_gid(&gid);
         Some(task)
     }
 
     #[inline]
-    fn pop_from_low_pri_queue_by_group_id(&mut self, gid: &T) -> Task<T> {
+    fn pop_from_low_pri_queue_by_gid(&mut self, gid: &T) -> Task<T> {
         let (empty_after_pop, task) = {
             let mut waiting_tasks = self.low_pri_queue.get_mut(gid).unwrap();
             let task = waiting_tasks.pop_front().unwrap();
@@ -235,7 +238,7 @@ impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for BigGroupThr
 
         // If the value of `group_statistics[gid]` is not big enough, pop
         // a task from `low_pri_queue[gid]` and push it into `high_pri_queue`.
-        let group_task = self.pop_from_low_pri_queue_by_group_id(gid);
+        let group_task = self.pop_from_low_pri_queue_by_gid(gid);
         self.try_push_into_high_pri_queue(group_task).unwrap();
     }
 }
@@ -597,8 +600,7 @@ mod test {
 
     #[test]
     fn test_throttled_queue() {
-        let max_pending_task_each_group = 1;
-        let mut queue = BigGroupThrottledQueue::new(max_pending_task_each_group);
+        let mut queue = BigGroupThrottledQueue::new(1);
         // Push 4 tasks of `group1` into queue
         let group1 = 1001;
         let mut id = 0;
