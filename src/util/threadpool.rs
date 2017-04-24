@@ -86,21 +86,6 @@ impl GroupStatisticsItem {
         }
     }
 
-    fn started_a_task(&mut self) {
-        self.running_count += 1;
-    }
-
-    fn finished_a_task(&mut self) {
-        self.running_count -= 1;
-    }
-
-    fn pushed_one_into_queue1(&mut self) {
-        self.queue1_count += 1;
-    }
-
-    fn poped_one_from_queue1(&mut self) {
-        self.queue1_count -= 1;
-    }
     fn total(&self) -> usize {
         self.queue1_count + self.running_count
     }
@@ -155,7 +140,7 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
         if statistics.total() >= self.group_concurrency_limit {
             return Err(PushError(task));
         }
-        statistics.pushed_one_into_queue1();
+        statistics.queue1_count += 1;
         self.waiting_queue1.push(task);
         Ok(())
     }
@@ -210,7 +195,7 @@ impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQu
     fn pop(&mut self) -> Option<Task<T>> {
         if let Some(task) = self.waiting_queue1.pop() {
             let statistics = self.group_statistics.get_mut(&task.group_id).unwrap();
-            statistics.poped_one_from_queue1();
+            statistics.queue1_count -= 1;
             return Some(task);
         } else if let Some(task) = self.pop_from_queue2() {
             return Some(task);
@@ -221,13 +206,13 @@ impl<T: Hash + Eq + Ord + Send + Clone> ScheduleQueue<T> for BigGroupThrottledQu
     fn on_task_started(&mut self, group_id: &T) {
         let statistics =
             self.group_statistics.entry(group_id.clone()).or_insert(GroupStatisticsItem::new());
-        statistics.started_a_task();
+        statistics.running_count += 1
     }
 
     fn on_task_finished(&mut self, group_id: &T) {
         let count = {
             let mut statistics = self.group_statistics.get_mut(group_id).unwrap();
-            statistics.finished_a_task();
+            statistics.running_count -= 1;
             statistics.total()
         };
         if count == 0 {
