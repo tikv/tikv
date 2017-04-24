@@ -16,25 +16,17 @@ use server::coprocessor::Result;
 
 #[allow(dead_code)] //TODO:remove it
 pub struct Row {
-    handler: i64,
-    data: RowColsDict,
+    pub handle: i64,
+    pub data: RowColsDict,
 }
 
 #[allow(dead_code)] //TODO:remove it
 impl Row {
-    pub fn new(handler: i64, data: RowColsDict) -> Row {
+    pub fn new(handle: i64, data: RowColsDict) -> Row {
         Row {
-            handler: handler,
+            handle: handle,
             data: data,
         }
-    }
-
-    pub fn get_mut_data(&mut self) -> (&mut RowColsDict) {
-        &mut self.data
-    }
-
-    pub fn get_data(self) -> RowColsDict {
-        self.data
     }
 }
 
