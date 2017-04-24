@@ -59,7 +59,6 @@ regex = "0.1"
 fnv = "1.0"
 sys-info = "0.4.1"
 mio = "0.5"
-futures = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -77,16 +76,3 @@ git = "https://github.com/pingcap/tipb.git"
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
 features = ["nightly", "push"]
-
-[dependencies.grpc]
-git = "https://github.com/stepancheg/grpc-rust.git"
-
-[profile.dev]
-opt-level = 0  # Controls the --opt-level the compiler builds with
-debug = true   # Controls whether the compiler passes `-g`
-codegen-units = 4
-
-# The release profile, used for `cargo build --release`
-[profile.release]
-opt-level = 3
-debug = true
