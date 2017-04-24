@@ -15,12 +15,13 @@ use std::usize;
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread::{Builder, JoinHandle};
 use std::boxed::FnBox;
-use std::collections::{BinaryHeap, BTreeMap, HashMap, VecDeque};
+use std::collections::{BinaryHeap, VecDeque};
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::fmt::Write;
+use super::collections::HashMap;
 
 pub struct Task<T> {
     // The task's id in the pool. Each task has a unique id,
@@ -91,7 +92,7 @@ pub struct BigGroupThrottledQueue<T> {
     // `group_concurrency_on_busy`(which means the number of on-going tasks is
     // more than `group_concurrency_on_busy`), the rest of the group's tasks
     // would be pushed into `waiting_queue[group_id]`
-    waiting_queue: BTreeMap<T, VecDeque<Task<T>>>,
+    waiting_queue: HashMap<T, VecDeque<Task<T>>>,
     // group_id => running_num+pending_num(in `pending_tasks`). It means at most
     // `group_concurrency[group_id]` tasks of the group may be running
     group_concurrency: HashMap<T, usize>,
@@ -105,7 +106,7 @@ impl<T: Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     pub fn new(group_concurrency_on_busy: usize) -> BigGroupThrottledQueue<T> {
         BigGroupThrottledQueue {
             group_concurrency: HashMap::new(),
-            waiting_queue: BTreeMap::new(),
+            waiting_queue: HashMap::new(),
             pending_tasks: BinaryHeap::new(),
             group_concurrency_on_busy: group_concurrency_on_busy,
         }
