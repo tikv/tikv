@@ -18,6 +18,7 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
+use std::result;
 
 use rocksdb::DB;
 use tempdir::TempDir;
@@ -33,6 +34,7 @@ use tikv::raftstore::{Result, Error};
 use tikv::util::HandyRwLock;
 use tikv::util::transport::SendCh;
 use tikv::server::Config as ServerConfig;
+use tikv::server::Error as ServerError;
 use tikv::server::transport::{ServerRaftStoreRouter, RaftStoreRouter};
 use tikv::raft::SnapshotStatus;
 use tikv::storage::ALL_CFS;
@@ -146,6 +148,60 @@ impl NodeCluster {
             nodes: HashMap::new(),
             simulate_trans: HashMap::new(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn run_node_with_handle_error(&mut self,
+                                      node_id: u64,
+                                      cfg: ServerConfig,
+                                      engine: Arc<DB>)
+                                      -> result::Result<u64, ServerError> {
+        assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
+
+        let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
+
+        let simulate_trans = SimulateTransport::new(self.trans.clone());
+        let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
+
+        let (snap_mgr, tmp) = if node_id == 0 ||
+                                 !self.trans.rl().snap_paths.contains_key(&node_id) {
+            let tmp = TempDir::new("test_cluster").unwrap();
+            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(),
+                                            Some(node.get_sendch()),
+                                            cfg.raft_store.use_sst_file_snapshot);
+            (snap_mgr, Some(tmp))
+        } else {
+            let trans = self.trans.rl();
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            (snap_mgr.clone(), None)
+        };
+
+        try!(node.start(event_loop,
+                        engine.clone(),
+                        simulate_trans.clone(),
+                        snap_mgr.clone()));
+        assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+            .unwrap()
+            .is_none());
+        assert!(node_id == 0 || node_id == node.id());
+        debug!("node_id: {} tmp: {:?}",
+               node_id,
+               tmp.as_ref().map(|p| p.path().to_str().unwrap().to_owned()));
+        if let Some(tmp) = tmp {
+            self.trans.wl().snap_paths.insert(node.id(), (snap_mgr, tmp));
+        }
+
+        let node_id = node.id();
+        let router = ServerRaftStoreRouter::new(node.get_sendch(), node_id);
+        self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
+        self.trans
+            .wl()
+            .snapshot_status_senders
+            .insert(node_id, Mutex::new(node.get_snapshot_status_sender()));
+        self.nodes.insert(node_id, node);
+        self.simulate_trans.insert(node_id, simulate_trans);
+
+        Ok(node_id)
     }
 }
 

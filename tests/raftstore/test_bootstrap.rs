@@ -12,11 +12,16 @@
 // limitations under the License.
 
 use super::cluster::{Cluster, Simulator};
-use super::node::new_node_cluster;
+use std::sync::{Arc, RwLock};
+use super::node::{NodeCluster, new_node_cluster};
 use super::util::*;
 use tikv::raftstore::store::*;
 use futures::Future;
 use tikv::pd::PdClient;
+use tikv::storage::ALL_CFS;
+use super::pd::TestPdClient;
+use tikv::util::HandyRwLock;
+use tikv::server::Error as ServerError;
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
@@ -31,7 +36,10 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.check_regions_number(1);
 }
 
-fn test_bootstrap_with_check_epoch<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_bootstrap_with_check_epoch() {
+    let pd_client = Arc::new(TestPdClient::new(0));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = Cluster::new(0, 1, ALL_CFS, sim.clone(), pd_client);
     let pd_client = cluster.pd_client.clone();
     // firstly bootstrap with region
     let region_id = cluster.run_conf_change();
@@ -47,8 +55,17 @@ fn test_bootstrap_with_check_epoch<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(write_prepare_bootstrap(&engine, &region).is_ok());
     pd_client.set_cluster_bootstrap(true);
 
-    // to check meet inconsistent epoch when bootstrap，will panic in here
-    cluster.start();
+    // to check meet inconsistent epoch when bootstrap，will meet error in here
+    let e = sim.wl()
+        .run_node_with_handle_error(1, cluster.cfg.clone(), engine.clone())
+        .unwrap_err();
+    match e {
+        ServerError::Other(err) => {
+            assert!(err.description().contains("region version inconsist: 1 with 2"))
+        }
+        _ => panic!("should meet region epoch inconsist error"),
+    }
+    cluster.check_regions_number(1);
 }
 #[test]
 fn test_node_bootstrap_idempotent() {
@@ -57,8 +74,6 @@ fn test_node_bootstrap_idempotent() {
 }
 
 #[test]
-#[should_panic]
 fn test_node_bootstrap_witch_check_epoch() {
-    let mut cluster = new_node_cluster(0, 1);
-    test_bootstrap_with_check_epoch(&mut cluster);
+    test_bootstrap_with_check_epoch();
 }
