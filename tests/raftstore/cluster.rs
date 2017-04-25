@@ -13,7 +13,7 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
@@ -36,7 +36,6 @@ use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
 use super::transport_simulate::*;
-
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -308,7 +307,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn check_regions_number(&self, len: u32) {
-        assert_eq!(self.pd_client.get_regions_number().unwrap(), len)
+        assert_eq!(self.pd_client.get_regions_number() as u32, len)
     }
 
     // For test when a node is already bootstraped the cluster with the first region
@@ -419,7 +418,15 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn shutdown(&mut self) {
         debug!("about to shutdown cluster");
-        let keys = self.sim.rl().get_node_ids();
+        let keys;
+        match self.sim.try_read() {
+            Ok(s) => keys = s.get_node_ids(),
+            Err(sync::TryLockError::Poisoned(e)) => {
+                let s = e.into_inner();
+                keys = s.get_node_ids();
+            }
+            Err(sync::TryLockError::WouldBlock) => unreachable!(),
+        }
         for id in keys {
             self.stop_node(id);
         }

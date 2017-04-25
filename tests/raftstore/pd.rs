@@ -138,8 +138,8 @@ impl Cluster {
         self.stores.values().map(|s| s.store.clone()).collect()
     }
 
-    fn get_regions_number(&self) -> Result<u32> {
-        Ok(self.regions.len() as u32)
+    fn get_regions_number(&self) -> usize {
+        self.regions.len()
     }
 
     fn add_region(&mut self, region: &metapb::Region) {
@@ -373,8 +373,8 @@ impl TestPdClient {
         Ok(())
     }
 
-    fn is_regions_empty(&self) -> Result<(bool)> {
-        Ok(self.cluster.rl().regions.is_empty())
+    fn is_regions_empty(&self) -> bool {
+        self.cluster.rl().regions.is_empty()
     }
 
     // Set a customized rule to overwrite default max peer count check rule.
@@ -390,7 +390,7 @@ impl TestPdClient {
     pub fn get_region_epoch(&self, region_id: u64) -> metapb::RegionEpoch {
         self.get_region_by_id(region_id).wait().unwrap().unwrap().take_region_epoch()
     }
-    pub fn get_regions_number(&self) -> Result<(u32)> {
+    pub fn get_regions_number(&self) -> usize {
         self.cluster.rl().get_regions_number()
     }
     // Set an empty rule which nothing to do to disable default max peer count
@@ -515,6 +515,10 @@ impl TestPdClient {
     pub fn get_pending_peers(&self) -> HashMap<u64, metapb::Peer> {
         self.cluster.rl().pending_peers.clone()
     }
+
+    pub fn set_cluster_bootstrap(&self, is_bootstraped: bool) {
+        self.cluster.wl().set_bootstrap(is_bootstraped);
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -523,7 +527,7 @@ impl PdClient for TestPdClient {
     }
 
     fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
-        if self.is_cluster_bootstrapped().unwrap() || !self.is_regions_empty().unwrap() {
+        if self.is_cluster_bootstrapped().unwrap() || !self.is_regions_empty() {
             self.cluster.wl().set_bootstrap(true);
             return Err(Error::ClusterBootstrapped(self.cluster_id));
         }
@@ -532,6 +536,8 @@ impl PdClient for TestPdClient {
 
         Ok(())
     }
+
+
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
         Ok(self.cluster.rl().is_bootstraped)
