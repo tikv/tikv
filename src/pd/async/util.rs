@@ -88,10 +88,10 @@ impl LeaderClient {
         let ret = {
             let inner = self.inner.rl();
             sleep = inner.timer
-                .sleep(Duration::from_secs(RECON_INTERVAL))
+                .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
                 .map_err(|e| box_err!(e))
                 .boxed();
-            if inner.last_update.elapsed() < Duration::from_secs(RECON_INTERVAL) {
+            if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
                 return sleep;
             }
@@ -120,8 +120,8 @@ impl LeaderClient {
     }
 }
 
-const RECON_INTERVAL: u64 = 1; // 1s
-const RETRY_INTERVAL: u64 = 500; // 500ms
+const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
+const RETRY_INTERVAL_MS: u64 = 500; // 500ms
 
 /// The context of sending requets.
 pub struct Request<Req, Resp, F> {
@@ -153,7 +153,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         if self.request_sent < MAX_REQUEST_COUNT {
             debug!("retry on the same client");
             let sleep =
-                self.timer.sleep(Duration::from_millis(RETRY_INTERVAL)).map_err(|e| box_err!(e));
+                self.timer.sleep(Duration::from_millis(RETRY_INTERVAL_MS)).map_err(|e| box_err!(e));
             return sleep.map(|_| self).boxed();
         }
 
