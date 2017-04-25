@@ -121,7 +121,7 @@ fn test_server_store_snap_stats() {
 
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
-    must_detect_snap(&pd_client);
+    must_detect_snap(&pd_client, 2);
 
     // wait snapshot finish.
     sleep_ms(100);
@@ -133,13 +133,15 @@ fn test_server_store_snap_stats() {
     must_not_detect_snap(&pd_client);
 }
 
-fn must_detect_snap(pd_client: &Arc<TestPdClient>) {
+fn must_detect_snap(pd_client: &Arc<TestPdClient>, total_nodes: u64) {
     for _ in 0..200 {
         sleep_ms(10);
 
-        if let Some(stats) = pd_client.get_store_stats(1) {
-            if stats.get_sending_snap_count() > 0 || stats.get_receiving_snap_count() > 0 {
-                return;
+        for id in 1..total_nodes + 1 {
+            if let Some(stats) = pd_client.get_store_stats(id) {
+                if stats.get_sending_snap_count() > 0 || stats.get_receiving_snap_count() > 0 {
+                    return;
+                }
             }
         }
     }
