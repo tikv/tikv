@@ -17,9 +17,8 @@ use tipb::executor::TableScan;
 use kvproto::coprocessor::KeyRange;
 use storage::{SnapshotStore, Statistics};
 use util::codec::table;
-use util::codec::table::RowColsDict;
-use util::HashSet;
-use super::Executor;
+use util::collections::HashSet;
+use super::{Executor, Row};
 use super::base_scanner::BaseScanner;
 
 struct TableScanExec<'a> {
@@ -59,7 +58,7 @@ impl<'a> TableScanExec<'a> {
         }
     }
 
-    fn get_row_from_range(&mut self) -> Result<Option<(i64, RowColsDict)>> {
+    fn get_row_from_range(&mut self) -> Result<Option<Row>> {
         let range = &self.key_ranges[self.cursor];
         let kv = box_try!(self.scanner.get_row_from_range(range));
         let (key, value) = match kv {
@@ -74,23 +73,23 @@ impl<'a> TableScanExec<'a> {
             prefix_next(&key)
         };
         self.scanner.set_seek_key(Some(seek_key));
-        Ok(Some((h, row_data)))
+        Ok(Some(Row::new(h, row_data)))
     }
 
-    fn get_row_from_point(&mut self) -> Result<Option<(i64, RowColsDict)>> {
+    fn get_row_from_point(&mut self) -> Result<Option<Row>> {
         let key = self.key_ranges[self.cursor].get_start();
         let value = box_try!(self.scanner.get_row_from_point(key));
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(self.key_ranges[self.cursor].get_start()));
-            return Ok(Some((h, values)));
+            return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
     }
 }
 
 impl<'a> Executor for TableScanExec<'a> {
-    fn next(&mut self) -> Result<Option<(i64, RowColsDict)>> {
+    fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
             // let range = &self.key_ranges[self.cursor];
             if is_point(&self.key_ranges[self.cursor]) {
@@ -179,14 +178,14 @@ mod test {
                                                    meta.region_end,
                                                    &mut statistics);
 
-        let (handler, data) = table_scanner.next().unwrap().unwrap();
-        assert_eq!(handler, meta.data.pk_handle);
-        assert_eq!(data.len(), meta.cols.len());
+        let row = table_scanner.next().unwrap().unwrap();
+        assert_eq!(row.handle, meta.data.pk_handle);
+        assert_eq!(row.data.len(), meta.cols.len());
 
         let encode_data = &meta.data.encode_data[0];
         for col in &meta.cols {
             let cid = col.get_column_id();
-            let v = data.get(cid).unwrap();
+            let v = row.data.get(cid).unwrap();
             assert_eq!(encode_data[&cid], v.to_vec());
         }
         assert!(table_scanner.next().unwrap().is_none());
@@ -209,14 +208,14 @@ mod test {
                                                    meta.region_end,
                                                    &mut statistics);
 
-        for col_id in 0..KEY_NUMBER {
-            let (handler, data) = table_scanner.next().unwrap().unwrap();
-            assert_eq!(handler, col_id as i64);
-            assert_eq!(data.len(), meta.cols.len());
-            let encode_data = &meta.data.encode_data[col_id];
+        for handle in 0..KEY_NUMBER {
+            let row = table_scanner.next().unwrap().unwrap();
+            assert_eq!(row.handle, handle as i64);
+            assert_eq!(row.data.len(), meta.cols.len());
+            let encode_data = &meta.data.encode_data[handle];
             for col in &meta.cols {
                 let cid = col.get_column_id();
-                let v = data.get(cid).unwrap();
+                let v = row.data.get(cid).unwrap();
                 assert_eq!(encode_data[&cid], v.to_vec());
             }
         }
@@ -236,14 +235,14 @@ mod test {
                                                    &mut statistics);
 
         for tid in 0..KEY_NUMBER {
-            let col_id = KEY_NUMBER - tid - 1;
-            let (handle, data) = table_scanner.next().unwrap().unwrap();
-            assert_eq!(handle, col_id as i64);
-            assert_eq!(data.len(), 2);
-            let encode_data = &meta.data.encode_data[col_id];
+            let handle = KEY_NUMBER - tid - 1;
+            let row = table_scanner.next().unwrap().unwrap();
+            assert_eq!(row.handle, handle as i64);
+            assert_eq!(row.data.len(), 2);
+            let encode_data = &meta.data.encode_data[handle];
             for col in &meta.cols {
                 let cid = col.get_column_id();
-                let v = data.get(cid).unwrap();
+                let v = row.data.get(cid).unwrap();
                 assert_eq!(encode_data[&cid], v.to_vec());
             }
         }

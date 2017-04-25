@@ -16,7 +16,7 @@ use kvproto::coprocessor::KeyRange;
 use storage::{Key, Value, SnapshotStore, Statistics, ScanMode};
 use util::escape;
 
-// Scanner for TableScan && IndexScan
+// Scanner for TableScan and IndexScan
 pub struct BaseScanner<'a> {
     store: SnapshotStore<'a>,
     seek_key: Option<Vec<u8>>,
@@ -136,7 +136,7 @@ pub mod test {
     use util::codec::datum::{self, Datum};
     use util::codec::number::NumberEncoder;
     use util::codec::table;
-    use util::HashMap;
+    use util::collections::HashMap;
     use tipb::schema::ColumnInfo;
     use kvproto::kvrpcpb::Context;
     use storage::SnapshotStore;
