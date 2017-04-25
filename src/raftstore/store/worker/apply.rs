@@ -1212,7 +1212,6 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use std::sync::*;
-    use std::collections::*;
 
     use tempdir::TempDir;
     use rocksdb::DB;
@@ -1222,6 +1221,7 @@ mod tests {
 
     use super::*;
     use storage::{CF_WRITE, ALL_CFS};
+    use util::collections::HashMap;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
