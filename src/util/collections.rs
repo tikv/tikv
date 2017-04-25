@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod client;
-mod util;
-
-pub use self::client::RpcClient;
-pub use self::util::validate_endpoints;
+pub use fnv::FnvHashSet as HashSet;
+pub use fnv::FnvBuildHasher as BuildHasherDefault;
+pub use ordermap::OrderMap as HashMap;
+pub use ordermap::Entry as HashMapEntry;
+pub use ordermap::Values as HashMapValues;

@@ -447,7 +447,7 @@ mod tests {
 
     use super::*;
     use kvproto::metapb::Region;
-    use util::{rocksdb, HashMap};
+    use util::collections::HashMap;
 
     #[test]
     fn test_base() {
