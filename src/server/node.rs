@@ -349,7 +349,6 @@ mod tests {
     use raftstore::store::keys;
     use super::check_region_epoch;
     use kvproto::metapb;
-    use server::Error;
 
     #[test]
     fn test_check_region_epoch() {
@@ -373,17 +372,8 @@ mod tests {
         r3.set_end_key(keys::EMPTY_KEY.to_vec());
         r3.mut_region_epoch().set_version(1);
         r3.mut_region_epoch().set_conf_ver(2);
-        match check_region_epoch(&r1, &r2).unwrap_err() {
-            Error::Other(err) => {
-                assert!(err.description().contains("region version inconsist: 1 with 2"))
-            }
-            _ => panic!("should meet region version inconsist error"),
-        }
-        match check_region_epoch(&r1, &r3).unwrap_err() {
-            Error::Other(err) => {
-                assert!(err.description().contains("region conf_ver inconsist: 1 with 2"))
-            }
-            _ => panic!("should meet region conf_ver inconsist error"),
-        }
+
+        assert!(check_region_epoch(&r1, &r2).is_err());
+        assert!(check_region_epoch(&r1, &r3).is_err());
     }
 }
