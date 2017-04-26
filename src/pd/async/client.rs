@@ -12,13 +12,16 @@
 // limitations under the License.
 
 use std::fmt;
+use std::sync::Arc;
 
 use protobuf::RepeatedField;
 use futures::Future;
+use futures::future;
+use grpc::{self, Environment};
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::pdpb_grpc::{PDAsync, PDAsyncClient};
+use kvproto::pdpb_grpc::PDClient;
 
 use super::super::PdFuture;
 use super::super::{Result, Error, PdClient};
@@ -39,11 +42,12 @@ impl RpcClient {
             })
             .collect();
 
-        let (client, members) = try!(validate_endpoints(&endpoints));
+        let env = Arc::new(Environment::new());
+        let (client, members) = try!(validate_endpoints(env.clone(), &endpoints));
 
         Ok(RpcClient {
             cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(client, members),
+            leader_client: LeaderClient::new(env, client, members),
         })
     }
 
@@ -82,7 +86,7 @@ impl PdClient for RpcClient {
 
         let resp = try!(sync_request(&self.leader_client,
                                      LEADER_CHANGE_RETRY,
-                                     |client| client.Bootstrap(req.clone())));
+                                     |client| client.bootstrap(req.clone())));
         try!(check_resp_header(resp.get_header()));
         Ok(())
     }
@@ -93,7 +97,7 @@ impl PdClient for RpcClient {
 
         let resp = try!(sync_request(&self.leader_client,
                                      LEADER_CHANGE_RETRY,
-                                     |client| client.IsBootstrapped(req.clone())));
+                                     |client| client.is_bootstrapped(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.get_bootstrapped())
@@ -105,7 +109,7 @@ impl PdClient for RpcClient {
 
         let resp = try!(sync_request(&self.leader_client,
                                      LEADER_CHANGE_RETRY,
-                                     |client| client.AllocID(req.clone())));
+                                     |client| client.alloc_id(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.get_id())
@@ -118,7 +122,7 @@ impl PdClient for RpcClient {
 
         let resp = try!(sync_request(&self.leader_client,
                                      LEADER_CHANGE_RETRY,
-                                     |client| client.PutStore(req.clone())));
+                                     |client| client.put_store(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(())
@@ -131,7 +135,7 @@ impl PdClient for RpcClient {
 
         let mut resp = try!(sync_request(&self.leader_client,
                                          LEADER_CHANGE_RETRY,
-                                         |client| client.GetStore(req.clone())));
+                                         |client| client.get_store(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_store())
@@ -143,7 +147,7 @@ impl PdClient for RpcClient {
 
         let mut resp = try!(sync_request(&self.leader_client,
                                          LEADER_CHANGE_RETRY,
-                                         |client| client.GetClusterConfig(req.clone())));
+                                         |client| client.get_cluster_config(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_cluster())
@@ -156,7 +160,7 @@ impl PdClient for RpcClient {
 
         let mut resp = try!(sync_request(&self.leader_client,
                                          LEADER_CHANGE_RETRY,
-                                         |client| client.GetRegion(req.clone())));
+                                         |client| client.get_region(req.clone())));
         try!(check_resp_header(resp.get_header()));
 
         Ok(resp.take_region())
@@ -167,17 +171,19 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let executor = |client: &PDAsyncClient, req: pdpb::GetRegionByIDRequest| {
-            client.GetRegionByID(req)
-                .map_err(Error::Grpc)
+        let executor = |client: &PDClient, req: pdpb::GetRegionByIDRequest| {
+            client.get_region_by_id_async(req)
+                .unwrap()
                 .and_then(|mut resp| {
-                    try!(check_resp_header(resp.get_header()));
+                    // try!(check_resp_header(resp.get_header()));
+                    let mut resp = resp.unwrap();
                     if resp.has_region() {
                         Ok(Some(resp.take_region()))
                     } else {
                         Ok(None)
                     }
                 })
+                .map_err(Error::Grpc)
                 .boxed()
         };
 
@@ -201,13 +207,15 @@ impl PdClient for RpcClient {
         req.set_pending_peers(RepeatedField::from_vec(pending_peers));
         req.set_bytes_written(written_bytes);
 
-        let executor = |client: &PDAsyncClient, req: pdpb::RegionHeartbeatRequest| {
-            client.RegionHeartbeat(req)
-                .map_err(Error::Grpc)
+        let executor = |client: &PDClient, req: pdpb::RegionHeartbeatRequest| {
+            client.region_heartbeat_async(req)
+                .unwrap()
                 .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
+                    let resp = resp.unwrap();
+                    // try!(check_resp_header(resp.get_header()));
                     Ok(resp)
                 })
+                .map_err(Error::Grpc)
                 .boxed()
         };
 
@@ -221,13 +229,15 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
 
-        let executor = |client: &PDAsyncClient, req: pdpb::AskSplitRequest| {
-            client.AskSplit(req)
-                .map_err(Error::Grpc)
+        let executor = |client: &PDClient, req: pdpb::AskSplitRequest| {
+            client.ask_split_async(req)
+                .unwrap()
                 .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
+                    let resp = resp.unwrap();
+                    // try!(check_resp_header(resp.get_header()));
                     Ok(resp)
                 })
+                .map_err(Error::Grpc)
                 .boxed()
         };
 
@@ -241,13 +251,15 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_stats(stats);
 
-        let executor = |client: &PDAsyncClient, req: pdpb::StoreHeartbeatRequest| {
-            client.StoreHeartbeat(req)
-                .map_err(Error::Grpc)
+        let executor = |client: &PDClient, req: pdpb::StoreHeartbeatRequest| {
+            client.store_heartbeat_async(req)
+                .unwrap()
                 .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
+                    let resp = resp.unwrap();
+                    // try!(check_resp_header(resp.get_header()));
                     Ok(())
                 })
+                .map_err(Error::Grpc)
                 .boxed()
         };
 
@@ -262,13 +274,15 @@ impl PdClient for RpcClient {
         req.set_left(left);
         req.set_right(right);
 
-        let executor = |client: &PDAsyncClient, req: pdpb::ReportSplitRequest| {
-            client.ReportSplit(req)
-                .map_err(Error::Grpc)
+        let executor = |client: &PDClient, req: pdpb::ReportSplitRequest| {
+            client.report_split_async(req)
+                .unwrap()
                 .and_then(|resp| {
-                    try!(check_resp_header(resp.get_header()));
+                    let resp = resp.unwrap();
+                    // try!(check_resp_header(resp.get_header()));
                     Ok(())
                 })
+                .map_err(Error::Grpc)
                 .boxed()
         };
 

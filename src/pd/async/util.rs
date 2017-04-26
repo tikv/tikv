@@ -24,13 +24,12 @@ use futures::future::{loop_fn, Loop};
 
 use tokio_timer::Timer;
 
-use grpc;
-use grpc::futures_grpc::GrpcFutureSend;
+use grpc::{self, Environment, ChannelBuilder, Result as GrpcResult};
 use url::Url;
 use rand::{self, Rng};
 
 use kvproto::pdpb::{ResponseHeader, ErrorType, GetMembersRequest, GetMembersResponse, Member};
-use kvproto::pdpb_grpc::{PDAsyncClient, PDAsync};
+use kvproto::pdpb_grpc::PDClient;
 
 use util::HandyRwLock;
 
@@ -38,11 +37,15 @@ use super::super::{Result, Error, PdFuture};
 use super::super::metrics::PD_SEND_MSG_HISTOGRAM;
 
 pub struct Inner {
-    client: PDAsyncClient,
+    env: Arc<Environment>,
+    client: PDClient,
     members: GetMembersResponse,
 
     last_update: Instant,
 }
+
+unsafe impl Send for Inner {}
+unsafe impl Sync for Inner {}
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
@@ -50,9 +53,13 @@ pub struct LeaderClient {
 }
 
 impl LeaderClient {
-    pub fn new(client: PDAsyncClient, members: GetMembersResponse) -> LeaderClient {
+    pub fn new(env: Arc<Environment>,
+               client: PDClient,
+               members: GetMembersResponse)
+               -> LeaderClient {
         LeaderClient {
             inner: Arc::new(RwLock::new(Inner {
+                env: env,
                 client: client,
                 members: members,
 
@@ -63,7 +70,7 @@ impl LeaderClient {
 
     pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
         where Req: Clone + 'static,
-              F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
+              F: FnMut(&PDClient, Req) -> PdFuture<Resp> + Send + 'static
     {
         Request {
             reconnect_count: retry,
@@ -90,7 +97,7 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
-            (try!(try_connect_leader(&inner.members)), start)
+            (try!(try_connect_leader(inner.env.clone(), &inner.members)), start)
         };
 
         let mut inner = self.inner.wl();
@@ -122,7 +129,7 @@ const MAX_REQUEST_COUNT: usize = 5;
 impl<Req, Resp, F> Request<Req, Resp, F>
     where Req: Clone + Send + 'static,
           Resp: Send + 'static,
-          F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
+          F: FnMut(&PDClient, Req) -> PdFuture<Resp> + Send + 'static
 {
     fn reconnect_if_needed(mut self) -> BoxFuture<Self, Self> {
         debug!("reconnect remains: {}", self.reconnect_count);
@@ -203,13 +210,12 @@ impl<Req, Resp, F> Request<Req, Resp, F>
 
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
-    where F: Fn(&PDAsyncClient) -> GrpcFutureSend<R>
+    where F: Fn(&PDClient) -> GrpcResult<R>
 {
     for _ in 0..retry {
         let r = {
             let _timer = PD_SEND_MSG_HISTOGRAM.start_timer(); // observe on dropping.
-            let f = func(&client.inner.rl().client);
-            f.wait()
+            func(&client.inner.rl().client)
         };
 
         match r {
@@ -228,7 +234,9 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
     Err(box_err!("fail to request"))
 }
 
-pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMembersResponse)> {
+pub fn validate_endpoints(env: Arc<Environment>,
+                          endpoints: &[String])
+                          -> Result<(PDClient, GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
     }
@@ -243,7 +251,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMem
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(ep) {
+        let (_, resp) = match connect(env.clone(), ep) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -272,7 +280,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMem
 
     match members {
         Some(members) => {
-            let (client, members) = try!(try_connect_leader(&members));
+            let (client, members) = try!(try_connect_leader(env.clone(), &members));
             info!("All PD endpoints are consistent: {:?}", endpoints);
             Ok((client, members))
         }
@@ -280,29 +288,24 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMem
     }
 }
 
-fn connect(addr: &str) -> Result<(PDAsyncClient, GetMembersResponse)> {
+fn connect(env: Arc<Environment>, addr: &str) -> Result<(PDClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
-    let ep = box_try!(Url::parse(addr));
-    let host = ep.host_str().unwrap();
-    let port = ep.port().unwrap();
-
-    let mut conf: grpc::client::GrpcClientConf = Default::default();
-    conf.http.no_delay = Some(true);
-
-    // TODO: It seems that `new` always return an Ok(_).
-    PDAsyncClient::new(host, port, false, conf)
-        .and_then(|client| {
-            // try request.
-            match client.GetMembers(GetMembersRequest::new()).wait() {
-                Ok(resp) => Ok((client, resp)),
-                Err(e) => Err(e),
-            }
-        })
-        .map_err(Error::Grpc)
+    let addr = if addr.starts_with("http://") {
+        &addr[7..]
+    } else {
+        addr
+    };
+    let channel = ChannelBuilder::new(env).connect(addr);
+    let client = PDClient::new(channel);
+    match client.get_members(GetMembersRequest::new()) {
+        Ok(resp) => Ok((client, resp)),
+        Err(e) => Err(Error::Grpc(e)),
+    }
 }
 
-pub fn try_connect_leader(previous: &GetMembersResponse)
-                          -> Result<(PDAsyncClient, GetMembersResponse)> {
+pub fn try_connect_leader(env: Arc<Environment>,
+                          previous: &GetMembersResponse)
+                          -> Result<(PDClient, GetMembersResponse)> {
     // Try to connect other members.
     // Randomize endpoints.
     let members = previous.get_members();
@@ -312,7 +315,7 @@ pub fn try_connect_leader(previous: &GetMembersResponse)
     let mut resp = None;
     'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
-            match connect(ep.as_str()) {
+            match connect(env.clone(), ep.as_str()) {
                 Ok((_, r)) => {
                     resp = Some(r);
                     break 'outer;
@@ -329,7 +332,7 @@ pub fn try_connect_leader(previous: &GetMembersResponse)
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(ep.as_str()) {
+            if let Ok((client, _)) = connect(env.clone(), ep.as_str()) {
                 info!("connect to PD leader {:?}", ep);
                 return Ok((client, resp));
             }

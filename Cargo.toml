@@ -73,6 +73,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+branch = "ov/grpc-rs"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -83,7 +84,8 @@ default-features = false
 features = ["nightly", "push"]
 
 [dependencies.grpc]
-git = "https://github.com/stepancheg/grpc-rust.git"
+git = "https://github.com/pingcap/grpc-rs.git"
+branch = "ov/compiler"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"
