@@ -82,7 +82,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 
     let send_timer = SEND_SNAP_HISTOGRAM.start_timer();
 
-    let snap = data.msg.get_raft().get_message().get_snapshot();
+    let snap = data.msg.get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(&snap));
     mgr.register(key.clone(), SnapEntry::Sending);
     let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
