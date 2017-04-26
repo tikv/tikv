@@ -12,7 +12,8 @@
 // limitations under the License.
 
 use super::cluster::{Cluster, Simulator};
-use super::node::{new_node_cluster};
+use super::node::new_node_cluster;
+use super::util::sleep_ms;
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully

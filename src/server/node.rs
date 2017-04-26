@@ -32,7 +32,6 @@ use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::RaftStoreRouter;
 
-
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
