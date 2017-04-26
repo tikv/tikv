@@ -27,6 +27,8 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
+#[cfg(feature = "mem-profiling")]
+extern crate jemallocator;
 #[macro_use]
 extern crate log;
 extern crate protobuf;
@@ -66,7 +68,7 @@ fn _0_ci_setup() {
 
 #[test]
 fn _1_check_system_requirement() {
-    if let Err(e) = tikv::util::config::check_max_open_fds(2000) {
+    if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
         panic!("To run test, please make sure the maximum number of open file descriptors not \
                 less than 2000: {:?}",
                e);

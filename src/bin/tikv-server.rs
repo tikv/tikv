@@ -19,6 +19,8 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
+#[cfg(feature = "mem-profiling")]
+extern crate jemallocator;
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
@@ -34,8 +36,11 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
+#[cfg(test)]
+extern crate tempdir;
 
 mod signal_handler;
+mod profiling;
 
 use std::process;
 use std::{env, thread};
@@ -53,7 +58,8 @@ use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
 use tikv::storage::{Storage, TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
@@ -491,7 +497,7 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
 
     let block_cache_size = get_toml_int(config,
                                         "rocksdb.lockcf.block-cache-size",
-                                        Some(64 * 1024 * 1024));
+                                        Some(256 * 1024 * 1024));
     block_base_opts.set_lru_cache(block_cache_size as usize);
 
     block_base_opts.set_bloom_filter(10, false);
@@ -504,7 +510,7 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
 
     let write_buffer_size = get_toml_int(config,
                                          "rocksdb.lockcf.write-buffer-size",
-                                         Some(64 * 1024 * 1024));
+                                         Some(128 * 1024 * 1024));
     opts.set_write_buffer_size(write_buffer_size as u64);
 
     let max_write_buffer_number =
@@ -513,7 +519,7 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
 
     let max_bytes_for_level_base = get_toml_int(config,
                                                 "rocksdb.lockcf.max-bytes-for-level-base",
-                                                Some(64 * 1024 * 1024));
+                                                Some(128 * 1024 * 1024));
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
     opts.set_target_file_size_base(32 * 1024 * 1024);
 

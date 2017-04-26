@@ -42,6 +42,9 @@ pub mod file;
 pub mod file_log;
 pub mod clocktime;
 pub mod metrics;
+pub mod threadpool;
+pub mod collections;
+
 #[cfg(target_os="linux")]
 mod thread_metrics;
 
@@ -672,5 +675,31 @@ mod tests {
         let sp = should_panic.clone();
         defer!(assert!(!sp.load(Ordering::SeqCst)));
         should_panic.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_rwlock_deadlock() {
+        // If the test runs over 60s, then there is a deadlock.
+        let mu = RwLock::new(Some(1));
+        {
+            let _clone = foo(&mu.rl());
+            let mut data = mu.wl();
+            assert!(data.is_some());
+            *data = None;
+        }
+
+        {
+            match foo(&mu.rl()) {
+                Some(_) | None => {
+                    let res = mu.try_write();
+                    assert!(res.is_err());
+                }
+            }
+        }
+
+        #[allow(clone_on_copy)]
+        fn foo(a: &Option<usize>) -> Option<usize> {
+            a.clone()
+        }
     }
 }
