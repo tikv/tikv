@@ -515,10 +515,6 @@ impl TestPdClient {
     pub fn get_pending_peers(&self) -> HashMap<u64, metapb::Peer> {
         self.cluster.rl().pending_peers.clone()
     }
-
-    pub fn set_cluster_bootstrap(&self, is_bootstraped: bool) {
-        self.cluster.wl().set_bootstrap(is_bootstraped);
-    }
 }
 
 impl PdClient for TestPdClient {

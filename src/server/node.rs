@@ -32,6 +32,7 @@ use super::config::Config;
 use storage::{Storage, RaftKv};
 use super::transport::RaftStoreRouter;
 
+
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
@@ -41,6 +42,22 @@ pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<St
     let engine = box RaftKv::new(db, router);
     let store = try!(Storage::from_engine(engine, &cfg.storage));
     Ok(store)
+}
+
+fn check_region_epoch(region: &metapb::Region, other: &metapb::Region) -> Result<()> {
+    let epoch = region.get_region_epoch();
+    let other_epoch = other.get_region_epoch();
+    if epoch.get_conf_ver() != other_epoch.get_conf_ver() {
+        return Err(box_err!("region conf_ver inconsist: {} with {}",
+                            epoch.get_conf_ver(),
+                            other_epoch.get_conf_ver()));
+    }
+    if epoch.get_version() != other_epoch.get_version() {
+        return Err(box_err!("region version inconsist: {} with {}",
+                            epoch.get_version(),
+                            other_epoch.get_version()));
+    }
+    Ok(())
 }
 
 // Node is a wrapper for raft store.
@@ -196,22 +213,6 @@ impl<C> Node<C>
         Ok(region)
     }
 
-    fn check_region_epoch(&self, region: &metapb::Region, other: &metapb::Region) -> Result<()> {
-        let epoch = region.get_region_epoch();
-        let other_epoch = other.get_region_epoch();
-        if epoch.get_conf_ver() != other_epoch.get_conf_ver() {
-            return Err(box_err!("region conf_ver inconsist: {} with {}",
-                                epoch.get_conf_ver(),
-                                other_epoch.get_conf_ver()));
-        }
-        if epoch.get_version() != other_epoch.get_version() {
-            return Err(box_err!("region version inconsist: {} with {}",
-                                epoch.get_version(),
-                                other_epoch.get_version()));
-        }
-        Ok(())
-    }
-
     fn check_prepare_bootstrap_cluster(&self, engine: &DB) -> Result<()> {
         let res = try!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
         if res.is_none() {
@@ -223,7 +224,7 @@ impl<C> Node<C>
             match self.pd_client.get_region(b"") {
                 Ok(region) => {
                     if region.get_id() == first_region.get_id() {
-                        try!(self.check_region_epoch(&region, &first_region));
+                        try!(check_region_epoch(&region, &first_region));
                         try!(store::clear_prepare_bootstrap_state(engine));
                     } else {
                         try!(store::clear_prepare_bootstrap(engine, region.get_id()));
@@ -342,5 +343,48 @@ impl<C> Drop for Node<C>
 {
     fn drop(&mut self) {
         self.stop().unwrap();
+    }
+}
+#[cfg(test)]
+mod tests {
+    use raftstore::store::keys;
+    use super::check_region_epoch;
+    use kvproto::metapb;
+    use server::Error;
+
+    #[test]
+    fn test_check_region_epoch() {
+        let mut r1 = metapb::Region::new();
+        r1.set_id(1);
+        r1.set_start_key(keys::EMPTY_KEY.to_vec());
+        r1.set_end_key(keys::EMPTY_KEY.to_vec());
+        r1.mut_region_epoch().set_version(1);
+        r1.mut_region_epoch().set_conf_ver(1);
+
+        let mut r2 = metapb::Region::new();
+        r2.set_id(1);
+        r2.set_start_key(keys::EMPTY_KEY.to_vec());
+        r2.set_end_key(keys::EMPTY_KEY.to_vec());
+        r2.mut_region_epoch().set_version(2);
+        r2.mut_region_epoch().set_conf_ver(1);
+
+        let mut r3 = metapb::Region::new();
+        r3.set_id(1);
+        r3.set_start_key(keys::EMPTY_KEY.to_vec());
+        r3.set_end_key(keys::EMPTY_KEY.to_vec());
+        r3.mut_region_epoch().set_version(1);
+        r3.mut_region_epoch().set_conf_ver(2);
+        match check_region_epoch(&r1, &r2).unwrap_err() {
+            Error::Other(err) => {
+                assert!(err.description().contains("region version inconsist: 1 with 2"))
+            }
+            _ => panic!("should meet region version inconsist error"),
+        }
+        match check_region_epoch(&r1, &r3).unwrap_err() {
+            Error::Other(err) => {
+                assert!(err.description().contains("region conf_ver inconsist: 1 with 2"))
+            }
+            _ => panic!("should meet region conf_ver inconsist error"),
+        }
     }
 }
