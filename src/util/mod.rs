@@ -43,7 +43,9 @@ pub mod file;
 pub mod file_log;
 pub mod clocktime;
 pub mod metrics;
+pub mod threadpool;
 pub mod collections;
+
 #[cfg(target_os="linux")]
 mod thread_metrics;
 
