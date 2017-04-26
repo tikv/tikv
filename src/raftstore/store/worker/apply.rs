@@ -138,6 +138,8 @@ pub enum ExecResult {
 struct ApplyContext {
     pub wb: Option<WriteBatch>,
     pub cbs: Vec<(Callback, RaftCmdResponse)>,
+    pub wb_last_bytes: u64,
+    pub wb_last_keys: u64,
 }
 
 impl ApplyContext {
@@ -145,6 +147,8 @@ impl ApplyContext {
         ApplyContext {
             wb: Some(WriteBatch::new()),
             cbs: vec![],
+            wb_last_bytes: 0,
+            wb_last_keys: 0,
         }
     }
 
@@ -154,6 +158,27 @@ impl ApplyContext {
 
     pub fn wb_ref(&self) -> &WriteBatch {
         self.wb.as_ref().unwrap()
+    }
+
+    pub fn mark_last_bytes_and_keys(&mut self) {
+        self.wb_last_bytes = self.wb_ref().data_size() as u64;
+        self.wb_last_keys = self.wb_ref().count() as u64;
+    }
+
+    pub fn delta_bytes(&self) -> u64 {
+        self.wb_ref().data_size() as u64 - self.wb_last_bytes
+    }
+
+    pub fn delta_keys(&self) -> u64 {
+        self.wb_ref().count() as u64 - self.wb_last_keys
+    }
+}
+
+impl Drop for ApplyContext {
+    fn drop(&mut self) {
+        if !self.cbs.is_empty() {
+            panic!("callback of apply context is leak");
+        }
     }
 }
 
@@ -291,14 +316,19 @@ impl ApplyDelegate {
             self.write_apply_state(apply_ctx.wb_mut());
         }
 
-        self.metrics.written_bytes += apply_ctx.wb_ref().data_size() as u64;
-        self.metrics.written_keys += apply_ctx.wb_ref().count() as u64;
+        self.update_metrics(apply_ctx);
+        apply_ctx.mark_last_bytes_and_keys();
 
         slow_log!(t,
                   "{} handle ready {} committed entries",
                   self.tag,
                   committed_count);
         results
+    }
+
+    fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
+        self.metrics.written_bytes += apply_ctx.delta_bytes();
+        self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
     fn write_apply_state(&self, wb: &WriteBatch) {
@@ -330,6 +360,8 @@ impl ApplyDelegate {
             if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
                 self.write_apply_state(apply_ctx.wb_mut());
 
+                self.update_metrics(apply_ctx);
+
                 // flush to engine
                 self.engine
                     .write(apply_ctx.wb.take().unwrap())
@@ -342,6 +374,7 @@ impl ApplyDelegate {
                     cb(resp);
                 }
                 apply_ctx.wb = Some(WriteBatch::new());
+                apply_ctx.mark_last_bytes_and_keys();
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -1224,11 +1257,13 @@ impl Runner {
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
         // Call callbacks
-        for (cb, resp) in apply_ctx.cbs {
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
             cb(resp);
         }
 
-        self.notifier.send(TaskRes::Applys(applys_res)).unwrap();
+        if !applys_res.is_empty() {
+            self.notifier.send(TaskRes::Applys(applys_res)).unwrap();
+        }
     }
 
     fn handle_propose(&mut self, p: Propose) {
@@ -1303,7 +1338,7 @@ mod tests {
     use std::sync::*;
 
     use tempdir::TempDir;
-    use rocksdb::DB;
+    use rocksdb::{DB, WriteBatch, Writable};
     use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::CmdType;
@@ -1332,6 +1367,33 @@ mod tests {
         e.set_term(term);
         req.map(|r| e.set_data(r.write_to_bytes().unwrap()));
         e
+    }
+
+    #[test]
+    fn test_should_flush_to_engine() {
+        // ComputeHash command
+        let mut req = RaftCmdRequest::new();
+        req.mut_admin_request().set_cmd_type(AdminCmdType::ComputeHash);
+        let wb = WriteBatch::new();
+        assert_eq!(should_flush_to_engine(&req, wb.count()), true);
+
+        // Write batch keys reach WRITE_BATCH_MAX_KEYS
+        let req = RaftCmdRequest::new();
+        let wb = WriteBatch::new();
+        for i in 0..WRITE_BATCH_MAX_KEYS {
+            let key = format!("key_{}", i);
+            wb.put(key.as_bytes(), b"value").unwrap();
+        }
+        assert_eq!(should_flush_to_engine(&req, wb.count()), true);
+
+        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
+        let req = RaftCmdRequest::new();
+        let wb = WriteBatch::new();
+        for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
+            let key = format!("key_{}", i);
+            wb.put(key.as_bytes(), b"value").unwrap();
+        }
+        assert_eq!(should_flush_to_engine(&req, wb.count()), false);
     }
 
     #[test]
@@ -1408,27 +1470,29 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::apply(1, 1, vec![new_entry(2, 3, None)]));
+        runner.run(Task::applys(vec![Apply::new(1, 1, vec![new_entry(2, 3, None)])]));
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
-        runner.run(Task::apply(2, 11, vec![]));
+        runner.run(Task::applys(vec![Apply::new(2, 11, vec![])]));
         // empty entries should be ignored.
         assert!(rx.try_recv().is_err());
         assert_eq!(runner.delegates[&2].term, reg.term);
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(db.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::apply(2, 11, vec![new_entry(5, 4, None)]));
-        let apply_res = match rx.try_recv() {
-            Ok(TaskRes::Apply(res)) => res,
+        runner.run(Task::applys(vec![Apply::new(2, 11, vec![new_entry(5, 4, None)])]));
+        let res = match rx.try_recv() {
+            Ok(TaskRes::Applys(res)) => res,
             e => panic!("unexpected apply result: {:?}", e),
         };
+        assert_eq!(res.len(), 1);
+        let ref apply_res = res[0];
         assert_eq!(apply_res.region_id, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         assert!(apply_res.exec_res.is_empty());
-        // empty entry should not change metrics.
-        assert_eq!(apply_res.metrics, ApplyMetrics::default());
+        // empty entry will make applied_index step forward and should write apply state to engine.
+        assert_eq!(apply_res.metrics.written_keys, 1);
         assert_eq!(apply_res.applied_index_term, 5);
         {
             let delegate = &runner.delegates[&2];
@@ -1535,7 +1599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_raft_entry_normal() {
+    fn test_handle_raft_committed_entries() {
         let (_path, db) = create_tmp_engine("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
@@ -1548,8 +1612,13 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let res = delegate.handle_raft_entry_normal(put_entry);
-        assert!(res.is_none());
+        let mut apply_ctx = ApplyContext::new();
+        let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+        assert!(res.is_empty());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses().len(), 1);
@@ -1563,7 +1632,12 @@ mod tests {
         let written_keys = delegate.metrics.written_keys;
         let size_diff_hint = delegate.metrics.size_diff_hint;
         let put_entry = EntryBuilder::new(2, 2).put_cf(CF_LOCK, b"k1", b"v1").epoch(1, 3).build();
-        delegate.handle_raft_entry_normal(put_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let lock_handle = db.cf_handle(CF_LOCK).unwrap();
         assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
         assert_eq!(delegate.metrics.lock_cf_written_bytes,
@@ -1579,7 +1653,12 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        delegate.handle_raft_entry_normal(put_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
         assert_eq!(delegate.applied_index_term, 2);
@@ -1591,7 +1670,12 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        delegate.handle_raft_entry_normal(put_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
@@ -1601,7 +1685,7 @@ mod tests {
         assert!(db.get(&dk_k3).unwrap().is_none());
 
         EntryBuilder::new(5, 2).capture_resp(&mut delegate, tx.clone()).build();
-        let put_entry = EntryBuilder::new(6, 2)
+        let put_entry = EntryBuilder::new(5, 2)
             .delete(b"k1")
             .delete_cf(CF_LOCK, b"k1")
             .delete_cf(CF_WRITE, b"k1")
@@ -1611,7 +1695,12 @@ mod tests {
         let lock_written_bytes = delegate.metrics.lock_cf_written_bytes;
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
-        delegate.handle_raft_entry_normal(put_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
@@ -1623,12 +1712,17 @@ mod tests {
         assert_eq!(delegate.metrics.delete_keys_hint, delete_keys_hint + 2);
         assert_eq!(delegate.metrics.size_diff_hint, size_diff_hint - 9);
 
-        let delete_entry = EntryBuilder::new(7, 2)
+        let delete_entry = EntryBuilder::new(6, 2)
             .delete(b"k5")
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        delegate.handle_raft_entry_normal(delete_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
     }
