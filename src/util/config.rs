@@ -17,7 +17,7 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 use url;
 use regex::Regex;
 
-use util::HashMap;
+use util::collections::HashMap;
 use rocksdb::{DBCompressionType, DBRecoveryMode};
 
 quick_error! {

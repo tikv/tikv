@@ -45,7 +45,8 @@ use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE}
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
 use util::transport::{SyncSendCh, Error as TransportError};
-use util::{SlowTimer, HashMap};
+use util::SlowTimer;
+use util::collections::HashMap;
 
 use super::Result;
 use super::Error;
