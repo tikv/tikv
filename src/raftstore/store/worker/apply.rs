@@ -1487,7 +1487,7 @@ mod tests {
             e => panic!("unexpected apply result: {:?}", e),
         };
         assert_eq!(res.len(), 1);
-        let ref apply_res = res[0];
+        let apply_res = &res[0];
         assert_eq!(apply_res.region_id, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         assert!(apply_res.exec_res.is_empty());
