@@ -13,19 +13,23 @@
 
 use std::fmt::{self, Formatter, Display};
 use std::io;
-use std::net::{SocketAddr, TcpStream};
-use std::io::Read;
+use std::iter::Iterator;
+use std::net::SocketAddr;
 use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
-use std::time::{Instant, Duration};
+use std::time::Instant;
+use std::iter;
+use std::result;
 
 use threadpool::ThreadPool;
 use mio::Token;
+use grpc::error::GrpcError;
+use kvproto::raft_serverpb::SnapshotChunk;
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::tikvpb_grpc::{TiKVClient, TiKV};
 
 use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
-use util::codec::rpc;
 use util::buf::PipeBuffer;
 use util::HashMap;
 use util::transport::SendCh;
@@ -37,8 +41,6 @@ use super::transport::RaftStoreRouter;
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_SENDER_POOL_SIZE: usize = 3;
-const DEFAULT_READ_TIMEOUT: u64 = 30;
-const DEFAULT_WRITE_TIMEOUT: u64 = 30;
 
 /// `Task` that `Runner` can handle.
 ///
@@ -73,6 +75,41 @@ impl Display for Task {
     }
 }
 
+struct SnapChunk<'a, T: Snapshot + ?Sized + 'a> {
+    snap: &'a mut T,
+}
+
+const SNAP_CHUNK_LEN: usize = 1024 * 1024;
+
+impl<'a, T: Snapshot + ?Sized + 'a> Iterator for SnapChunk<'a, T> {
+    type Item = result::Result<Vec<u8>, io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf = vec![0; SNAP_CHUNK_LEN];
+        let mut written = 0;
+        loop {
+            let len = match self.snap.read(&mut buf[written..]) {
+                Ok(0) => {
+                    return if written > 0 {
+                        Some(Ok(buf.drain(..written).collect()))
+                    } else {
+                        None
+                    }
+                }
+                Ok(len) => len,
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    return Some(Err(e));
+                }
+            };
+            written += len;
+            if written >= SNAP_CHUNK_LEN {
+                return Some(Ok(buf));
+            }
+        }
+    }
+}
+
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
@@ -82,8 +119,10 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 
     let send_timer = SEND_SNAP_HISTOGRAM.start_timer();
 
-    let snap = data.msg.get_message().get_snapshot();
-    let key = try!(SnapKey::from_snap(&snap));
+    let key = {
+        let snap = data.msg.get_message().get_snapshot();
+        try!(SnapKey::from_snap(&snap))
+    };
     mgr.register(key.clone(), SnapEntry::Sending);
     let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
     defer!({
@@ -92,16 +131,33 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
+
     // snapshot file has been validated when created, so no need to validate again.
 
-    let mut conn = try!(TcpStream::connect(&addr));
-    try!(conn.set_nodelay(true));
-    try!(conn.set_read_timeout(Some(Duration::from_secs(DEFAULT_READ_TIMEOUT))));
-    try!(conn.set_write_timeout(Some(Duration::from_secs(DEFAULT_WRITE_TIMEOUT))));
+    // Ideally, we should not collect all chunks here, and send an iterator to Grpc client to save
+    // memory. But inside grpc client, the iterator needs to be moved to another thread, and we
+    // can't send the snapshot away because we need to use it later.
+    let chunks: Vec<result::Result<SnapshotChunk, GrpcError>> = {
+        let snap_chunk = SnapChunk { snap: s.as_mut() };
+        let first = iter::once({
+            let mut chunk = SnapshotChunk::new();
+            chunk.set_message(data.msg);
+            Ok(chunk)
+        });
+        let rests = snap_chunk.map(|item| {
+            item.map(|buf| {
+                    let mut chunk = SnapshotChunk::new();
+                    chunk.set_data(buf);
+                    chunk
+                })
+                .map_err(GrpcError::Io)
+        });
+        first.chain(rests).collect()
+    };
 
-    let res = rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
-        .and_then(|_| io::copy(&mut s, &mut conn).map_err(From::from))
-        .and_then(|_| conn.read(&mut [0]).map_err(From::from))
+    let host = format!("{}", addr.ip());
+    let res = TiKVClient::new(&*host, addr.port(), false, Default::default())
+        .and_then(|client| client.Snapshot(box chunks.into_iter()))
         .map(|_| ())
         .map_err(From::from);
     let size = try!(s.total_size());
