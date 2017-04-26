@@ -467,6 +467,11 @@ impl<T> RingQueue<T> {
     }
 }
 
+// `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
+pub fn cfs_diff<'a, 'b>(a: &'a Vec<&'b str>, b: &'a Vec<&'b str>) -> Vec<&'b str> {
+    a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{SocketAddr, AddrParseError};

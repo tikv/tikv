@@ -19,6 +19,8 @@ use rocksdb::{DB, Options, SliceTransform};
 
 pub use rocksdb::CFHandle;
 
+use super::cfs_diff;
+
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
     db.cf_handle(cf)
         .ok_or_else(|| format!("cf {} not found.", cf))
@@ -44,8 +46,8 @@ pub fn open_opt(opts: Options,
 }
 
 pub struct CFOptions<'a> {
-    pub cf: &'a str,
-    pub options: Options,
+    cf: &'a str,
+    options: Options,
 }
 
 impl<'a> CFOptions<'a> {
@@ -126,18 +128,19 @@ fn check_and_open(path: &str, mut db_opt: Options, cfs_opts: Vec<CFOptions>) -> 
     let mut db = DB::open_cf(db_opt, path, cfs.as_slice(), cfs_opts_ref.as_slice()).unwrap();
 
     // Drop discarded column families.
-    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
+    //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
+    for cf in cfs_diff(&existed, &needed) {
         // Never drop default column families.
-        if *cf != CF_DEFAULT {
+        if cf != CF_DEFAULT {
             try!(db.drop_cf(cf));
         }
     }
 
     // Create needed column families not existed yet.
-    for cf in needed.iter().filter(|x| existed.iter().find(|y| y == x).is_none()) {
+    for cf in cfs_diff(&needed, &existed) {
         try!(db.create_cf(cf,
                           &cfs_opts.iter()
-                              .find(|cf_options| cf_options.cf == *cf)
+                              .find(|cf_options| cf_options.cf == cf)
                               .unwrap()
                               .options));
     }
