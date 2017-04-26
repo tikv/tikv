@@ -14,7 +14,7 @@
 use std::boxed::FnBox;
 use std::fmt::Debug;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use grpc::futures_grpc::{GrpcStreamSend, GrpcFutureSend};
@@ -31,6 +31,7 @@ use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
 use util::worker::{Worker, Scheduler};
 use util::buf::PipeBuffer;
+use util::HandyRwLock;
 use storage::{self, Storage, Key, Options, Mutation};
 use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
@@ -47,13 +48,13 @@ const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 #[allow(dead_code)]
 pub struct Handle<T: RaftStoreRouter + 'static> {
     // For handling KV requests.
-    storage: Mutex<Storage>,
+    storage: RwLock<Storage>,
     // For handling coprocessor requests.
-    end_point_worker: Mutex<Worker<EndPointTask>>,
+    end_point_worker: RwLock<Worker<EndPointTask>>,
     end_point_concurrency: usize,
     // For handling raft messages.
-    ch: Mutex<T>,
-    snap_scheduler: Mutex<Scheduler<SnapTask>>,
+    ch: RwLock<T>,
+    snap_scheduler: RwLock<Scheduler<SnapTask>>,
 
     // TODO: remove it, now it reserves to keep compatible with SnapshotManager.
     token: AtomicUsize,
@@ -67,24 +68,23 @@ impl<T: RaftStoreRouter + 'static> Handle<T> {
                snap_scheduler: Scheduler<SnapTask>)
                -> Handle<T> {
         Handle {
-            storage: Mutex::new(storage),
+            storage: RwLock::new(storage),
 
-            end_point_worker: Mutex::new(Worker::new("end-point-worker")),
+            end_point_worker: RwLock::new(Worker::new("end-point-worker")),
             end_point_concurrency: end_point_concurrency,
 
-            ch: Mutex::new(ch),
-            snap_scheduler: Mutex::new(snap_scheduler),
+            ch: RwLock::new(ch),
+            snap_scheduler: RwLock::new(snap_scheduler),
             token: AtomicUsize::new(1),
         }
     }
 
     pub fn run(&mut self) -> Result<()> {
-        let end_point = EndPointHost::new(self.storage.lock().unwrap().get_engine(),
-                                          self.end_point_worker.lock().unwrap().scheduler(),
+        let end_point = EndPointHost::new(self.storage.rl().get_engine(),
+                                          self.end_point_worker.rl().scheduler(),
                                           self.end_point_concurrency);
         try!(self.end_point_worker
-            .lock()
-            .unwrap()
+            .wl()
             .start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         Ok(())
     }
@@ -104,8 +104,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_get(p.take_context(),
                        Key::from_raw(p.get_key()),
                        p.get_version(),
@@ -134,8 +133,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_scan(p.take_context(),
                         Key::from_raw(p.get_start_key()),
                         p.get_limit() as usize,
@@ -173,8 +171,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_prewrite(p.take_context(),
                             mutations,
                             p.take_primary_lock(),
@@ -200,8 +197,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_commit(p.take_context(),
                           keys,
                           p.get_start_version(),
@@ -225,8 +221,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_cleanup(p.take_context(),
                            Key::from_raw(p.get_key()),
                            p.get_start_version(),
@@ -254,8 +249,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_batch_get(p.take_context(), keys, p.get_version(), cb)
             .unwrap();
         future.map(|v| {
@@ -278,8 +272,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_rollback(p.take_context(), keys, p.get_start_version(), cb)
             .unwrap();
         future.map(|v| {
@@ -299,8 +292,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_scan_lock(p.take_context(), p.get_max_version(), cb)
             .unwrap();
         future.map(|v| {
@@ -327,8 +319,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_resolve_lock(p.take_context(), p.get_start_version(), commit_ts, cb)
             .unwrap();
         future.map(|v| {
@@ -347,7 +338,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage.lock().unwrap().async_gc(p.take_context(), p.get_safe_point(), cb).unwrap();
+        self.storage.rl().async_gc(p.take_context(), p.get_safe_point(), cb).unwrap();
         future.map(|v| {
                 let mut resp = GCResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -364,7 +355,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage.lock().unwrap().async_raw_get(p.take_context(), p.take_key(), cb).unwrap();
+        self.storage.rl().async_raw_get(p.take_context(), p.take_key(), cb).unwrap();
         future.map(|v| {
                 let mut resp = RawGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -386,8 +377,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.storage
-            .lock()
-            .unwrap()
+            .rl()
             .async_raw_put(p.take_context(), p.take_key(), p.take_value(), cb)
             .unwrap();
         future.map(|v| {
@@ -406,7 +396,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage.lock().unwrap().async_raw_delete(p.take_context(), p.take_key(), cb).unwrap();
+        self.storage.rl().async_raw_delete(p.take_context(), p.take_key(), cb).unwrap();
         future.map(|v| {
                 let mut resp = RawDeleteResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -424,15 +414,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
         let (cb, future) = make_callback();
         self.end_point_worker
-            .lock()
-            .unwrap()
+            .rl()
             .schedule(EndPointTask::Request(RequestTask::new(p, cb)))
             .unwrap();
         future.boxed()
     }
 
     fn Raft(&self, s: GrpcStreamSend<RaftMessage>) -> GrpcFutureSend<Done> {
-        let ch = self.ch.lock().unwrap().clone();
+        let ch = self.ch.rl().clone();
         s.for_each(move |msg| {
                 ch.send_raft_msg(msg).map_err(|_| GrpcError::Other("send raft msg fail"))
             })
@@ -442,7 +431,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
 
     fn Snapshot(&self, s: GrpcStreamSend<SnapshotChunk>) -> GrpcFutureSend<Done> {
         let token = Token(self.token.fetch_add(1, Ordering::SeqCst));
-        let sched = self.snap_scheduler.lock().unwrap().clone();
+        let sched = self.snap_scheduler.rl().clone();
         let sched2 = sched.clone();
         s.for_each(move |mut chunk| {
                 if chunk.has_message() {
@@ -466,9 +455,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
                         sched2.schedule(SnapTask::Discard(token))
                     }
                 };
-                future::result(res.map_err(|_| GrpcError::Other("schedule snap_task fail")))
+                res.map(|_| Done::new()).map_err(|_| GrpcError::Other("schedule snap_task fail"))
             })
-            .and_then(|_| future::ok::<_, GrpcError>(Done::new()))
             .boxed()
     }
 }
@@ -556,8 +544,10 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
     match res {
         Ok(res) => {
             res.into_iter()
-                .filter(|x| x.is_err())
-                .map(|e| extract_key_error(&e.unwrap_err()))
+                .filter_map(|x| match x {
+                    Err(e) => Some(extract_key_error(&e)),
+                    Ok(_) => None,
+                })
                 .collect()
         }
         Err(e) => vec![extract_key_error(&e)],
