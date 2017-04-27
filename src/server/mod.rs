@@ -22,6 +22,7 @@ use util::codec::rpc;
 use kvproto::eraftpb::MessageType as RaftMessageType;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::coprocessor::Response;
+mod handle;
 mod conn;
 mod metrics;
 
