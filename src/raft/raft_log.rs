@@ -33,7 +33,7 @@ use raft::errors::{Result, Error, StorageError};
 use std::cmp;
 use util;
 
-pub const NO_LIMIT: u64 = util::NO_LIMIT;
+pub use util::NO_LIMIT;
 
 /// Raft log implementation
 #[derive(Default)]
