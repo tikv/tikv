@@ -41,11 +41,11 @@ impl<T: Debug> Debug for Task<T> {
 }
 
 impl<T> Task<T> {
-    fn new<F>(id: u64, gid: T, job: F) -> Task<T>
+    fn new<F>(gid: T, job: F) -> Task<T>
         where F: FnOnce() + Send + 'static
     {
         Task {
-            id: id,
+            id: 0,
             gid: gid,
             task: Box::new(job),
         }
@@ -346,7 +346,7 @@ impl<Q, T> ThreadPool<Q, T>
     pub fn execute<F>(&mut self, gid: T, job: F)
         where F: FnOnce() + Send + 'static
     {
-        let task = Task::new(0, gid, job);
+        let task = Task::new(gid, job);
         self.sender.send(task).unwrap();
         self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
         let &(_, ref cvar) = &*self.task_pool;
@@ -607,7 +607,8 @@ mod test {
         // Push 4 tasks of `group1` into queue
         let group1 = 1001;
         for _ in 0..4 {
-            let task = Task::new(id, group1, move || {});
+            let mut task = Task::new(group1, move || {});
+            task.id = id;
             id += 1;
             queue.push(task);
         }
@@ -615,7 +616,8 @@ mod test {
         // Push 4 tasks of `group2` into queue.
         let group2 = 1002;
         for _ in 0..4 {
-            let task = Task::new(id, group2, move || {});
+            let mut task = Task::new(group2, move || {});
+            task.id = id;
             id += 1;
             queue.push(task);
         }
