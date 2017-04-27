@@ -656,6 +656,8 @@ impl PeerStorage {
               region,
               ctx.apply_state);
 
+        self.cache.clear();
+
         ctx.snap_region = Some(region);
         Ok(())
     }
