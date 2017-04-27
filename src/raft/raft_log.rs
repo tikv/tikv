@@ -30,10 +30,10 @@ use raft::storage::Storage;
 use raft::log_unstable::Unstable;
 use kvproto::eraftpb::{Entry, Snapshot};
 use raft::errors::{Result, Error, StorageError};
-use std::{cmp, u64};
+use std::cmp;
 use util;
 
-pub const NO_LIMIT: u64 = u64::MAX;
+pub const NO_LIMIT: u64 = util::NO_LIMIT;
 
 /// Raft log implementation
 #[derive(Default)]
