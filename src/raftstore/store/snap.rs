@@ -1580,16 +1580,18 @@ mod v2 {
             assert!(s4.exists());
 
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
-            let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(),
-                                                      ALL_CFS)
-                .unwrap());
+            let dst_db_path = dst_db_dir.path().to_str().unwrap();
+            // Change arbitrarily the cf order of ALL_CFS at destination db.
+            let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
+            let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs).unwrap());
             let options = ApplyOptions {
                 db: dst_db.clone(),
                 region: region.clone(),
                 abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
                 write_batch_size: TEST_WRITE_BATCH_SIZE,
             };
-            s4.apply(options).unwrap();
+            // Verify thte snapshot applying is ok.
+            assert!(s4.apply(options).is_ok());
 
             // Ensure `delete()` works to delete the dest snapshot.
             s4.delete();
@@ -1637,67 +1639,6 @@ mod v2 {
 
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s2.exists());
-        }
-
-        #[test]
-        fn test_snapshot_applying_with_arbitrary_cf_order() {
-            // Create a snapshot and copy it to a new destination.
-            let region_id = 1;
-            let region = get_test_region(region_id, 1, 1);
-
-            let db_dir_src = TempDir::new("test-cf-order-db-dir-src").unwrap();
-            let db_src = get_test_db(&db_dir_src).unwrap();
-            let snapshot = DbSnapshot::new(db_src.clone());
-
-            let dir_src = TempDir::new("test-cf-order-dir-src").unwrap();
-            let key = SnapKey::new(region_id, 1, 1);
-            let size_track = Arc::new(RwLock::new(0));
-            let mut s_src =
-                Snap::new_for_building(dir_src.path(), &key, &snapshot, size_track.clone())
-                    .unwrap();
-            assert!(!s_src.exists());
-
-            let mut snap_data = RaftSnapshotData::new();
-            snap_data.set_region(region.clone());
-            let mut stat = SnapshotStatistics::new();
-            s_src.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
-            assert!(s_src.exists());
-
-            let mut s1 = Snap::new_for_sending(dir_src.path(), &key, size_track.clone()).unwrap();
-            assert!(s1.exists());
-
-            let dir_dst = TempDir::new("test-cf-order-dir-dst").unwrap();
-            let mut s2 = Snap::new_for_receiving(dir_dst.path(),
-                                                 &key,
-                                                 snap_data.take_meta(),
-                                                 size_track.clone())
-                .unwrap();
-            assert!(!s2.exists());
-
-            let _ = io::copy(&mut s1, &mut s2).unwrap();
-            s2.save().unwrap();
-            assert!(s2.exists());
-
-            let mut s_dst = Snap::new_for_applying(dir_dst.path(), &key, size_track.clone())
-                .unwrap();
-            assert!(s_dst.exists());
-
-            let db_dir_dst = TempDir::new("test-cf-order-db-dir-dst").unwrap();
-            let db_path_dst = db_dir_dst.path().to_str().unwrap();
-            // Change the cf order arbitrarily of ALL_CFS at destination db.
-            let cfs_dst = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-            let db_dst = Arc::new(rocksdb::new_engine(db_path_dst, &cfs_dst).unwrap());
-            let options = ApplyOptions {
-                db: db_dst.clone(),
-                region: region.clone(),
-                abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
-                write_batch_size: TEST_WRITE_BATCH_SIZE,
-            };
-            // Verify the snapshot applying is ok.
-            assert!(s_dst.apply(options).is_ok());
-
-            // Verify the data is correct after applying snapshot.
-            assert_eq_db(db_src, db_dst.as_ref());
         }
     }
 }
