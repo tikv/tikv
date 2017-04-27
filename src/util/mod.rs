@@ -468,7 +468,7 @@ impl<T> RingQueue<T> {
 }
 
 // `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
-pub fn cfs_diff<'a, 'b>(a: &'a [&'b str], b: &'a [&'b str]) -> Vec<&'b str> {
+pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
 }
 

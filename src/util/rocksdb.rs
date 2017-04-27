@@ -76,16 +76,16 @@ fn check_and_open(path: &str, mut db_opt: Options, cfs_opts: Vec<CFOptions>) -> 
 
         let mut cfs = vec![];
         let mut cfs_opts_ref = vec![];
-        if let Some(cf_options) = cfs_opts.iter().find(|x| x.cf == CF_DEFAULT) {
+        if let Some(x) = cfs_opts.iter().find(|x| x.cf == CF_DEFAULT) {
             cfs.push(CF_DEFAULT);
-            cfs_opts_ref.push(&cf_options.options);
+            cfs_opts_ref.push(&x.options);
         }
         let mut db = try!(DB::open_cf(db_opt, path, cfs.as_slice(), cfs_opts_ref.as_slice()));
-        for cf_options in &cfs_opts {
-            if cf_options.cf == "default" {
+        for x in &cfs_opts {
+            if x.cf == CF_DEFAULT {
                 continue;
             }
-            try!(db.create_cf(cf_options.cf, &cf_options.options));
+            try!(db.create_cf(x.cf, &x.options));
         }
 
         return Ok(db);
@@ -96,15 +96,15 @@ fn check_and_open(path: &str, mut db_opt: Options, cfs_opts: Vec<CFOptions>) -> 
     // List all column families in current db.
     let cfs_list = try!(DB::list_column_families(&db_opt, path));
     let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
-    let needed: Vec<&str> = cfs_opts.iter().map(|cf_options| cf_options.cf).collect();
+    let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
 
     // If all column families are exist, just open db.
     if existed == needed {
         let mut cfs = vec![];
         let mut cfs_opts_ref = vec![];
-        for cf_options in &cfs_opts {
-            cfs.push(cf_options.cf);
-            cfs_opts_ref.push(&cf_options.options);
+        for x in &cfs_opts {
+            cfs.push(x.cf);
+            cfs_opts_ref.push(&x.options);
         }
 
         return DB::open_cf(db_opt, path, cfs.as_slice(), cfs_opts_ref.as_slice());
@@ -116,9 +116,9 @@ fn check_and_open(path: &str, mut db_opt: Options, cfs_opts: Vec<CFOptions>) -> 
     let mut cfs_opts_ref = vec![];
     for cf in &existed {
         cfs.push(*cf);
-        match cfs_opts.iter().find(|cf_options| cf_options.cf == *cf) {
-            Some(cf_options) => {
-                cfs_opts_ref.push(&cf_options.options);
+        match cfs_opts.iter().find(|x| x.cf == *cf) {
+            Some(x) => {
+                cfs_opts_ref.push(&x.options);
             }
             None => {
                 cfs_opts_ref.push(&common_opt);
@@ -138,11 +138,7 @@ fn check_and_open(path: &str, mut db_opt: Options, cfs_opts: Vec<CFOptions>) -> 
 
     // Create needed column families not existed yet.
     for cf in cfs_diff(&needed, &existed) {
-        try!(db.create_cf(cf,
-                          &cfs_opts.iter()
-                              .find(|cf_options| cf_options.cf == cf)
-                              .unwrap()
-                              .options));
+        try!(db.create_cf(cf, &cfs_opts.iter().find(|x| x.cf == cf).unwrap().options));
     }
 
     Ok(db)
