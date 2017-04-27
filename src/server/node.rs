@@ -197,7 +197,7 @@ impl<C> Node<C>
         Ok(store_id)
     }
 
-    fn prepare_bootstrap_cluster(&self, engine: &DB, store_id: u64) -> Result<metapb::Region> {
+    pub fn prepare_bootstrap_cluster(&self, engine: &DB, store_id: u64) -> Result<metapb::Region> {
         let region_id = try!(self.alloc_id());
         info!("alloc first region id {} for cluster {}, store {}",
               region_id,
