@@ -52,9 +52,10 @@ mod thread_metrics;
 
 pub const NO_LIMIT: u64 = u64::MAX;
 
-pub fn get_limit_at_size<'a, T: Message + Clone, I: IntoIterator<Item = &'a T>>(entries: I,
-                                                                                max: u64)
-                                                                                -> usize {
+pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
+    where T: Message + Clone,
+          I: IntoIterator<Item = &'a T>
+{
     let mut iter = entries.into_iter();
     // If max is NO_LIMIT, we can return directly.
     if max == NO_LIMIT {
