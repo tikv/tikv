@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Instant;
 use std::time::Duration;
 use std::collections::HashSet;
 
-use futures::Future;
+use futures::{Future, BoxFuture};
 use futures::future::ok;
 use futures::future::{loop_fn, Loop};
 
@@ -101,7 +102,7 @@ impl LeaderClient {
     }
 }
 
-const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
+const RECONNECT_INTERVAL_SEC: u64 = 2; // 2s
 
 /// The context of sending requets.
 pub struct Request<Req, Resp, F> {
@@ -123,7 +124,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
           Resp: Send + 'static,
           F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
 {
-    fn reconnect_if_needed(mut self) -> PdFuture<Self> {
+    fn reconnect_if_needed(mut self) -> BoxFuture<Self, Self> {
         debug!("reconnect remains: {}", self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
@@ -131,47 +132,53 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         }
 
         // Updating client.
-
-        self.request_sent = 0;
         self.reconnect_count -= 1;
 
         // FIXME: should not block the core.
         warn!("updating PD client, block the tokio core");
         match self.client.reconnect() {
-            Ok(_) => ok(self).boxed(),
+            Ok(_) => {
+                self.request_sent = 0;
+                ok(self).boxed()
+            }
             Err(_) => {
                 self.timer
-                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
-                    .map_err(|e| box_err!(e))
-                    .map(|_| self)
+                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC / 2))
+                    .then(|_| Err(self))
                     .boxed()
             }
         }
     }
 
-    fn send_and_receive(mut self) -> PdFuture<Self> {
+    fn send_and_receive(mut self) -> BoxFuture<Self, Self> {
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
         let req = (self.func)(&self.client.inner.rl().client, r);
         req.then(|resp| {
                 match resp {
-                    Ok(resp) => self.resp = Some(Ok(resp)),
+                    Ok(resp) => {
+                        self.resp = Some(Ok(resp));
+                        Ok(self)
+                    }
                     Err(err) => {
                         error!("request failed: {:?}", err);
+                        Err(self)
                     }
-                };
-                Ok(self)
+                }
             })
             .boxed()
     }
 
-    fn break_or_continue(self) -> Result<Loop<Self, Self>> {
-        let done = self.reconnect_count == 0 || self.resp.is_some();
+    fn break_or_continue(ctx: result::Result<Self, Self>) -> Result<Loop<Self, Self>> {
+        let ctx = match ctx {
+            Ok(ctx) | Err(ctx) => ctx,
+        };
+        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
         if done {
-            Ok(Loop::Break(self))
+            Ok(Loop::Break(ctx))
         } else {
-            Ok(Loop::Continue(self))
+            Ok(Loop::Continue(ctx))
         }
     }
 
@@ -187,7 +194,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         loop_fn(ctx, |ctx| {
                 ctx.reconnect_if_needed()
                     .and_then(Self::send_and_receive)
-                    .and_then(Self::break_or_continue)
+                    .then(Self::break_or_continue)
             })
             .then(Self::post_loop)
             .boxed()

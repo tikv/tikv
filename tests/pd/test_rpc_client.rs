@@ -163,7 +163,7 @@ fn test_restart_leader() {
     let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
     let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
 
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(2));
 
     let client = RpcClient::new(&eps[0]).unwrap();
     // Put a region.
@@ -193,7 +193,9 @@ fn test_restart_leader() {
     let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
     let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
     let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
-    thread::sleep(Duration::from_secs(1));
+
+    // RECONNECT_INTERVAL_SEC is 2s.
+    thread::sleep(Duration::from_secs(2));
 
     let region = client.get_region_by_id(1);
     region.wait().unwrap();
