@@ -606,10 +606,12 @@ mod tests {
         let tbls = vec![
             (vec![], NO_LIMIT, 0),
             (vec![], size, 0),
+            (vec![e.clone(); 10], 0, 1),
             (vec![e.clone(); 10], NO_LIMIT, 10),
             (vec![e.clone(); 10], size, 1),
             (vec![e.clone(); 10], size + 1, 1),
             (vec![e.clone(); 10], 2 * size , 2),
+            (vec![e.clone(); 10], 10 * size - 1, 9),
             (vec![e.clone(); 10], 10 * size, 10),
             (vec![e.clone(); 10], 10 * size + 1, 10),
         ];
