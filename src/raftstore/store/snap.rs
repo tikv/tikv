@@ -937,7 +937,7 @@ mod v2 {
                     // initialize sst file writer
                     let handle = try!(snap.cf_handle(&cf_file.cf));
                     let io_options = snap.get_db().get_options_cf(handle);
-                    let mut writer = SstFileWriter::new(&env_opt, &io_options, handle);
+                    let mut writer = SstFileWriter::new(&env_opt, &io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
                 }
@@ -1372,7 +1372,7 @@ mod v2 {
         use kvproto::raft_serverpb::RaftSnapshotData;
         use rocksdb::DB;
 
-        use storage::ALL_CFS;
+        use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
         use util::{rocksdb, HandyRwLock};
         use raftstore::Result;
         use raftstore::store::keys;
@@ -1383,6 +1383,7 @@ mod v2 {
 
         const TEST_STORE_ID: u64 = 1;
         const TEST_KEY: &[u8] = b"akey";
+        const TEST_WRITE_BATCH_SIZE: usize = 10 * 1024 * 1024;
 
         pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
             let p = path.path().to_str().unwrap();
@@ -1586,7 +1587,7 @@ mod v2 {
                 db: dst_db.clone(),
                 region: region.clone(),
                 abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
-                write_batch_size: 10 * 1024 * 1024,
+                write_batch_size: TEST_WRITE_BATCH_SIZE,
             };
             s4.apply(options).unwrap();
 
@@ -1636,6 +1637,67 @@ mod v2 {
 
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s2.exists());
+        }
+
+        #[test]
+        fn test_snapshot_applying_with_arbitrary_cf_order() {
+            // Create a snapshot and copy it to a new destination.
+            let region_id = 1;
+            let region = get_test_region(region_id, 1, 1);
+
+            let db_dir_src = TempDir::new("test-cf-order-db-dir-src").unwrap();
+            let db_src = get_test_db(&db_dir_src).unwrap();
+            let snapshot = DbSnapshot::new(db_src.clone());
+
+            let dir_src = TempDir::new("test-cf-order-dir-src").unwrap();
+            let key = SnapKey::new(region_id, 1, 1);
+            let size_track = Arc::new(RwLock::new(0));
+            let mut s_src =
+                Snap::new_for_building(dir_src.path(), &key, &snapshot, size_track.clone())
+                    .unwrap();
+            assert!(!s_src.exists());
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data.set_region(region.clone());
+            let mut stat = SnapshotStatistics::new();
+            s_src.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            assert!(s_src.exists());
+
+            let mut s1 = Snap::new_for_sending(dir_src.path(), &key, size_track.clone()).unwrap();
+            assert!(s1.exists());
+
+            let dir_dst = TempDir::new("test-cf-order-dir-dst").unwrap();
+            let mut s2 = Snap::new_for_receiving(dir_dst.path(),
+                                                 &key,
+                                                 snap_data.take_meta(),
+                                                 size_track.clone())
+                .unwrap();
+            assert!(!s2.exists());
+
+            let _ = io::copy(&mut s1, &mut s2).unwrap();
+            s2.save().unwrap();
+            assert!(s2.exists());
+
+            let mut s_dst = Snap::new_for_applying(dir_dst.path(), &key, size_track.clone())
+                .unwrap();
+            assert!(s_dst.exists());
+
+            let db_dir_dst = TempDir::new("test-cf-order-db-dir-dst").unwrap();
+            let db_path_dst = db_dir_dst.path().to_str().unwrap();
+            // Change the cf order arbitrarily of ALL_CFS at destination db.
+            let cfs_dst = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
+            let db_dst = Arc::new(rocksdb::new_engine(db_path_dst, &cfs_dst).unwrap());
+            let options = ApplyOptions {
+                db: db_dst.clone(),
+                region: region.clone(),
+                abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
+                write_batch_size: TEST_WRITE_BATCH_SIZE,
+            };
+            // Verify the snapshot applying is ok.
+            assert!(s_dst.apply(options).is_ok());
+
+            // Verify the data is correct after applying snapshot.
+            assert_eq_db(db_src, db_dst.as_ref());
         }
     }
 }
