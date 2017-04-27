@@ -60,7 +60,7 @@ impl<'a> TableScanExec<'a> {
 
     fn get_row_from_range(&mut self) -> Result<Option<Row>> {
         let range = &self.key_ranges[self.cursor];
-        let kv = box_try!(self.scanner.get_row_from_range(range));
+        let kv = try!(self.scanner.get_row_from_range(range));
         let (key, value) = match kv {
             Some((key, value)) => (key, value),
             None => return Ok(None),
@@ -78,7 +78,7 @@ impl<'a> TableScanExec<'a> {
 
     fn get_row_from_point(&mut self) -> Result<Option<Row>> {
         let key = self.key_ranges[self.cursor].get_start();
-        let value = box_try!(self.scanner.get_row_from_point(key));
+        let value = try!(self.scanner.get_row_from_point(key));
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(self.key_ranges[self.cursor].get_start()));
@@ -91,15 +91,14 @@ impl<'a> TableScanExec<'a> {
 impl<'a> Executor for TableScanExec<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
-            // let range = &self.key_ranges[self.cursor];
             if is_point(&self.key_ranges[self.cursor]) {
-                let data = box_try!(self.get_row_from_point());
+                let data = try!(self.get_row_from_point());
                 self.scanner.set_seek_key(None);
                 self.cursor += 1;
                 return Ok(data);
             }
 
-            let data = box_try!(self.get_row_from_range());
+            let data = try!(self.get_row_from_range());
             if data.is_none() {
                 self.scanner.set_seek_key(None);
                 self.cursor += 1;
@@ -121,6 +120,7 @@ mod test {
     use storage::Statistics;
     use protobuf::RepeatedField;
     use server::coprocessor::endpoint::{is_point, prefix_next};
+
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
 

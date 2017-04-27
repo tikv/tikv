@@ -57,19 +57,19 @@ impl<'a> BaseScanner<'a> {
         }
     }
 
-    pub fn get_row_from_range(&mut self, range: &KeyRange) -> (Result<Option<(Vec<u8>, Value)>>) {
+    pub fn get_row_from_range(&mut self, range: &KeyRange) -> Result<Option<(Vec<u8>, Value)>> {
         let seek_key = self.prepare_and_get_seek_key(range);
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
-        let mut scanner = box_try!(self.store.scanner(self.scan_mode,
-                                                      self.key_only,
-                                                      self.upper_bound.clone(),
-                                                      self.statistics));
+        let mut scanner = try!(self.store.scanner(self.scan_mode,
+                                                  self.key_only,
+                                                  self.upper_bound.clone(),
+                                                  self.statistics));
         let kv = if self.desc {
-            box_try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+            try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
         } else {
-            box_try!(scanner.seek(Key::from_raw(&seek_key)))
+            try!(scanner.seek(Key::from_raw(&seek_key)))
         };
 
         let (key, value) = match kv {
@@ -88,7 +88,7 @@ impl<'a> BaseScanner<'a> {
     }
 
     pub fn get_row_from_point(&mut self, key: &[u8]) -> Result<Option<Value>> {
-        let data = box_try!(self.store
+        let data = try!(self.store
             .get(&Key::from_raw(key), &mut self.statistics));
         Ok(data)
     }
@@ -98,7 +98,7 @@ impl<'a> BaseScanner<'a> {
         self.seek_key = seek_key;
     }
 
-    fn prepare_and_get_seek_key(&mut self, range: &KeyRange) -> (Vec<u8>) {
+    fn prepare_and_get_seek_key(&mut self, range: &KeyRange) -> Vec<u8> {
         if self.seek_key.is_some() {
             let seek_key = self.seek_key.take().unwrap();
             self.seek_key = None;
@@ -116,7 +116,7 @@ impl<'a> BaseScanner<'a> {
         }
 
         if range.has_end() {
-            self.upper_bound = Some(Key::from_raw(range.get_end()).encoded().clone());
+            self.upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
         }
 
         let range_start = range.get_start().to_vec();
