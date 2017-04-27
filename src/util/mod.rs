@@ -21,6 +21,7 @@ use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use std::collections::vec_deque::{Iter, VecDeque};
+use std::u64;
 
 use prometheus;
 use rand::{self, ThreadRng};
@@ -48,20 +49,35 @@ mod thread_metrics;
 
 pub use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet, FnvBuildHasher as BuildHasherDefault};
 
-pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
-    if entries.is_empty() {
-        return;
+pub const NO_LIMIT: u64 = u64::MAX;
+
+pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
+    where T: Message + Clone,
+          I: IntoIterator<Item = &'a T>
+{
+    let mut iter = entries.into_iter();
+    // If max is NO_LIMIT, we can return directly.
+    if max == NO_LIMIT {
+        return iter.count();
     }
 
-    let mut size = Message::compute_size(&entries[0]) as u64;
-    let mut limit = 1usize;
-    while limit < entries.len() {
-        size += Message::compute_size(&entries[limit]) as u64;
+    let mut size = match iter.next() {
+        None => return 0,
+        Some(e) => Message::compute_size(e) as u64,
+    };
+    let mut limit = 1;
+    for e in iter {
+        size += Message::compute_size(e) as u64;
         if size > max {
             break;
         }
         limit += 1;
     }
+    limit
+}
+
+pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
+    let limit = get_limit_at_size(entries.as_slice(), max);
     entries.truncate(limit);
 }
 
@@ -471,6 +487,9 @@ mod tests {
     use std::rc::Rc;
     use std::{f64, cmp};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use time;
+    use kvproto::eraftpb::Entry;
+    use protobuf::Message;
     use super::*;
 
     #[test]
@@ -538,5 +557,56 @@ mod tests {
         let sp = should_panic.clone();
         defer!(assert!(!sp.load(Ordering::SeqCst)));
         should_panic.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_rwlock_deadlock() {
+        // If the test runs over 60s, then there is a deadlock.
+        let mu = RwLock::new(Some(1));
+        {
+            let _clone = foo(&mu.rl());
+            let mut data = mu.wl();
+            assert!(data.is_some());
+            *data = None;
+        }
+
+        {
+            match foo(&mu.rl()) {
+                Some(_) | None => {
+                    let res = mu.try_write();
+                    assert!(res.is_err());
+                }
+            }
+        }
+
+        #[allow(clone_on_copy)]
+        fn foo(a: &Option<usize>) -> Option<usize> {
+            a.clone()
+        }
+    }
+
+    #[test]
+    fn test_limit_size() {
+        let mut e = Entry::new();
+        e.set_data(b"0123456789".to_vec());
+        let size = e.compute_size() as u64;
+
+        let tbls = vec![
+            (vec![], NO_LIMIT, 0),
+            (vec![], size, 0),
+            (vec![e.clone(); 10], 0, 1),
+            (vec![e.clone(); 10], NO_LIMIT, 10),
+            (vec![e.clone(); 10], size, 1),
+            (vec![e.clone(); 10], size + 1, 1),
+            (vec![e.clone(); 10], 2 * size , 2),
+            (vec![e.clone(); 10], 10 * size - 1, 9),
+            (vec![e.clone(); 10], 10 * size, 10),
+            (vec![e.clone(); 10], 10 * size + 1, 10),
+        ];
+
+        for (mut entries, max, len) in tbls {
+            limit_size(&mut entries, max);
+            assert_eq!(entries.len(), len);
+        }
     }
 }
