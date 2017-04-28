@@ -70,7 +70,6 @@ signal = "0.2"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
-branch = "hhkbp2/add-constructor-for-sstfilewriter"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
