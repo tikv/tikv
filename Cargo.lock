@@ -12,7 +12,7 @@ dependencies = [
  "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler)",
+ "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler-dev)",
  "jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=ov/grpc-rs)",
  "lazy_static 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -253,10 +253,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "grpc"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler#fdd50a53be755e7090a05470f584f11122656623"
+source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler-dev#b3654b251f2fd89025b3c553d29e5a0f2afdbc3f"
 dependencies = [
  "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler)",
+ "grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler-dev)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -264,7 +264,7 @@ dependencies = [
 [[package]]
 name = "grpc-sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler#fdd50a53be755e7090a05470f584f11122656623"
+source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler-dev#b3654b251f2fd89025b3c553d29e5a0f2afdbc3f"
 dependencies = [
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -364,11 +364,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=ov/grpc-rs#e0272e007ada6547d232b4824d9e341fe0d83c90"
+source = "git+https://github.com/pingcap/kvproto.git?branch=ov/grpc-rs#3672d987fe329a7d176f3ef2fa7cbe81cb5d162b"
 dependencies = [
  "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler)",
+ "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler-dev)",
  "protobuf 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1055,8 +1055,8 @@ dependencies = [
 "checksum futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "bb982bb25cd8fa5da6a8eb3a460354c984ff1113da82bcb4f0b0862b5795db82"
 "checksum gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)" = "91ecd03771effb0c968fd6950b37e89476a578aaf1c70297d8e92b6516ec3312"
 "checksum getopts 0.2.14 (registry+https://github.com/rust-lang/crates.io-index)" = "d9047cfbd08a437050b363d35ef160452c5fe8ea5187ae0a624708c91581d685"
-"checksum grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler)" = "<none>"
-"checksum grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler)" = "<none>"
+"checksum grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler-dev)" = "<none>"
+"checksum grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/compiler-dev)" = "<none>"
 "checksum hpack 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3d2da7d3a34cf6406d9d700111b8eafafe9a251de41ae71d8052748259343b58"
 "checksum httparse 1.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "46534074dbb80b070d60a5cb8ecadd8963a00a438ae1a95268850a7ef73b67ae"
 "checksum hyper 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)" = "eb27e8a3e8f17ac43ffa41bbda9cf5ad3f9f13ef66fa4873409d4902310275f7"

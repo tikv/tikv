@@ -17,7 +17,7 @@ use std::sync::Arc;
 use protobuf::RepeatedField;
 use futures::Future;
 use futures::future;
-use grpc::{self, Environment};
+use grpc::Environment;
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
@@ -42,7 +42,7 @@ impl RpcClient {
             })
             .collect();
 
-        let env = Arc::new(Environment::new());
+        let env = Arc::new(Environment::new(1));
         let (client, members) = try!(validate_endpoints(env.clone(), &endpoints));
 
         Ok(RpcClient {
@@ -172,18 +172,19 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let executor = |client: &PDClient, req: pdpb::GetRegionByIDRequest| {
-            client.get_region_by_id_async(req)
-                .unwrap()
+            let handler = match client.get_region_by_id_async(req) {
+                Ok(h) => h,
+                Err(e) => return future::err(Error::Grpc(e)).boxed(),
+            };
+            handler.map_err(Error::Grpc)
                 .and_then(|mut resp| {
-                    // try!(check_resp_header(resp.get_header()));
-                    let mut resp = resp.unwrap();
+                    try!(check_resp_header(resp.get_header()));
                     if resp.has_region() {
                         Ok(Some(resp.take_region()))
                     } else {
                         Ok(None)
                     }
                 })
-                .map_err(Error::Grpc)
                 .boxed()
         };
 
@@ -208,14 +209,15 @@ impl PdClient for RpcClient {
         req.set_bytes_written(written_bytes);
 
         let executor = |client: &PDClient, req: pdpb::RegionHeartbeatRequest| {
-            client.region_heartbeat_async(req)
-                .unwrap()
+            let handler = match client.region_heartbeat_async(req) {
+                Ok(h) => h,
+                Err(e) => return future::err(Error::Grpc(e)).boxed(),
+            };
+            handler.map_err(Error::Grpc)
                 .and_then(|resp| {
-                    let resp = resp.unwrap();
-                    // try!(check_resp_header(resp.get_header()));
+                    try!(check_resp_header(resp.get_header()));
                     Ok(resp)
                 })
-                .map_err(Error::Grpc)
                 .boxed()
         };
 
@@ -230,14 +232,15 @@ impl PdClient for RpcClient {
         req.set_region(region);
 
         let executor = |client: &PDClient, req: pdpb::AskSplitRequest| {
-            client.ask_split_async(req)
-                .unwrap()
+            let handler = match client.ask_split_async(req) {
+                Ok(h) => h,
+                Err(e) => return future::err(Error::Grpc(e)).boxed(),
+            };
+            handler.map_err(Error::Grpc)
                 .and_then(|resp| {
-                    let resp = resp.unwrap();
-                    // try!(check_resp_header(resp.get_header()));
+                    try!(check_resp_header(resp.get_header()));
                     Ok(resp)
                 })
-                .map_err(Error::Grpc)
                 .boxed()
         };
 
@@ -252,14 +255,15 @@ impl PdClient for RpcClient {
         req.set_stats(stats);
 
         let executor = |client: &PDClient, req: pdpb::StoreHeartbeatRequest| {
-            client.store_heartbeat_async(req)
-                .unwrap()
+            let handler = match client.store_heartbeat_async(req) {
+                Ok(h) => h,
+                Err(e) => return future::err(Error::Grpc(e)).boxed(),
+            };
+            handler.map_err(Error::Grpc)
                 .and_then(|resp| {
-                    let resp = resp.unwrap();
-                    // try!(check_resp_header(resp.get_header()));
+                    try!(check_resp_header(resp.get_header()));
                     Ok(())
                 })
-                .map_err(Error::Grpc)
                 .boxed()
         };
 
@@ -275,14 +279,15 @@ impl PdClient for RpcClient {
         req.set_right(right);
 
         let executor = |client: &PDClient, req: pdpb::ReportSplitRequest| {
-            client.report_split_async(req)
-                .unwrap()
+            let handler = match client.report_split_async(req) {
+                Ok(h) => h,
+                Err(e) => return future::err(Error::Grpc(e)).boxed(),
+            };
+            handler.map_err(Error::Grpc)
                 .and_then(|resp| {
-                    let resp = resp.unwrap();
-                    // try!(check_resp_header(resp.get_header()));
+                    try!(check_resp_header(resp.get_header()));
                     Ok(())
                 })
-                .map_err(Error::Grpc)
                 .boxed()
         };
 

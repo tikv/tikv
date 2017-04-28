@@ -24,8 +24,7 @@ use futures::future::{loop_fn, Loop};
 
 use tokio_timer::Timer;
 
-use grpc::{self, Environment, ChannelBuilder, Result as GrpcResult};
-use url::Url;
+use grpc::{Environment, ChannelBuilder, Result as GrpcResult};
 use rand::{self, Rng};
 
 use kvproto::pdpb::{ResponseHeader, ErrorType, GetMembersRequest, GetMembersResponse, Member};
@@ -215,7 +214,7 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
     for _ in 0..retry {
         let r = {
             let _timer = PD_SEND_MSG_HISTOGRAM.start_timer(); // observe on dropping.
-            func(&client.inner.rl().client)
+            func(&client.inner.rl().client).map_err(Error::Grpc)
         };
 
         match r {
