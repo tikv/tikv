@@ -99,10 +99,12 @@ impl LeaderClient {
             (try!(try_connect_leader(inner.env.clone(), &inner.members)), start)
         };
 
-        let mut inner = self.inner.wl();
-        inner.client = client;
-        inner.members = members;
-        inner.last_update = Instant::now();
+        {
+            let mut inner = self.inner.wl();
+            inner.client = client;
+            inner.members = members;
+            inner.last_update = Instant::now();
+        }
         warn!("updating PD client done, spent {:?}", start.elapsed());
         Ok(())
     }
