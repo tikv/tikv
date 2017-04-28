@@ -736,25 +736,34 @@ mod v2 {
         Ok(snapshot_meta)
     }
 
-    fn check_file_size_and_checksum(path: &PathBuf,
-                                    expect_size: u64,
-                                    expect_checksum: u32)
-                                    -> RaftStoreResult<()> {
+    fn check_file_size(path: &PathBuf, expected_size: u64) -> RaftStoreResult<()> {
         let size = try!(get_file_size(path));
-        if size != expect_size {
+        if size != expected_size {
             return Err(box_err!("invalid size {} for snapshot cf file {}, expected {}",
                                 size,
                                 path.display(),
-                                expect_size));
+                                expected_size));
         }
+        Ok(())
+    }
+
+    fn check_file_checksum(path: &PathBuf, expected_checksum: u32) -> RaftStoreResult<()> {
         let checksum = try!(calc_crc32(&path));
-        if checksum != expect_checksum {
+        if checksum != expected_checksum {
             return Err(box_err!("invalid checksum {} for snapshot cf file {}, expected {}",
                                 checksum,
                                 path.display(),
-                                expect_checksum));
+                                expected_checksum));
         }
         Ok(())
+    }
+
+    fn check_file_size_and_checksum(path: &PathBuf,
+                                    expected_size: u64,
+                                    expected_checksum: u32)
+                                    -> RaftStoreResult<()> {
+        check_file_size(path, expected_size)
+            .and_then(|_| check_file_checksum(path, expected_checksum))
     }
 
     #[derive(Default)]
@@ -975,9 +984,8 @@ mod v2 {
                                         meta.get_cf()));
                 }
                 if file_exists(&cf_file.path) {
-                    try!(check_file_size_and_checksum(&cf_file.path,
-                                                      meta.get_size(),
-                                                      meta.get_checksum()));
+                    // Check only the file size for `exists()` to work correctly.
+                    try!(check_file_size(&cf_file.path, meta.get_size()));
                 }
                 cf_file.size = meta.get_size();
                 cf_file.checksum = meta.get_checksum();
