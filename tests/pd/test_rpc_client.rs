@@ -194,8 +194,8 @@ fn test_restart_leader() {
     let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
     let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
 
-    // RECONNECT_INTERVAL_SEC is 2s.
-    thread::sleep(Duration::from_secs(2));
+    // RECONNECT_INTERVAL_SEC is 1s.
+    thread::sleep(Duration::from_secs(1));
 
     let region = client.get_region_by_id(1);
     region.wait().unwrap();

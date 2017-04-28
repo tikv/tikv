@@ -102,7 +102,7 @@ impl LeaderClient {
     }
 }
 
-const RECONNECT_INTERVAL_SEC: u64 = 2; // 2s
+const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 
 /// The context of sending requets.
 pub struct Request<Req, Resp, F> {
@@ -143,7 +143,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
             }
             Err(_) => {
                 self.timer
-                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC / 2))
+                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
                     .then(|_| Err(self))
                     .boxed()
             }
