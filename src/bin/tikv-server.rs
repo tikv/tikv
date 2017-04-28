@@ -865,7 +865,6 @@ fn main() {
                     rust_ver)
         };
     let matches = App::new("TiKV")
-        .version(crate_version!())
         .long_version(long_version.as_ref())
         .author("PingCAP Inc. <info@pingcap.com>")
         .about("A Distributed transactional key-value database powered by Rust and Raft")
