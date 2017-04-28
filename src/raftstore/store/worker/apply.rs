@@ -1725,5 +1725,25 @@ mod tests {
         }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
+
+        let mut entries = vec![];
+        for i in 0..WRITE_BATCH_MAX_KEYS {
+            let put_entry = EntryBuilder::new(i as u64 +7, 2)
+                .put(b"k", b"v")
+                .epoch(1, 3)
+                .capture_resp(&mut delegate, tx.clone())
+                .build();
+            entries.push(put_entry);
+        }
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+        for _ in 0..WRITE_BATCH_MAX_KEYS {
+            rx.try_recv().unwrap();
+        }
+        assert_eq!(delegate.apply_state.get_applied_index(), WRITE_BATCH_MAX_KEYS as u64 + 6);
     }
 }
