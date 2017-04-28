@@ -19,10 +19,11 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
+#[macro_use]
+extern crate clap;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
 extern crate tikv;
-extern crate getopts;
 #[macro_use]
 extern crate log;
 extern crate rocksdb;
@@ -43,7 +44,7 @@ mod signal_handler;
 mod profiling;
 
 use std::process;
-use std::{env, thread};
+use std::thread;
 use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
@@ -51,7 +52,7 @@ use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
 
-use getopts::{Options, Matches};
+use clap::{Arg, App, ArgMatches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
@@ -95,25 +96,20 @@ fn align_to_mb(n: u64) -> u64 {
     n & 0xFFFFFFFFFFF00000
 }
 
-fn print_usage(program: &str, opts: &Options) {
-    let brief = format!("Usage: {} [options]", program);
-    print!("{}", opts.usage(&brief));
-}
-
 fn exit_with_err(msg: String) -> ! {
     error!("{}", msg);
     process::exit(1)
 }
 
-fn get_flag_string(matches: &Matches, name: &str) -> Option<String> {
-    let s = matches.opt_str(name);
+fn get_flag_string(matches: &ArgMatches, name: &str) -> Option<String> {
+    let s = matches.value_of(name);
     info!("flag {}: {:?}", name, s);
 
-    s
+    s.map(|s| s.to_owned())
 }
 
-fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
-    let i = matches.opt_str(name).map(|x| {
+fn get_flag_int(matches: &ArgMatches, name: &str) -> Option<i64> {
+    let i = matches.value_of(name).map(|x| {
         x.parse::<i64>()
             .or_else(|_| util::config::parse_readable_int(&x))
             .unwrap_or_else(|e| exit_with_err(format!("parse {} failed: {:?}", name, e)))
@@ -218,20 +214,23 @@ fn cfg_duration(target: &mut Duration, config: &toml::Value, name: &str) {
     }
 }
 
-fn initial_log(matches: &Matches, config: &toml::Value) {
-    let level = get_flag_string(matches, "L")
-        .unwrap_or_else(|| get_toml_string(config, "server.log-level", Some("info".to_owned())));
+fn init_log(matches: &ArgMatches, config: &toml::Value) {
+    let level = matches.value_of("log-level")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(config, "server.log-level"))
+        .unwrap_or_else(|| "info".to_owned());
 
-    let log_file_path = get_flag_string(matches, "f")
-        .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
+    let log_file_opt = matches.value_of("log-file")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(config, "server.log-file"));
 
     let level_filter = logger::get_level_by_string(&level);
-    if log_file_path.is_empty() {
-        let w = StderrLogger;
+    if let Some(log_file) = log_file_opt {
+         let w = RotatingFileLogger::new(&log_file)
+            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
         logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     } else {
-        let w = RotatingFileLogger::new(&log_file_path)
-            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+        let w = StderrLogger;
         logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     }
 }
@@ -563,7 +562,7 @@ fn adjust_sched_workers_by_cpu_num(total_cpu_num: usize) -> usize {
 // Currently, to add a new option, we will define three default value
 // in config.rs, this file and config-template.toml respectively. It may be more
 // maintainable to keep things in one place.
-fn build_cfg(matches: &Matches,
+fn build_cfg(matches: &ArgMatches,
              config: &toml::Value,
              cluster_id: u64,
              addr: String,
@@ -746,10 +745,10 @@ fn canonicalize_path(path: &str) -> String {
             p.canonicalize().unwrap_or_else(|err| exit_with_err(format!("{:?}", err))).display())
 }
 
-fn get_data_and_backup_dirs(matches: &Matches, config: &toml::Value) -> (String, String) {
+fn get_data_and_backup_dirs(matches: &ArgMatches, config: &toml::Value) -> (String, String) {
     // store data path
-    let abs_data_dir = get_flag_string(matches, "data-dir")
-        .or_else(|| get_flag_string(matches, "s"))
+    let abs_data_dir = matches.value_of("data-dir")
+        .map(|s| s.to_owned())
         .or_else(|| get_toml_string_opt(config, "server.data-dir"))
         .or_else(|| get_toml_string_opt(config, "server.store"))
         .map(|s| canonicalize_path(&s))
@@ -777,9 +776,11 @@ fn get_data_and_backup_dirs(matches: &Matches, config: &toml::Value) -> (String,
     }
 }
 
-fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
-    let labels = get_flag_string(matches, "labels")
-        .unwrap_or_else(|| get_toml_string(config, "server.labels", Some("".to_owned())));
+fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<String, String> {
+    let labels = matches.value_of("labels")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(config, "server.labels"))
+        .unwrap_or_default();
     util::config::parse_store_labels(&labels)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
 }
@@ -854,74 +855,105 @@ fn run_raft_server(pd_client: RpcClient,
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let program = args[0].clone();
-    let mut opts = Options::new();
-    opts.optopt("A",
-                "addr",
-                "set listening address",
-                "default is 127.0.0.1:20160");
-    opts.optopt("",
-                "advertise-addr",
-                "set advertise listening address for client communication",
-                "if not set, use ${addr} instead.");
-    opts.optopt("L",
-                "log",
-                "set log level",
-                "log level: trace, debug, info, warn, error, off");
-    opts.optopt("f",
-                "log-file",
-                "set log file",
-                "if not set, output log to stdout");
-    opts.optflag("V", "version", "print version information");
-    opts.optflag("h", "help", "print this help menu");
-    opts.optopt("C", "config", "set configuration file", "file path");
-    opts.optopt("",
-                "data-dir",
-                "set the path to store directory",
-                "/tmp/tikv/store");
-    opts.optopt("s",
-                "store",
-                "set the path to store directory (deprecated)",
-                "/tmp/tikv/store");
-    opts.optopt("",
-                "capacity",
-                "set the store capacity",
-                "default: 0 (disk capacity)");
-    opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
-    opts.optopt("",
-                "labels",
-                "attributes about this server",
-                "zone=example-zone,disk=example-disk");
+    let long_version: String = {
+        let (hash, time, rust_ver) = util::build_info();
+        format!("{}\n\
+                 Git Commit Hash: {}\n\
+                 UTC Build Time:  {}\n\
+                 Rust Version:    {}",
+                crate_version!(), hash, time, rust_ver)
+    };
+    let matches = App::new("TiKV")
+        .version(crate_version!())
+        .long_version(long_version.as_ref())
+        .author("PingCAP Inc. <info@pingcap.com>")
+        .about("A Distributed transactional key-value database powered by Rust and Raft")
+        .arg(Arg::with_name("config")
+                .required(true)
+                .short("C")
+                .long("config")
+                .value_name("FILE")
+                .help("Sets config file")
+                .takes_value(true))
+        .arg(Arg::with_name("addr")
+            .short("A")
+            .long("addr")
+            .takes_value(true)
+            .value_name("IP:PORT")
+            .default_value("127.0.0.1:20160")
+            .help("Sets listening address"))
+        .arg(Arg::with_name("advertise-addr")
+            .long("advertise-addr")
+            .takes_value(true)
+            .value_name("IP:PORT")
+            .default_value("${addr}")
+            .help("Sets advertise listening address for client communication"))
+        .arg(Arg::with_name("log-level")
+            .short("L")
+            .long("log-level")
+            .alias("log")
+            .takes_value(true)
+            .value_name("LEVEL")
+            .possible_values(&["trace", "debug", "info", "warn", "error", "off"])
+            .help("Sets log level"))
+        .arg(Arg::with_name("log-file")
+            .short("f")
+            .long("log-file")
+            .takes_value(true)
+            .value_name("FILE")
+            .help("Sets log file")
+            .long_help("Sets log file. If not set, output log to stderr"))
+        .arg(Arg::with_name("data-dir")
+            .long("data-dir")
+            .aliases(&["s", "store"])
+            .takes_value(true)
+            .value_name("PATH")
+            .default_value("/tmp/tikv/store")
+            .help("Sets the path to store directory"))
+        .arg(Arg::with_name("capacity")
+            .long("capacity")
+            .takes_value(true)
+            .value_name("CAPACITY")
+            .default_value("0")
+            .help("Sets the store capacity")
+            .long_help("Sets the store capacity. If not set, use entire partition"))
+        .arg(Arg::with_name("pd-endpoints")
+            .long("pd-endpoints")
+            .aliases(&["pd", "[pd-endpoint"])
+            .takes_value(true)
+            .value_name("PD_URL")
+            .multiple(true)
+            .use_delimiter(true)
+            .require_delimiter(true)
+            .value_delimiter(",")
+            .default_value("127.0.0.1:2379")
+            .help("Sets PD endpoints")
+            .long_help("Sets PD endpoints. Uses `,` to separate multiple PDs"))
+        .arg(Arg::with_name("labels")
+            .long("labels")
+            .alias("label")
+            .takes_value(true)
+            .value_name("KEY=VALUE")
+            .multiple(true)
+            .use_delimiter(true)
+            .require_delimiter(true)
+            .value_delimiter(",")
+            .default_value("")
+            .help("Sets server labels")
+            .long_help("Sets server labels. Uses `,` to separate kv pairs, like `zone=cn,disk=ssd`"))
+        .get_matches();
 
-    let matches = opts.parse(&args[1..]).unwrap_or_else(|e| {
-        println!("opts parse failed, {:?}", e);
-        print_usage(&program, &opts);
-        process::exit(1);
-    });
-    if matches.opt_present("h") {
-        print_usage(&program, &opts);
-        return;
-    }
-    if matches.opt_present("V") {
-        let (hash, date, rustc) = util::build_info();
-        println!("Git Commit Hash: {}", hash);
-        println!("UTC Build Time:  {}", date);
-        println!("Rustc Version:   {}", rustc);
-        return;
-    }
-    let config = match matches.opt_str("C") {
+    let config = match matches.value_of("config") {
         Some(path) => {
-            let mut config_file = fs::File::open(&path).expect("config open failed");
+            let mut config_file = File::open(&path).expect("config open failed");
             let mut s = String::new();
             config_file.read_to_string(&mut s).expect("config read failed");
             toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
         }
-        // Empty value, lookup() always return `None`.
-        None => toml::Value::Integer(0),
+        None => unreachable!()
     };
 
-    initial_log(&matches, &config);
+    init_log(&matches, &config);
 
     // Print version information.
     util::print_tikv_info();
@@ -931,18 +963,20 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    let addr = get_flag_string(&matches, "A").unwrap_or_else(|| {
-        let addr = get_toml_string(&config,
-                                   "server.addr",
-                                   Some(DEFAULT_LISTENING_ADDR.to_owned()));
-        if let Err(e) = util::config::check_addr(&addr) {
-            exit_with_err(format!("{:?}", e));
-        }
-        addr
-    });
+    let addr = matches.value_of("addr")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(&config, "server.addr"))
+        .unwrap_or_else(|| DEFAULT_LISTENING_ADDR.to_owned());
 
-    let pd_endpoints = get_flag_string(&matches, "pd")
-        .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
+    if let Err(e) = util::config::check_addr(&addr) {
+        exit_with_err(format!("{:?}", e));
+    }
+
+    let pd_endpoints = matches.value_of("pd-endpoints")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(&config, "pd.endpoints"))
+        .expect("empty pd endpoints");
+
     for addr in pd_endpoints.split(',')
         .map(|s| s.trim())
         .filter_map(|s| if s.is_empty() {
@@ -964,7 +998,7 @@ fn main() {
     info!("connect to PD cluster {}", cluster_id);
 
     let total_cpu_num = cpu_num().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    // return  memory in KB.
+    // return memory in KB.
     let mem = mem_info().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let total_mem = mem.total * KB;
     if !sanitize_memory_usage() {
