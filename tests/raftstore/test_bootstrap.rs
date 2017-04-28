@@ -38,6 +38,7 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.check_regions_number(1);
 }
 
+#[test]
 fn test_node_bootstrap_with_prepared_data() {
     // create a node
     let pd_client = Arc::new(TestPdClient::new(0));
@@ -56,7 +57,7 @@ fn test_node_bootstrap_with_prepared_data() {
                                     cfg.raft_store.use_sst_file_snapshot);
 
 
-    // assume there is a node has bootstraped the cluster and add region in pd successfully
+    // assume there is a node has bootstrapped the cluster and add region in pd successfully
     bootstrap_with_first_region(pd_client.clone()).unwrap();
 
     // now anthoer node at same time begin bootstrap node, but panic after prepared bootstrap
@@ -80,9 +81,4 @@ fn test_node_bootstrap_with_prepared_data() {
 fn test_node_bootstrap_idempotent() {
     let mut cluster = new_node_cluster(0, 3);
     test_bootstrap_idempotent(&mut cluster);
-}
-
-#[test]
-fn test_bootstrap_with_prepared_data() {
-    test_node_bootstrap_with_prepared_data();
 }
