@@ -151,6 +151,12 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
     s
 }
 
+fn get_toml_string_opt(config: &toml::Value, name: &str) -> Option<String> {
+    config.lookup(name)
+        .and_then(|val| val.as_str())
+        .map(|s| s.to_owned())
+}
+
 fn get_toml_int_opt(config: &toml::Value, name: &str) -> Option<i64> {
     let res = match config.lookup(name) {
         Some(&toml::Value::Integer(i)) => Some(i),
@@ -740,29 +746,34 @@ fn canonicalize_path(path: &str) -> String {
             p.canonicalize().unwrap_or_else(|err| exit_with_err(format!("{:?}", err))).display())
 }
 
-fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
-    // Store path
-    let store_path = get_flag_string(matches, "s")
-        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
-    let store_abs_path = if store_path == TEMP_DIR {
-        TEMP_DIR.to_owned()
-    } else {
-        canonicalize_path(&store_path)
-    };
+fn get_data_and_backup_dirs(matches: &Matches, config: &toml::Value) -> (String, String) {
+    // store data path
+    let abs_data_dir = get_flag_string(matches, "data-dir")
+        .or_else(|| get_flag_string(matches, "s"))
+        .or_else(|| get_toml_string_opt(config, "server.data-dir"))
+        .or_else(|| get_toml_string_opt(config, "server.store"))
+        .map(|s| canonicalize_path(&s))
+        .unwrap_or_else(|| {
+            warn!("data dir parsing failed, use default data dir {}", TEMP_DIR);
+            TEMP_DIR.to_owned()
+        });
+    info!("server.data-dir uses {:?}", abs_data_dir);
 
     // Backup path
-    let mut backup_path = get_toml_string(config, "server.backup", Some(String::new()));
-    if backup_path.is_empty() && store_abs_path != TEMP_DIR {
-        backup_path = format!("{}", Path::new(&store_abs_path).join("backup").display())
+    let mut backup_dir = get_toml_string_opt(config, "server.backup-dir")
+        .or_else(|| get_toml_string_opt(config, "server.backup"))
+        .unwrap_or_default();
+    if backup_dir.is_empty() && abs_data_dir != TEMP_DIR {
+        backup_dir = format!("{}", Path::new(&abs_data_dir).join("backup").display())
     }
 
-    if backup_path.is_empty() {
+    if backup_dir.is_empty() {
         info!("empty backup path, backup is disabled");
-        (store_abs_path, backup_path)
+        (abs_data_dir, backup_dir)
     } else {
-        let backup_abs_path = canonicalize_path(&backup_path);
-        info!("backup path: {}", backup_abs_path);
-        (store_abs_path, backup_abs_path)
+        let abs_backup_dir = canonicalize_path(&backup_dir);
+        info!("server.backup-dir uses {:?}", abs_backup_dir);
+        (abs_data_dir, abs_backup_dir)
     }
 }
 
@@ -865,9 +876,13 @@ fn main() {
     opts.optflag("V", "version", "print version information");
     opts.optflag("h", "help", "print this help menu");
     opts.optopt("C", "config", "set configuration file", "file path");
+    opts.optopt("",
+                "data-dir",
+                "set the path to store directory",
+                "/tmp/tikv/store");
     opts.optopt("s",
                 "store",
-                "set the path to store directory",
+                "set the path to store directory (deprecated)",
                 "/tmp/tikv/store");
     opts.optopt("",
                 "capacity",
@@ -958,7 +973,7 @@ fn main() {
 
     let mut cfg = build_cfg(&matches, &config, cluster_id, addr, total_cpu_num as usize);
     cfg.labels = get_store_labels(&matches, &config);
-    let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
+    let (store_path, backup_path) = get_data_and_backup_dirs(&matches, &config);
     cfg.storage.path = store_path;
 
     if cluster_id == DEFAULT_CLUSTER_ID {
