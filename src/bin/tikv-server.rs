@@ -226,7 +226,7 @@ fn init_log(matches: &ArgMatches, config: &toml::Value) {
 
     let level_filter = logger::get_level_by_string(&level);
     if let Some(log_file) = log_file_opt {
-         let w = RotatingFileLogger::new(&log_file)
+        let w = RotatingFileLogger::new(&log_file)
             .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
         logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     } else {
@@ -855,26 +855,27 @@ fn run_raft_server(pd_client: RpcClient,
 }
 
 fn main() {
-    let long_version: String = {
-        let (hash, time, rust_ver) = util::build_info();
-        format!("{}\n\
-                 Git Commit Hash: {}\n\
-                 UTC Build Time:  {}\n\
-                 Rust Version:    {}",
-                crate_version!(), hash, time, rust_ver)
-    };
+    let long_version: String =
+        {
+            let (hash, time, rust_ver) = util::build_info();
+            format!("{}\nGit Commit Hash: {}\nUTC Build Time:  {}\nRust Version:    {}",
+                    crate_version!(),
+                    hash,
+                    time,
+                    rust_ver)
+        };
     let matches = App::new("TiKV")
         .version(crate_version!())
         .long_version(long_version.as_ref())
         .author("PingCAP Inc. <info@pingcap.com>")
         .about("A Distributed transactional key-value database powered by Rust and Raft")
         .arg(Arg::with_name("config")
-                .required(true)
-                .short("C")
-                .long("config")
-                .value_name("FILE")
-                .help("Sets config file")
-                .takes_value(true))
+            .required(true)
+            .short("C")
+            .long("config")
+            .value_name("FILE")
+            .help("Sets config file")
+            .takes_value(true))
         .arg(Arg::with_name("addr")
             .short("A")
             .long("addr")
@@ -940,7 +941,8 @@ fn main() {
             .value_delimiter(",")
             .default_value("")
             .help("Sets server labels")
-            .long_help("Sets server labels. Uses `,` to separate kv pairs, like `zone=cn,disk=ssd`"))
+            .long_help("Sets server labels. Uses `,` to separate kv pairs, like \
+                        `zone=cn,disk=ssd`"))
         .get_matches();
 
     let config = match matches.value_of("config") {
@@ -950,7 +952,7 @@ fn main() {
             config_file.read_to_string(&mut s).expect("config read failed");
             toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
         }
-        None => unreachable!()
+        None => unreachable!(),
     };
 
     init_log(&matches, &config);
