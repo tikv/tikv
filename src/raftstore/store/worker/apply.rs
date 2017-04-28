@@ -457,9 +457,7 @@ impl ApplyDelegate {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cmd_cb = self.find_cb(uuid, term, &cmd);
-        let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
-        timer.observe_duration();
 
         debug!("{} applied command with uuid {:?} at log index {}",
                self.tag,
@@ -1213,6 +1211,8 @@ impl Runner {
     }
 
     fn handle_apply(&mut self, applys: Vec<Apply>) {
+        let timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
+
         let mut applys_res = Vec::with_capacity(applys.len());
         let mut apply_ctx = ApplyContext::new();
         for apply in applys {
@@ -1264,6 +1264,8 @@ impl Runner {
         if !applys_res.is_empty() {
             self.notifier.send(TaskRes::Applys(applys_res)).unwrap();
         }
+
+        timer.observe_duration();
     }
 
     fn handle_propose(&mut self, p: Propose) {
@@ -1728,7 +1730,7 @@ mod tests {
 
         let mut entries = vec![];
         for i in 0..WRITE_BATCH_MAX_KEYS {
-            let put_entry = EntryBuilder::new(i as u64 +7, 2)
+            let put_entry = EntryBuilder::new(i as u64 + 7, 2)
                 .put(b"k", b"v")
                 .epoch(1, 3)
                 .capture_resp(&mut delegate, tx.clone())
@@ -1744,6 +1746,7 @@ mod tests {
         for _ in 0..WRITE_BATCH_MAX_KEYS {
             rx.try_recv().unwrap();
         }
-        assert_eq!(delegate.apply_state.get_applied_index(), WRITE_BATCH_MAX_KEYS as u64 + 6);
+        assert_eq!(delegate.apply_state.get_applied_index(),
+                   WRITE_BATCH_MAX_KEYS as u64 + 6);
     }
 }
