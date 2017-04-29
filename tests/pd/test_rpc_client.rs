@@ -19,7 +19,7 @@ use futures::Future;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError};
+use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError, RegionStat};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
@@ -74,7 +74,7 @@ fn test_rpc_client() {
                           metapb::Peer::new(),
                           vec![],
                           vec![],
-                          0)
+                          RegionStat::default())
         .wait()
         .unwrap();
     client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();

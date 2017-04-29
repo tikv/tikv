@@ -27,7 +27,7 @@ use kvproto::pdpb;
 use util::worker::FutureRunnable as Runnable;
 use util::escape;
 use util::transport::SendCh;
-use pd::PdClient;
+use pd::{PdClient, RegionStat};
 use raftstore::store::Msg;
 use raftstore::store::util::is_epoch_stale;
 
@@ -48,6 +48,7 @@ pub enum Task {
         down_peers: Vec<pdpb::PeerStats>,
         pending_peers: Vec<metapb::Peer>,
         written_bytes: u64,
+        written_keys: u64,
     },
     StoreHeartbeat { stats: pdpb::StoreStats },
     ReportSplit {
@@ -59,7 +60,6 @@ pub enum Task {
         peer: metapb::Peer,
     },
 }
-
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -141,7 +141,7 @@ impl<T: PdClient> Runner<T> {
                         peer: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64) {
+                        region_stat: RegionStat) {
         PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
 
         let ch = self.ch.clone();
@@ -152,7 +152,7 @@ impl<T: PdClient> Runner<T> {
                               peer.clone(),
                               down_peers,
                               pending_peers,
-                              written_bytes)
+                              region_stat)
             .then(move |resp| {
                 match resp {
                     Ok(mut resp) => {
@@ -289,13 +289,18 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::AskSplit { region, split_key, peer, right_derive } => {
                 self.handle_ask_split(handle, region, split_key, peer, right_derive)
             }
-            Task::Heartbeat { region, peer, down_peers, pending_peers, written_bytes } => {
+            Task::Heartbeat { region,
+                              peer,
+                              down_peers,
+                              pending_peers,
+                              written_bytes,
+                              written_keys } => {
                 self.handle_heartbeat(handle,
                                       region,
                                       peer,
                                       down_peers,
                                       pending_peers,
-                                      written_bytes)
+                                      RegionStat::new(written_bytes, written_keys))
             }
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(handle, stats),
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),

@@ -24,7 +24,7 @@ use futures::future::{ok, err};
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::eraftpb;
-use tikv::pd::{PdClient, Result, Error, Key, PdFuture};
+use tikv::pd::{PdClient, Result, Error, Key, PdFuture, RegionStat};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
@@ -285,7 +285,7 @@ impl Cluster {
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
-                        _: u64 /* written_bytes */)
+                        _: RegionStat)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in region.get_peers() {
             self.down_peers.remove(&peer.get_id());
@@ -563,14 +563,14 @@ impl PdClient for TestPdClient {
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
+                        region_stat: RegionStat)
                         -> PdFuture<pdpb::RegionHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return err(e).boxed();
         }
         match self.cluster
             .wl()
-            .region_heartbeat(region, leader, down_peers, pending_peers, written_bytes) {
+            .region_heartbeat(region, leader, down_peers, pending_peers, region_stat) {
             Ok(resp) => ok(resp).boxed(),
             Err(e) => err(e).boxed(),
         }

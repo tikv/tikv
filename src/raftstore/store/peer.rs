@@ -181,6 +181,14 @@ enum RequestPolicy {
     ProposeConfChange,
 }
 
+#[derive(Default, Clone)]
+pub struct PeerStat {
+    pub written_bytes: u64,
+    pub written_keys: u64,
+    pub last_written_bytes: u64,
+    pub last_written_keys: u64,
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     cfg: Rc<Config>,
@@ -233,9 +241,7 @@ pub struct Peer {
     //      locally.
     leader_lease_expired_time: Option<Either<Timespec, Timespec>>,
 
-    pub written_bytes: u64,
-    pub written_keys: u64,
-    pub last_written_bytes: u64,
+    pub peer_stat: PeerStat,
 }
 
 impl Peer {
@@ -326,9 +332,7 @@ impl Peer {
             raft_entry_max_size: cfg.raft_entry_max_size,
             cfg: cfg,
             leader_lease_expired_time: None,
-            written_bytes: 0,
-            written_keys: 0,
-            last_written_bytes: 0,
+            peer_stat: PeerStat::default(),
         };
 
         peer.load_all_coprocessors();
@@ -808,8 +812,8 @@ impl Peer {
         self.raft_group.advance_apply(res.apply_state.get_applied_index());
         self.mut_store().apply_state = res.apply_state.clone();
         self.mut_store().applied_index_term = res.applied_index_term;
-        self.written_keys += res.metrics.written_keys;
-        self.written_bytes += res.metrics.written_bytes;
+        self.peer_stat.written_keys += res.metrics.written_keys;
+        self.peer_stat.written_bytes += res.metrics.written_bytes;
 
         if has_split {
             self.delete_keys_hint = res.metrics.delete_keys_hint;
@@ -1407,7 +1411,8 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.last_written_bytes,
+            written_bytes: self.peer_stat.last_written_bytes,
+            written_keys: self.peer_stat.last_written_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

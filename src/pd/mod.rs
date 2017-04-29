@@ -29,6 +29,21 @@ use kvproto::pdpb;
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<T, Error>;
 
+#[derive(Default)]
+pub struct RegionStat {
+    pub written_bytes: u64,
+    pub written_keys: u64,
+}
+
+impl RegionStat {
+    pub fn new(written_bytes: u64, written_keys: u64) -> RegionStat {
+        RegionStat {
+            written_bytes: written_bytes,
+            written_keys: written_keys,
+        }
+    }
+}
+
 pub const INVALID_ID: u64 = 0;
 
 // Client to communicate with placement driver (pd) for special cluster.
@@ -93,7 +108,7 @@ pub trait PdClient: Send + Sync {
                         leader: metapb::Peer,
                         down_peers: Vec<pdpb::PeerStats>,
                         pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
+                        region_stat: RegionStat)
                         -> PdFuture<pdpb::RegionHeartbeatResponse>;
 
     // Ask pd for split, pd will returns the new split region id.
