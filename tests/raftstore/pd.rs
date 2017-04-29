@@ -15,7 +15,7 @@
 use std::collections::{HashMap, BTreeMap, HashSet};
 use std::vec::Vec;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::Future;
@@ -26,6 +26,8 @@ use kvproto::pdpb;
 use kvproto::eraftpb;
 use tikv::pd::{PdClient, Result, Error, Key, PdFuture, RegionStat};
 use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
+use tikv::pd::{PdClient, Result, Error, Key, PdFuture};
+use tikv::raftstore::store::keys::{self, enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
 use super::util::*;
@@ -57,6 +59,7 @@ struct Cluster {
 
     down_peers: HashMap<u64, pdpb::PeerStats>,
     pending_peers: HashMap<u64, metapb::Peer>,
+    is_bootstraped: bool,
 }
 
 impl Cluster {
@@ -76,6 +79,7 @@ impl Cluster {
             split_count: 0,
             down_peers: HashMap::new(),
             pending_peers: HashMap::new(),
+            is_bootstraped: false,
         }
     }
 
@@ -96,6 +100,11 @@ impl Cluster {
         self.stores.insert(store_id, s);
 
         self.add_region(&region);
+        self.is_bootstraped = true;
+    }
+
+    fn set_bootstrap(&mut self, is_bootstraped: bool) {
+        self.is_bootstraped = is_bootstraped
     }
 
     // We don't care cluster id here, so any value like 0 in tests is ok.
@@ -129,6 +138,10 @@ impl Cluster {
 
     fn get_stores(&self) -> Vec<metapb::Store> {
         self.stores.values().map(|s| s.store.clone()).collect()
+    }
+
+    fn get_regions_number(&self) -> usize {
+        self.regions.len()
     }
 
     fn add_region(&mut self, region: &metapb::Region) {
@@ -337,6 +350,21 @@ fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::P
     peers
 }
 
+// For test when a node is already bootstraped the cluster with the first region
+pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
+    let mut region = metapb::Region::new();
+    region.set_id(1);
+    region.set_start_key(keys::EMPTY_KEY.to_vec());
+    region.set_end_key(keys::EMPTY_KEY.to_vec());
+    region.mut_region_epoch().set_version(1);
+    region.mut_region_epoch().set_conf_ver(1);
+    let peer = new_peer(1, 1);
+    region.mut_peers().push(peer.clone());
+    pd_client.add_region(&region);
+    pd_client.set_bootstrap(true);
+    Ok(())
+}
+
 pub struct TestPdClient {
     cluster_id: u64,
     cluster: RwLock<Cluster>,
@@ -362,6 +390,10 @@ impl TestPdClient {
         Ok(())
     }
 
+    fn is_regions_empty(&self) -> bool {
+        self.cluster.rl().regions.is_empty()
+    }
+
     // Set a customized rule to overwrite default max peer count check rule.
     pub fn set_rule(&self, rule: Rule) {
         self.cluster.wl().rule = Some(rule);
@@ -375,7 +407,9 @@ impl TestPdClient {
     pub fn get_region_epoch(&self, region_id: u64) -> metapb::RegionEpoch {
         self.get_region_by_id(region_id).wait().unwrap().unwrap().take_region_epoch()
     }
-
+    pub fn get_regions_number(&self) -> usize {
+        self.cluster.rl().get_regions_number()
+    }
     // Set an empty rule which nothing to do to disable default max peer count
     // check rule, we can use reset_rule to enable default again.
     pub fn disable_default_rule(&self) {
@@ -422,6 +456,9 @@ impl TestPdClient {
             .wait()
             .unwrap();
         panic!("region {:?} has peer {:?}", region, peer);
+    }
+    pub fn add_region(&self, region: &metapb::Region) {
+        self.cluster.wl().add_region(region)
     }
 
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
@@ -495,6 +532,10 @@ impl TestPdClient {
     pub fn get_pending_peers(&self) -> HashMap<u64, metapb::Peer> {
         self.cluster.rl().pending_peers.clone()
     }
+
+    pub fn set_bootstrap(&self, is_bootstraped: bool) {
+        self.cluster.wl().set_bootstrap(is_bootstraped);
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -503,7 +544,8 @@ impl PdClient for TestPdClient {
     }
 
     fn bootstrap_cluster(&self, store: metapb::Store, region: metapb::Region) -> Result<()> {
-        if self.is_cluster_bootstrapped().unwrap() {
+        if self.is_cluster_bootstrapped().unwrap() || !self.is_regions_empty() {
+            self.cluster.wl().set_bootstrap(true);
             return Err(Error::ClusterBootstrapped(self.cluster_id));
         }
 
@@ -513,7 +555,7 @@ impl PdClient for TestPdClient {
     }
 
     fn is_cluster_bootstrapped(&self) -> Result<bool> {
-        Ok(!self.cluster.rl().stores.is_empty())
+        Ok(self.cluster.rl().is_bootstraped)
     }
 
     fn alloc_id(&self) -> Result<u64> {
