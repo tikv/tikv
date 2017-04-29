@@ -25,8 +25,6 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::eraftpb;
 use tikv::pd::{PdClient, Result, Error, Key, PdFuture, RegionStat};
-use tikv::raftstore::store::keys::{enc_end_key, enc_start_key, data_key};
-use tikv::pd::{PdClient, Result, Error, Key, PdFuture};
 use tikv::raftstore::store::keys::{self, enc_end_key, enc_start_key, data_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::util::{HandyRwLock, escape};
