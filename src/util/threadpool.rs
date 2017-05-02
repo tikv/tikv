@@ -551,21 +551,33 @@ mod test {
         // the running tasks should be {txn31, txn32}
         assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
         assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
-        let mut group2_num = 0;
         let mut group1_num = 0;
-        for _ in 0..4 {
+        let mut group2_num = 0;
+        let mut group3_num = 0;
+        for _ in 0..6 {
             let group = rx.recv_timeout(recv_timeout_duration).unwrap();
-            if group == group1 {
-                group1_num += 1;
-                continue;
+            match group {
+                _ if group == group1 => group1_num += 1,
+                _ if group == group2 => group2_num += 1,
+                _ if group1_num >= 2 && group == group3 => group3_num += 1,
+                _ => {
+                    panic!("unexpected group id {}, when group1_num: {}, group2_num: {}, \
+                            group3_num {}",
+                           group,
+                           group1_num,
+                           group2_num,
+                           group3_num)
+                }
             }
-            assert_eq!(group, group2);
-            group2_num += 1;
+            if group1_num >= 2 && group2_num >= 2 {
+                break;
+            }
         }
         assert_eq!(group1_num, 2);
         assert_eq!(group2_num, 2);
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
+        for _ in 0..(2 - group3_num) {
+            assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
+        }
     }
 
     #[test]
