@@ -616,7 +616,7 @@ impl PeerStorage {
     }
 
     // Apply the peer with given snapshot.
-    pub fn apply_snapshot(&self,
+    pub fn apply_snapshot(&mut self,
                           ctx: &mut InvokeContext,
                           snap: &Snapshot,
                           wb: &mut WriteBatch)
@@ -1050,7 +1050,7 @@ mod test {
         let db = new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
-        let region = bootstrap::bootstrap_region(&db, 1, 1, 1).expect("");
+        let region = bootstrap::prepare_bootstrap(&db, 1, 1, 1).expect("");
         PeerStorage::new(db, &region, sched, "".to_owned()).unwrap()
     }
 

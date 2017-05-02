@@ -11,16 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Instant;
 use std::time::Duration;
-use std::thread;
 use std::collections::HashSet;
 
-use futures::Future;
+use futures::{Future, BoxFuture};
 use futures::future::ok;
 use futures::future::{loop_fn, Loop};
+
+use tokio_timer::Timer;
 
 use grpc;
 use grpc::futures_grpc::GrpcFutureSend;
@@ -38,6 +40,8 @@ use super::super::metrics::PD_SEND_MSG_HISTOGRAM;
 pub struct Inner {
     client: PDAsyncClient,
     members: GetMembersResponse,
+
+    last_update: Instant,
 }
 
 /// A leader client doing requests asynchronous.
@@ -51,6 +55,8 @@ impl LeaderClient {
             inner: Arc::new(RwLock::new(Inner {
                 client: client,
                 members: members,
+
+                last_update: Instant::now(),
             })),
         }
     }
@@ -62,6 +68,7 @@ impl LeaderClient {
         Request {
             reconnect_count: retry,
             request_sent: 0,
+            timer: Timer::default(),
             client: LeaderClient { inner: self.inner.clone() },
             req: req,
             resp: None,
@@ -74,34 +81,36 @@ impl LeaderClient {
     }
 
     // Re-establish connection with PD leader in synchronized fashion.
-    pub fn reconnect(&self) {
-        let start = Instant::now();
-        let ret = try_connect_leader(&self.inner.rl().members);
-        match ret {
-            Ok((client, members)) => {
-                let mut inner = self.inner.wl();
-                inner.client = client;
-                inner.members = members;
-                warn!("updating PD client done, spent {:?}", start.elapsed());
+    pub fn reconnect(&self) -> Result<()> {
+        let ((client, members), start) = {
+            let inner = self.inner.rl();
+            if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
+                // Avoid unnecessary updating.
+                return Ok(());
             }
 
-            Err(err) => {
-                warn!("updating PD client spent {:?}, err {:?}",
-                      start.elapsed(),
-                      err);
-                // FIXME: use tokio-timer instead.
-                thread::sleep(Duration::from_secs(RETRY_INTERVAL));
-            }
+            let start = Instant::now();
+            (try!(try_connect_leader(&inner.members)), start)
+        };
+
+        {
+            let mut inner = self.inner.wl();
+            inner.client = client;
+            inner.members = members;
+            inner.last_update = Instant::now();
         }
+        warn!("updating PD client done, spent {:?}", start.elapsed());
+        Ok(())
     }
 }
 
-const RETRY_INTERVAL: u64 = 1;
+const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 
 /// The context of sending requets.
 pub struct Request<Req, Resp, F> {
     reconnect_count: usize,
     request_sent: usize,
+    timer: Timer,
 
     client: LeaderClient,
 
@@ -117,53 +126,61 @@ impl<Req, Resp, F> Request<Req, Resp, F>
           Resp: Send + 'static,
           F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
 {
-    fn reconnect_if_needed(mut self) -> PdFuture<Self> {
+    fn reconnect_if_needed(mut self) -> BoxFuture<Self, Self> {
         debug!("reconnect remains: {}", self.reconnect_count);
 
-        if self.request_sent == 0 {
-            return ok(self).boxed();
-        }
-
         if self.request_sent < MAX_REQUEST_COUNT {
-            debug!("retry on the same client");
             return ok(self).boxed();
         }
 
         // Updating client.
-
-        self.request_sent = 0;
         self.reconnect_count -= 1;
 
         // FIXME: should not block the core.
         warn!("updating PD client, block the tokio core");
-        self.client.reconnect();
-
-        ok(self).boxed()
+        match self.client.reconnect() {
+            Ok(_) => {
+                self.request_sent = 0;
+                ok(self).boxed()
+            }
+            Err(_) => {
+                self.timer
+                    .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
+                    .then(|_| Err(self))
+                    .boxed()
+            }
+        }
     }
 
-    fn send(mut self) -> PdFuture<Self> {
+    fn send_and_receive(mut self) -> BoxFuture<Self, Self> {
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
         let req = (self.func)(&self.client.inner.rl().client, r);
         req.then(|resp| {
                 match resp {
-                    Ok(resp) => self.resp = Some(Ok(resp)),
+                    Ok(resp) => {
+                        self.resp = Some(Ok(resp));
+                        Ok(self)
+                    }
                     Err(err) => {
                         error!("request failed: {:?}", err);
+                        Err(self)
                     }
-                };
-                Ok(self)
+                }
             })
             .boxed()
     }
 
-    fn receive(self) -> Result<Loop<Self, Self>> {
-        let done = self.reconnect_count == 0 || self.resp.is_some();
+    fn break_or_continue(ctx: result::Result<Self, Self>) -> Result<Loop<Self, Self>> {
+        let ctx = match ctx {
+            Ok(ctx) | Err(ctx) => ctx,
+        };
+        let done = ctx.reconnect_count == 0 || ctx.resp.is_some();
         if done {
-            Ok(Loop::Break(self))
+            Ok(Loop::Break(ctx))
         } else {
-            Ok(Loop::Continue(self))
+            Ok(Loop::Continue(ctx))
         }
     }
 
@@ -178,8 +195,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         let ctx = self;
         loop_fn(ctx, |ctx| {
                 ctx.reconnect_if_needed()
-                    .and_then(Self::send)
-                    .and_then(Self::receive)
+                    .and_then(Self::send_and_receive)
+                    .then(Self::break_or_continue)
             })
             .then(Self::post_loop)
             .boxed()
@@ -203,7 +220,9 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
             }
             Err(e) => {
                 error!("fail to request: {:?}", e);
-                client.reconnect()
+                if let Err(e) = client.reconnect() {
+                    error!("fail to reconnect: {:?}", e);
+                }
             }
         }
     }

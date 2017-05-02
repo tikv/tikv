@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use time::{self, Timespec};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-
 use std::collections::vec_deque::{Iter, VecDeque, Drain};
+use std::u64;
 
 use prometheus;
 use rand::{self, ThreadRng};
@@ -48,12 +48,18 @@ pub mod collections;
 #[cfg(target_os="linux")]
 mod thread_metrics;
 
-pub use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet, FnvBuildHasher as BuildHasherDefault};
+pub const NO_LIMIT: u64 = u64::MAX;
 
-pub fn get_limit_at_size<'a, T: Message + Clone, I: IntoIterator<Item = &'a T>>(entries: I,
-                                                                                max: u64)
-                                                                                -> usize {
+pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
+    where T: Message + Clone,
+          I: IntoIterator<Item = &'a T>
+{
     let mut iter = entries.into_iter();
+    // If max is NO_LIMIT, we can return directly.
+    if max == NO_LIMIT {
+        return iter.count();
+    }
+
     let mut size = match iter.next() {
         None => return 0,
         Some(e) => Message::compute_size(e) as u64,
@@ -547,6 +553,8 @@ mod tests {
     use std::{f64, cmp};
     use std::sync::atomic::{AtomicBool, Ordering};
     use time;
+    use kvproto::eraftpb::Entry;
+    use protobuf::Message;
     use super::*;
 
     #[test]
@@ -700,6 +708,31 @@ mod tests {
         #[allow(clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
             a.clone()
+        }
+    }
+
+    #[test]
+    fn test_limit_size() {
+        let mut e = Entry::new();
+        e.set_data(b"0123456789".to_vec());
+        let size = e.compute_size() as u64;
+
+        let tbls = vec![
+            (vec![], NO_LIMIT, 0),
+            (vec![], size, 0),
+            (vec![e.clone(); 10], 0, 1),
+            (vec![e.clone(); 10], NO_LIMIT, 10),
+            (vec![e.clone(); 10], size, 1),
+            (vec![e.clone(); 10], size + 1, 1),
+            (vec![e.clone(); 10], 2 * size , 2),
+            (vec![e.clone(); 10], 10 * size - 1, 9),
+            (vec![e.clone(); 10], 10 * size, 10),
+            (vec![e.clone(); 10], 10 * size + 1, 10),
+        ];
+
+        for (mut entries, max, len) in tbls {
+            limit_size(&mut entries, max);
+            assert_eq!(entries.len(), len);
         }
     }
 }
