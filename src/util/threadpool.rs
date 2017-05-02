@@ -437,11 +437,9 @@ impl<Q, T> Worker<Q, T>
 #[cfg(test)]
 mod test {
     use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue};
-    use std::thread::sleep;
     use std::time::Duration;
     use std::sync::mpsc::channel;
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_for_tasks_with_different_cost() {
@@ -485,116 +483,37 @@ mod test {
     }
 
     #[test]
-    fn test_for_tasks_with_group_concurrency_on_busy() {
-        let name = thd_name!("test_for_tasks_with_group_concurrency_on_busy");
-        let concurrency = 4;
-        let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(2));
-        let (tx, rx) = channel();
-        let sleep_duration = Duration::from_millis(50);
-        let recv_timeout_duration = Duration::from_secs(2);
-        let group1 = 1001;
-        let push_tasks_cond = Arc::new((Mutex::new(()), Condvar::new()));
-        let push_finished = Arc::new(AtomicBool::new(false));
-
-        // Make all threads busy until all test tasks had been pushed into the pool.
-        for gid in 0..concurrency {
-            let listener = push_tasks_cond.clone();
-            let push_finished = push_finished.clone();
-            task_pool.execute(gid, move || {
-                let &(ref lock, ref cvar) = &*listener;
-                // conv needn't start to wait if noitification is sended.
-                if !push_finished.load(Ordering::SeqCst) {
-                    cvar.wait_timeout(lock.lock().unwrap(), recv_timeout_duration).unwrap();
-                }
-            });
-        }
-
-        // Push 4 tasks of `group1` into pool with each task cost `sleep_duration`.
-        for _ in 0..4 {
-            let tx = tx.clone();
-            task_pool.execute(group1, move || {
-                sleep(sleep_duration);
-                tx.send(group1).unwrap();
-            });
-        }
-
-        // Push 2 tasks of  `group2` into the pool with each task cost `2*sleep_duration`.
-        let group2 = 1002;
-        for _ in 0..2 {
-            let tx = tx.clone();
-            task_pool.execute(group2, move || {
-                sleep(sleep_duration * 2);
-                tx.send(group2).unwrap();
-            });
-        }
-
-        // Push 2 tasks of `group3` into the pool with each task cost `sleep_duration`.
-        let group3 = 1003;
-        for _ in 0..2 {
-            let tx = tx.clone();
-            task_pool.execute(group3, move || {
-                sleep(sleep_duration);
-                tx.send(group3).unwrap();
-            });
-        }
-
-        // Notify all threads that all test tasks had been pushed into the pool.
-        push_tasks_cond.1.notify_all();
-
-        // conv needn't start to wait if noitification is sended.
-        push_finished.store(true, Ordering::SeqCst);
-
-        // The tasks in pool: {txn11, txn12, txn13, txn14, txn21, txn22, txn31, txn32}.
-        // First 4 tasks running during [0,sleep_duration] should be
-        // {txn11, txn12,txn21, txn22 }. Since txn1 would be finished before txn2.
-        // Next 4 tasks running during [sleep_duration,2*sleep_duration] should be
-        // {txn13, txn14, txn21, txn22 }. During [2*sleep_duration,3*sleep_duration],
-        // the running tasks should be {txn31, txn32}
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
-        let mut group2_num = 0;
-        let mut group1_num = 0;
-        for _ in 0..4 {
-            let group = rx.recv_timeout(recv_timeout_duration).unwrap();
-            if group == group1 {
-                group1_num += 1;
-                continue;
-            }
-            assert_eq!(group, group2);
-            group2_num += 1;
-        }
-        assert_eq!(group1_num, 2);
-        assert_eq!(group2_num, 2);
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
-    }
-
-    #[test]
     fn test_get_task_count() {
         let name = thd_name!("test_get_task_count");
         let concurrency = 1;
         let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(1));
         let (tx, rx) = channel();
-        let sleep_duration = Duration::from_millis(50);
+        let (ftx, frx) = channel();
+        let receiver = Arc::new(Mutex::new(rx));
         let recv_timeout_duration = Duration::from_secs(2);
         let group_num = 4;
         let mut task_num = 0;
         for gid in 0..group_num {
-            let txer = tx.clone();
+            let rxer = receiver.clone();
+            let ftx = ftx.clone();
             task_pool.execute(gid, move || {
-                sleep(sleep_duration);
-                txer.send(gid).unwrap();
+                let rx = rxer.lock().unwrap();
+                let id = rx.recv_timeout(recv_timeout_duration).unwrap();
+                assert_eq!(id, gid);
+                ftx.send(true).unwrap();
             });
             task_num += 1;
             assert_eq!(task_pool.get_task_count(), task_num);
         }
 
         for gid in 0..group_num {
-            assert_eq!(gid, rx.recv_timeout(recv_timeout_duration).unwrap());
-            // To make sure the task is finished and count has been changed.
-            sleep(sleep_duration / 2);
+            tx.send(gid).unwrap();
+            let left_num = task_pool.get_task_count();
+            frx.recv_timeout(recv_timeout_duration).unwrap();
+            // current task may not finished
+            assert!(left_num == task_num || left_num == task_num - 1,
+                    format!("left_num {},task_num {}", left_num, task_num));
             task_num -= 1;
-            assert_eq!(task_pool.get_task_count(), task_num);
         }
         task_pool.stop().unwrap();
     }
