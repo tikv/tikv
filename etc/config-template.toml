@@ -1,5 +1,5 @@
 # TiKV config template
-#  Human-readable big numbers: 
+#  Human-readable big numbers:
 #   File size(based on byte): KB, MB, GB, TB, PB (or lowercase)
 #    e.g.: 1_048_576 = "1MB"
 #   Time(based on ms): ms, s, m, h
@@ -11,7 +11,7 @@ addr = "127.0.0.1:20160"
 # set advertise listening address for client communication, if not set, use addr instead.
 #advertise-addr = ""
 # set the path to rocksdb directory.
-store = "/tmp/tikv/store"
+data-dir = "/tmp/tikv/store"
 # set attributes about this server, e.g. "zone=us-west-1,disk=ssd".
 labels = ""
 # log level: trace, debug, info, warn, error, off.
@@ -30,7 +30,7 @@ recv-buffer-size = "128KB"
 # capacity = 0
 
 # set backup path, if not set, use "backup" under store path.
-# backup = "/tmp/tikv/store/backup"
+# backup-dir = "/tmp/tikv/store/backup"
 
 [metric]
 # the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
@@ -47,18 +47,18 @@ notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
 messages-per-tick = 4096
 
-# Region heartbeat tick interval for reporting to pd. 
+# Region heartbeat tick interval for reporting to pd.
 pd-heartbeat-tick-interval = "60s"
 # Store heartbeat tick interval for reporting to pd.
 pd-store-heartbeat-tick-interval = "10s"
 
-# When the region's size exceeds region-max-size, we will split the region 
-# into two which the left region's size will be region-split-size or a little 
-# bit smaller. 
+# When the region's size exceeds region-max-size, we will split the region
+# into two which the left region's size will be region-split-size or a little
+# bit smaller.
 region-max-size = "80MB"
 region-split-size = "64MB"
-# When region size changes exceeds region-split-check-diff, we should check 
-# whether the region should be split or not. 
+# When region size changes exceeds region-split-check-diff, we should check
+# whether the region should be split or not.
 region-split-check-diff = "8MB"
 # Interval to check region whether need to be split or not.
 split-region-check-tick-interval = "5s"
@@ -95,13 +95,13 @@ max-peer-down-duration = "5m"
 # consistency-check-interval = 0
 
 [pd]
-# pd endpoints 
+# pd endpoints
 endpoints = ""
 
 [rocksdb]
 # RocksDB info log directory, if set, RocksDB will save the log in `info-log-dir/LOG`.
 # info-log-dir = ""
-# Maximal size of the info log, if new info log will be created if size is large than it. 
+# Maximal size of the info log, if new info log will be created if size is large than it.
 # info-log-max-size = 0
 # Time for the info log file to roll (in seconds).
 # info-log-roll-time = "0s"
