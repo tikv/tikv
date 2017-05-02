@@ -55,24 +55,25 @@ pub fn bootstrap_store(engine: &DB, cluster_id: u64, store_id: u64) -> Result<()
     engine.put_msg(&ident_key, &ident)
 }
 
-// Write first region meta.
-pub fn write_region(engine: &DB, region: &metapb::Region) -> Result<()> {
+// Write first region meta and prepare state.
+pub fn write_prepare_bootstrap(engine: &DB, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::new();
     state.set_region(region.clone());
 
     let wb = WriteBatch::new();
     try!(wb.put_msg(&keys::region_state_key(region.get_id()), &state));
     try!(write_initial_state(engine, &wb, region.get_id()));
+    try!(wb.put_msg(&keys::prepare_bootstrap_key(), region));
     try!(engine.write(wb));
     Ok(())
 }
 
-// Clear first region meta.
-pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
+// Clear first region meta and prepare state.
+pub fn clear_prepare_bootstrap(engine: &DB, region_id: u64) -> Result<()> {
     let wb = WriteBatch::new();
 
     try!(wb.delete(&keys::region_state_key(region_id)));
-
+    try!(wb.delete(&keys::prepare_bootstrap_key()));
     // should clear raft initial state too.
     let raft_cf = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
     try!(wb.delete_cf(raft_cf, &keys::raft_state_key(region_id)));
@@ -82,12 +83,18 @@ pub fn clear_region(engine: &DB, region_id: u64) -> Result<()> {
     Ok(())
 }
 
-// Bootstrap first region.
-pub fn bootstrap_region(engine: &DB,
-                        store_id: u64,
-                        region_id: u64,
-                        peer_id: u64)
-                        -> Result<metapb::Region> {
+// Clear prepare state
+pub fn clear_prepare_bootstrap_state(engine: &DB) -> Result<()> {
+    try!(engine.delete(&keys::prepare_bootstrap_key()));
+    Ok(())
+}
+
+// Prepare bootstrap.
+pub fn prepare_bootstrap(engine: &DB,
+                         store_id: u64,
+                         region_id: u64,
+                         peer_id: u64)
+                         -> Result<metapb::Region> {
     let mut region = metapb::Region::new();
     region.set_id(region_id);
     region.set_start_key(keys::EMPTY_KEY.to_vec());
@@ -100,7 +107,7 @@ pub fn bootstrap_region(engine: &DB,
     peer.set_id(peer_id);
     region.mut_peers().push(peer);
 
-    try!(write_region(engine, &region));
+    try!(write_prepare_bootstrap(engine, &region));
 
     Ok(region)
 }
@@ -124,12 +131,14 @@ mod tests {
         assert!(bootstrap_store(&engine, 1, 1).is_ok());
         assert!(bootstrap_store(&engine, 1, 1).is_err());
 
-        assert!(bootstrap_region(&engine, 1, 1, 1).is_ok());
+        assert!(prepare_bootstrap(&engine, 1, 1, 1).is_ok());
         assert!(engine.get_value(&keys::region_state_key(1)).unwrap().is_some());
+        assert!(engine.get_value(&keys::prepare_bootstrap_key()).unwrap().is_some());
         assert!(engine.get_value_cf(CF_RAFT, &keys::raft_state_key(1)).unwrap().is_some());
         assert!(engine.get_value_cf(CF_RAFT, &keys::apply_state_key(1)).unwrap().is_some());
 
-        assert!(clear_region(&engine, 1).is_ok());
+        assert!(clear_prepare_bootstrap_state(&engine).is_ok());
+        assert!(clear_prepare_bootstrap(&engine, 1).is_ok());
         assert!(is_range_empty(&engine,
                                CF_DEFAULT,
                                &keys::region_meta_prefix(1),
