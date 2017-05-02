@@ -214,6 +214,7 @@ impl SliceTransform for FixedPrefixSliceTransform {
 mod tests {
     use rocksdb::{DB, Options};
     use tempdir::TempDir;
+    use storage::CF_DEFAULT;
     use super::{check_and_open, CFOptions};
 
     #[test]
@@ -222,25 +223,25 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         // create db when db not exist
-        let cfs_opts = vec![CFOptions::new("default", Options::new())];
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, Options::new())];
         check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, &["default"]);
+        column_families_must_eq(path_str, &[CF_DEFAULT]);
 
         // add cf1.
-        let cfs_opts = vec![CFOptions::new("default", Options::new()),
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, Options::new()),
                             CFOptions::new("cf1", Options::new())];
         check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, &["default", "cf1"]);
+        column_families_must_eq(path_str, &[CF_DEFAULT, "cf1"]);
 
         // drop cf1.
-        let cfs_opts = vec![CFOptions::new("default", Options::new())];
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, Options::new())];
         check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, &["default"]);
+        column_families_must_eq(path_str, &[CF_DEFAULT]);
 
         // never drop default cf
         let cfs_opts = vec![];
         check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, &["default"]);
+        column_families_must_eq(path_str, &[CF_DEFAULT]);
     }
 
     fn column_families_must_eq(path: &str, excepted: &[&str]) {
