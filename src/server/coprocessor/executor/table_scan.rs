@@ -34,8 +34,6 @@ impl<'a> TableScanExec<'a> {
     pub fn new(meta: TableScan,
                key_ranges: Vec<KeyRange>,
                store: SnapshotStore<'a>,
-               region_start: Vec<u8>,
-               region_end: Vec<u8>,
                statistics: &'a mut Statistics)
                -> TableScanExec<'a> {
         let col_ids = meta.get_columns()
@@ -43,12 +41,7 @@ impl<'a> TableScanExec<'a> {
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = BaseScanner::new(meta.get_desc(),
-                                       false,
-                                       store,
-                                       region_start,
-                                       region_end,
-                                       statistics);
+        let scanner = BaseScanner::new(meta.get_desc(), false, store, statistics);
         TableScanExec {
             meta: meta,
             col_ids: col_ids,
@@ -113,8 +106,7 @@ impl<'a> Executor for TableScanExec<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::super::base_scanner::test::{Data, TestStore, prepare_table_data, get_region,
-                                           get_range};
+    use super::super::base_scanner::test::{Data, TestStore, prepare_table_data, get_range};
     use std::i64;
     use tipb::schema::ColumnInfo;
     use storage::Statistics;
@@ -128,8 +120,6 @@ mod test {
         data: Data,
         store: TestStore,
         table_scan: TableScan,
-        region_start: Vec<u8>,
-        region_end: Vec<u8>,
         ranges: Vec<KeyRange>,
         cols: Vec<ColumnInfo>,
     }
@@ -143,8 +133,6 @@ mod test {
             let cols = test_data.get_prev_2_cols();
             let col_req = RepeatedField::from_vec(cols.clone());
             table_scan.set_columns(col_req);
-            // prepare region_start/region_end
-            let (region_start, region_end) = get_region(i64::MIN, i64::MAX);
             // prepare range
             let range = get_range(TABLE_ID, i64::MIN, i64::MAX);
             let key_ranges = vec![range];
@@ -152,8 +140,6 @@ mod test {
                 data: test_data,
                 store: test_store,
                 table_scan: table_scan,
-                region_start: region_start,
-                region_end: region_end,
                 ranges: key_ranges,
                 cols: cols,
             }
@@ -174,8 +160,6 @@ mod test {
         let mut table_scanner = TableScanExec::new(meta.table_scan,
                                                    meta.ranges,
                                                    meta.store.store(),
-                                                   meta.region_start,
-                                                   meta.region_end,
                                                    &mut statistics);
 
         let row = table_scanner.next().unwrap().unwrap();
@@ -204,8 +188,6 @@ mod test {
         let mut table_scanner = TableScanExec::new(meta.table_scan,
                                                    meta.ranges,
                                                    meta.store.store(),
-                                                   meta.region_start,
-                                                   meta.region_end,
                                                    &mut statistics);
 
         for handle in 0..KEY_NUMBER {
@@ -230,8 +212,6 @@ mod test {
         let mut table_scanner = TableScanExec::new(meta.table_scan,
                                                    meta.ranges,
                                                    meta.store.store(),
-                                                   meta.region_start,
-                                                   meta.region_end,
                                                    &mut statistics);
 
         for tid in 0..KEY_NUMBER {

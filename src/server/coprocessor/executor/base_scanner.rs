@@ -22,8 +22,6 @@ pub struct BaseScanner<'a> {
     seek_key: Option<Vec<u8>>,
     scan_mode: ScanMode,
     upper_bound: Option<Vec<u8>>,
-    region_start: Vec<u8>,
-    region_end: Vec<u8>,
     statistics: &'a mut Statistics,
     desc: bool,
     key_only: bool,
@@ -34,8 +32,6 @@ impl<'a> BaseScanner<'a> {
     pub fn new(desc: bool,
                key_only: bool,
                store: SnapshotStore<'a>,
-               region_start: Vec<u8>,
-               region_end: Vec<u8>,
                statistics: &'a mut Statistics)
                -> BaseScanner<'a> {
 
@@ -49,8 +45,6 @@ impl<'a> BaseScanner<'a> {
             seek_key: None,
             scan_mode: scan_mode,
             upper_bound: None,
-            region_start: region_start,
-            region_end: region_end,
             statistics: statistics,
             desc: desc,
             key_only: key_only,
@@ -106,25 +100,10 @@ impl<'a> BaseScanner<'a> {
         }
         self.upper_bound = None;
         if self.desc {
-            let range_end = range.get_end().to_vec();
-            let seek_key = if self.region_end.is_empty() || range_end < self.region_end {
-                self.region_end.clone()
-            } else {
-                range_end
-            };
-            return seek_key;
+            return range.get_end().to_vec();
         }
-
-        if range.has_end() {
-            self.upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
-        }
-
-        let range_start = range.get_start().to_vec();
-        if range_start > self.region_start {
-            range_start
-        } else {
-            self.region_start.clone()
-        }
+        self.upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
+        range.get_start().to_vec()
     }
 }
 
@@ -286,20 +265,14 @@ pub mod test {
     }
 
     #[inline]
-    pub fn get_region(start: i64, end: i64) -> (Vec<u8>, Vec<u8>) {
+    pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
         let mut start_buf = Vec::with_capacity(8);
         start_buf.encode_i64(start).unwrap();
         let mut end_buf = Vec::with_capacity(8);
         end_buf.encode_i64(end).unwrap();
-        (start_buf, end_buf)
-    }
-
-    #[inline]
-    pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
         let mut key_range = KeyRange::new();
-        let (left, right) = get_region(start, end);
-        key_range.set_start(table::encode_row_key(table_id, &left));
-        key_range.set_end(table::encode_row_key(table_id, &right));
+        key_range.set_start(table::encode_row_key(table_id, &start_buf));
+        key_range.set_end(table::encode_row_key(table_id, &end_buf));
         key_range
     }
 
@@ -315,13 +288,7 @@ pub mod test {
         let test_store = TestStore::new(&test_data, pk.clone());
         let mut statistics = Statistics::default();
         let store = test_store.store();
-        let (region_start, region_end) = get_region(i64::MIN, i64::MAX);
-        let mut scanner = BaseScanner::new(false,
-                                           false,
-                                           store,
-                                           region_start,
-                                           region_end,
-                                           &mut statistics);
+        let mut scanner = BaseScanner::new(false, false, store, &mut statistics);
         let data = scanner.get_row_from_point(&pk).unwrap().unwrap();
         assert_eq!(data, pv);
     }
@@ -338,18 +305,9 @@ pub mod test {
         let test_store = TestStore::new(&test_data, pk.clone());
         let mut statistics = Statistics::default();
         let store = test_store.store();
-        let (region_start, region_end) = get_region(i64::MIN, i64::MAX);
-        // prepare region_start/region_end
-        let mut range = KeyRange::new();
-        range.set_start(region_start.clone());
-        range.set_end(region_end.clone());
+        let range = get_range(table_id, i64::MIN, i64::MAX);
 
-        let mut scanner = BaseScanner::new(false,
-                                           false,
-                                           store,
-                                           region_start,
-                                           region_end,
-                                           &mut statistics);
+        let mut scanner = BaseScanner::new(false, false, store, &mut statistics);
 
         for &(ref k, ref v) in &test_data {
             let (key, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
@@ -369,18 +327,9 @@ pub mod test {
         let test_store = TestStore::new(&data.data, data.pk.clone());
         let mut statistics = Statistics::default();
         let store = test_store.store();
-        let (region_start, region_end) = get_region(i64::MIN, i64::MAX);
-        // prepare region_start/region_end
-        let mut range = KeyRange::new();
-        range.set_start(region_start.clone());
-        range.set_end(region_end.clone());
+        let range = get_range(table_id, i64::MIN, i64::MAX);
 
-        let mut scanner = BaseScanner::new(true,
-                                           false,
-                                           store,
-                                           region_start,
-                                           region_end,
-                                           &mut statistics);
+        let mut scanner = BaseScanner::new(true, false, store, &mut statistics);
 
         data.data.reverse();
         for &(ref k, ref v) in &data.data {
@@ -406,18 +355,8 @@ pub mod test {
         let test_store = TestStore::new(&test_data, pk.clone());
         let mut statistics = Statistics::default();
         let store = test_store.store();
-        let (region_start, region_end) = get_region(i64::MIN, i64::MAX);
-        // prepare region_start/region_end
-        let mut range = KeyRange::new();
-        range.set_start(region_start.clone());
-        range.set_end(region_end.clone());
-
-        let mut scanner = BaseScanner::new(false,
-                                           true,
-                                           store,
-                                           region_start,
-                                           region_end,
-                                           &mut statistics);
+        let range = get_range(table_id, i64::MIN, i64::MAX);
+        let mut scanner = BaseScanner::new(false, true, store, &mut statistics);
 
         let (_, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
         assert!(value.is_empty());
@@ -434,49 +373,22 @@ pub mod test {
         let test_store = TestStore::new(&test_data, pk.clone());
         let mut statistics = Statistics::default();
         let store = test_store.store();
-        let (small_buf, big_buf) = get_region(i64::MIN, i64::MAX);
-        // prepare range
-        let mut range = KeyRange::new();
-        range.set_start(small_buf.clone());
-        range.set_end(big_buf.clone());
-        let mut scanner = BaseScanner::new(true,
-                                           false,
-                                           store,
-                                           small_buf.clone(),
-                                           big_buf.clone(),
-                                           &mut statistics);
+        let range = get_range(table_id, i64::MIN, i64::MAX);
+        let mut scanner = BaseScanner::new(true, false, store, &mut statistics);
         // 1. seek_key is some
         scanner.set_seek_key(Some(pk.clone()));
         let seek_key = scanner.prepare_and_get_seek_key(&range);
         assert_eq!(seek_key, pk.clone());
 
-        // 1. seek_key is none. 2. desc scan 3. range.end < region_end
-        scanner.region_end = big_buf.clone();
-        range.set_end(small_buf.clone());
-        let seek_key = scanner.prepare_and_get_seek_key(&range);
-        assert_eq!(seek_key, scanner.region_end.clone());
-        assert!(scanner.upper_bound.is_none());
-
-        // 1. seek_key is none. 2.desc scan 3.range.end > region_end
-        scanner.region_end = small_buf.clone();
-        range.set_end(big_buf.clone());
+        // 1. seek_key is none. 2. desc scan
         let seek_key = scanner.prepare_and_get_seek_key(&range);
         assert_eq!(seek_key, range.get_end());
+        assert!(scanner.upper_bound.is_none());
 
-        // 1.seek_key is none. 2.asc scan 3.range.start <= region.start
+        // 1.seek_key is none. 2.asc scan
         scanner.desc = false;
-        scanner.region_start = big_buf.clone();
-        range.set_start(small_buf.clone());
-        let seek_key = scanner.prepare_and_get_seek_key(&range);
-        assert_eq!(seek_key, scanner.region_start.clone());
-        // assert!(self.upper_bound.is_some());
-
-        // 1. seek_key is none. 2.asc scan 3.range.start > buf_small
-        range.set_start(big_buf.clone());
-        range.clear_end();
-        scanner.region_start = small_buf.clone();
         let seek_key = scanner.prepare_and_get_seek_key(&range);
         assert_eq!(seek_key, range.get_start());
-        // assert!(self.upper_bound.is_none());
+        assert!(scanner.upper_bound.is_some());
     }
 }
