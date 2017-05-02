@@ -668,11 +668,12 @@ fn build_raftkv(config: &toml::Value,
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let db_opts = get_rocksdb_db_option(config);
-    let mut cfs_opts = HashMap::default();
-    cfs_opts.insert(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem));
-    cfs_opts.insert(CF_LOCK, get_rocksdb_lock_cf_option(config));
-    cfs_opts.insert(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem));
-    cfs_opts.insert(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem));
+    let cfs_opts = vec![
+        rocksdb_util::CFOptions::new(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem)),
+        rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config)),
+        rocksdb_util::CFOptions::new(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem)),
+        rocksdb_util::CFOptions::new(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem)),
+    ];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine =
