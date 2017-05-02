@@ -272,13 +272,12 @@ impl<Q: ScheduleQueue<T>, T: Debug> TaskPool<Q, T> {
     }
 
     fn pop_task(&mut self) -> Option<Task<T>> {
-        let task = self.task_queue.pop();
-        if task.is_none() {
-            // try fill queue when queue is empty.
-            self.try_fill_queue();
-            return self.task_queue.pop();
+        if let Some(task) = self.task_queue.pop() {
+            return Some(task);
         }
-        task
+        // try fill queue when queue is empty.
+        self.try_fill_queue();
+        self.task_queue.pop()
     }
 
     fn try_fill_queue(&mut self) {
