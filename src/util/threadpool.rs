@@ -511,8 +511,8 @@ mod test {
 
         for gid in 0..group_num {
             tx.send(gid).unwrap();
-            let left_num = task_pool.get_task_count();
             frx.recv_timeout(recv_timeout_duration).unwrap();
+            let left_num = task_pool.get_task_count();
             // current task may not finished
             assert!(left_num == task_num || left_num == task_num - 1,
                     format!("left_num {},task_num {}", left_num, task_num));
