@@ -1131,7 +1131,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         if !campaigned {
             if let Some(msg) = self.pending_votes
-                   .swap_remove_front(|m| m.get_to_peer() == &peer) {
+                .swap_remove_front(|m| m.get_to_peer() == &peer) {
                 let _ = self.on_raft_message(msg);
             }
         }

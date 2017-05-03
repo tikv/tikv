@@ -479,7 +479,8 @@ impl<T> RingQueue<T> {
     }
 
     pub fn swap_remove_front<F>(&mut self, f: F) -> Option<T>
-        where F: FnMut(&T) -> bool {
+        where F: FnMut(&T) -> bool
+    {
         if let Some(pos) = self.buf.iter().position(f) {
             self.buf.swap_remove_front(pos)
         } else {
