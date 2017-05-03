@@ -365,7 +365,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     }
 
     let max_sub_compactions = get_toml_int(config, "rocksdb.max-sub-compactions", Some(1));
-    opts.set_max_subcompactions(max_sub_compactions as i64);
+    opts.set_max_subcompactions(max_sub_compactions as usize);
 
     opts
 }
