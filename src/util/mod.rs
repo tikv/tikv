@@ -483,6 +483,11 @@ impl<T> RingQueue<T> {
     }
 }
 
+// `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
+pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
+    a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{SocketAddr, AddrParseError};
@@ -621,5 +626,21 @@ mod tests {
             limit_size(&mut entries, max);
             assert_eq!(entries.len(), len);
         }
+    }
+
+    #[test]
+    fn test_cfs_diff() {
+        let a = vec!["1", "2", "3"];
+        let a_diff_a = cfs_diff(&a, &a);
+        assert!(a_diff_a.is_empty());
+        let b = vec!["4"];
+        assert_eq!(a, cfs_diff(&a, &b));
+        let c = vec!["4", "5", "3", "6"];
+        assert_eq!(vec!["1", "2"], cfs_diff(&a, &c));
+        assert_eq!(vec!["4", "5", "6"], cfs_diff(&c, &a));
+        let d = vec!["1", "2", "3", "4"];
+        let a_diff_d = cfs_diff(&a, &d);
+        assert!(a_diff_d.is_empty());
+        assert_eq!(vec!["4"], cfs_diff(&d, &a));
     }
 }

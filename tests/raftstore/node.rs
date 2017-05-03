@@ -25,6 +25,7 @@ use tempdir::TempDir;
 use super::cluster::{Simulator, Cluster};
 use tikv::server::Node;
 use tikv::raftstore::store::*;
+use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::eraftpb::MessageType;
@@ -177,7 +178,14 @@ impl Simulator for NodeCluster {
             (snap_mgr.clone(), None)
         };
 
-        node.start(event_loop, engine, simulate_trans.clone(), snap_mgr.clone()).unwrap();
+        node.start(event_loop,
+                   engine.clone(),
+                   simulate_trans.clone(),
+                   snap_mgr.clone())
+            .unwrap();
+        assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+            .unwrap()
+            .is_none());
         assert!(node_id == 0 || node_id == node.id());
         debug!("node_id: {} tmp: {:?}",
                node_id,
