@@ -856,15 +856,14 @@ fn run_raft_server(pd_client: RpcClient,
 }
 
 fn main() {
-    let long_version: String =
-        {
-            let (hash, time, rust_ver) = util::build_info();
-            format!("{}\nGit Commit Hash: {}\nUTC Build Time:  {}\nRust Version:    {}",
-                    crate_version!(),
-                    hash,
-                    time,
-                    rust_ver)
-        };
+    let long_version: String = {
+        let (hash, time, rust_ver) = util::build_info();
+        format!("{}\nGit Commit Hash: {}\nUTC Build Time:  {}\nRust Version:    {}",
+                crate_version!(),
+                hash,
+                time,
+                rust_ver)
+    };
     let matches = App::new("TiKV")
         .long_version(long_version.as_ref())
         .author("PingCAP Inc. <info@pingcap.com>")
