@@ -1732,7 +1732,7 @@ mod v2 {
                         f.read_exact(&mut buf[..]).unwrap();
                         buf[0] ^= u8::max_value();
                         f.seek(pos).unwrap();
-                        f.write(&buf[..]).unwrap();
+                        f.write_all(&buf[..]).unwrap();
                         total += 1;
                     }
                 }
