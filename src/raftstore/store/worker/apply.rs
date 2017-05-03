@@ -1211,7 +1211,7 @@ impl Runner {
     }
 
     fn handle_apply(&mut self, applys: Vec<Apply>) {
-        let timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
+        let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
 
         let mut applys_res = Vec::with_capacity(applys.len());
         let mut apply_ctx = ApplyContext::new();
@@ -1243,8 +1243,6 @@ impl Runner {
                     metrics: delegate.metrics.clone(),
                     applied_index_term: delegate.applied_index_term,
                 });
-
-
             }
             if e.get().pending_remove {
                 e.remove();
@@ -1264,8 +1262,6 @@ impl Runner {
         if !applys_res.is_empty() {
             self.notifier.send(TaskRes::Applys(applys_res)).unwrap();
         }
-
-        timer.observe_duration();
     }
 
     fn handle_propose(&mut self, p: Propose) {
