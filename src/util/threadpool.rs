@@ -252,7 +252,10 @@ struct TaskPool<Q, T> {
     jobs: Receiver<Task<T>>,
 }
 
-impl<Q: ScheduleQueue<T>, T: Debug> TaskPool<Q, T> {
+impl<Q, T> TaskPool<Q, T>
+    where Q: ScheduleQueue<T>,
+          T: Debug
+{
     fn new(queue: Q, jobs: Receiver<Task<T>>) -> TaskPool<Q, T> {
         TaskPool {
             next_task_id: 0,
