@@ -1724,7 +1724,8 @@ mod v2 {
                     if e.file_name().into_string().unwrap().ends_with(META_FILE_SUFFIX) {
                         let mut f =
                             OpenOptions::new().read(true).write(true).open(e.path()).unwrap();
-                        // Make the last byte of the meta file corrupted by turning over all bits of it
+                        // Make the last byte of the meta file corrupted
+                        // by turning over all bits of it
                         let pos = SeekFrom::End(-(BYTE_SIZE as i64));
                         f.seek(pos).unwrap();
                         let mut buf = [0; BYTE_SIZE];
@@ -1747,11 +1748,9 @@ mod v2 {
             let mut from = Snap::new_for_sending(from_dir.path(), key, size_track.clone()).unwrap();
             assert!(from.exists());
 
-            let mut to = Snap::new_for_receiving(to_dir.path(),
-                                                 key,
-                                                 snapshot_meta,
-                                                 size_track.clone())
-                .unwrap();
+            let mut to =
+                Snap::new_for_receiving(to_dir.path(), key, snapshot_meta, size_track.clone())
+                    .unwrap();
 
             assert!(!to.exists());
             let _ = io::copy(&mut from, &mut to).unwrap();
@@ -1791,7 +1790,11 @@ mod v2 {
             assert!(s2.exists());
 
             let dst_dir = TempDir::new("test-snap-corruption-dst").unwrap();
-            copy_snapshot(&dir, &dst_dir, &key, size_track.clone(), snap_data.get_meta().clone());
+            copy_snapshot(&dir,
+                          &dst_dir,
+                          &key,
+                          size_track.clone(),
+                          snap_data.get_meta().clone());
 
             let mut metas = corrupt_snapshot_checksum_in(dst_dir.path());
             assert_eq!(1, metas.len());
@@ -1848,7 +1851,11 @@ mod v2 {
             assert!(s2.exists());
 
             let dst_dir = TempDir::new("test-snap-corruption-meta-dst").unwrap();
-            copy_snapshot(&dir, &dst_dir, &key, size_track.clone(), snap_data.get_meta().clone());
+            copy_snapshot(&dir,
+                          &dst_dir,
+                          &key,
+                          size_track.clone(),
+                          snap_data.get_meta().clone());
 
             assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
