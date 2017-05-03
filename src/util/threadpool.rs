@@ -451,18 +451,18 @@ mod test {
         let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(1));
         let (jtx, jrx) = channel();
         let group_with_big_task = 1001 as u64;
-        let recv_timeout_duration = Duration::from_secs(2);
+        let timeout = Duration::from_secs(2);
         let (ftx, frx) = channel();
         // Push a big task into pool.
         task_pool.execute(group_with_big_task, move || {
             // Since a long task of `group_with_big_task` is running,
             // the other threads shouldn't run any task of `group_with_big_task`.
             for _ in 0..10 {
-                let gid = jrx.recv_timeout(recv_timeout_duration).unwrap();
+                let gid = jrx.recv_timeout(timeout).unwrap();
                 assert_ne!(gid, group_with_big_task);
             }
             for _ in 0..10 {
-                let gid = jrx.recv_timeout(recv_timeout_duration).unwrap();
+                let gid = jrx.recv_timeout(timeout).unwrap();
                 assert_eq!(gid, group_with_big_task);
             }
             ftx.send(true).unwrap();
@@ -481,7 +481,7 @@ mod test {
                 sender.send(group_with_big_task).unwrap();
             });
         }
-        frx.recv_timeout(recv_timeout_duration).unwrap();
+        frx.recv_timeout(timeout).unwrap();
         task_pool.stop().unwrap();
     }
 
@@ -493,7 +493,7 @@ mod test {
         let (tx, rx) = channel();
         let (ftx, frx) = channel();
         let receiver = Arc::new(Mutex::new(rx));
-        let recv_timeout_duration = Duration::from_secs(2);
+        let timeout = Duration::from_secs(2);
         let group_num = 4;
         let mut task_num = 0;
         for gid in 0..group_num {
@@ -501,7 +501,7 @@ mod test {
             let ftx = ftx.clone();
             task_pool.execute(gid, move || {
                 let rx = rxer.lock().unwrap();
-                let id = rx.recv_timeout(recv_timeout_duration).unwrap();
+                let id = rx.recv_timeout(timeout).unwrap();
                 assert_eq!(id, gid);
                 ftx.send(true).unwrap();
             });
@@ -511,9 +511,9 @@ mod test {
 
         for gid in 0..group_num {
             tx.send(gid).unwrap();
-            frx.recv_timeout(recv_timeout_duration).unwrap();
+            frx.recv_timeout(timeout).unwrap();
             let left_num = task_pool.get_task_count();
-            // current task may not finished
+            // current task may be still running.
             assert!(left_num == task_num || left_num == task_num - 1,
                     format!("left_num {},task_num {}", left_num, task_num));
             task_num -= 1;
