@@ -17,6 +17,7 @@ use server::coprocessor::Result;
 
 mod base_scanner;
 pub mod table_scan;
+pub mod index_scan;
 
 #[allow(dead_code)] //TODO:remove it
 pub struct Row {
