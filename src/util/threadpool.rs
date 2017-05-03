@@ -436,7 +436,6 @@ mod test {
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Condvar, Mutex};
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn test_for_tasks_with_different_cost() {
@@ -489,83 +488,122 @@ mod test {
         let concurrency = 4;
         let mut task_pool = ThreadPool::new(name, concurrency, BigGroupThrottledQueue::new(2));
         let (tx, rx) = channel();
-        let sleep_duration = Duration::from_millis(50);
-        let recv_timeout_duration = Duration::from_secs(2);
-        let group1 = 1001;
-        let push_tasks_cond = Arc::new((Mutex::new(()), Condvar::new()));
-        let push_finished = Arc::new(AtomicBool::new(false));
+        let timeout = Duration::from_secs(2);
 
         // Make all threads busy until all test tasks had been pushed into the pool.
+        let push_tasks_pair = Arc::new((Mutex::new(false), Condvar::new()));
         for gid in 0..concurrency {
-            let listener = push_tasks_cond.clone();
-            let push_finished = push_finished.clone();
+            let pair = push_tasks_pair.clone();
             task_pool.execute(gid, move || {
-                let &(ref lock, ref cvar) = &*listener;
-                // conv needn't start to wait if noitification is sended.
-                if !push_finished.load(Ordering::SeqCst) {
-                    cvar.wait_timeout(lock.lock().unwrap(), recv_timeout_duration).unwrap();
+                let &(ref lock, ref cvar) = &*pair;
+                let mut finished = lock.lock().unwrap();
+                while !*finished {
+                    finished = cvar.wait_timeout(finished, timeout).unwrap().0;
                 }
             });
         }
 
-        // Push 4 tasks of `group1` into pool with each task cost `sleep_duration`.
-        for _ in 0..4 {
+        // Push 4 tasks of `group1` into pool.
+        let group1 = 1001;
+        let group1_tasks_pair = Arc::new((Mutex::new(false), Condvar::new()));
+        for _ in 0..2 {
+            let pair = group1_tasks_pair.clone();
             let tx = tx.clone();
             task_pool.execute(group1, move || {
-                sleep(sleep_duration);
+                let &(ref lock, ref cvar) = &*pair;
+                let mut finished = lock.lock().unwrap();
+                while !*finished {
+                    finished = cvar.wait_timeout(finished, timeout).unwrap().0;
+                }
                 tx.send(group1).unwrap();
             });
         }
 
-        // Push 2 tasks of  `group2` into the pool with each task cost `2*sleep_duration`.
-        let group2 = 1002;
+        let group1_tasks_pair2 = Arc::new((Mutex::new(false), Condvar::new()));
         for _ in 0..2 {
+            let pair = group1_tasks_pair2.clone();
+            let tx = tx.clone();
+            task_pool.execute(group1, move || {
+                let &(ref lock, ref cvar) = &*pair;
+                let mut finished = lock.lock().unwrap();
+                while !*finished {
+                    finished = cvar.wait_timeout(finished, timeout).unwrap().0;
+                }
+                tx.send(group1).unwrap();
+            });
+        }
+
+        // Push 2 tasks of  `group2` into the pool.
+        let group2 = 1002;
+        let group2_tasks_pair = Arc::new((Mutex::new(false), Condvar::new()));
+        for _ in 0..2 {
+            let pair = group2_tasks_pair.clone();
             let tx = tx.clone();
             task_pool.execute(group2, move || {
-                sleep(sleep_duration * 2);
+                let &(ref lock, ref cvar) = &*pair;
+                let mut finished = lock.lock().unwrap();
+                while !*finished {
+                    finished = cvar.wait_timeout(finished, timeout).unwrap().0;
+                }
                 tx.send(group2).unwrap();
             });
         }
 
-        // Push 2 tasks of `group3` into the pool with each task cost `2*sleep_duration`.
+        // Push 2 tasks of `group3` into the pool.
         let group3 = 1003;
+        let group3_tasks_pair = Arc::new((Mutex::new(false), Condvar::new()));
         for _ in 0..2 {
+            let pair = group3_tasks_pair.clone();
             let tx = tx.clone();
             task_pool.execute(group3, move || {
-                sleep(sleep_duration);
+                let &(ref lock, ref cvar) = &*pair;
+                let mut finished = lock.lock().unwrap();
+                while !*finished {
+                    finished = cvar.wait_timeout(finished, timeout).unwrap().0;
+                }
                 tx.send(group3).unwrap();
             });
         }
 
         // Notify all threads that all test tasks had been pushed into the pool.
-        push_tasks_cond.1.notify_all();
-
-        // conv needn't start to wait if noitification is sended.
-        push_finished.store(true, Ordering::SeqCst);
-
-        // The tasks in pool: {txn11, txn12, txn13, txn14, txn21, txn22, txn31, txn32}.
-        // First 4 tasks running during [0,sleep_duration] should be
-        // {txn11, txn12,txn21, txn22 }. Since txn1 would be finished before txn2.
-        // Next 4 tasks running during [sleep_duration,2*sleep_duration] should be
-        // {txn13, txn14, txn21, txn22 }. During [2*sleep_duration,3*sleep_duration],
-        // the running tasks should be {txn31, txn32}
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group1);
-        let mut group2_num = 0;
-        let mut group1_num = 0;
-        for _ in 0..4 {
-            let group = rx.recv_timeout(recv_timeout_duration).unwrap();
-            if group == group1 {
-                group1_num += 1;
+        // And then finish these tasks in sequence one by one.
+        // Define task21 to be the first task of group 2.
+        // The tasks in pool are
+        // {task11, task12, task13, task14, task21, task22, task31, task32}.
+        // Ensure tasks are scheduled as expected:
+        // {task11, task12, task21, task22, task13, task14, task31, task32}.
+        for (i, pair) in [push_tasks_pair,
+                          group1_tasks_pair,
+                          group2_tasks_pair,
+                          group1_tasks_pair2,
+                          group3_tasks_pair]
+            .into_iter()
+            .enumerate() {
+            {
+                let &(ref lock, ref cvar) = &**pair;
+                let mut finished = lock.lock().unwrap();
+                *finished = true;
+                cvar.notify_all();
+            }
+            if i == 0 {
                 continue;
             }
-            assert_eq!(group, group2);
-            group2_num += 1;
+            let expected_group = match i {
+                1 | 3 => group1,
+                2 => group2,
+                4 => group3,
+                _ => unreachable!(),
+            };
+            for _ in 0..2 {
+                let group = rx.recv_timeout(timeout).unwrap();
+                assert_eq!(group,
+                           expected_group,
+                           "#{}: group {}, expected {}",
+                           i,
+                           group,
+                           expected_group);
+            }
         }
-        assert_eq!(group1_num, 2);
-        assert_eq!(group2_num, 2);
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
-        assert_eq!(rx.recv_timeout(recv_timeout_duration).unwrap(), group3);
     }
 
     #[test]
