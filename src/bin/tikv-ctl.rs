@@ -136,7 +136,7 @@ fn main() {
     let db_path = matches.value_of("db").unwrap();
     let db = util::rocksdb::open(db_path, ALL_CFS).unwrap();
     if let Some(matches) = matches.subcommand_matches("print") {
-        let cf_name = matches.value_of("cf").unwrap_or("default");
+        let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
         let key = String::from(matches.value_of("key").unwrap());
         dump_raw_value(db, cf_name, key);
     } else if let Some(matches) = matches.subcommand_matches("raft") {
@@ -165,7 +165,7 @@ fn main() {
         let from = String::from(matches.value_of("from").unwrap());
         let to = matches.value_of("to").map(String::from);
         let limit = matches.value_of("limit").map(|s| s.parse().unwrap());
-        let cf_name = matches.value_of("cf").unwrap_or("default");
+        let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         if let Some(ref to) = to {
@@ -175,7 +175,7 @@ fn main() {
         }
         dump_range(db, from, to, limit, cf_name, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
-        let cf_name = matches.value_of("cf").unwrap_or("default");
+        let cf_name = matches.value_of("cf").unwrap_or(CF_DEFAULT);
         let key = matches.value_of("key").unwrap();
         let key_encoded = matches.is_present("encoded");
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());

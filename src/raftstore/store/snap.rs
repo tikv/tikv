@@ -937,7 +937,7 @@ mod v2 {
                     // initialize sst file writer
                     let handle = try!(snap.cf_handle(&cf_file.cf));
                     let io_options = snap.get_db().get_options_cf(handle);
-                    let mut writer = SstFileWriter::new(&env_opt, &io_options, handle);
+                    let mut writer = SstFileWriter::new(&env_opt, &io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
                 }
@@ -1372,7 +1372,7 @@ mod v2 {
         use kvproto::raft_serverpb::RaftSnapshotData;
         use rocksdb::DB;
 
-        use storage::ALL_CFS;
+        use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
         use util::{rocksdb, HandyRwLock};
         use raftstore::Result;
         use raftstore::store::keys;
@@ -1383,6 +1383,7 @@ mod v2 {
 
         const TEST_STORE_ID: u64 = 1;
         const TEST_KEY: &[u8] = b"akey";
+        const TEST_WRITE_BATCH_SIZE: usize = 10 * 1024 * 1024;
 
         pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
             let p = path.path().to_str().unwrap();
@@ -1579,16 +1580,18 @@ mod v2 {
             assert!(s4.exists());
 
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
-            let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(),
-                                                      ALL_CFS)
-                .unwrap());
+            let dst_db_path = dst_db_dir.path().to_str().unwrap();
+            // Change arbitrarily the cf order of ALL_CFS at destination db.
+            let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
+            let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs).unwrap());
             let options = ApplyOptions {
                 db: dst_db.clone(),
                 region: region.clone(),
                 abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
-                write_batch_size: 10 * 1024 * 1024,
+                write_batch_size: TEST_WRITE_BATCH_SIZE,
             };
-            s4.apply(options).unwrap();
+            // Verify thte snapshot applying is ok.
+            assert!(s4.apply(options).is_ok());
 
             // Ensure `delete()` works to delete the dest snapshot.
             s4.delete();
