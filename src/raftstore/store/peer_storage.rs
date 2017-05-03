@@ -1378,7 +1378,7 @@ mod test {
         copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
-        let s2 = new_storage(sched, &td2);
+        let mut s2 = new_storage(sched, &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
