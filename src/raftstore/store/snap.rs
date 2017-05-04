@@ -1866,6 +1866,63 @@ mod v2 {
                                             size_track.clone())
                 .is_err());
         }
+
+        // `test_snap_deletion_when_sending` tests the behaviour of sending snapshot if
+        // the deletion is triggered.
+        #[test]
+        fn test_snap_sending_on_deletion() {
+            // Prepare the snapshot to be sent later.
+            let region_id = 1;
+            let region = get_test_region(region_id, 1, 1);
+            let db_dir = TempDir::new("test-deletion-when-sending-snap-db").unwrap();
+            let db = get_test_db(&db_dir).unwrap();
+            let snapshot = DbSnapshot::new(db);
+
+            let dir = TempDir::new("test-deletion-when-sending-snap").unwrap();
+            let key = SnapKey::new(region_id, 1, 1);
+            let size_track = Arc::new(RwLock::new(0));
+            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+            assert!(!s1.exists());
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data.set_region(region.clone());
+            let mut stat = SnapshotStatistics::new();
+            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            assert!(s1.exists());
+            let total_size = s1.total_size().unwrap();
+            let size = *size_track.rl();
+            assert_eq!(size, total_size);
+
+            // Initialize three snapshot for sending to simulate
+            // 1. get a snopshot before the deletion, and try to send it after the deletion is done.
+            // 2. get a snapshot after the deletion, and try to send it after the deletion is done.
+            let mut s2 = Snap::new_for_sending(dir.path(), &key, size_track.clone()).unwrap();
+            assert!(s2.exists());
+            let s3 = Snap::new_for_sending(dir.path(), &key, size_track.clone()).unwrap();
+            assert!(s3.exists());
+            s3.delete();
+            // When the deletion is done, all snapshot files is gone from
+            // the surface of file system.
+            assert!(!s3.exists());
+            assert!(!s2.exists());
+            let s4 = Snap::new_for_sending(dir.path(), &key, size_track.clone()).unwrap();
+            // Because `s4.exists()` => false, it will not be sent.
+            assert!(!s4.exists());
+
+            let dst_dir = TempDir::new("test-deletion-when-sending-snap-dst").unwrap();
+            let mut s5 = Snap::new_for_receiving(dst_dir.path(),
+                                                 &key,
+                                                 snap_data.take_meta(),
+                                                 size_track.clone())
+                .unwrap();
+            // Ensure the file descriptors of snapshot files which are opened before the deletion
+            // still hold, and the snapshot copying progress works well.
+            let r = io::copy(&mut s2, &mut s5);
+            assert!(r.is_ok());
+            let copy_size = r.unwrap();
+            assert_eq!(copy_size, size);
+        }
     }
 }
 
