@@ -364,6 +364,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
         opts.set_ratelimiter(rate_bytes_per_sec as i64);
     }
 
+    let max_sub_compactions = get_toml_int(config, "rocksdb.max-sub-compactions", Some(1));
+    opts.set_max_subcompactions(max_sub_compactions as usize);
+
     opts
 }
 
