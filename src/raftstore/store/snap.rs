@@ -1907,7 +1907,7 @@ mod v2 {
             assert!(!s3.exists());
             assert!(!s2.exists());
             let s4 = Snap::new_for_sending(dir.path(), &key, size_track.clone()).unwrap();
-            // Because `s4.exists()` => false, it will not be sent.
+            // Because `s4.exists()` returns false, it will not be sent.
             assert!(!s4.exists());
 
             let dst_dir = TempDir::new("test-deletion-when-sending-snap-dst").unwrap();
