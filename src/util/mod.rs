@@ -478,8 +478,14 @@ impl<T> RingQueue<T> {
         self.buf.iter()
     }
 
-    pub fn swap_remove_front(&mut self, pos: usize) -> Option<T> {
-        self.buf.swap_remove_front(pos)
+    pub fn swap_remove_front<F>(&mut self, f: F) -> Option<T>
+        where F: FnMut(&T) -> bool
+    {
+        if let Some(pos) = self.buf.iter().position(f) {
+            self.buf.swap_remove_front(pos)
+        } else {
+            None
+        }
     }
 }
 
@@ -532,17 +538,18 @@ mod tests {
             queue.push(num);
             assert_eq!(queue.len(), cmp::min(num + 1, 10));
         }
-        assert_eq!(None, queue.swap_remove_front(10));
+        assert_eq!(None, queue.swap_remove_front(|i| *i == 20));
         for i in 0..6 {
-            assert_eq!(Some(12 + i), queue.swap_remove_front(2));
+            assert_eq!(Some(12 + i), queue.swap_remove_front(|e| *e == 12 + i));
             assert_eq!(queue.len(), 9 - i);
         }
+
         let left: Vec<_> = queue.iter().cloned().collect();
         assert_eq!(vec![10, 11, 18, 19], left);
         for _ in 0..4 {
-            queue.swap_remove_front(0).unwrap();
+            queue.swap_remove_front(|_| true).unwrap();
         }
-        assert_eq!(None, queue.swap_remove_front(0));
+        assert_eq!(None, queue.swap_remove_front(|_| true));
     }
 
     #[test]
