@@ -106,6 +106,11 @@ max-background-compactions = 6
 # Maximum number of concurrent background flush jobs
 max-background-flushes = 2
 
+# This value represents the maximum number of threads that will concurrently perform a
+# compaction job by breaking it into multiple, smaller ones that are run simultaneously.
+# Default: 1 (i.e. no subcompactions)
+# max-sub-compactions = 1
+
 # Number of open files that can be used by the DB.  You may need to
 # increase this if your database has a large working set. Value -1 means
 # files opened are always kept open. You can estimate number of files based

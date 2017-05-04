@@ -330,6 +330,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
         get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
 
+    let max_sub_compactions = get_toml_int(config, "rocksdb.max-sub-compactions", Some(1));
+    opts.set_max_subcompactions(max_sub_compactions as usize);
+
     opts
 }
 
