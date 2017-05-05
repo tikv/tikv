@@ -869,7 +869,6 @@ fn main() {
         .author("PingCAP Inc. <info@pingcap.com>")
         .about("A Distributed transactional key-value database powered by Rust and Raft")
         .arg(Arg::with_name("config")
-            .required(true)
             .short("C")
             .long("config")
             .value_name("FILE")
@@ -945,7 +944,8 @@ fn main() {
             config_file.read_to_string(&mut s).expect("config read failed");
             toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
         }
-        None => unreachable!(),
+        // Default empty value, lookup() always returns `None`.
+        None => toml::Value::Integer(0)
     };
 
     init_log(&matches, &config);
