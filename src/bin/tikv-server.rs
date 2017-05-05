@@ -581,6 +581,15 @@ fn build_cfg(matches: &Matches,
                   "server.end-point-concurrency") {
         cfg.end_point_concurrency = adjust_end_points_by_cpu_num(total_cpu_num);
     }
+
+    if !cfg_usize(&mut cfg.end_point_txn_concurrency_on_busy,
+                  config,
+                  "server.end-point-txn-concurrency-on-busy") {
+        cfg.reset_end_point_txn_concurrency();
+        info!("server.end-point-txn-concurrency-on-busy keep default ratio with value = {}",
+              cfg.end_point_txn_concurrency_on_busy);
+    }
+
     cfg_usize(&mut cfg.messages_per_tick,
               config,
               "server.messages-per-tick");
