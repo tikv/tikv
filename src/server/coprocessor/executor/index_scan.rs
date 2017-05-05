@@ -15,9 +15,10 @@
 use server::coprocessor::endpoint::prefix_next;
 use server::coprocessor::Result;
 use tipb::executor::IndexScan;
+use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::KeyRange;
 use storage::{SnapshotStore, Statistics};
-use util::codec::table;
+use util::codec::{table, datum, mysql};
 use byteorder::{BigEndian, ReadBytesExt};
 use super::{Executor, Row};
 use super::base_scanner::BaseScanner;
@@ -28,6 +29,7 @@ struct IndexScanExec<'a> {
     cursor: usize,
     key_ranges: Vec<KeyRange>,
     scanner: BaseScanner<'a>,
+    pk_col: Option<ColumnInfo>,
 }
 
 impl<'a> IndexScanExec<'a> {
@@ -37,9 +39,17 @@ impl<'a> IndexScanExec<'a> {
                store: SnapshotStore<'a>,
                statistics: &'a mut Statistics)
                -> IndexScanExec<'a> {
+        let mut pk_col = None;
         let col_ids = meta.get_columns()
             .iter()
-            .filter(|c| !c.get_pk_handle())
+            .filter(|c| {
+                if c.get_pk_handle() {
+                    pk_col = Some((*c).clone());
+                    false
+                } else {
+                    true
+                }
+            })
             .map(|c| c.get_column_id())
             .collect();
         let scanner = BaseScanner::new(meta.get_desc(), false, store, statistics);
@@ -49,6 +59,7 @@ impl<'a> IndexScanExec<'a> {
             scanner: scanner,
             key_ranges: key_ranges,
             cursor: 0,
+            pk_col: pk_col,
         }
     }
 
@@ -70,7 +81,7 @@ impl<'a> IndexScanExec<'a> {
         };
         self.scanner.set_seek_key(Some(seek_key));
 
-        let (values, handle) = {
+        let (mut values, handle) = {
             box_try!(table::cut_idx_key(key, &self.col_ids))
         };
 
@@ -80,6 +91,16 @@ impl<'a> IndexScanExec<'a> {
             handle.unwrap()
         };
 
+        if let Some(ref pk_col) = self.pk_col {
+            let handle_datum = if mysql::has_unsigned_flag(pk_col.get_flag() as u64) {
+                // PK column is unsigned
+                datum::Datum::U64(handle as u64)
+            } else {
+                datum::Datum::I64(handle)
+            };
+            let mut bytes = datum::encode_value(&[handle_datum]).unwrap();
+            values.append(pk_col.get_column_id(), &mut bytes);
+        }
         Ok(Some(Row::new(handle, values)))
     }
 }
