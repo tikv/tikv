@@ -447,7 +447,6 @@ mod tests {
 
     use super::*;
     use kvproto::metapb::Region;
-    use util::collections::HashMap;
 
     #[test]
     fn test_base() {
@@ -602,10 +601,9 @@ mod tests {
         db_opt.set_write_buffer_size(1024);
         db_opt.compression(DBCompressionType::DBNo);
 
-        let engine = Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(),
-                                                      db_opt,
-                                                      HashMap::default())
-            .unwrap());
+        let engine =
+            Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(), db_opt, vec![])
+                .unwrap());
 
         let value = vec![0;1024];
         for i in 0..10 {
