@@ -36,7 +36,7 @@ use raftstore::store::{Store, cmd_resp, keys, util};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Snapshot, Peekable, Mutable};
 use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state, compact_raft_log};
-use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
+use raftstore::store::peer::{parse_data_at, check_epoch, Peer, ProposalBatch};
 use raftstore::store::metrics::*;
 
 
@@ -237,9 +237,7 @@ impl ApplyDelegate {
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
             };
 
-            if let Some(res) = res {
-                results.push(res);
-            }
+            results.extend(res);
         }
 
         slow_log!(t,
@@ -249,14 +247,30 @@ impl ApplyDelegate {
         results
     }
 
-    fn handle_raft_entry_normal(&mut self, entry: Entry) -> Option<ExecResult> {
+    fn handle_raft_entry_normal(&mut self, entry: Entry) -> Vec<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
-        let data = entry.get_data();
+        let mut data = entry.get_data();
 
         if !data.is_empty() {
-            let cmd = parse_data_at(data, index, &self.tag);
-            return self.process_raft_cmd(index, term, cmd);
+            let mut res = vec![];
+            let (mut data, is_new_version) = ProposalBatch::check_version(data);
+            if !is_new_version {
+                //let cmd = ProposalBatch::read_old_req(data);
+                let cmd = parse_data_at(data, index, &self.tag);
+                if let Some(exec_res) = self.process_raft_cmd(index, term, cmd) {
+                    res.push(exec_res);
+                }
+            } else {
+                while !data.is_empty() {
+                    let (left, cmd) = ProposalBatch::read_req(data);
+                    if let Some(exec_res) = self.process_raft_cmd(index, term, cmd) {
+                        res.push(exec_res);
+                    }
+                    data = left;
+                }
+            }
+            return res;
         }
 
         // when a peer become leader, it will send an empty entry.
@@ -282,15 +296,15 @@ impl ApplyDelegate {
             // apprently, all the callbacks whose term is less than entry's term are stale.
             notify_stale_command(&self.tag, self.term, cmd);
         }
-        None
+        vec![]
     }
 
-    fn handle_raft_entry_conf_change(&mut self, entry: Entry) -> Option<ExecResult> {
+    fn handle_raft_entry_conf_change(&mut self, entry: Entry) -> Vec<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        Some(self.process_raft_cmd(index, term, cmd).map_or_else(|| {
+        let result = Some(self.process_raft_cmd(index, term, cmd).map_or_else(|| {
             // If failed, tell raft that the config change was aborted.
             ExecResult::ChangePeer(Default::default())
         }, |mut res| {
@@ -304,7 +318,8 @@ impl ApplyDelegate {
                        index);
             }
             res
-        }))
+        }));
+        result.map_or_else(|| vec![], |r| vec![r])
     }
 
     fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
