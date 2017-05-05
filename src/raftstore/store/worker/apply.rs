@@ -1113,15 +1113,15 @@ pub struct Destroy {
 
 /// region related task.
 pub enum Task {
-    Applys(Vec<Apply>),
+    Applies(Vec<Apply>),
     Registration(Registration),
     Propose(Propose),
     Destroy(Destroy),
 }
 
 impl Task {
-    pub fn applys(applys: Vec<Apply>) -> Task {
-        Task::Applys(applys)
+    pub fn applies(applies: Vec<Apply>) -> Task {
+        Task::Applies(applies)
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -1153,7 +1153,7 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Applys(ref a) => write!(f, "async applys count {}", a.len()),
+            Task::Applies(ref a) => write!(f, "async applys count {}", a.len()),
             Task::Propose(ref p) => write!(f, "[region {}] propose", p.region_id),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
@@ -1210,7 +1210,7 @@ impl Runner {
         }
     }
 
-    fn handle_apply(&mut self, applys: Vec<Apply>) {
+    fn handle_applies(&mut self, applys: Vec<Apply>) {
         let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
 
         let mut applys_res = Vec::with_capacity(applys.len());
@@ -1319,7 +1319,7 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Applys(a) => self.handle_apply(a),
+            Task::Applies(a) => self.handle_applies(a),
             Task::Propose(p) => self.handle_propose(p),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
@@ -1468,18 +1468,18 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::applys(vec![Apply::new(1, 1, vec![new_entry(2, 3, None)])]));
+        runner.run(Task::applies(vec![Apply::new(1, 1, vec![new_entry(2, 3, None)])]));
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
-        runner.run(Task::applys(vec![Apply::new(2, 11, vec![])]));
+        runner.run(Task::applies(vec![Apply::new(2, 11, vec![])]));
         // empty entries should be ignored.
         assert!(rx.try_recv().is_err());
         assert_eq!(runner.delegates[&2].term, reg.term);
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(db.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::applys(vec![Apply::new(2, 11, vec![new_entry(5, 4, None)])]));
+        runner.run(Task::applies(vec![Apply::new(2, 11, vec![new_entry(5, 4, None)])]));
         let res = match rx.try_recv() {
             Ok(TaskRes::Applys(res)) => res,
             e => panic!("unexpected apply result: {:?}", e),

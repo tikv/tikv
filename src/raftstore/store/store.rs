@@ -932,7 +932,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 self.on_ready_apply_snapshot(apply_result);
             }
         }
-        self.apply_worker.schedule(ApplyTask::applys(apply_tasks)).unwrap();
+        self.apply_worker.schedule(ApplyTask::applies(apply_tasks)).unwrap();
 
         let dur = t.elapsed();
         if !self.is_busy {
