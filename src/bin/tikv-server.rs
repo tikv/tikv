@@ -307,6 +307,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
     opts.set_max_background_flushes(max_background_flushes as i32);
 
+    let base_bg_compactions = get_toml_int(config, "rocksdb.base-background-compactions", Some(1));
+    opts.set_base_background_compactions(base_bg_compactions as i32);
+
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
                                               Some(20 * 1024 * 1024));
