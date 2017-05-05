@@ -60,9 +60,9 @@ dependencies:
       if [[ ! -e $HOME/.local/lib/librocksdb.so ]]; then
         export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
         cd /tmp && \
-        curl -L https://github.com/facebook/rocksdb/archive/v5.0.1.tar.gz -o rocksdb.tar.gz && \
+        curl -L https://github.com/facebook/rocksdb/archive/v5.2.1.tar.gz -o rocksdb.tar.gz && \
         tar xf rocksdb.tar.gz && \
-        cd rocksdb-5.0.1 && \
+        cd rocksdb-5.2.1 && \
         INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared;
       fi
   post:
