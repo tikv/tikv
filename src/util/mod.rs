@@ -478,9 +478,20 @@ impl<T> RingQueue<T> {
         self.buf.iter()
     }
 
-    pub fn swap_remove_front(&mut self, pos: usize) -> Option<T> {
-        self.buf.swap_remove_front(pos)
+    pub fn swap_remove_front<F>(&mut self, f: F) -> Option<T>
+        where F: FnMut(&T) -> bool
+    {
+        if let Some(pos) = self.buf.iter().position(f) {
+            self.buf.swap_remove_front(pos)
+        } else {
+            None
+        }
     }
+}
+
+// `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
+pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
+    a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
 }
 
 #[cfg(test)]
@@ -527,17 +538,18 @@ mod tests {
             queue.push(num);
             assert_eq!(queue.len(), cmp::min(num + 1, 10));
         }
-        assert_eq!(None, queue.swap_remove_front(10));
+        assert_eq!(None, queue.swap_remove_front(|i| *i == 20));
         for i in 0..6 {
-            assert_eq!(Some(12 + i), queue.swap_remove_front(2));
+            assert_eq!(Some(12 + i), queue.swap_remove_front(|e| *e == 12 + i));
             assert_eq!(queue.len(), 9 - i);
         }
+
         let left: Vec<_> = queue.iter().cloned().collect();
         assert_eq!(vec![10, 11, 18, 19], left);
         for _ in 0..4 {
-            queue.swap_remove_front(0).unwrap();
+            queue.swap_remove_front(|_| true).unwrap();
         }
-        assert_eq!(None, queue.swap_remove_front(0));
+        assert_eq!(None, queue.swap_remove_front(|_| true));
     }
 
     #[test]
@@ -621,5 +633,21 @@ mod tests {
             limit_size(&mut entries, max);
             assert_eq!(entries.len(), len);
         }
+    }
+
+    #[test]
+    fn test_cfs_diff() {
+        let a = vec!["1", "2", "3"];
+        let a_diff_a = cfs_diff(&a, &a);
+        assert!(a_diff_a.is_empty());
+        let b = vec!["4"];
+        assert_eq!(a, cfs_diff(&a, &b));
+        let c = vec!["4", "5", "3", "6"];
+        assert_eq!(vec!["1", "2"], cfs_diff(&a, &c));
+        assert_eq!(vec!["4", "5", "6"], cfs_diff(&c, &a));
+        let d = vec!["1", "2", "3", "4"];
+        let a_diff_d = cfs_diff(&a, &d);
+        assert!(a_diff_d.is_empty());
+        assert_eq!(vec!["4"], cfs_diff(&d, &a));
     }
 }
