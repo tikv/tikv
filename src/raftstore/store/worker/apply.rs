@@ -39,6 +39,7 @@ use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state
 use raftstore::store::peer::{parse_data_at, check_epoch, Peer, ProposalBatch};
 use raftstore::store::metrics::*;
 
+const WRITE_BATCH_MAX_KEYS: usize = 128;
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -134,6 +135,53 @@ pub enum ExecResult {
     VerifyHash { index: u64, hash: Vec<u8> },
 }
 
+struct ApplyContext {
+    pub wb: Option<WriteBatch>,
+    pub cbs: Vec<(Callback, RaftCmdResponse)>,
+    pub wb_last_bytes: u64,
+    pub wb_last_keys: u64,
+}
+
+impl ApplyContext {
+    fn new() -> ApplyContext {
+        ApplyContext {
+            wb: Some(WriteBatch::new()),
+            cbs: vec![],
+            wb_last_bytes: 0,
+            wb_last_keys: 0,
+        }
+    }
+
+    pub fn wb_mut(&mut self) -> &mut WriteBatch {
+        self.wb.as_mut().unwrap()
+    }
+
+    pub fn wb_ref(&self) -> &WriteBatch {
+        self.wb.as_ref().unwrap()
+    }
+
+    pub fn mark_last_bytes_and_keys(&mut self) {
+        self.wb_last_bytes = self.wb_ref().data_size() as u64;
+        self.wb_last_keys = self.wb_ref().count() as u64;
+    }
+
+    pub fn delta_bytes(&self) -> u64 {
+        self.wb_ref().data_size() as u64 - self.wb_last_bytes
+    }
+
+    pub fn delta_keys(&self) -> u64 {
+        self.wb_ref().count() as u64 - self.wb_last_keys
+    }
+}
+
+impl Drop for ApplyContext {
+    fn drop(&mut self) {
+        if !self.cbs.is_empty() {
+            panic!("callback of apply context is leak");
+        }
+    }
+}
+
 /// Call the callback of `cmd` that the region is removed.
 fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     notify_req_region_removed(region_id, peer_id, cmd.uuid, cmd.cb.take().unwrap());
@@ -155,10 +203,29 @@ fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
     notify_stale_req(tag, term, cmd.uuid, cmd.cb.take().unwrap())
 }
 
-pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
-    let resp = cmd_resp::err_resp(Error::StaleCommand, uuid, term);
+fn gen_stale_req(tag: &str, uuid: Uuid, term: u64) -> RaftCmdResponse {
     info!("{} command {} is stale, skip", tag, uuid);
+    cmd_resp::err_resp(Error::StaleCommand, uuid, term)
+}
+
+pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
+    let resp = gen_stale_req(tag, uuid, term);
     cb(resp);
+}
+
+fn should_flush_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
+    // When encounter ComputeHash cmd, we must flush the write batch to engine immediately.
+    if cmd.has_admin_request() &&
+       cmd.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash {
+        return true;
+    }
+
+    // When write batch contains more than `recommended` keys, flush the batch to engine.
+    if wb_keys >= WRITE_BATCH_MAX_KEYS {
+        return true;
+    }
+
+    false
 }
 
 #[derive(Debug)]
@@ -208,7 +275,10 @@ impl ApplyDelegate {
         }
     }
 
-    fn handle_raft_committed_entries(&mut self, committed_entries: Vec<Entry>) -> Vec<ExecResult> {
+    fn handle_raft_committed_entries(&mut self,
+                                     apply_ctx: &mut ApplyContext,
+                                     committed_entries: Vec<Entry>)
+                                     -> Vec<ExecResult> {
         if committed_entries.is_empty() {
             return vec![];
         }
@@ -233,12 +303,19 @@ impl ApplyDelegate {
             }
 
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(entry),
-                EntryType::EntryConfChange => self.handle_raft_entry_conf_change(entry),
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, entry),
+                EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, entry),
             };
 
             results.extend(res);
         }
+
+        if !self.pending_remove {
+            self.write_apply_state(apply_ctx.wb_mut());
+        }
+
+        self.update_metrics(apply_ctx);
+        apply_ctx.mark_last_bytes_and_keys();
 
         slow_log!(t,
                   "{} handle ready {} committed entries",
@@ -247,26 +324,91 @@ impl ApplyDelegate {
         results
     }
 
-    fn handle_raft_entry_normal(&mut self, entry: Entry) -> Vec<ExecResult> {
+    fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
+        self.metrics.written_bytes += apply_ctx.delta_bytes();
+        self.metrics.written_keys += apply_ctx.delta_keys();
+    }
+
+    fn write_apply_state(&self, wb: &WriteBatch) {
+        rocksdb::get_cf_handle(&self.engine, CF_RAFT)
+            .map_err(From::from)
+            .and_then(|handle| {
+                wb.put_msg_cf(handle,
+                              &keys::apply_state_key(self.region.get_id()),
+                              &self.apply_state)
+            })
+            .unwrap_or_else(|e| {
+                panic!("{} failed to save apply state to write batch, error: {:?}",
+                       self.tag,
+                       e);
+            });
+    }
+
+    fn handle_raft_entry_normal(&mut self,
+                                apply_ctx: &mut ApplyContext,
+                                entry: Entry)
+                                -> Vec<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let mut data = entry.get_data();
 
         if !data.is_empty() {
             let mut res = vec![];
-            let (mut data, is_new_version) = ProposalBatch::check_version(data);
+            let (mut data, is_new_version) = ProposalBatch::check_new_version(data);
             if !is_new_version {
-                //let cmd = ProposalBatch::read_old_req(data);
                 let cmd = parse_data_at(data, index, &self.tag);
-                if let Some(exec_res) = self.process_raft_cmd(index, term, cmd) {
+
+                if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
+                    self.write_apply_state(apply_ctx.wb_mut());
+
+                    self.update_metrics(apply_ctx);
+
+                    // flush to engine
+                    self.engine
+                        .write(apply_ctx.wb.take().unwrap())
+                        .unwrap_or_else(|e| {
+                            panic!("{} failed to write to engine, error: {:?}", self.tag, e)
+                        });
+
+                    // call callback
+                    for (cb, resp) in apply_ctx.cbs.drain(..) {
+                        cb(resp);
+                    }
+                    apply_ctx.wb = Some(WriteBatch::new());
+                    apply_ctx.mark_last_bytes_and_keys();
+                }
+
+                if let Some(exec_res) = self.process_raft_cmd(apply_ctx, index, term, cmd) {
                     res.push(exec_res);
                 }
             } else {
                 while !data.is_empty() {
                     let (left, cmd) = ProposalBatch::read_req(data);
-                    if let Some(exec_res) = self.process_raft_cmd(index, term, cmd) {
+
+                    if left.is_empty() && should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
+                        self.write_apply_state(apply_ctx.wb_mut());
+
+                        self.update_metrics(apply_ctx);
+
+                        // flush to engine
+                        self.engine
+                            .write(apply_ctx.wb.take().unwrap())
+                            .unwrap_or_else(|e| {
+                                panic!("{} failed to write to engine, error: {:?}", self.tag, e)
+                            });
+
+                        // call callback
+                        for (cb, resp) in apply_ctx.cbs.drain(..) {
+                            cb(resp);
+                        }
+                        apply_ctx.wb = Some(WriteBatch::new());
+                        apply_ctx.mark_last_bytes_and_keys();
+                    }
+
+                    if let Some(exec_res) = self.process_raft_cmd(apply_ctx, index, term, cmd) {
                         res.push(exec_res);
                     }
+                    
                     data = left;
                 }
             }
@@ -274,37 +416,28 @@ impl ApplyDelegate {
         }
 
         // when a peer become leader, it will send an empty entry.
-        let wb = WriteBatch::new();
         let mut state = self.apply_state.clone();
         state.set_applied_index(index);
-        rocksdb::get_cf_handle(&self.engine, CF_RAFT)
-            .map_err(From::from)
-            .and_then(|handle| {
-                wb.put_msg_cf(handle, &keys::apply_state_key(self.region.get_id()), &state)
-            })
-            .and_then(|_| self.engine.write(wb).map_err(From::from))
-            .unwrap_or_else(|e| {
-                panic!("{} failed to apply empty entry at {}: {:?}",
-                       self.tag,
-                       index,
-                       e);
-            });
         self.apply_state = state;
         self.applied_index_term = term;
         assert!(term > 0);
-        while let Some(cmd) = self.pending_cmds.pop_normal(term - 1) {
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
-            notify_stale_command(&self.tag, self.term, cmd);
+            apply_ctx.cbs
+                .push((cmd.cb.take().unwrap(), gen_stale_req(&self.tag, cmd.uuid, cmd.term)));
         }
         vec![]
     }
 
-    fn handle_raft_entry_conf_change(&mut self, entry: Entry) -> Vec<ExecResult> {
+    fn handle_raft_entry_conf_change(&mut self,
+                                     apply_ctx: &mut ApplyContext,
+                                     entry: Entry)
+                                     -> Vec<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        let result = Some(self.process_raft_cmd(index, term, cmd).map_or_else(|| {
+        let result = Some(self.process_raft_cmd(apply_ctx, index, term, cmd).map_or_else(|| {
             // If failed, tell raft that the config change was aborted.
             ExecResult::ChangePeer(Default::default())
         }, |mut res| {
@@ -346,6 +479,7 @@ impl ApplyDelegate {
     }
 
     fn process_raft_cmd(&mut self,
+                        apply_ctx: &mut ApplyContext,
                         index: u64,
                         term: u64,
                         cmd: RaftCmdRequest)
@@ -357,9 +491,7 @@ impl ApplyDelegate {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cmd_cb = self.find_cb(uuid, term, &cmd);
-        let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
-        let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
-        timer.observe_duration();
+        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
 
         debug!("{} applied command with uuid {:?} at log index {}",
                self.tag,
@@ -377,7 +509,7 @@ impl ApplyDelegate {
         // Bind uuid here.
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term);
-        cb.call_box((resp,));
+        apply_ctx.cbs.push((cb, resp));
 
         exec_result
     }
@@ -389,6 +521,7 @@ impl ApplyDelegate {
     // we should try to apply the entry again or panic. Considering that this
     // usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(&mut self,
+                      wb: &mut WriteBatch,
                       index: u64,
                       term: u64,
                       req: &RaftCmdRequest)
@@ -396,10 +529,11 @@ impl ApplyDelegate {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
-        let mut ctx = self.new_ctx(index, term, req);
+        let mut ctx = self.new_ctx(wb, index, term, req);
+        ctx.wb.set_save_point();
         let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             // clear dirty values.
-            ctx.wb.clear();
+            ctx.wb.rollback_to_save_point().unwrap();
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
@@ -408,18 +542,6 @@ impl ApplyDelegate {
         });
 
         ctx.apply_state.set_applied_index(index);
-        if !self.pending_remove {
-            ctx.save(self.region.get_id())
-                .unwrap_or_else(|e| panic!("{} failed to save apply context: {:?}", self.tag, e));
-        }
-
-        self.metrics.written_bytes += ctx.wb.data_size() as u64;
-        self.metrics.written_keys += ctx.wb.count() as u64;
-
-        // Commit write and change storage fields atomically.
-        self.engine
-            .write(ctx.wb)
-            .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
 
         self.apply_state = ctx.apply_state;
         self.applied_index_term = term;
@@ -484,11 +606,16 @@ impl ApplyDelegate {
         }
     }
 
-    fn new_ctx<'a>(&self, index: u64, term: u64, req: &'a RaftCmdRequest) -> ExecContext<'a> {
+    fn new_ctx<'a>(&self,
+                   wb: &'a mut WriteBatch,
+                   index: u64,
+                   term: u64,
+                   req: &'a RaftCmdRequest)
+                   -> ExecContext<'a> {
         ExecContext {
             snap: Snapshot::new(self.engine.clone()),
             apply_state: self.apply_state.clone(),
-            wb: WriteBatch::new(),
+            wb: wb,
             req: req,
             index: index,
             term: term,
@@ -499,20 +626,10 @@ impl ApplyDelegate {
 struct ExecContext<'a> {
     snap: Snapshot,
     apply_state: RaftApplyState,
-    wb: WriteBatch,
+    wb: &'a mut WriteBatch,
     req: &'a RaftCmdRequest,
     index: u64,
     term: u64,
-}
-
-impl<'a> ExecContext<'a> {
-    fn save(&self, region_id: u64) -> Result<()> {
-        let raft_cf = try!(self.snap.cf_handle(CF_RAFT));
-        try!(self.wb.put_msg_cf(raft_cf,
-                                &keys::apply_state_key(region_id),
-                                &self.apply_state));
-        Ok(())
-    }
 }
 
 // Here we implement all commands.
@@ -638,7 +755,7 @@ impl ApplyDelegate {
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(&ctx.wb, &region, state) {
+        if let Err(e) = write_peer_state(ctx.wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -709,9 +826,9 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(&ctx.wb, &region, PeerState::Normal)
-            .and_then(|_| write_peer_state(&ctx.wb, &new_region, PeerState::Normal))
-            .and_then(|_| write_initial_state(self.engine.as_ref(), &ctx.wb, new_region.get_id()))
+        write_peer_state(ctx.wb, &region, PeerState::Normal)
+            .and_then(|_| write_peer_state(ctx.wb, &new_region, PeerState::Normal))
+            .and_then(|_| write_initial_state(self.engine.as_ref(), ctx.wb, new_region.get_id()))
             .unwrap_or_else(|e| {
                 panic!("{} failed to save split region {:?}: {:?}",
                        self.tag,
@@ -984,6 +1101,16 @@ pub struct Apply {
     entries: Vec<Entry>,
 }
 
+impl Apply {
+    pub fn new(region_id: u64, term: u64, entries: Vec<Entry>) -> Apply {
+        Apply {
+            region_id: region_id,
+            term: term,
+            entries: entries,
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct Registration {
     pub id: u64,
@@ -1020,19 +1147,15 @@ pub struct Destroy {
 
 /// region related task.
 pub enum Task {
-    Apply(Apply),
+    Applies(Vec<Apply>),
     Registration(Registration),
     Propose(Propose),
     Destroy(Destroy),
 }
 
 impl Task {
-    pub fn apply(region_id: u64, term: u64, entries: Vec<Entry>) -> Task {
-        Task::Apply(Apply {
-            region_id: region_id,
-            term: term,
-            entries: entries,
-        })
+    pub fn applies(applies: Vec<Apply>) -> Task {
+        Task::Applies(applies)
     }
 
     pub fn register(peer: &Peer) -> Task {
@@ -1064,7 +1187,7 @@ impl Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
-            Task::Apply(ref a) => write!(f, "[region {}] async apply", a.region_id),
+            Task::Applies(ref a) => write!(f, "async applys count {}", a.len()),
             Task::Propose(ref p) => write!(f, "[region {}] propose", p.region_id),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
@@ -1097,7 +1220,7 @@ pub struct ApplyRes {
 
 #[derive(Debug)]
 pub enum TaskRes {
-    Apply(ApplyRes),
+    Applys(Vec<ApplyRes>),
     Destroy(ApplyDelegate),
 }
 
@@ -1121,39 +1244,57 @@ impl Runner {
         }
     }
 
-    fn handle_apply(&mut self, apply: Apply) {
-        if apply.entries.is_empty() {
-            return;
-        }
-        let mut e = match self.delegates.entry(apply.region_id) {
-            MapEntry::Vacant(_) => {
-                error!("[region {}] is missing", apply.region_id);
-                return;
-            }
-            MapEntry::Occupied(e) => e,
-        };
-        {
-            let delegate = e.get_mut();
-            delegate.metrics = ApplyMetrics::default();
-            delegate.term = apply.term;
-            let results = delegate.handle_raft_committed_entries(apply.entries);
+    fn handle_applies(&mut self, applys: Vec<Apply>) {
+        let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
 
-            if delegate.pending_remove {
-                delegate.destroy();
+        let mut applys_res = Vec::with_capacity(applys.len());
+        let mut apply_ctx = ApplyContext::new();
+        for apply in applys {
+            if apply.entries.is_empty() {
+                continue;
             }
+            let mut e = match self.delegates.entry(apply.region_id) {
+                MapEntry::Vacant(_) => {
+                    error!("[region {}] is missing", apply.region_id);
+                    continue;
+                }
+                MapEntry::Occupied(e) => e,
+            };
+            {
+                let delegate = e.get_mut();
+                delegate.metrics = ApplyMetrics::default();
+                delegate.term = apply.term;
+                let results = delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
 
-            self.notifier
-                .send(TaskRes::Apply(ApplyRes {
+                if delegate.pending_remove {
+                    delegate.destroy();
+                }
+
+                applys_res.push(ApplyRes {
                     region_id: apply.region_id,
                     apply_state: delegate.apply_state.clone(),
                     exec_res: results,
                     metrics: delegate.metrics.clone(),
                     applied_index_term: delegate.applied_index_term,
-                }))
-                .unwrap();
+                });
+            }
+            if e.get().pending_remove {
+                e.remove();
+            }
         }
-        if e.get().pending_remove {
-            e.remove();
+
+        // Write to engine
+        self.db
+            .write(apply_ctx.wb.take().unwrap())
+            .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
+
+        // Call callbacks
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+
+        if !applys_res.is_empty() {
+            self.notifier.send(TaskRes::Applys(applys_res)).unwrap();
         }
     }
 
@@ -1212,7 +1353,7 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Apply(a) => self.handle_apply(a),
+            Task::Applies(a) => self.handle_applies(a),
             Task::Propose(p) => self.handle_propose(p),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
@@ -1229,7 +1370,7 @@ mod tests {
     use std::sync::*;
 
     use tempdir::TempDir;
-    use rocksdb::DB;
+    use rocksdb::{DB, WriteBatch, Writable};
     use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::CmdType;
@@ -1258,6 +1399,33 @@ mod tests {
         e.set_term(term);
         req.map(|r| e.set_data(r.write_to_bytes().unwrap()));
         e
+    }
+
+    #[test]
+    fn test_should_flush_to_engine() {
+        // ComputeHash command
+        let mut req = RaftCmdRequest::new();
+        req.mut_admin_request().set_cmd_type(AdminCmdType::ComputeHash);
+        let wb = WriteBatch::new();
+        assert_eq!(should_flush_to_engine(&req, wb.count()), true);
+
+        // Write batch keys reach WRITE_BATCH_MAX_KEYS
+        let req = RaftCmdRequest::new();
+        let wb = WriteBatch::new();
+        for i in 0..WRITE_BATCH_MAX_KEYS {
+            let key = format!("key_{}", i);
+            wb.put(key.as_bytes(), b"value").unwrap();
+        }
+        assert_eq!(should_flush_to_engine(&req, wb.count()), true);
+
+        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
+        let req = RaftCmdRequest::new();
+        let wb = WriteBatch::new();
+        for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
+            let key = format!("key_{}", i);
+            wb.put(key.as_bytes(), b"value").unwrap();
+        }
+        assert_eq!(should_flush_to_engine(&req, wb.count()), false);
     }
 
     #[test]
@@ -1334,27 +1502,29 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        runner.run(Task::apply(1, 1, vec![new_entry(2, 3, None)]));
+        runner.run(Task::applies(vec![Apply::new(1, 1, vec![new_entry(2, 3, None)])]));
         // non registered region should be ignored.
         assert!(rx.try_recv().is_err());
 
-        runner.run(Task::apply(2, 11, vec![]));
+        runner.run(Task::applies(vec![Apply::new(2, 11, vec![])]));
         // empty entries should be ignored.
         assert!(rx.try_recv().is_err());
         assert_eq!(runner.delegates[&2].term, reg.term);
 
         let apply_state_key = keys::apply_state_key(2);
         assert!(db.get(&apply_state_key).unwrap().is_none());
-        runner.run(Task::apply(2, 11, vec![new_entry(5, 4, None)]));
-        let apply_res = match rx.try_recv() {
-            Ok(TaskRes::Apply(res)) => res,
+        runner.run(Task::applies(vec![Apply::new(2, 11, vec![new_entry(5, 4, None)])]));
+        let res = match rx.try_recv() {
+            Ok(TaskRes::Applys(res)) => res,
             e => panic!("unexpected apply result: {:?}", e),
         };
+        assert_eq!(res.len(), 1);
+        let apply_res = &res[0];
         assert_eq!(apply_res.region_id, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         assert!(apply_res.exec_res.is_empty());
-        // empty entry should not change metrics.
-        assert_eq!(apply_res.metrics, ApplyMetrics::default());
+        // empty entry will make applied_index step forward and should write apply state to engine.
+        assert_eq!(apply_res.metrics.written_keys, 1);
         assert_eq!(apply_res.applied_index_term, 5);
         {
             let delegate = &runner.delegates[&2];
@@ -1461,7 +1631,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_raft_entry_normal() {
+    fn test_handle_raft_committed_entries() {
         let (_path, db) = create_tmp_engine("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
@@ -1474,8 +1644,13 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let res = delegate.handle_raft_entry_normal(put_entry);
-        assert!(res.is_none());
+        let mut apply_ctx = ApplyContext::new();
+        let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+        assert!(res.is_empty());
         let resp = rx.try_recv().unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         assert_eq!(resp.get_responses().len(), 1);
@@ -1489,7 +1664,12 @@ mod tests {
         let written_keys = delegate.metrics.written_keys;
         let size_diff_hint = delegate.metrics.size_diff_hint;
         let put_entry = EntryBuilder::new(2, 2).put_cf(CF_LOCK, b"k1", b"v1").epoch(1, 3).build();
-        delegate.handle_raft_entry_normal(put_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let lock_handle = db.cf_handle(CF_LOCK).unwrap();
         assert_eq!(db.get_cf(lock_handle, &dk_k1).unwrap().unwrap(), b"v1");
         assert_eq!(delegate.metrics.lock_cf_written_bytes,
@@ -1505,7 +1685,12 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        delegate.handle_raft_entry_normal(put_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_stale_epoch());
         assert_eq!(delegate.applied_index_term, 2);
@@ -1517,7 +1702,12 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        delegate.handle_raft_entry_normal(put_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         assert_eq!(delegate.applied_index_term, 2);
@@ -1527,7 +1717,7 @@ mod tests {
         assert!(db.get(&dk_k3).unwrap().is_none());
 
         EntryBuilder::new(5, 2).capture_resp(&mut delegate, tx.clone()).build();
-        let put_entry = EntryBuilder::new(6, 2)
+        let put_entry = EntryBuilder::new(5, 2)
             .delete(b"k1")
             .delete_cf(CF_LOCK, b"k1")
             .delete_cf(CF_WRITE, b"k1")
@@ -1537,7 +1727,12 @@ mod tests {
         let lock_written_bytes = delegate.metrics.lock_cf_written_bytes;
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
-        delegate.handle_raft_entry_normal(put_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let resp = rx.try_recv().unwrap();
         // stale command should be cleared.
         assert!(resp.get_header().get_error().has_stale_command());
@@ -1549,13 +1744,39 @@ mod tests {
         assert_eq!(delegate.metrics.delete_keys_hint, delete_keys_hint + 2);
         assert_eq!(delegate.metrics.size_diff_hint, size_diff_hint - 9);
 
-        let delete_entry = EntryBuilder::new(7, 2)
+        let delete_entry = EntryBuilder::new(6, 2)
             .delete(b"k5")
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        delegate.handle_raft_entry_normal(delete_entry);
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
         let resp = rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
+
+        let mut entries = vec![];
+        for i in 0..WRITE_BATCH_MAX_KEYS {
+            let put_entry = EntryBuilder::new(i as u64 + 7, 2)
+                .put(b"k", b"v")
+                .epoch(1, 3)
+                .capture_resp(&mut delegate, tx.clone())
+                .build();
+            entries.push(put_entry);
+        }
+        let mut apply_ctx = ApplyContext::new();
+        delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
+        db.write(apply_ctx.wb.take().unwrap()).unwrap();
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
+        }
+        for _ in 0..WRITE_BATCH_MAX_KEYS {
+            rx.try_recv().unwrap();
+        }
+        assert_eq!(delegate.apply_state.get_applied_index(),
+                   WRITE_BATCH_MAX_KEYS as u64 + 6);
     }
 }

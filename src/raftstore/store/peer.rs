@@ -39,7 +39,7 @@ use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker as Worker, Scheduler};
-use raftstore::store::worker::{ApplyTask, ApplyRes};
+use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either, strftimespec};
 use util::collections::{HashMap, HashSet, HashMapValues as Values};
 use util::codec::number::{NumberEncoder, NumberDecoder};
@@ -57,8 +57,8 @@ use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
-const PROPOSAL_BATCH_SIZE: u64 = 64 * 1024; // 64K
-const PROPOSAL_BATCH_MAGIC_NUM: u64 = 20170505;
+const PROPOSAL_BATCH_SIZE: u64 = 16 * 1024; // 16K
+const PROPOSAL_BATCH_MAGIC_NUM: &'static [u8] = &[0, 0, 0, 0, 1, 51, 199, 9];  // 20170505
 
 struct ReadIndexRequest {
     uuid: Uuid,
@@ -157,7 +157,7 @@ impl ProposalBatch {
     }
 
     fn write_data(mut data: Vec<u8>, req: &RaftCmdRequest, req_size: u64) -> Vec<u8> {
-        data.encode_var_u64(PROPOSAL_BATCH_MAGIC_NUM);
+        data = PROPOSAL_BATCH_MAGIC_NUM.to_vec();
         data.encode_var_u64(req_size as u64).unwrap();
         req.write_to_vec(&mut data).unwrap();
         data
@@ -170,7 +170,7 @@ impl ProposalBatch {
                req_size: u64,
                err_resp: RaftCmdResponse) {
         if self.data.is_empty() {
-            self.data.encode_var_u64(PROPOSAL_BATCH_MAGIC_NUM);
+            self.data = PROPOSAL_BATCH_MAGIC_NUM.to_vec();
         }
         self.data.encode_var_u64(req_size).unwrap();
         req.write_to_vec(&mut self.data).unwrap();
@@ -178,13 +178,12 @@ impl ProposalBatch {
         self.ctx.push((meta, cb, err_resp));
     }
 
-    pub fn check_version(mut buf: &[u8]) -> (&[u8], bool) {
+    pub fn check_new_version(mut buf: &[u8]) -> (&[u8], bool) {
         if buf.len() <= 8 {
             return (buf, false);
         }
-        let magic_num = buf.decode_var_u64().unwrap();
-        if magic_num == PROPOSAL_BATCH_MAGIC_NUM {
-            let (msg, left) = buf.split_at(8);
+        if buf.starts_with(PROPOSAL_BATCH_MAGIC_NUM) {
+            let (_, left) = buf.split_at(8);
             return (left, true);
         }
         (buf, false)
@@ -781,7 +780,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready) {
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -813,8 +812,7 @@ impl Peer {
             }
             if !committed_entries.is_empty() {
                 self.last_ready_idx = committed_entries.last().unwrap().get_index();
-                let apply_task = ApplyTask::apply(self.region_id, self.term(), committed_entries);
-                self.apply_scheduler.schedule(apply_task).unwrap();
+                apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
 
@@ -1019,7 +1017,7 @@ impl Peer {
             }
             Ok(RequestPolicy::ProposeNormal) => {
                 self.maybe_propose_normal(meta, cb, req, err_resp, metrics);
-                return false;
+                return true;
             }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics);
@@ -1221,13 +1219,13 @@ impl Peer {
     }
 
     fn flush_pending_proposal(&mut self) {
+        if self.pending_proposal.data.is_empty() {
+            return;
+        }
         let is_leader = self.is_leader();
         let leader = self.get_peer_from_cache(self.leader_id());
         let term = self.term();
 
-        if self.pending_proposal.data.is_empty() {
-            return;
-        }
         let data: Vec<u8> = self.pending_proposal.data.drain(..).collect();
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
