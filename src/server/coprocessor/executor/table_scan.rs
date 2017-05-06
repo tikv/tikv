@@ -19,14 +19,14 @@ use storage::{SnapshotStore, Statistics};
 use util::codec::table;
 use util::collections::HashSet;
 use super::{Executor, Row};
-use super::base_scanner::BaseScanner;
+use super::scanner::Scanner;
 
 struct TableScanExec<'a> {
     meta: TableScan,
     col_ids: HashSet<i64>,
     cursor: usize,
     key_ranges: Vec<KeyRange>,
-    scanner: BaseScanner<'a>,
+    scanner: Scanner<'a>,
 }
 
 impl<'a> TableScanExec<'a> {
@@ -41,7 +41,7 @@ impl<'a> TableScanExec<'a> {
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = BaseScanner::new(meta.get_desc(), false, store, statistics);
+        let scanner = Scanner::new(meta.get_desc(), false, store, statistics);
         TableScanExec {
             meta: meta,
             col_ids: col_ids,
@@ -74,7 +74,7 @@ impl<'a> TableScanExec<'a> {
         let value = try!(self.scanner.get_row_from_point(key));
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
-            let h = box_try!(table::decode_handle(self.key_ranges[self.cursor].get_start()));
+            let h = box_try!(table::decode_handle(key));
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
@@ -106,7 +106,7 @@ impl<'a> Executor for TableScanExec<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::super::base_scanner::test::{Data, TestStore, prepare_table_data, get_range};
+    use super::super::scanner::test::{Data, TestStore, prepare_table_data, get_range};
     use std::i64;
     use tipb::schema::ColumnInfo;
     use storage::Statistics;

@@ -15,7 +15,7 @@ use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
 
 
-mod base_scanner;
+mod scanner;
 pub mod table_scan;
 
 #[allow(dead_code)] //TODO:remove it
