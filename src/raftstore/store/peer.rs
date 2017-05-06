@@ -818,7 +818,7 @@ impl Peer {
                 // have no effect. Although this may allow old uuids to be reused before old
                 // callbacks are called.
                 self.proposals.clear();
-                self.pending_proposal.clear();
+                self.clear_pending_proposal();
             }
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
@@ -1034,7 +1034,6 @@ impl Peer {
             }
             Ok(RequestPolicy::ProposeNormal) => {
                 self.maybe_propose_normal(meta, cb, req, err_resp, metrics);
-                return true;
             }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics);
@@ -1279,6 +1278,22 @@ impl Peer {
         }
 
         self.pending_proposal.uuids.clear();
+    }
+
+    fn clear_pending_proposal(&mut self) {
+        if self.pending_proposal.is_empty() {
+            return;
+        }
+        let leader = self.get_peer_from_cache(self.leader_id());
+        let err: errorpb::Error = Error::NotLeader(self.region_id, leader.clone()).into();
+
+        let ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
+            self.pending_proposal.ctx.take().unwrap();
+        for (_, cb, mut err_resp) in ctx {
+            err_resp.mut_header().set_error(err.clone());
+            cb(err_resp);
+        }
+        self.pending_proposal.clear();
     }
 
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
