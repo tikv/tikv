@@ -350,14 +350,14 @@ impl ApplyDelegate {
                                 -> Vec<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
-        let mut data = entry.get_data();
+        let data = entry.get_data();
 
         if !data.is_empty() {
             let mut res = vec![];
             let (mut data, is_new_version) = ProposalBatch::check_new_version(data);
+
             if !is_new_version {
                 let cmd = parse_data_at(data, index, &self.tag);
-
                 if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
                     self.write_apply_state(apply_ctx.wb_mut());
 
@@ -384,7 +384,6 @@ impl ApplyDelegate {
             } else {
                 while !data.is_empty() {
                     let (left, cmd) = ProposalBatch::read_req(data);
-
                     if left.is_empty() && should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
                         self.write_apply_state(apply_ctx.wb_mut());
 
@@ -408,7 +407,6 @@ impl ApplyDelegate {
                     if let Some(exec_res) = self.process_raft_cmd(apply_ctx, index, term, cmd) {
                         res.push(exec_res);
                     }
-                    
                     data = left;
                 }
             }

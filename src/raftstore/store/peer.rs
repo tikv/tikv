@@ -142,8 +142,8 @@ impl ProposalQueue {
 
 #[derive(Default)]
 pub struct ProposalBatch {
-    data: Vec<u8>,
-    ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)>,
+    data: Option<Vec<u8>>,
+    ctx: Option<Vec<(ProposalMeta, Callback, RaftCmdResponse)>>,
     uuids: HashSet<Uuid>,
 }
 
@@ -152,12 +152,19 @@ impl ProposalBatch {
         self.uuids.contains(uuid)
     }
 
-    fn size(&self) -> u64 {
-        self.data.len() as u64
+    fn is_empty(&self) -> bool {
+        self.uuids.is_empty()
     }
 
-    fn write_data(mut data: Vec<u8>, req: &RaftCmdRequest, req_size: u64) -> Vec<u8> {
-        data = PROPOSAL_BATCH_MAGIC_NUM.to_vec();
+    fn size(&self) -> u64 {
+        if let Some(ref data) = self.data {
+            return data.len() as u64;
+        }
+        0
+    }
+
+    fn write_data(req: &RaftCmdRequest, req_size: u64) -> Vec<u8> {
+        let mut data = PROPOSAL_BATCH_MAGIC_NUM.to_vec();
         data.encode_var_u64(req_size as u64).unwrap();
         req.write_to_vec(&mut data).unwrap();
         data
@@ -169,16 +176,26 @@ impl ProposalBatch {
                req: RaftCmdRequest,
                req_size: u64,
                err_resp: RaftCmdResponse) {
-        if self.data.is_empty() {
-            self.data = PROPOSAL_BATCH_MAGIC_NUM.to_vec();
+        if self.data.is_none() {
+            self.data = Some(PROPOSAL_BATCH_MAGIC_NUM.to_vec());
         }
-        self.data.encode_var_u64(req_size).unwrap();
-        req.write_to_vec(&mut self.data).unwrap();
+        let mut data: Vec<u8> = self.data.take().unwrap();
+        data.encode_var_u64(req_size).unwrap();
+        req.write_to_vec(&mut data).unwrap();
+        self.data = Some(data);
+
         self.uuids.insert(meta.uuid);
-        self.ctx.push((meta, cb, err_resp));
+        if self.ctx.is_none() {
+            self.ctx = Some(vec![(meta, cb, err_resp)]);
+        } else {
+            let mut ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
+                self.ctx.take().unwrap();
+            ctx.push((meta, cb, err_resp));
+            self.ctx = Some(ctx);
+        }
     }
 
-    pub fn check_new_version(mut buf: &[u8]) -> (&[u8], bool) {
+    pub fn check_new_version(buf: &[u8]) -> (&[u8], bool) {
         if buf.len() <= 8 {
             return (buf, false);
         }
@@ -199,8 +216,8 @@ impl ProposalBatch {
 
     fn clear(&mut self) {
         if !self.uuids.is_empty() {
-            self.data.clear();
-            self.ctx.clear();
+            self.data = None;
+            self.ctx = None;
             self.uuids.clear();
         }
     }
@@ -1219,14 +1236,13 @@ impl Peer {
     }
 
     fn flush_pending_proposal(&mut self) {
-        if self.pending_proposal.data.is_empty() {
+        if self.pending_proposal.is_empty() {
             return;
         }
         let is_leader = self.is_leader();
         let leader = self.get_peer_from_cache(self.leader_id());
-        let term = self.term();
 
-        let data: Vec<u8> = self.pending_proposal.data.drain(..).collect();
+        let data: Vec<u8> = self.pending_proposal.data.take().unwrap();
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
         let last_index = self.raft_group.raft.raft_log.last_index();
@@ -1252,13 +1268,12 @@ impl Peer {
         };
 
         let ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
-            self.pending_proposal.ctx.drain(..).collect();
-        for (mut meta, cb, mut err_resp) in ctx {
+            self.pending_proposal.ctx.take().unwrap();
+        for (meta, cb, mut err_resp) in ctx {
             if err.is_none() {
                 self.post_propose(meta, false, cb);
                 continue;
             }
-            //cmd_resp::bind_error(&mut err_resp, err.clone().unwrap());
             err_resp.mut_header().set_error(err.clone().unwrap());
             cb(err_resp);
         }
@@ -1379,8 +1394,7 @@ impl Peer {
             return Err(Error::RaftEntryTooLarge(self.region_id, req_size));
         }
 
-        let mut data: Vec<u8> = vec![];
-        let data = ProposalBatch::write_data(data, &req, req_size);
+        let data = ProposalBatch::write_data(&req, req_size);
 
         let propose_index = self.next_proposal_index();
         try!(self.raft_group.propose(data));
