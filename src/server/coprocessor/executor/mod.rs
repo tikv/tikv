@@ -14,6 +14,8 @@
 use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
 
+pub mod selection;
+
 #[allow(dead_code)] //TODO:remove it
 pub struct Row {
     pub handle: i64,

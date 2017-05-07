@@ -61,16 +61,17 @@ const ONE_DAY: i64 = 3600 * 24;
 
 impl EvalContext {
     pub fn new(sel: &SelectRequest) -> Result<EvalContext> {
-        let offset = sel.get_time_zone_offset();
-        if offset <= -ONE_DAY || offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", offset)));
+        EvalContext::new_with(sel.get_time_zone_offset(), sel.get_flags())
+    }
+
+    pub fn new_with(time_zone_offset: i64, flags: u64) -> Result<EvalContext> {
+        if time_zone_offset <= -ONE_DAY || time_zone_offset >= ONE_DAY {
+            return Err(Error::Eval(format!("invalid tz offset {}", time_zone_offset)));
         }
-        let tz = match FixedOffset::east_opt(offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", offset))),
+        let tz = match FixedOffset::east_opt(time_zone_offset as i32) {
+            None => return Err(Error::Eval(format!("invalid tz offset {}", time_zone_offset))),
             Some(tz) => tz,
         };
-
-        let flags = sel.get_flags();
 
         let e = EvalContext {
             tz: tz,
