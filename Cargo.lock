@@ -472,7 +472,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=zhangjinpeng/more-compression-type#c5b5e370827ead509460ad7127ac73da91c99870"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=zhangjinpeng/more-compression-type#5ea73d957cd969bc92fb0a342d423208db3bc562"
 dependencies = [
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -796,7 +796,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=zhangjinpeng/more-compression-type#c5b5e370827ead509460ad7127ac73da91c99870"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=zhangjinpeng/more-compression-type#5ea73d957cd969bc92fb0a342d423208db3bc562"
 dependencies = [
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=zhangjinpeng/more-compression-type)",
