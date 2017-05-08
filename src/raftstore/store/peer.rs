@@ -177,7 +177,9 @@ impl ProposalBatch {
                req_size: u64,
                err_resp: RaftCmdResponse) {
         if self.data.is_none() {
-            self.data = Some(PROPOSAL_BATCH_MAGIC_NUM.to_vec());
+            let mut data: Vec<u8> = Vec::with_capacity(PROPOSAL_BATCH_SIZE as usize);
+            data.append(&mut PROPOSAL_BATCH_MAGIC_NUM.to_vec());
+            self.data = Some(data);
         }
         let mut data: Vec<u8> = self.data.take().unwrap();
         data.encode_var_u64(req_size).unwrap();
@@ -186,7 +188,10 @@ impl ProposalBatch {
 
         self.uuids.insert(meta.uuid);
         if self.ctx.is_none() {
-            self.ctx = Some(vec![(meta, cb, err_resp)]);
+            let mut ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
+                Vec::with_capacity(PROPOSAL_BATCH_SIZE as usize);
+            ctx.push((meta, cb, err_resp));
+            self.ctx = Some(ctx);
         } else {
             let mut ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
                 self.ctx.take().unwrap();
@@ -1381,12 +1386,24 @@ impl Peer {
         }
 
         let req_size: u64 = Message::compute_size(&req) as u64;
-        if self.pending_proposal.size() + req_size >= self.raft_entry_max_size {
+        if req_size > self.raft_entry_max_size {
+            cmd_resp::bind_error(&mut err_resp,
+                                 box_err!("entry is too large, entry size {}", req_size));
+            cb(err_resp);
+            return;
+        }
+        let is_compute_hash: bool = req.has_admin_request() &&
+            req.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash;
+
+        let total_size = req_size + self.pending_proposal.size();
+        if total_size >= PROPOSAL_BATCH_SIZE || total_size >= self.raft_entry_max_size {
+            self.flush_pending_proposal();
+        } else if is_compute_hash {
             self.flush_pending_proposal();
         }
 
         self.pending_proposal.enqueue(meta, cb, req, req_size, err_resp);
-        if self.pending_proposal.size() >= PROPOSAL_BATCH_SIZE {
+        if is_compute_hash {
             self.flush_pending_proposal();
         }
     }
@@ -1434,6 +1451,8 @@ impl Peer {
         let peer = transfer_leader.get_peer();
 
         let transfered = if self.is_tranfer_leader_allowed(peer) {
+            // Before propose transfer leader, propose all pending normal proposal
+            self.flush_pending_proposal();
             self.transfer_leader(peer);
             true
         } else {
