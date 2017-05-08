@@ -1,3 +1,4 @@
+
 [package]
 name = "tikv"
 version = "0.0.1"
@@ -73,7 +74,6 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "zhangjinpeng/store-keys-written"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
