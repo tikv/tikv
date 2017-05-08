@@ -13,12 +13,13 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
 
 use rocksdb::DB;
 use tempdir::TempDir;
+use futures::Future;
 
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::*;
@@ -35,7 +36,6 @@ use tikv::server::Config as ServerConfig;
 use super::pd::TestPdClient;
 use tikv::raftstore::store::keys::data_key;
 use super::transport_simulate::*;
-
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -238,6 +238,7 @@ impl<T: Simulator> Cluster<T> {
     fn store_ids_of_region(&self, region_id: u64) -> Option<Vec<u64>> {
         self.pd_client
             .get_region_by_id(region_id)
+            .wait()
             .unwrap()
             .map(|region| region.get_peers().into_iter().map(|p| p.get_store_id()).collect())
     }
@@ -305,6 +306,28 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.get(&region_id).cloned()
     }
 
+    pub fn check_regions_number(&self, len: u32) {
+        assert_eq!(self.pd_client.get_regions_number() as u32, len)
+    }
+
+    // For test when a node is already bootstraped the cluster with the first region
+    // But another node may request bootstrap at same time and get is_bootstrap false
+    // Add Region but not set bootstrap to true
+    pub fn add_first_region(&self) -> Result<()> {
+        let mut region = metapb::Region::new();
+        let region_id = self.pd_client.alloc_id().unwrap();
+        let peer_id = self.pd_client.alloc_id().unwrap();
+        region.set_id(region_id);
+        region.set_start_key(keys::EMPTY_KEY.to_vec());
+        region.set_end_key(keys::EMPTY_KEY.to_vec());
+        region.mut_region_epoch().set_version(1);
+        region.mut_region_epoch().set_conf_ver(1);
+        let peer = new_peer(peer_id, peer_id);
+        region.mut_peers().push(peer.clone());
+        self.pd_client.add_region(&region);
+        Ok(())
+    }
+
     // Multiple nodes with fixed node id, like node 1, 2, .. 5,
     // First region 1 is in all stores with peer 1, 2, .. 5.
     // Peer 1 is in node 1, store 1, etc.
@@ -328,7 +351,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engine in self.engines.values() {
-            try!(write_region(&engine, &region));
+            try!(write_prepare_bootstrap(&engine, &region));
         }
 
         self.bootstrap_cluster(region);
@@ -348,7 +371,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        let region = bootstrap_region(&self.engines[&node_id], 1, 1, 1).unwrap();
+        let region = prepare_bootstrap(&self.engines[&node_id], 1, 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
@@ -395,7 +418,15 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn shutdown(&mut self) {
         debug!("about to shutdown cluster");
-        let keys = self.sim.rl().get_node_ids();
+        let keys;
+        match self.sim.try_read() {
+            Ok(s) => keys = s.get_node_ids(),
+            Err(sync::TryLockError::Poisoned(e)) => {
+                let s = e.into_inner();
+                keys = s.get_node_ids();
+            }
+            Err(sync::TryLockError::WouldBlock) => unreachable!(),
+        }
         for id in keys {
             self.stop_node(id);
         }
@@ -559,6 +590,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         self.pd_client
             .get_region_by_id(region_id)
+            .wait()
             .unwrap()
             .unwrap()
             .take_region_epoch()

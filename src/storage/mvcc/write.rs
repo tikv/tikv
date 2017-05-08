@@ -113,3 +113,64 @@ impl Write {
         Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::LockType;
+    use super::*;
+
+    #[test]
+    fn test_write_type() {
+        let mut tests = vec![(Some(LockType::Put), WriteType::Put, FLAG_PUT),
+                             (Some(LockType::Delete), WriteType::Delete, FLAG_DELETE),
+                             (Some(LockType::Lock), WriteType::Lock, FLAG_LOCK),
+                             (None, WriteType::Rollback, FLAG_ROLLBACK)];
+        for (i, (lock_type, write_type, flag)) in tests.drain(..).enumerate() {
+            if lock_type.is_some() {
+                let wt = WriteType::from_lock_type(lock_type.unwrap());
+                assert_eq!(wt,
+                           write_type,
+                           "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",
+                           i,
+                           lock_type,
+                           write_type,
+                           wt);
+            }
+            let f = write_type.to_u8();
+            assert_eq!(f,
+                       flag,
+                       "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
+                       i,
+                       write_type,
+                       flag,
+                       f);
+            let wt = WriteType::from_u8(flag).unwrap();
+            assert_eq!(wt,
+                       write_type,
+                       "#{}, expect from_u8({:?}) returns {:?}, but got {:?}",
+                       i,
+                       flag,
+                       write_type,
+                       wt);
+        }
+    }
+
+    #[test]
+    fn test_write() {
+        // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
+        let mut writes = vec![Write::new(WriteType::Put, 0, None),
+                              Write::new(WriteType::Delete, 0, Some(b"short_value".to_vec()))];
+        for (i, write) in writes.drain(..).enumerate() {
+            let v = write.to_bytes();
+            let w = Write::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
+            assert_eq!(w, write, "#{} expect {:?}, but got {:?}", i, write, w);
+        }
+
+        // Test `Write::parse()` handles incorrect input.
+        assert!(Write::parse(b"").is_err());
+
+        let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
+        let v = lock.to_bytes();
+        assert!(Write::parse(&v[..1]).is_err());
+    }
+}

@@ -15,6 +15,7 @@ machine:
     RUST_TEST_THREADS: 1
     RUST_BACKTRACE: 1
     RUSTFLAGS: "-Dwarnings"
+    RUSTFMT_VERSION: "v0.6.0"
   pre:
     - |
       sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
@@ -40,7 +41,7 @@ dependencies:
       else
         rustup default "nightly-${RUSTC_DATE}";
       fi
-    - test -e $HOME/.cargo/bin/cargo-fmt || cargo install --force --vers =0.6.0 rustfmt || true
+    - make -f travis-build/Makefile prepare-rustfmt
     - |
       if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
         cd /tmp && \
@@ -55,9 +56,9 @@ dependencies:
       if [[ ! -e $HOME/.local/lib/librocksdb.so ]]; then
         export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
         cd /tmp && \
-        curl -L https://github.com/facebook/rocksdb/archive/v5.0.1.tar.gz -o rocksdb.tar.gz && \
+        curl -L https://github.com/facebook/rocksdb/archive/v5.2.1.tar.gz -o rocksdb.tar.gz && \
         tar xf rocksdb.tar.gz && \
-        cd rocksdb-5.0.1 && \
+        cd rocksdb-5.2.1 && \
         INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared;
       fi
   post:
@@ -70,6 +71,6 @@ dependencies:
 
 test:
   override:
-    - make format && git diff-index --quiet HEAD -- || (echo please make format before creating a pr!; exit 1)
+    - make format && git diff-index --quiet HEAD -- || (echo please make format and run tests before creating a pr!; exit 1)
     - cargo test --features "default" -- --nocapture
     - cargo test --features "default" --bench benches -- --nocapture

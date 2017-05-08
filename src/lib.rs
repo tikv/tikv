@@ -63,6 +63,10 @@ extern crate fs2;
 extern crate regex;
 extern crate grpc;
 extern crate fnv;
+extern crate ordermap;
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_timer;
 
 #[macro_use]
 pub mod util;

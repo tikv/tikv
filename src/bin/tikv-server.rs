@@ -19,6 +19,8 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
+#[cfg(feature = "mem-profiling")]
+extern crate jemallocator;
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
@@ -34,8 +36,11 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
+#[cfg(test)]
+extern crate tempdir;
 
 mod signal_handler;
+mod profiling;
 
 use std::process;
 use std::{env, thread};
@@ -53,7 +58,8 @@ use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
 use tikv::storage::{Storage, TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
-use tikv::util::{self, panic_hook, rocksdb as rocksdb_util, HashMap};
+use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
+use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
@@ -72,6 +78,7 @@ const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
 const KB: u64 = 1024;
 const MB: u64 = KB * 1024;
 const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
+const SEC_TO_MS: i64 = 1000;
 
 fn sanitize_memory_usage() -> bool {
     let mut ratio = 0.0;
@@ -142,6 +149,12 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
     info!("toml value {}: {:?}", name, s);
 
     s
+}
+
+fn get_toml_string_opt(config: &toml::Value, name: &str) -> Option<String> {
+    config.lookup(name)
+        .and_then(|val| val.as_str())
+        .map(|s| s.to_owned())
 }
 
 fn get_toml_int_opt(config: &toml::Value, name: &str) -> Option<i64> {
@@ -215,10 +228,11 @@ fn initial_log(matches: &Matches, config: &toml::Value) {
     let level_filter = logger::get_level_by_string(&level);
     if log_file_path.is_empty() {
         let w = StderrLogger;
-        logger::init_log(w, level_filter).unwrap();
+        logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     } else {
-        let w = RotatingFileLogger::new(&log_file_path).unwrap();
-        logger::init_log(w, level_filter).unwrap();
+        let w = RotatingFileLogger::new(&log_file_path)
+            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+        logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     }
 }
 
@@ -240,7 +254,7 @@ fn initial_metric(config: &toml::Value, node_id: Option<u64>) {
 
     info!("start prometheus client");
 
-    util::monitor_threads("tikv").unwrap();
+    util::monitor_threads("tikv").unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     util::run_prometheus(Duration::from_millis(push_interval as u64),
                          &push_address,
@@ -279,7 +293,8 @@ fn check_advertise_address(addr: &str) {
 fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let rmode = get_toml_int(config, "rocksdb.wal-recovery-mode", Some(2));
-    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode).unwrap();
+    let wal_recovery_mode = util::config::parse_rocksdb_wal_recovery_mode(rmode)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.set_wal_recovery_mode(wal_recovery_mode);
 
     let wal_dir = get_toml_string(config, "rocksdb.wal-dir", Some("".to_owned()));
@@ -307,6 +322,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
     opts.set_max_background_flushes(max_background_flushes as i32);
 
+    let base_bg_compactions = get_toml_int(config, "rocksdb.base-background-compactions", Some(1));
+    opts.set_base_background_compactions(base_bg_compactions as i32);
+
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
                                               Some(20 * 1024 * 1024));
@@ -329,6 +347,33 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let compaction_readahead_size =
         get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as u64);
+
+    let max_file_size = get_toml_int(config, "rocksdb.info-log-max-size", Some(0));
+    opts.set_max_log_file_size(max_file_size as u64);
+
+    // RocksDB needs seconds, but here we will get milliseconds.
+    let roll_time_secs = get_toml_int(config, "rocksdb.info-log-roll-time", Some(0)) / SEC_TO_MS;
+    opts.set_log_file_time_to_roll(roll_time_secs as u64);
+
+    let info_log_dir = get_toml_string(config, "rocksdb.info-log-dir", Some("".to_owned()));
+    if !info_log_dir.is_empty() {
+        opts.create_info_log(&info_log_dir).unwrap_or_else(|e| {
+            panic!("create RocksDB info log {} error {:?}", info_log_dir, e);
+        })
+    }
+
+    let rate_bytes_per_sec = get_toml_int(config, "rocksdb.rate-bytes-per-sec", Some(0));
+    if rate_bytes_per_sec > 0 {
+        opts.set_ratelimiter(rate_bytes_per_sec as i64);
+    }
+
+    let max_sub_compactions = get_toml_int(config, "rocksdb.max-sub-compactions", Some(1));
+    opts.set_max_subcompactions(max_sub_compactions as usize);
+
+    let writable_file_max_buffer_size = get_toml_int(config,
+                                                     "rocksdb.writable-file-max-buffer-size",
+                                                     Some(1024 * 1024));
+    opts.set_writable_file_max_buffer_size(writable_file_max_buffer_size as i32);
 
     opts
 }
@@ -375,7 +420,8 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let cpl = get_toml_string(config,
                               (prefix.clone() + "compression-per-level").as_str(),
                               Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()));
-    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_toml_int(config,
@@ -439,7 +485,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
     // prefix extractor(trim the timestamp at tail) for write cf.
     opt.set_prefix_extractor("FixedSuffixSliceTransform",
                               Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
-        .unwrap();
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     // create prefix bloom for memtable.
     opt.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
     opt
@@ -457,7 +503,7 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     let mut opt = get_rocksdb_cf_option(config, "raftcf", default_block_cache_size, false, false);
     opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
             Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
-        .unwrap();
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opt
 }
 
@@ -468,19 +514,20 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
 
     let block_cache_size = get_toml_int(config,
                                         "rocksdb.lockcf.block-cache-size",
-                                        Some(64 * 1024 * 1024));
+                                        Some(256 * 1024 * 1024));
     block_base_opts.set_lru_cache(block_cache_size as usize);
 
     block_base_opts.set_bloom_filter(10, false);
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = "no:no:no:no:no:no:no".to_owned();
-    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
+    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_toml_int(config,
                                          "rocksdb.lockcf.write-buffer-size",
-                                         Some(64 * 1024 * 1024));
+                                         Some(128 * 1024 * 1024));
     opts.set_write_buffer_size(write_buffer_size as u64);
 
     let max_write_buffer_number =
@@ -489,7 +536,7 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
 
     let max_bytes_for_level_base = get_toml_int(config,
                                                 "rocksdb.lockcf.max-bytes-for-level-base",
-                                                Some(64 * 1024 * 1024));
+                                                Some(128 * 1024 * 1024));
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
     opts.set_target_file_size_base(32 * 1024 * 1024);
 
@@ -662,18 +709,22 @@ fn build_raftkv(config: &toml::Value,
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let db_opts = get_rocksdb_db_option(config);
-    let mut cfs_opts = HashMap::default();
-    cfs_opts.insert(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem));
-    cfs_opts.insert(CF_LOCK, get_rocksdb_lock_cf_option(config));
-    cfs_opts.insert(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem));
-    cfs_opts.insert(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem));
+    let cfs_opts = vec![
+        rocksdb_util::CFOptions::new(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem)),
+        rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config)),
+        rocksdb_util::CFOptions::new(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem)),
+        rocksdb_util::CFOptions::new(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem)),
+    ];
     let mut db_path = path.clone();
     db_path.push("db");
-    let engine =
-        Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), db_opts, cfs_opts)
-            .unwrap());
+    let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
+                                                           .unwrap(),
+                                                       db_opts,
+                                                       cfs_opts)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
 
-    let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
+    let mut event_loop = store::create_event_loop(&cfg.raft_store)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let mut node = Node::new(&mut event_loop, cfg, pd_client);
 
     let mut snap_path = path.clone();
@@ -683,11 +734,13 @@ fn build_raftkv(config: &toml::Value,
                                     Some(node.get_sendch()),
                                     cfg.raft_store.use_sst_file_snapshot);
 
-    node.start(event_loop, engine.clone(), trans, snap_mgr.clone()).unwrap();
+    node.start(event_loop, engine.clone(), trans, snap_mgr.clone())
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
 
     (node,
-     create_raft_storage(router.clone(), engine.clone(), cfg).unwrap(),
+     create_raft_storage(router.clone(), engine.clone(), cfg)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))),
      router,
      snap_mgr,
      engine)
@@ -699,41 +752,48 @@ fn canonicalize_path(path: &str) -> String {
         exit_with_err(format!("{} is not a directory!", path));
     }
     if !p.exists() {
-        fs::create_dir_all(p).unwrap();
+        fs::create_dir_all(p).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     }
-    format!("{}", p.canonicalize().unwrap().display())
+    format!("{}",
+            p.canonicalize().unwrap_or_else(|err| exit_with_err(format!("{:?}", err))).display())
 }
 
-fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
-    // Store path
-    let store_path = get_flag_string(matches, "s")
-        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
-    let store_abs_path = if store_path == TEMP_DIR {
-        TEMP_DIR.to_owned()
-    } else {
-        canonicalize_path(&store_path)
-    };
+fn get_data_and_backup_dirs(matches: &Matches, config: &toml::Value) -> (String, String) {
+    // store data path
+    let abs_data_dir = get_flag_string(matches, "data-dir")
+        .or_else(|| get_flag_string(matches, "s"))
+        .or_else(|| get_toml_string_opt(config, "server.data-dir"))
+        .or_else(|| get_toml_string_opt(config, "server.store"))
+        .map(|s| canonicalize_path(&s))
+        .unwrap_or_else(|| {
+            warn!("data dir parsing failed, use default data dir {}", TEMP_DIR);
+            TEMP_DIR.to_owned()
+        });
+    info!("server.data-dir uses {:?}", abs_data_dir);
 
     // Backup path
-    let mut backup_path = get_toml_string(config, "server.backup", Some(String::new()));
-    if backup_path.is_empty() && store_abs_path != TEMP_DIR {
-        backup_path = format!("{}", Path::new(&store_abs_path).join("backup").display())
+    let mut backup_dir = get_toml_string_opt(config, "server.backup-dir")
+        .or_else(|| get_toml_string_opt(config, "server.backup"))
+        .unwrap_or_default();
+    if backup_dir.is_empty() && abs_data_dir != TEMP_DIR {
+        backup_dir = format!("{}", Path::new(&abs_data_dir).join("backup").display())
     }
 
-    if backup_path.is_empty() {
+    if backup_dir.is_empty() {
         info!("empty backup path, backup is disabled");
-        (store_abs_path, backup_path)
+        (abs_data_dir, backup_dir)
     } else {
-        let backup_abs_path = canonicalize_path(&backup_path);
-        info!("backup path: {}", backup_abs_path);
-        (store_abs_path, backup_abs_path)
+        let abs_backup_dir = canonicalize_path(&backup_dir);
+        info!("server.backup-dir uses {:?}", abs_backup_dir);
+        (abs_data_dir, abs_backup_dir)
     }
 }
 
 fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
     let labels = get_flag_string(matches, "labels")
         .unwrap_or_else(|| get_toml_string(config, "server.labels", Some("".to_owned())));
-    util::config::parse_store_labels(&labels).unwrap()
+    util::config::parse_store_labels(&labels)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
 }
 
 fn start_server<T, S>(mut server: Server<T, S>,
@@ -747,11 +807,11 @@ fn start_server<T, S>(mut server: Server<T, S>,
     let h = thread::Builder::new()
         .name("tikv-eventloop".to_owned())
         .spawn(move || {
-            server.run(&mut el).unwrap();
+            server.run(&mut el).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
         })
-        .unwrap();
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     signal_handler::handle_signal(ch, engine, backup_path);
-    h.join().unwrap();
+    h.join().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 
 fn run_raft_server(pd_client: RpcClient,
@@ -759,15 +819,17 @@ fn run_raft_server(pd_client: RpcClient,
                    backup_path: &str,
                    config: &toml::Value,
                    total_mem: u64) {
-    let mut event_loop = create_event_loop(&cfg).unwrap();
+    let mut event_loop = create_event_loop(&cfg)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let ch = SendCh::new(event_loop.channel(), "raft-server");
     let pd_client = Arc::new(pd_client);
-    let resolver = PdStoreAddrResolver::new(pd_client.clone()).unwrap();
+    let resolver = PdStoreAddrResolver::new(pd_client.clone())
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     let store_path = &cfg.storage.path;
     let mut lock_path = Path::new(store_path).to_path_buf();
     lock_path.push("LOCK");
-    let f = File::create(lock_path).unwrap();
+    let f = File::create(lock_path).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     if f.try_lock_exclusive().is_err() {
         panic!("lock {} failed, maybe another instance is using this directory.",
                store_path);
@@ -785,7 +847,7 @@ fn run_raft_server(pd_client: RpcClient,
     }
 
     info!("Start listening on {}...", cfg.addr);
-    let listener = bind(&cfg.addr).unwrap();
+    let listener = bind(&cfg.addr).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     let server_chan = ServerChannel {
         raft_router: raft_router,
@@ -798,9 +860,9 @@ fn run_raft_server(pd_client: RpcClient,
                           server_chan,
                           resolver,
                           snap_mgr)
-        .unwrap();
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     start_server(svr, event_loop, engine, backup_path);
-    node.stop().unwrap();
+    node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 
 fn main() {
@@ -826,9 +888,13 @@ fn main() {
     opts.optflag("V", "version", "print version information");
     opts.optflag("h", "help", "print this help menu");
     opts.optopt("C", "config", "set configuration file", "file path");
+    opts.optopt("",
+                "data-dir",
+                "set the path to store directory",
+                "/tmp/tikv/store");
     opts.optopt("s",
                 "store",
-                "set the path to store directory",
+                "set the path to store directory (deprecated)",
                 "/tmp/tikv/store");
     opts.optopt("",
                 "capacity",
@@ -907,10 +973,11 @@ fn main() {
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let cluster_id = pd_client.get_cluster_id()
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    info!("connect to PD cluster {}", cluster_id);
 
-    let total_cpu_num = cpu_num().unwrap();
+    let total_cpu_num = cpu_num().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     // return  memory in KB.
-    let mem = mem_info().unwrap();
+    let mem = mem_info().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let total_mem = mem.total * KB;
     if !sanitize_memory_usage() {
         panic!("default block cache size over total memory.");
@@ -918,7 +985,7 @@ fn main() {
 
     let mut cfg = build_cfg(&matches, &config, cluster_id, addr, total_cpu_num as usize);
     cfg.labels = get_store_labels(&matches, &config);
-    let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
+    let (store_path, backup_path) = get_data_and_backup_dirs(&matches, &config);
     cfg.storage.path = store_path;
 
     if cluster_id == DEFAULT_CLUSTER_ID {

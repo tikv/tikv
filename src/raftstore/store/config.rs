@@ -132,6 +132,9 @@ pub struct Config {
     pub raft_store_max_leader_lease: TimeDuration,
 
     pub use_sst_file_snapshot: bool,
+
+    // Right region derive origin region id when split.
+    pub right_derive_when_split: bool,
 }
 
 impl Default for Config {
@@ -169,6 +172,7 @@ impl Default for Config {
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
             raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),
             use_sst_file_snapshot: DEFAULT_USE_SST_FILE_SNAPSHOT,
+            right_derive_when_split: true,
         }
     }
 }
@@ -212,5 +216,47 @@ impl Config {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::Duration as TimeDuration;
+
+    #[test]
+    fn test_config_validate() {
+        let mut cfg = Config::new();
+        assert!(cfg.validate().is_ok());
+
+        cfg.raft_heartbeat_ticks = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_election_timeout_ticks = 10;
+        cfg.raft_heartbeat_ticks = 10;
+        assert!(cfg.validate().is_err());
+
+        cfg.raft_heartbeat_ticks = 11;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_log_gc_threshold = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_log_gc_size_limit = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.region_max_size = 10;
+        cfg.region_split_size = 20;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_base_tick_interval = 1000;
+        cfg.raft_election_timeout_ticks = 10;
+        cfg.raft_store_max_leader_lease = TimeDuration::seconds(20);
+        assert!(cfg.validate().is_err());
     }
 }

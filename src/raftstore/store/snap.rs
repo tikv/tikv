@@ -15,7 +15,6 @@ use std::error;
 use std::io::{self, Write, ErrorKind, Read};
 use std::fmt::{self, Formatter, Display};
 use std::fs::{self, Metadata};
-use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::Path;
@@ -32,7 +31,8 @@ use raftstore::Result as RaftStoreResult;
 use raftstore::store::Msg;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::transport::SendCh;
-use util::{HandyRwLock, HashMap};
+use util::HandyRwLock;
+use util::collections::{HashMap, HashMapEntry as Entry};
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
@@ -736,25 +736,34 @@ mod v2 {
         Ok(snapshot_meta)
     }
 
-    fn check_file_size_and_checksum(path: &PathBuf,
-                                    expect_size: u64,
-                                    expect_checksum: u32)
-                                    -> RaftStoreResult<()> {
+    fn check_file_size(path: &PathBuf, expected_size: u64) -> RaftStoreResult<()> {
         let size = try!(get_file_size(path));
-        if size != expect_size {
+        if size != expected_size {
             return Err(box_err!("invalid size {} for snapshot cf file {}, expected {}",
                                 size,
                                 path.display(),
-                                expect_size));
+                                expected_size));
         }
+        Ok(())
+    }
+
+    fn check_file_checksum(path: &PathBuf, expected_checksum: u32) -> RaftStoreResult<()> {
         let checksum = try!(calc_crc32(&path));
-        if checksum != expect_checksum {
+        if checksum != expected_checksum {
             return Err(box_err!("invalid checksum {} for snapshot cf file {}, expected {}",
                                 checksum,
                                 path.display(),
-                                expect_checksum));
+                                expected_checksum));
         }
         Ok(())
+    }
+
+    fn check_file_size_and_checksum(path: &PathBuf,
+                                    expected_size: u64,
+                                    expected_checksum: u32)
+                                    -> RaftStoreResult<()> {
+        check_file_size(path, expected_size)
+            .and_then(|_| check_file_checksum(path, expected_checksum))
     }
 
     #[derive(Default)]
@@ -937,7 +946,7 @@ mod v2 {
                     // initialize sst file writer
                     let handle = try!(snap.cf_handle(&cf_file.cf));
                     let io_options = snap.get_db().get_options_cf(handle);
-                    let mut writer = SstFileWriter::new(&env_opt, &io_options, handle);
+                    let mut writer = SstFileWriter::new(&env_opt, &io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
                 }
@@ -975,9 +984,8 @@ mod v2 {
                                         meta.get_cf()));
                 }
                 if file_exists(&cf_file.path) {
-                    try!(check_file_size_and_checksum(&cf_file.path,
-                                                      meta.get_size(),
-                                                      meta.get_checksum()));
+                    // Check only the file size for `exists()` to work correctly.
+                    try!(check_file_size(&cf_file.path, meta.get_size()));
                 }
                 cf_file.size = meta.get_size();
                 cf_file.checksum = meta.get_checksum();
@@ -1250,6 +1258,8 @@ mod v2 {
         }
 
         fn apply(&mut self, options: ApplyOptions) -> Result<()> {
+            box_try!(self.validate());
+
             for cf_file in &mut self.cf_files {
                 if cf_file.size == 0 {
                     // Skip empty cf file.
@@ -1364,25 +1374,31 @@ mod v2 {
 
     #[cfg(test)]
     pub mod test {
-        use std::io;
+        use std::io::{self, Read, Write, Seek, SeekFrom};
+        use std::fs::{self, OpenOptions};
+        use std::path::PathBuf;
         use std::sync::{Arc, RwLock};
         use std::sync::atomic::AtomicUsize;
         use tempdir::TempDir;
+        use protobuf::Message;
         use kvproto::metapb::{Peer, Region};
-        use kvproto::raft_serverpb::RaftSnapshotData;
+        use kvproto::raft_serverpb::{SnapshotMeta, RaftSnapshotData};
         use rocksdb::DB;
 
-        use storage::ALL_CFS;
+        use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
         use util::{rocksdb, HandyRwLock};
         use raftstore::Result;
         use raftstore::store::keys;
         use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable, Iterable};
         use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-        use super::super::{SNAP_GEN_PREFIX, SnapKey, Snapshot};
-        use super::{SNAPSHOT_CFS, Snap, SnapshotStatistics, ApplyOptions};
+        use super::super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SnapKey, Snapshot};
+        use super::{META_FILE_SUFFIX, Snap, SnapshotStatistics, ApplyOptions};
 
         const TEST_STORE_ID: u64 = 1;
         const TEST_KEY: &[u8] = b"akey";
+        const TEST_WRITE_BATCH_SIZE: usize = 10 * 1024 * 1024;
+        const TEST_META_FILE_BUFFER_SIZE: usize = 1000;
+        const BYTE_SIZE: usize = 1;
 
         pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
             let p = path.path().to_str().unwrap();
@@ -1579,16 +1595,18 @@ mod v2 {
             assert!(s4.exists());
 
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
-            let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(),
-                                                      ALL_CFS)
-                .unwrap());
+            let dst_db_path = dst_db_dir.path().to_str().unwrap();
+            // Change arbitrarily the cf order of ALL_CFS at destination db.
+            let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
+            let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs).unwrap());
             let options = ApplyOptions {
                 db: dst_db.clone(),
                 region: region.clone(),
                 abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
-                write_batch_size: 10 * 1024 * 1024,
+                write_batch_size: TEST_WRITE_BATCH_SIZE,
             };
-            s4.apply(options).unwrap();
+            // Verify thte snapshot applying is ok.
+            assert!(s4.apply(options).is_ok());
 
             // Ensure `delete()` works to delete the dest snapshot.
             s4.delete();
@@ -1636,6 +1654,217 @@ mod v2 {
 
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s2.exists());
+        }
+
+        // Make all the snapshot in the specified dir corrupted to have incorrect size.
+        fn corrupt_snapshot_size_in<T: Into<PathBuf>>(dir: T) {
+            let dir_path = dir.into();
+            let read_dir = fs::read_dir(dir_path).unwrap();
+            for p in read_dir {
+                if p.is_ok() {
+                    let e = p.as_ref().unwrap();
+                    if !e.file_name().into_string().unwrap().ends_with(META_FILE_SUFFIX) {
+                        let mut f = OpenOptions::new().append(true).open(e.path()).unwrap();
+                        f.write_all(b"xxxxx").unwrap();
+                    }
+                }
+            }
+        }
+
+        // Make all the snapshot in the specified dir corrupted to have incorrect checksum.
+        fn corrupt_snapshot_checksum_in<T: Into<PathBuf>>(dir: T) -> Vec<SnapshotMeta> {
+            let dir_path = dir.into();
+            let mut res = Vec::new();
+            let read_dir = fs::read_dir(dir_path).unwrap();
+            for p in read_dir {
+                if p.is_ok() {
+                    let e = p.as_ref().unwrap();
+                    if e.file_name().into_string().unwrap().ends_with(META_FILE_SUFFIX) {
+                        let mut snapshot_meta = SnapshotMeta::new();
+                        let mut buf = Vec::with_capacity(TEST_META_FILE_BUFFER_SIZE);
+                        {
+                            let mut f = OpenOptions::new().read(true).open(e.path()).unwrap();
+                            f.read_to_end(&mut buf).unwrap();
+                        }
+
+                        snapshot_meta.merge_from_bytes(&buf).unwrap();
+
+                        for cf in snapshot_meta.mut_cf_files().iter_mut() {
+                            let corrupted_checksum = cf.get_checksum() + 100;
+                            cf.set_checksum(corrupted_checksum);
+                        }
+
+                        buf.clear();
+                        snapshot_meta.write_to_vec(&mut buf).unwrap();
+                        {
+                            let mut f = OpenOptions::new()
+                                .write(true)
+                                .truncate(true)
+                                .open(e.path())
+                                .unwrap();
+                            f.write_all(&buf[..]).unwrap();
+                            f.flush().unwrap();
+                        }
+
+                        res.push(snapshot_meta);
+                    }
+                }
+            }
+            res
+        }
+
+        // Make all the snapshot meta files in the specified corrupted to have incorrect content.
+        fn corrupt_snapshot_meta_file<T: Into<PathBuf>>(dir: T) -> usize {
+            let mut total = 0;
+            let dir_path = dir.into();
+            let read_dir = fs::read_dir(dir_path).unwrap();
+            for p in read_dir {
+                if p.is_ok() {
+                    let e = p.as_ref().unwrap();
+                    if e.file_name().into_string().unwrap().ends_with(META_FILE_SUFFIX) {
+                        let mut f =
+                            OpenOptions::new().read(true).write(true).open(e.path()).unwrap();
+                        // Make the last byte of the meta file corrupted
+                        // by turning over all bits of it
+                        let pos = SeekFrom::End(-(BYTE_SIZE as i64));
+                        f.seek(pos).unwrap();
+                        let mut buf = [0; BYTE_SIZE];
+                        f.read_exact(&mut buf[..]).unwrap();
+                        buf[0] ^= u8::max_value();
+                        f.seek(pos).unwrap();
+                        f.write_all(&buf[..]).unwrap();
+                        total += 1;
+                    }
+                }
+            }
+            total
+        }
+
+        fn copy_snapshot(from_dir: &TempDir,
+                         to_dir: &TempDir,
+                         key: &SnapKey,
+                         size_track: Arc<RwLock<u64>>,
+                         snapshot_meta: SnapshotMeta) {
+            let mut from = Snap::new_for_sending(from_dir.path(), key, size_track.clone()).unwrap();
+            assert!(from.exists());
+
+            let mut to =
+                Snap::new_for_receiving(to_dir.path(), key, snapshot_meta, size_track.clone())
+                    .unwrap();
+
+            assert!(!to.exists());
+            let _ = io::copy(&mut from, &mut to).unwrap();
+            to.save().unwrap();
+            assert!(to.exists());
+        }
+
+        #[test]
+        fn test_snap_corruption_on_size_or_checksum() {
+            let region_id = 1;
+            let region = get_test_region(region_id, 1, 1);
+            let db_dir = TempDir::new("test-snap-corruption-db").unwrap();
+            let db = get_test_db(&db_dir).unwrap();
+            let snapshot = DbSnapshot::new(db);
+
+            let dir = TempDir::new("test-snap-corruption").unwrap();
+            let key = SnapKey::new(region_id, 1, 1);
+            let size_track = Arc::new(RwLock::new(0));
+            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+            assert!(!s1.exists());
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data.set_region(region.clone());
+            let mut stat = SnapshotStatistics::new();
+            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            assert!(s1.exists());
+
+            corrupt_snapshot_size_in(dir.path());
+
+            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone()).is_err());
+
+            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+            assert!(!s2.exists());
+            s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            assert!(s2.exists());
+
+            let dst_dir = TempDir::new("test-snap-corruption-dst").unwrap();
+            copy_snapshot(&dir,
+                          &dst_dir,
+                          &key,
+                          size_track.clone(),
+                          snap_data.get_meta().clone());
+
+            let mut metas = corrupt_snapshot_checksum_in(dst_dir.path());
+            assert_eq!(1, metas.len());
+            let snap_meta = metas.pop().unwrap();
+
+            let mut s5 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).unwrap();
+            assert!(s5.exists());
+
+            let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
+            let dst_db = get_test_empty_db(&dst_db_dir).unwrap();
+            let options = ApplyOptions {
+                db: dst_db.clone(),
+                region: region.clone(),
+                abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
+                write_batch_size: TEST_WRITE_BATCH_SIZE,
+            };
+            assert!(s5.apply(options).is_err());
+
+            corrupt_snapshot_size_in(dst_dir.path());
+            assert!(Snap::new_for_receiving(dst_dir.path(), &key, snap_meta, size_track.clone())
+                .is_err());
+            assert!(Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).is_err());
+        }
+
+        #[test]
+        fn test_snap_corruption_on_meta_file() {
+            let region_id = 1;
+            let region = get_test_region(region_id, 1, 1);
+            let db_dir = TempDir::new("test-snapshot-corruption-meta-db").unwrap();
+            let db = get_test_db(&db_dir).unwrap();
+            let snapshot = DbSnapshot::new(db);
+
+            let dir = TempDir::new("test-snap-corruption-meta").unwrap();
+            let key = SnapKey::new(region_id, 1, 1);
+            let size_track = Arc::new(RwLock::new(0));
+            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+            assert!(!s1.exists());
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data.set_region(region.clone());
+            let mut stat = SnapshotStatistics::new();
+            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            assert!(s1.exists());
+
+            assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
+
+            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone()).is_err());
+            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+
+            assert!(!s2.exists());
+            s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            assert!(s2.exists());
+
+            let dst_dir = TempDir::new("test-snap-corruption-meta-dst").unwrap();
+            copy_snapshot(&dir,
+                          &dst_dir,
+                          &key,
+                          size_track.clone(),
+                          snap_data.get_meta().clone());
+
+            assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
+
+            assert!(Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_receiving(dst_dir.path(),
+                                            &key,
+                                            snap_data.take_meta(),
+                                            size_track.clone())
+                .is_err());
         }
     }
 }

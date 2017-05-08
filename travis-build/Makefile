@@ -17,26 +17,26 @@ ${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so:
 	export CPLUS_INCLUDE_PATH="${CPLUS_INCLUDE_PATH}:${LOCAL_DIR}/include" && \
 	export CXX=${COMPILER} && \
 	cd /tmp && \
-	curl -L https://github.com/facebook/rocksdb/archive/v5.0.1.tar.gz -o rocksdb.tar.gz && \
+	curl -L https://github.com/facebook/rocksdb/archive/v5.2.1.tar.gz -o rocksdb.tar.gz && \
 	tar xf rocksdb.tar.gz && \
-	cd rocksdb-5.0.1 && \
+	cd rocksdb-5.2.1 && \
 	INSTALL_PATH=${LOCAL_DIR} make install-shared
 
 # TODO: use offical archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
 ${LOCAL_DIR}/bin/kcov:
 	cd /tmp && \
-	curl -L https://github.com/BusyJay/kcov/archive/busyjay/support-setting-stripped-path.tar.gz -o kcov.tar.gz && \
+	curl -L https://github.com/SimonKagstrom/kcov/archive/v33.tar.gz -o kcov.tar.gz && \
 	tar xf kcov.tar.gz && \
-	cd kcov-busyjay-support-setting-stripped-path && \
-	cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_DIR} . && \
-	make && \
-	make install
-
-ifeq ($(TRAVIS_OS_NAME),linux)
-GO_ARCH = linux
-else
-GO_ARCH = darwin
-endif
+	cd kcov-33 && \
+	if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then \
+	    cmake -G Xcode . && \
+		xcodebuild -configuration Release && \
+		cp src/Release/kcov ${LOCAL_DIR}/bin/kcov; \
+	else \
+	    cmake -DCMAKE_INSTALL_PREFIX=${LOCAL_DIR} . && \
+		make && \
+		make install; \
+	fi
 
 prepare-rustfmt:
 	curl -L https://github.com/tennix/rustfmt/releases/download/v0.6/rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -o rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz && \
@@ -49,15 +49,13 @@ prepare_brew:
 	brew update && \
 	brew install gflags snappy rocksdb
 
-prepare_osx: prepare_brew
+prepare_osx: prepare_brew ${LOCAL_DIR}/bin/kcov
 
 test_linux test_osx:
 	export CI=true && ${CI_BUILD_DIR}/test.sh
 
-cover_linux:
+cover_linux cover_osx:
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	export RUST_TEST_THREADS=1 && \
-	grep " Running " tests.out | sed -e 's/Running//g' | xargs -n 1 -i ${LOCAL_DIR}/bin/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src --exclude-pattern tikv/src/bin --strip-path `pwd`/ target/kcov {} --nocapture
-
-cover_osx:
+	export RUST_TEST_THREADS=2 && \
+	grep " Running " tests.out | sed -e 's/Running//g' | xargs -n 1 -I {} ${LOCAL_DIR}/bin/kcov --verify --coveralls-id=${TRAVIS_JOB_ID} --include-pattern tikv/src --exclude-pattern tikv/src/bin --strip-path `pwd`/ target/kcov {} --nocapture

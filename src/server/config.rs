@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use util::HashMap;
+use util::collections::HashMap;
 
 use super::Result;
 
@@ -76,5 +76,19 @@ impl Config {
         try!(self.raft_store.validate());
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_validate() {
+        let mut cfg = Config::new();
+        assert!(cfg.validate().is_ok());
+
+        cfg.raft_store.raft_heartbeat_ticks = 0;
+        assert!(cfg.validate().is_err());
     }
 }

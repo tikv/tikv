@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::collections::hash_map::Values;
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
@@ -39,9 +38,10 @@ use raftstore::store::Config;
 use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
 
-use util::worker::{Worker, Scheduler};
-use raftstore::store::worker::{ApplyTask, ApplyRes};
-use util::{clocktime, Either, HashMap, HashSet};
+use util::worker::{FutureWorker as Worker, Scheduler};
+use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
+use util::{clocktime, Either, strftimespec};
+use util::collections::{HashMap, HashSet, HashMapValues as Values};
 
 use pd::INVALID_ID;
 
@@ -596,11 +596,11 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    self.leader_lease_expired_time =
-                        Some(Either::Left(self.next_lease_expired_time(clocktime::raw_now())));
+                    let next_expired_time = self.next_lease_expired_time(clocktime::raw_now());
+                    self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
-                           self.leader_lease_expired_time);
+                           strftimespec(next_expired_time));
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
@@ -707,7 +707,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready) {
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -738,8 +738,7 @@ impl Peer {
             }
             if !committed_entries.is_empty() {
                 self.last_ready_idx = committed_entries.last().unwrap().get_index();
-                let apply_task = ApplyTask::apply(self.region_id, self.term(), committed_entries);
-                self.apply_scheduler.schedule(apply_task).unwrap();
+                apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
 
@@ -851,8 +850,8 @@ impl Peer {
             if current_expired_time < next_expired_time {
                 debug!("{} update leader lease expired time from {:?} to {:?}",
                        self.tag,
-                       current_expired_time,
-                       next_expired_time);
+                       strftimespec(current_expired_time),
+                       strftimespec(next_expired_time));
                 self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
             }
         } else if self.is_leader() {
@@ -862,7 +861,7 @@ impl Peer {
             let next_expired_time = self.next_lease_expired_time(propose_time);
             debug!("{} update leader lease expired time from None to {:?}",
                    self.tag,
-                   self.leader_lease_expired_time);
+                   strftimespec(next_expired_time));
             self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
         }
     }
@@ -1035,7 +1034,7 @@ impl Peer {
 
             debug!("{} leader lease expired time {:?} is outdated",
                    self.tag,
-                   self.leader_lease_expired_time);
+                   strftimespec(safe_expired_time));
             // Reset leader lease expiring time.
             self.leader_lease_expired_time = None;
         }
