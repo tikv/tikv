@@ -94,9 +94,7 @@ impl<'a> Scanner<'a> {
 
     fn prepare_and_get_seek_key(&mut self, range: &KeyRange) -> Vec<u8> {
         if self.seek_key.is_some() {
-            let seek_key = self.seek_key.take().unwrap();
-            self.seek_key = None;
-            return seek_key;
+            return self.seek_key.take().unwrap();
         }
         self.upper_bound = None;
         if self.desc {
