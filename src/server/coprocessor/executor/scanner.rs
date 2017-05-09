@@ -130,7 +130,7 @@ pub mod test {
     }
 
     pub struct Data {
-        pub data: Vec<(Vec<u8>, Vec<u8>)>,
+        pub kv_data: Vec<(Vec<u8>, Vec<u8>)>,
         pub pk: Vec<u8>,
         pub pk_handle: i64,
         // encode_data[row_id][column_id]=>value
@@ -151,7 +151,7 @@ pub mod test {
                         new_col_info(2, types::VARCHAR),
                         new_col_info(3, types::NEW_DECIMAL)];
 
-        let mut data = Vec::new();
+        let mut kv_data = Vec::new();
         let mut pk = Vec::new();
         let mut pk_handle = 0 as i64;
         let mut encode_data = Vec::new();
@@ -182,10 +182,10 @@ pub mod test {
                 pk_handle = handle as i64;
             }
             encode_data.push(encode_value);
-            data.push((key, value));
+            kv_data.push((key, value));
         }
         Data {
-            data: data,
+            kv_data: kv_data,
             pk: pk,
             pk_handle: pk_handle,
             encode_data: encode_data,
@@ -204,7 +204,7 @@ pub mod test {
     }
 
     impl TestStore {
-        pub fn new(data: &[(Vec<u8>, Vec<u8>)], pk: Vec<u8>) -> TestStore {
+        pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)], pk: Vec<u8>) -> TestStore {
             let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
@@ -214,16 +214,16 @@ pub mod test {
                 ctx: ctx,
                 engine: engine,
             };
-            store.init_data(data);
+            store.init_data(kv_data);
             store
         }
 
-        fn init_data(&mut self, data: &[(Vec<u8>, Vec<u8>)]) {
+        fn init_data(&mut self, kv_data: &[(Vec<u8>, Vec<u8>)]) {
             let mut statistics = Statistics::default();
             // do prewrite.
             let txn_motifies = {
                 let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
-                for &(ref key, ref value) in data {
+                for &(ref key, ref value) in kv_data {
                     txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
                                   &self.pk,
                                   &Options::default())
@@ -235,7 +235,7 @@ pub mod test {
             // do commit
             let txn_modifies = {
                 let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
-                for &(ref key, _) in data {
+                for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
                 txn.modifies()
@@ -314,15 +314,15 @@ pub mod test {
         let table_id = 1;
         let key_number = 10;
         let mut data = prepare_table_data(key_number, table_id);
-        let test_store = TestStore::new(&data.data, data.pk.clone());
+        let test_store = TestStore::new(&data.kv_data, data.pk.clone());
         let mut statistics = Statistics::default();
         let store = test_store.store();
         let range = get_range(table_id, i64::MIN, i64::MAX);
 
         let mut scanner = Scanner::new(true, false, store, &mut statistics);
 
-        data.data.reverse();
-        for &(ref k, ref v) in &data.data {
+        data.kv_data.reverse();
+        for &(ref k, ref v) in &data.kv_data {
             let (key, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
             print!("key:{:?},value:{:?}", key, value);
             let seek_key = table::truncate_as_row_key(&key).unwrap().to_vec();

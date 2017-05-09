@@ -127,7 +127,7 @@ mod test {
     impl Default for TableScanExecutorMeta {
         fn default() -> TableScanExecutorMeta {
             let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
-            let test_store = TestStore::new(&test_data.data, test_data.pk.clone());
+            let test_store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
             let mut table_scan = TableScan::new();
             // prepare cols
             let cols = test_data.get_prev_2_cols();
