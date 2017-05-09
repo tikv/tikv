@@ -16,7 +16,8 @@ use kvproto::coprocessor::KeyRange;
 use storage::{Key, Value, SnapshotStore, Statistics, ScanMode};
 use util::escape;
 
-// Scanner for TableScan and IndexScan
+// `Scanner` is a helper struct to wrap all common scan operates
+// for `TableScanExecutor` and `IndexScanExecutor`
 pub struct Scanner<'a> {
     store: SnapshotStore<'a>,
     seek_key: Option<Vec<u8>>,
@@ -26,7 +27,6 @@ pub struct Scanner<'a> {
     desc: bool,
     key_only: bool,
 }
-
 
 impl<'a> Scanner<'a> {
     pub fn new(desc: bool,
@@ -121,7 +121,6 @@ pub mod test {
     use storage::{make_key, Mutation, ALL_CFS, Options, Statistics};
     use storage::engine::{self, Engine, TEMP_DIR, Snapshot, Modify};
     use server::coprocessor::endpoint::prefix_next;
-
 
     fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
@@ -232,7 +231,7 @@ pub mod test {
                 }
                 txn.modifies()
             };
-            self.write_motifies(txn_motifies);
+            self.write_modifies(txn_motifies);
             // do commit
             let txn_modifies = {
                 let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
@@ -241,11 +240,11 @@ pub mod test {
                 }
                 txn.modifies()
             };
-            self.write_motifies(txn_modifies);
+            self.write_modifies(txn_modifies);
         }
 
         #[inline]
-        fn write_motifies(&mut self, txn: Vec<Modify>) {
+        fn write_modifies(&mut self, txn: Vec<Modify>) {
             self.engine.write(&self.ctx, txn).unwrap();
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
