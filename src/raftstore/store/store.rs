@@ -527,13 +527,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn poll_apply(&mut self) {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
-                Ok(ApplyTaskRes::Apply(res)) => {
-                    if let Some(p) = self.region_peers.get_mut(&res.region_id) {
-                        debug!("{} async apply finish: {:?}", p.tag, res);
-                        p.post_apply(&res, &mut self.pending_raft_groups);
+                Ok(ApplyTaskRes::Applys(multi_res)) => {
+                    for res in multi_res {
+                        if let Some(p) = self.region_peers.get_mut(&res.region_id) {
+                            debug!("{} async apply finish: {:?}", p.tag, res);
+                            p.post_apply(&res, &mut self.pending_raft_groups);
+                        }
+                        self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
+                        self.on_ready_result(res.region_id, res.exec_res);
                     }
-                    self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
-                    self.on_ready_result(res.region_id, res.exec_res);
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
@@ -920,15 +922,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   self.raft_metrics.ready.message - previous_ready_metrics.message,
                   self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot);
 
+        let mut apply_tasks = Vec::with_capacity(ready_results.len());
         for (region_id, ready, res) in ready_results {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(ready);
+                .handle_raft_ready_apply(ready, &mut apply_tasks);
             if let Some(apply_result) = res {
                 self.on_ready_apply_snapshot(apply_result);
             }
         }
+        self.apply_worker.schedule(ApplyTask::applies(apply_tasks)).unwrap();
 
         let dur = t.elapsed();
         if !self.is_busy {
@@ -1130,11 +1134,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         if !campaigned {
-            if let Some(pos) = self.pending_votes
-                .iter()
-                .rev()
-                .position(|m| m.get_to_peer() == &peer) {
-                let msg = self.pending_votes.swap_remove_front(pos).unwrap();
+            if let Some(msg) = self.pending_votes
+                .swap_remove_front(|m| m.get_to_peer() == &peer) {
                 let _ = self.on_raft_message(msg);
             }
         }
