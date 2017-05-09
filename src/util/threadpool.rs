@@ -82,6 +82,7 @@ pub trait ScheduleQueue<T: Debug> {
 #[derive(Debug)]
 pub struct ReachConcurrencyLimit<T: Debug>(pub T);
 
+#[derive(Default)]
 struct GroupStatisticsItem {
     running_count: usize,
     high_priority_queue_count: usize,
@@ -89,22 +90,14 @@ struct GroupStatisticsItem {
 }
 
 impl GroupStatisticsItem {
-    fn new() -> GroupStatisticsItem {
-        GroupStatisticsItem {
-            running_count: 0,
-            high_priority_queue_count: 0,
-            low_priority_queue_count: 0,
-        }
-    }
-
     fn sum(&self) -> usize {
         self.running_count + self.high_priority_queue_count + self.low_priority_queue_count
     }
 }
 
-// `SpeedupSmallGroupsQueue` tries speedup groups with number of
-//  tasks smaller than small_group_tasks_limit when all threads are busy.
-pub struct SpeedupSmallGroupsQueue<T> {
+// `SmallGroupFirstQueue` tries to run groups with number of
+//  tasks smaller than small_group_tasks_limit first when all threads are busy.
+pub struct SmallGroupFirstQueue<T> {
     high_priority_queue: VecDeque<Task<T>>,
     low_priority_queue: VecDeque<Task<T>>,
     big_group_currency_on_busy: usize,
@@ -112,11 +105,11 @@ pub struct SpeedupSmallGroupsQueue<T> {
     statistics: HashMap<T, GroupStatisticsItem>,
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone + Debug> SpeedupSmallGroupsQueue<T> {
+impl<T: Hash + Eq + Ord + Send + Clone + Debug> SmallGroupFirstQueue<T> {
     pub fn new(group_concurrency_on_busy: usize,
                small_group_tasks_limit: usize)
-               -> SpeedupSmallGroupsQueue<T> {
-        SpeedupSmallGroupsQueue {
+               -> SmallGroupFirstQueue<T> {
+        SmallGroupFirstQueue {
             high_priority_queue: VecDeque::new(),
             low_priority_queue: VecDeque::new(),
             statistics: HashMap::new(),
@@ -148,11 +141,11 @@ impl<T: Hash + Eq + Ord + Send + Clone + Debug> SpeedupSmallGroupsQueue<T> {
     }
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for SpeedupSmallGroupsQueue<T> {
+impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQueue<T> {
     fn push(&mut self, task: Task<T>) {
         let mut statistics = self.statistics
             .entry(task.gid.clone())
-            .or_insert(GroupStatisticsItem::new());
+            .or_insert(Default::default());
         if statistics.low_priority_queue_count == 0 &&
            statistics.running_count + statistics.high_priority_queue_count <
            self.small_group_tasks_limit {
@@ -173,17 +166,18 @@ impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for SpeedupSmal
             return self.pop_from_low_priority_queue();
         }
 
-        let pop_from_waiting1 = {
+        let pop_from_high_priority_queue = {
             let t1 = self.high_priority_queue.front().unwrap();
             let t2 = self.low_priority_queue.front().unwrap();
             t1.id < t2.id ||
             (self.statistics[&t2.gid].running_count >= self.big_group_currency_on_busy)
         };
 
-        if !pop_from_waiting1 {
-            return self.pop_from_low_priority_queue();
+        if pop_from_high_priority_queue {
+            self.pop_from_high_priority_queue()
+        } else {
+            self.pop_from_low_priority_queue()
         }
-        self.pop_from_high_priority_queue()
     }
 
     fn on_task_started(&mut self, gid: &T) {
@@ -250,7 +244,7 @@ impl<T: Debug + Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
                                          -> Result<(), ReachConcurrencyLimit<Task<T>>> {
         let mut statistics = self.group_statistics
             .entry(task.gid.clone())
-            .or_insert(GroupStatisticsItem::new());
+            .or_insert(Default::default());
         if statistics.sum() >= self.group_concurrency_limit {
             return Err(ReachConcurrencyLimit(task));
         }
@@ -318,8 +312,7 @@ impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for BigGroupThr
     }
 
     fn on_task_started(&mut self, gid: &T) {
-        let mut statistics =
-            self.group_statistics.entry(gid.clone()).or_insert(GroupStatisticsItem::new());
+        let mut statistics = self.group_statistics.entry(gid.clone()).or_insert(Default::default());
         statistics.running_count += 1
     }
 
@@ -542,7 +535,7 @@ impl<Q, T> Worker<Q, T>
 
 #[cfg(test)]
 mod test {
-    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SpeedupSmallGroupsQueue};
+    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SmallGroupFirstQueue};
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Mutex};
@@ -675,10 +668,10 @@ mod test {
 
 
     #[test]
-    fn test_speedup_small_groups_queue() {
+    fn test_small_group_first_queue() {
         let concurrency_limit = 2;
         let small_group_tasks_limit = 2;
-        let mut queue = SpeedupSmallGroupsQueue::new(concurrency_limit, small_group_tasks_limit);
+        let mut queue = SmallGroupFirstQueue::new(concurrency_limit, small_group_tasks_limit);
         let mut id = 1;
         let mut pre_id = 0;
         // Push 2 tasks of `group1` into queue
