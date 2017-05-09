@@ -1025,18 +1025,12 @@ mod test {
 
     #[test]
     fn test_storage_term() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
 
-        let mut tests = vec![
-            (2, Err(RaftError::Store(StorageError::Compacted))),
-            (3, Ok(3)),
-            (4, Ok(4)),
-            (5, Ok(5)),
-        ];
+        let mut tests = vec![(2, Err(RaftError::Store(StorageError::Compacted))),
+                             (3, Ok(3)),
+                             (4, Ok(4)),
+                             (5, Ok(5))];
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
             let worker = Worker::new("snap_manager");
@@ -1053,25 +1047,32 @@ mod test {
     fn test_storage_entries() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
         let max_u64 = u64::max_value();
-        let mut tests = vec![
-            (2, 6, max_u64, Err(RaftError::Store(StorageError::Compacted))),
-            (3, 4, max_u64, Err(RaftError::Store(StorageError::Compacted))),
-            (4, 5, max_u64, Ok(vec![new_entry(4, 4)])),
-            (4, 6, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
-            // even if maxsize is zero, the first entry should be returned
-            (4, 7, 0, Ok(vec![new_entry(4, 4)])),
-            // limit to 2
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2])) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            // all
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
-        ];
+        let mut tests =
+            vec![(2, 6, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+                 (3, 4, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+                 (4, 5, max_u64, Ok(vec![new_entry(4, 4)])),
+                 (4, 6, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4, 7, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+                 // even if maxsize is zero, the first entry should be returned
+                 (4, 7, 0, Ok(vec![new_entry(4, 4)])),
+                 // limit to 2
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2])) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 // all
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]))];
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
@@ -1091,12 +1092,10 @@ mod test {
     #[test]
     fn test_storage_compact() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut tests = vec![
-            (2, Err(RaftError::Store(StorageError::Compacted))),
-            (3, Err(RaftError::Store(StorageError::Compacted))),
-            (4, Ok(())),
-            (5, Ok(())),
-        ];
+        let mut tests = vec![(2, Err(RaftError::Store(StorageError::Compacted))),
+                             (3, Err(RaftError::Store(StorageError::Compacted))),
+                             (4, Ok(())),
+                             (5, Ok(()))];
         for (i, (idx, werr)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
             let worker = Worker::new("snap_manager");
@@ -1231,35 +1230,19 @@ mod test {
     #[test]
     fn test_storage_append() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut tests = vec![
-            (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
-                vec![new_entry(4, 4), new_entry(5, 5)],
-            ),
-            (
-                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
-                vec![new_entry(4, 6), new_entry(5, 6)],
-            ),
-            (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-            ),
-            // truncate incoming entries, truncate the existing entries and append
-            (
-                vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)],
-                vec![new_entry(4, 5)],
-            ),
-            // truncate the existing entries and append
-            (
-                vec![new_entry(4, 5)],
-                vec![new_entry(4, 5)],
-            ),
-            // direct append
-            (
-                vec![new_entry(6, 5)],
-                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-            ),
-        ];
+        let mut tests =
+            vec![(vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
+                  vec![new_entry(4, 4), new_entry(5, 5)]),
+                 (vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
+                  vec![new_entry(4, 6), new_entry(5, 6)]),
+                 (vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+                  vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)]),
+                 // truncate incoming entries, truncate the existing entries and append
+                 (vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)], vec![new_entry(4, 5)]),
+                 // truncate the existing entries and append
+                 (vec![new_entry(4, 5)], vec![new_entry(4, 5)]),
+                 // direct append
+                 (vec![new_entry(6, 5)], vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)])];
         for (i, (entries, wentries)) in tests.drain(..).enumerate() {
             let td = TempDir::new("tikv-store-test").unwrap();
             let worker = Worker::new("snap_manager");

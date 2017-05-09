@@ -157,10 +157,7 @@ mod test {
         let (tx, rx) = mpsc::channel();
         let mut runner = Runner::new(tx);
         let mut digest = Digest::new(crc32::IEEE);
-        let kvs = vec![
-            (b"k1", b"v1"),
-            (b"k2", b"v2"),
-        ];
+        let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
         for (k, v) in kvs {
             let key = keys::data_key(k);
             db.put(&key, v).unwrap();

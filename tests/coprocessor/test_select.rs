@@ -575,12 +575,10 @@ fn init_with_data(tbl: &ProductTable,
 
 #[test]
 fn test_select() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:4"), 3),
-        (4, Some("name:3"), 1),
-        (5, Some("name:1"), 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:4"), 3),
+                    (4, Some("name:3"), 1),
+                    (5, Some("name:1"), 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -602,12 +600,10 @@ fn test_select() {
 
 #[test]
 fn test_group_by() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:2"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:1"), 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:2"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:1"), 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -628,14 +624,12 @@ fn test_group_by() {
 
 #[test]
 fn test_aggr_count() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -648,12 +642,10 @@ fn test_aggr_count() {
     let mut expected_encoded = datum::encode_value(&[gk, Datum::U64(data.len() as u64)]).unwrap();
     assert_eq!(spliter.next().unwrap().data, &*expected_encoded);
 
-    let exp = vec![
-        (Datum::Bytes(b"name:0".to_vec()), 2),
-        (Datum::Bytes(b"name:3".to_vec()), 1),
-        (Datum::Bytes(b"name:5".to_vec()), 2),
-        (Datum::Null, 1),
-    ];
+    let exp = vec![(Datum::Bytes(b"name:0".to_vec()), 2),
+                   (Datum::Bytes(b"name:3".to_vec()), 1),
+                   (Datum::Bytes(b"name:5".to_vec()), 2),
+                   (Datum::Null, 1)];
     let req = Select::from(&product.table).count().group_by(&[product.name]).build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), exp.len());
@@ -665,13 +657,11 @@ fn test_aggr_count() {
         assert_eq!(row.data, &*expected_encoded);
     }
 
-    let exp = vec![
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
-        (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
-        (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
-        (vec![Datum::Null, Datum::I64(4)], 1),
-    ];
+    let exp = vec![(vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
+                   (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
+                   (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
+                   (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
+                   (vec![Datum::Null, Datum::I64(4)], 1)];
     let req = Select::from(&product.table).count().group_by(&[product.name, product.count]).build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), exp.len());
@@ -688,28 +678,24 @@ fn test_aggr_count() {
 
 #[test]
 fn test_aggr_first() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (3, Some("name:5"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-        (8, None, 5),
-        (9, Some("name:5"), 5),
-        (10, None, 6),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (3, Some("name:5"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4),
+                    (8, None, 5),
+                    (9, Some("name:5"), 5),
+                    (10, None, 6)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
 
-    let exp = vec![
-        (Datum::Bytes(b"name:0".to_vec()), 1),
-        (Datum::Bytes(b"name:3".to_vec()), 2),
-        (Datum::Bytes(b"name:5".to_vec()), 3),
-        (Datum::Null, 7),
-    ];
+    let exp = vec![(Datum::Bytes(b"name:0".to_vec()), 1),
+                   (Datum::Bytes(b"name:3".to_vec()), 2),
+                   (Datum::Bytes(b"name:5".to_vec()), 3),
+                   (Datum::Null, 7)];
     let req = Select::from(&product.table).first(product.id).group_by(&[product.name]).build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), exp.len());
@@ -721,14 +707,12 @@ fn test_aggr_first() {
         assert_eq!(row.data, &*expected_encoded);
     }
 
-    let exp = vec![
-        (2, Datum::Bytes(b"name:0".to_vec())),
-        (3, Datum::Bytes(b"name:3".to_vec())),
-        (1, Datum::Bytes(b"name:0".to_vec())),
-        (4, Datum::Bytes(b"name:5".to_vec())),
-        (5, Datum::Null),
-        (6, Datum::Null),
-    ];
+    let exp = vec![(2, Datum::Bytes(b"name:0".to_vec())),
+                   (3, Datum::Bytes(b"name:3".to_vec())),
+                   (1, Datum::Bytes(b"name:0".to_vec())),
+                   (4, Datum::Bytes(b"name:5".to_vec())),
+                   (5, Datum::Null),
+                   (6, Datum::Null)];
     let req = Select::from(&product.table).first(product.name).group_by(&[product.count]).build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), exp.len());
@@ -745,14 +729,12 @@ fn test_aggr_first() {
 
 #[test]
 fn test_aggr_avg() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (mut store, mut end_point) = init_with_data(&product, &data);
@@ -785,24 +767,20 @@ fn test_aggr_avg() {
 
 #[test]
 fn test_aggr_sum() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
 
-    let exp = vec![
-        (Datum::Bytes(b"name:0".to_vec()), 3),
-        (Datum::Bytes(b"name:3".to_vec()), 3),
-        (Datum::Bytes(b"name:5".to_vec()), 8),
-        (Datum::Null, 4),
-    ];
+    let exp = vec![(Datum::Bytes(b"name:0".to_vec()), 3),
+                   (Datum::Bytes(b"name:3".to_vec()), 3),
+                   (Datum::Bytes(b"name:5".to_vec()), 8),
+                   (Datum::Null, 4)];
     let req = Select::from(&product.table).sum(product.count).group_by(&[product.name]).build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), exp.len());
@@ -818,14 +796,12 @@ fn test_aggr_sum() {
 
 #[test]
 fn test_aggr_extre() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 5),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 5),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (mut store, mut end_point) = init_with_data(&product, &data);
@@ -840,13 +816,11 @@ fn test_aggr_extre() {
     }
     store.commit();
 
-    let exp = vec![
-        (Datum::Bytes(b"name:0".to_vec()), Datum::I64(2), Datum::I64(1)),
-        (Datum::Bytes(b"name:3".to_vec()), Datum::I64(3), Datum::I64(3)),
-        (Datum::Bytes(b"name:5".to_vec()), Datum::I64(5), Datum::I64(4)),
-        (Datum::Null, Datum::I64(4), Datum::I64(4)),
-        (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null),
-    ];
+    let exp = vec![(Datum::Bytes(b"name:0".to_vec()), Datum::I64(2), Datum::I64(1)),
+                   (Datum::Bytes(b"name:3".to_vec()), Datum::I64(3), Datum::I64(3)),
+                   (Datum::Bytes(b"name:5".to_vec()), Datum::I64(5), Datum::I64(4)),
+                   (Datum::Null, Datum::I64(4), Datum::I64(4)),
+                   (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null)];
     let req = Select::from(&product.table)
         .max(product.count)
         .min(product.count)
@@ -866,23 +840,19 @@ fn test_aggr_extre() {
 
 #[test]
 fn test_order_by_column() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:6"), 4),
-        (6, Some("name:5"), 4),
-        (7, Some("name:4"), 4),
-        (8, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:6"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, Some("name:4"), 4),
+                    (8, None, 4)];
 
-    let exp = vec![
-        (8, None, 4),
-        (7, Some("name:4"), 4),
-        (6, Some("name:5"), 4),
-        (5, Some("name:6"), 4),
-        (2, Some("name:3"), 3),
-    ];
+    let exp = vec![(8, None, 4),
+                   (7, Some("name:4"), 4),
+                   (6, Some("name:5"), 4),
+                   (5, Some("name:6"), 4),
+                   (2, Some("name:3"), 3)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -906,15 +876,13 @@ fn test_order_by_column() {
 
 #[test]
 fn test_order_by_pk_with_select_from_index() {
-    let mut data = vec![
-        (8, Some("name:0"), 2),
-        (7, Some("name:3"), 3),
-        (6, Some("name:0"), 1),
-        (5, Some("name:6"), 4),
-        (4, Some("name:5"), 4),
-        (3, Some("name:4"), 4),
-        (2, None, 4),
-    ];
+    let mut data = vec![(8, Some("name:0"), 2),
+                        (7, Some("name:3"), 3),
+                        (6, Some("name:0"), 1),
+                        (5, Some("name:6"), 4),
+                        (4, Some("name:5"), 4),
+                        (3, Some("name:4"), 4),
+                        (2, None, 4)];
 
 
     let product = ProductTable::new();
@@ -934,14 +902,12 @@ fn test_order_by_pk_with_select_from_index() {
 
 #[test]
 fn test_limit() {
-    let mut data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let mut data = vec![(1, Some("name:0"), 2),
+                        (2, Some("name:3"), 3),
+                        (4, Some("name:0"), 1),
+                        (5, Some("name:5"), 4),
+                        (6, Some("name:5"), 4),
+                        (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -962,14 +928,12 @@ fn test_limit() {
 
 #[test]
 fn test_reverse() {
-    let mut data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let mut data = vec![(1, Some("name:0"), 2),
+                        (2, Some("name:3"), 3),
+                        (4, Some("name:0"), 1),
+                        (5, Some("name:5"), 4),
+                        (6, Some("name:5"), 4),
+                        (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -1002,14 +966,12 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
 
 #[test]
 fn test_index() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -1029,14 +991,12 @@ fn test_index() {
 
 #[test]
 fn test_index_reverse_limit() {
-    let mut data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let mut data = vec![(1, Some("name:0"), 2),
+                        (2, Some("name:3"), 3),
+                        (4, Some("name:0"), 1),
+                        (5, Some("name:5"), 4),
+                        (6, Some("name:5"), 4),
+                        (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -1056,14 +1016,12 @@ fn test_index_reverse_limit() {
 
 #[test]
 fn test_del_select() {
-    let mut data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let mut data = vec![(1, Some("name:0"), 2),
+                        (2, Some("name:3"), 3),
+                        (4, Some("name:0"), 1),
+                        (5, Some("name:5"), 4),
+                        (6, Some("name:5"), 4),
+                        (7, None, 4)];
 
     let product = ProductTable::new();
     let (mut store, mut end_point) = init_with_data(&product, &data);
@@ -1083,12 +1041,10 @@ fn test_del_select() {
 
 #[test]
 fn test_index_group_by() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:2"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:1"), 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:2"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:1"), 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -1109,14 +1065,12 @@ fn test_index_group_by() {
 
 #[test]
 fn test_index_aggr_count() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -1129,12 +1083,10 @@ fn test_index_aggr_count() {
     let mut expected_encoded = datum::encode_value(&[gk, Datum::U64(data.len() as u64)]).unwrap();
     assert_eq!(spliter.next().unwrap().data, &*expected_encoded);
 
-    let exp = vec![
-        (Datum::Null, 1),
-        (Datum::Bytes(b"name:0".to_vec()), 2),
-        (Datum::Bytes(b"name:3".to_vec()), 1),
-        (Datum::Bytes(b"name:5".to_vec()), 2),
-    ];
+    let exp = vec![(Datum::Null, 1),
+                   (Datum::Bytes(b"name:0".to_vec()), 2),
+                   (Datum::Bytes(b"name:3".to_vec()), 1),
+                   (Datum::Bytes(b"name:5".to_vec()), 2)];
     let req = Select::from_index(&product.table, product.name)
         .count()
         .group_by(&[product.name])
@@ -1149,13 +1101,11 @@ fn test_index_aggr_count() {
         assert_eq!(row.data, &*expected_encoded);
     }
 
-    let exp = vec![
-        (vec![Datum::Null, Datum::I64(4)], 1),
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
-        (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
-        (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
-        (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2),
-    ];
+    let exp = vec![(vec![Datum::Null, Datum::I64(4)], 1),
+                   (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(1)], 1),
+                   (vec![Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)], 1),
+                   (vec![Datum::Bytes(b"name:3".to_vec()), Datum::I64(3)], 1),
+                   (vec![Datum::Bytes(b"name:5".to_vec()), Datum::I64(4)], 2)];
     let req = Select::from_index(&product.table, product.name)
         .count()
         .group_by(&[product.name, product.count])
@@ -1175,24 +1125,20 @@ fn test_index_aggr_count() {
 
 #[test]
 fn test_index_aggr_first() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
 
-    let exp = vec![
-        (Datum::Null, 7),
-        (Datum::Bytes(b"name:0".to_vec()), 4),
-        (Datum::Bytes(b"name:3".to_vec()), 2),
-        (Datum::Bytes(b"name:5".to_vec()), 5),
-    ];
+    let exp = vec![(Datum::Null, 7),
+                   (Datum::Bytes(b"name:0".to_vec()), 4),
+                   (Datum::Bytes(b"name:3".to_vec()), 2),
+                   (Datum::Bytes(b"name:5".to_vec()), 5)];
     let req = Select::from_index(&product.table, product.name)
         .first(product.id)
         .group_by(&[product.name])
@@ -1212,14 +1158,12 @@ fn test_index_aggr_first() {
 
 #[test]
 fn test_index_aggr_avg() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (mut store, mut end_point) = init_with_data(&product, &data);
@@ -1255,24 +1199,20 @@ fn test_index_aggr_avg() {
 
 #[test]
 fn test_index_aggr_sum() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 4),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
 
-    let exp = vec![
-        (Datum::Null, 4),
-        (Datum::Bytes(b"name:0".to_vec()), 3),
-        (Datum::Bytes(b"name:3".to_vec()), 3),
-        (Datum::Bytes(b"name:5".to_vec()), 8),
-    ];
+    let exp = vec![(Datum::Null, 4),
+                   (Datum::Bytes(b"name:0".to_vec()), 3),
+                   (Datum::Bytes(b"name:3".to_vec()), 3),
+                   (Datum::Bytes(b"name:5".to_vec()), 8)];
     let req = Select::from_index(&product.table, product.name)
         .sum(product.count)
         .group_by(&[product.name])
@@ -1291,14 +1231,12 @@ fn test_index_aggr_sum() {
 
 #[test]
 fn test_index_aggr_extre() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 5),
-        (7, None, 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:3"), 3),
+                    (4, Some("name:0"), 1),
+                    (5, Some("name:5"), 4),
+                    (6, Some("name:5"), 5),
+                    (7, None, 4)];
 
     let product = ProductTable::new();
     let (mut store, mut end_point) = init_with_data(&product, &data);
@@ -1313,13 +1251,11 @@ fn test_index_aggr_extre() {
     }
     store.commit();
 
-    let exp = vec![
-        (Datum::Null, Datum::I64(4), Datum::I64(4)),
-        (Datum::Bytes(b"name:0".to_vec()), Datum::I64(2), Datum::I64(1)),
-        (Datum::Bytes(b"name:3".to_vec()), Datum::I64(3), Datum::I64(3)),
-        (Datum::Bytes(b"name:5".to_vec()), Datum::I64(5), Datum::I64(4)),
-        (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null),
-    ];
+    let exp = vec![(Datum::Null, Datum::I64(4), Datum::I64(4)),
+                   (Datum::Bytes(b"name:0".to_vec()), Datum::I64(2), Datum::I64(1)),
+                   (Datum::Bytes(b"name:3".to_vec()), Datum::I64(3), Datum::I64(3)),
+                   (Datum::Bytes(b"name:5".to_vec()), Datum::I64(5), Datum::I64(4)),
+                   (Datum::Bytes(b"name:6".to_vec()), Datum::Null, Datum::Null)];
     let req = Select::from_index(&product.table, product.name)
         .max(product.count)
         .min(product.count)
@@ -1339,12 +1275,10 @@ fn test_index_aggr_extre() {
 
 #[test]
 fn test_where() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:4"), 3),
-        (4, Some("name:3"), 1),
-        (5, Some("name:1"), 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:4"), 3),
+                    (4, Some("name:3"), 1),
+                    (5, Some("name:1"), 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -1381,12 +1315,10 @@ fn test_where() {
 
 #[test]
 fn test_handle_truncate() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:4"), 3),
-        (4, Some("name:3"), 1),
-        (5, Some("name:1"), 4),
-    ];
+    let data = vec![(1, Some("name:0"), 2),
+                    (2, Some("name:4"), 3),
+                    (4, Some("name:3"), 1),
+                    (5, Some("name:1"), 4)];
 
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
@@ -1468,14 +1400,12 @@ fn test_handle_truncate() {
 
 #[test]
 fn test_default_val() {
-    let mut data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:3"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:5"), 4),
-        (6, Some("name:5"), 4),
-        (7, None, 4),
-    ];
+    let mut data = vec![(1, Some("name:0"), 2),
+                        (2, Some("name:3"), 3),
+                        (4, Some("name:0"), 1),
+                        (5, Some("name:5"), 4),
+                        (6, Some("name:5"), 4),
+                        (7, None, 4)];
 
     let product = ProductTable::new();
     let added = ColumnBuilder::new().col_type(TYPE_LONG).default(3).build();

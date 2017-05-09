@@ -223,20 +223,18 @@ mod test {
 
     #[test]
     fn test_bytes_to_i64() {
-        let tests: Vec<(&'static [u8], i64)> = vec![
-            (b"0", 0),
-            (b" 23a", 23),
-            (b"\t 23a", 23),
-            (b"\r23a", 0),
-            (b"1", 1),
-            (b"2.1", 2),
-            (b"23e10", 23),
-            (b"ab", 0),
-            (b"4a", 4),
-            (b"+1024", 1024),
-            (b"-231", -231),
-            (b"", 0),
-        ];
+        let tests: Vec<(&'static [u8], i64)> = vec![(b"0", 0),
+                                                    (b" 23a", 23),
+                                                    (b"\t 23a", 23),
+                                                    (b"\r23a", 0),
+                                                    (b"1", 1),
+                                                    (b"2.1", 2),
+                                                    (b"23e10", 23),
+                                                    (b"ab", 0),
+                                                    (b"4a", 4),
+                                                    (b"+1024", 1024),
+                                                    (b"-231", -231),
+                                                    (b"", 0)];
 
         for (bs, n) in tests {
             let t = super::bytes_to_int_without_context(bs).unwrap();
@@ -248,17 +246,15 @@ mod test {
 
     #[test]
     fn test_bytes_to_f64() {
-        let tests: Vec<(&'static [u8], f64)> = vec![
-            (b"", 0.0),
-            (b" 23", 23.0),
-            (b"-1", -1.0),
-            (b"1.11", 1.11),
-            (b"1.11.00", 0.0),
-            (b"xx", 0.0),
-            (b"0x00", 0.0),
-            (b"11.xx", 0.0),
-            (b"xx.11", 0.0),
-        ];
+        let tests: Vec<(&'static [u8], f64)> = vec![(b"", 0.0),
+                                                    (b" 23", 23.0),
+                                                    (b"-1", -1.0),
+                                                    (b"1.11", 1.11),
+                                                    (b"1.11.00", 0.0),
+                                                    (b"xx", 0.0),
+                                                    (b"0x00", 0.0),
+                                                    (b"11.xx", 0.0),
+                                                    (b"xx.11", 0.0)];
 
         for (v, f) in tests {
             let ff = super::bytes_to_f64_without_context(v).unwrap();

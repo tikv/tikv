@@ -508,22 +508,17 @@ mod tests {
 
     #[test]
     fn test_to_socket_addr() {
-        let tbls = vec![
-            ("", false),
-            ("127.0.0.1", false),
-            ("localhost", false),
-            ("127.0.0.1:80", true),
-            ("localhost:80", true),
-        ];
+        let tbls = vec![("", false),
+                        ("127.0.0.1", false),
+                        ("localhost", false),
+                        ("127.0.0.1:80", true),
+                        ("localhost:80", true)];
 
         for (addr, ok) in tbls {
             assert_eq!(to_socket_addr(addr).is_ok(), ok);
         }
 
-        let tbls = vec![
-            ("localhost:80", false),
-            ("127.0.0.1:80", true),
-        ];
+        let tbls = vec![("localhost:80", false), ("127.0.0.1:80", true)];
 
         for (addr, ok) in tbls {
             let ret: Result<SocketAddr, AddrParseError> = addr.parse();
@@ -616,18 +611,16 @@ mod tests {
         e.set_data(b"0123456789".to_vec());
         let size = e.compute_size() as u64;
 
-        let tbls = vec![
-            (vec![], NO_LIMIT, 0),
-            (vec![], size, 0),
-            (vec![e.clone(); 10], 0, 1),
-            (vec![e.clone(); 10], NO_LIMIT, 10),
-            (vec![e.clone(); 10], size, 1),
-            (vec![e.clone(); 10], size + 1, 1),
-            (vec![e.clone(); 10], 2 * size , 2),
-            (vec![e.clone(); 10], 10 * size - 1, 9),
-            (vec![e.clone(); 10], 10 * size, 10),
-            (vec![e.clone(); 10], 10 * size + 1, 10),
-        ];
+        let tbls = vec![(vec![], NO_LIMIT, 0),
+                        (vec![], size, 0),
+                        (vec![e.clone(); 10], 0, 1),
+                        (vec![e.clone(); 10], NO_LIMIT, 10),
+                        (vec![e.clone(); 10], size, 1),
+                        (vec![e.clone(); 10], size + 1, 1),
+                        (vec![e.clone(); 10], 2 * size, 2),
+                        (vec![e.clone(); 10], 10 * size - 1, 9),
+                        (vec![e.clone(); 10], 10 * size, 10),
+                        (vec![e.clone(); 10], 10 * size + 1, 10)];
 
         for (mut entries, max, len) in tbls {
             limit_size(&mut entries, max);

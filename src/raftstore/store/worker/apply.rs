@@ -730,10 +730,10 @@ impl ApplyDelegate {
 
         Ok((resp,
             Some(ExecResult::ChangePeer(ChangePeer {
-            conf_change: Default::default(),
-            peer: peer.clone(),
-            region: region,
-        }))))
+                conf_change: Default::default(),
+                peer: peer.clone(),
+                region: region,
+            }))))
     }
 
     fn exec_split(&mut self,
@@ -816,17 +816,17 @@ impl ApplyDelegate {
         if right_derive {
             Ok((resp,
                 Some(ExecResult::SplitRegion {
-                left: new_region,
-                right: region,
-                right_derive: true,
-            })))
+                    left: new_region,
+                    right: region,
+                    right_derive: true,
+                })))
         } else {
             Ok((resp,
                 Some(ExecResult::SplitRegion {
-                left: region,
-                right: new_region,
-                right_derive: false,
-            })))
+                    left: region,
+                    right: new_region,
+                    right_derive: false,
+                })))
         }
     }
 
@@ -865,9 +865,9 @@ impl ApplyDelegate {
 
         Ok((resp,
             Some(ExecResult::CompactLog {
-            state: ctx.apply_state.get_truncated_state().clone(),
-            first_index: first_index,
-        })))
+                state: ctx.apply_state.get_truncated_state().clone(),
+                first_index: first_index,
+            })))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
@@ -1035,14 +1035,14 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         Ok((resp,
             Some(ExecResult::ComputeHash {
-            region: self.region.clone(),
-            index: ctx.index,
-            // This snapshot may be held for a long time, which may cause too many
-            // open files in rocksdb.
-            // TODO: figure out another way to do consistency check without snapshot
-            // or short life snapshot.
-            snap: Snapshot::new(self.engine.clone()),
-        })))
+                region: self.region.clone(),
+                index: ctx.index,
+                // This snapshot may be held for a long time, which may cause too many
+                // open files in rocksdb.
+                // TODO: figure out another way to do consistency check without snapshot
+                // or short life snapshot.
+                snap: Snapshot::new(self.engine.clone()),
+            })))
     }
 
     fn exec_verify_hash(&self,
@@ -1055,9 +1055,9 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         Ok((resp,
             Some(ExecResult::VerifyHash {
-            index: index,
-            hash: hash,
-        })))
+                index: index,
+                hash: hash,
+            })))
     }
 }
 

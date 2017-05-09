@@ -1241,25 +1241,22 @@ mod tests {
         let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(5).unwrap();
-        let test_data = vec![
-            (1, String::from("data1"), Datum::Null, Datum::I64(1)),
-            (2, String::from("data2"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
-            (5, String::from("data5"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(6)),
-            (6, String::from("data6"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(4)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
-        ];
+        let test_data =
+            vec![(1, String::from("data1"), Datum::Null, Datum::I64(1)),
+                 (2, String::from("data2"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(2)),
+                 (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+                 (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+                 (5, String::from("data5"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(6)),
+                 (6, String::from("data6"), Datum::Bytes(b"name:0".to_vec()), Datum::I64(4)),
+                 (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+                 (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+                 (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2))];
 
-        let exp = vec![
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
-        ];
+        let exp = vec![(9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+                       (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+                       (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+                       (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+                       (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2))];
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];
@@ -1324,21 +1321,18 @@ mod tests {
         let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(10).unwrap();
-        let test_data = vec![
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
-        ];
+        let test_data =
+            vec![(3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+                 (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
+                 (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+                 (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+                 (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2))];
 
-        let exp = vec![
-            (9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
-            (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
-            (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
-            (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
-            (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2)),
-        ];
+        let exp = vec![(9, String::from("data9"), Datum::Bytes(b"name:9".to_vec()), Datum::I64(2)),
+                       (8, String::from("data8"), Datum::Bytes(b"name:8".to_vec()), Datum::I64(2)),
+                       (7, String::from("data7"), Datum::Bytes(b"name:7".to_vec()), Datum::I64(2)),
+                       (3, String::from("data3"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(1)),
+                       (4, String::from("data4"), Datum::Bytes(b"name:3".to_vec()), Datum::I64(2))];
 
         for (handle, data, name, count) in test_data {
             let cur_key: Vec<Datum> = vec![name, count];

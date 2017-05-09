@@ -322,18 +322,12 @@ mod test {
 
     #[test]
     fn test_storage_term() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-        ];
-        let mut tests = vec![
-            (2, Err(RaftError::Store(StorageError::Compacted))),
-            (3, Ok(3)),
-            (4, Ok(4)),
-            (5, Ok(5)),
-            (6, Err(RaftError::Store(StorageError::Unavailable))),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut tests = vec![(2, Err(RaftError::Store(StorageError::Compacted))),
+                             (3, Ok(3)),
+                             (4, Ok(4)),
+                             (5, Ok(5)),
+                             (6, Err(RaftError::Store(StorageError::Unavailable)))];
 
         for (i, (idx, wterm)) in tests.drain(..).enumerate() {
             let storage = MemStorage::new();
@@ -348,32 +342,34 @@ mod test {
 
     #[test]
     fn test_storage_entries() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-            new_entry(6, 6),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
         let max_u64 = u64::max_value();
-        let mut tests = vec![
-            (2, 6, max_u64, Err(RaftError::Store(StorageError::Compacted))),
-            (3, 4, max_u64, Err(RaftError::Store(StorageError::Compacted))),
-            (4, 5, max_u64, Ok(vec![new_entry(4, 4)])),
-            (4, 6, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
-            // even if maxsize is zero, the first entry should be returned
-            (4, 7, 0, Ok(vec![new_entry(4, 4)])),
-            // limit to 2
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2])) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])/2) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
-            // all
-            (4, 7, (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
-             Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
-        ];
+        let mut tests =
+            vec![(2, 6, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+                 (3, 4, max_u64, Err(RaftError::Store(StorageError::Compacted))),
+                 (4, 5, max_u64, Ok(vec![new_entry(4, 4)])),
+                 (4, 6, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4, 7, max_u64, Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])),
+                 // even if maxsize is zero, the first entry should be returned
+                 (4, 7, 0, Ok(vec![new_entry(4, 4)])),
+                 // limit to 2
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2])) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5)])),
+                 // all
+                 (4,
+                  7,
+                  (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
+                  Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]))];
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let storage = MemStorage::new();
             storage.wl().entries = ents.clone();
@@ -386,11 +382,7 @@ mod test {
 
     #[test]
     fn test_storage_last_index() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let storage = MemStorage::new();
         storage.wl().entries = ents;
 
@@ -410,11 +402,7 @@ mod test {
 
     #[test]
     fn test_storage_first_index() {
-        let ents = vec![
-            new_entry(3, 3),
-            new_entry(4, 4),
-            new_entry(5, 5),
-        ];
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let storage = MemStorage::new();
         storage.wl().entries = ents;
 
@@ -435,12 +423,10 @@ mod test {
     #[test]
     fn test_storage_compact() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut tests = vec![
-            (2, Err(RaftError::Store(StorageError::Compacted)), 3, 3, 3),
-            (3, Err(RaftError::Store(StorageError::Compacted)), 3, 3, 3),
-            (4, Ok(()), 4, 4, 2),
-            (5, Ok(()), 5, 5, 1),
-        ];
+        let mut tests = vec![(2, Err(RaftError::Store(StorageError::Compacted)), 3, 3, 3),
+                             (3, Err(RaftError::Store(StorageError::Compacted)), 3, 3, 3),
+                             (4, Ok(()), 4, 4, 2),
+                             (5, Ok(()), 5, 5, 1)];
         for (i, (idx, wresult, windex, wterm, wlen)) in tests.drain(..).enumerate() {
             let storage = MemStorage::new();
             storage.wl().entries = ents.clone();
@@ -472,10 +458,8 @@ mod test {
         cs.set_nodes(nodes.clone());
         let data = b"data".to_vec();
 
-        let mut tests = vec![
-            (4, Ok(new_snapshot(4, 4, nodes.clone(), data.clone()))),
-            (5, Ok(new_snapshot(5, 5, nodes.clone(), data.clone()))),
-        ];
+        let mut tests = vec![(4, Ok(new_snapshot(4, 4, nodes.clone(), data.clone()))),
+                             (5, Ok(new_snapshot(5, 5, nodes.clone(), data.clone())))];
         for (i, (idx, wresult)) in tests.drain(..).enumerate() {
             let storage = MemStorage::new();
             storage.wl().entries = ents.clone();
@@ -493,41 +477,26 @@ mod test {
     #[test]
     fn test_storage_append() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut tests = vec![
-            (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
-                Ok(()),
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
-            ),
-            (
-                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
-                Ok(()),
-                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
-            ),
-            (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-                Ok(()),
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-            ),
-            // truncate incoming entries, truncate the existing entries and append
-            (
-                vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)],
-                Ok(()),
-                vec![new_entry(3, 3), new_entry(4, 5)],
-            ),
-            // truncate the existing entries and append
-            (
-                vec![new_entry(4, 5)],
-                Ok(()),
-                vec![new_entry(3, 3), new_entry(4, 5)],
-            ),
-            // direct append
-            (
-                vec![new_entry(6, 6)],
-                Ok(()),
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)],
-            ),
-        ];
+        let mut tests =
+            vec![(vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
+                  Ok(()),
+                  vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)]),
+                 (vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
+                  Ok(()),
+                  vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)]),
+                 (vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+                  Ok(()),
+                  vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)]),
+                 // truncate incoming entries, truncate the existing entries and append
+                 (vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)],
+                  Ok(()),
+                  vec![new_entry(3, 3), new_entry(4, 5)]),
+                 // truncate the existing entries and append
+                 (vec![new_entry(4, 5)], Ok(()), vec![new_entry(3, 3), new_entry(4, 5)]),
+                 // direct append
+                 (vec![new_entry(6, 6)],
+                  Ok(()),
+                  vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)])];
         for (i, (entries, wresult, wentries)) in tests.drain(..).enumerate() {
             let storage = MemStorage::new();
             storage.wl().entries = ents.clone();
@@ -548,10 +517,8 @@ mod test {
         let nodes = vec![1, 2, 3];
         let data = b"data".to_vec();
 
-        let snapshots = vec![
-            new_snapshot(4, 4, nodes.clone(), data.clone()),
-            new_snapshot(3, 3, nodes.clone(), data.clone()),
-        ];
+        let snapshots = vec![new_snapshot(4, 4, nodes.clone(), data.clone()),
+                             new_snapshot(3, 3, nodes.clone(), data.clone())];
 
         let storage = MemStorage::new();
 

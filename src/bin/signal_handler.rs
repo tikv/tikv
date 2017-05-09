@@ -55,7 +55,7 @@ mod imp {
                     for name in engine.cf_names() {
                         let handler = engine.cf_handle(name).unwrap();
                         if let Some(v) =
-                               engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
+                            engine.get_property_value_cf(handler, ROCKSDB_CF_STATS_KEY) {
                             info!("{}", v)
                         }
                     }

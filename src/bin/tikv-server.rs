@@ -708,12 +708,14 @@ fn build_raftkv(config: &toml::Value,
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let db_opts = get_rocksdb_db_option(config);
-    let cfs_opts = vec![
-        rocksdb_util::CFOptions::new(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem)),
-        rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config)),
-        rocksdb_util::CFOptions::new(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem)),
-        rocksdb_util::CFOptions::new(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem)),
-    ];
+    let cfs_opts =
+        vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
+                                          get_rocksdb_default_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config)),
+             rocksdb_util::CFOptions::new(CF_WRITE,
+                                          get_rocksdb_write_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_RAFT,
+                                          get_rocksdb_raftlog_cf_option(config, total_mem))];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
@@ -739,7 +741,7 @@ fn build_raftkv(config: &toml::Value,
 
     (node,
      create_raft_storage(router.clone(), engine.clone(), cfg)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))),
+         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))),
      router,
      snap_mgr,
      engine)
@@ -956,7 +958,7 @@ fn main() {
             toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
         }
         // Default empty value, lookup() always returns `None`.
-        None => toml::Value::Integer(0)
+        None => toml::Value::Integer(0),
     };
 
     init_log(&matches, &config);

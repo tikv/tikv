@@ -388,13 +388,11 @@ impl Network {
 #[test]
 fn test_progress_become_probe() {
     let matched = 1u64;
-    let mut tests = vec![
-        (new_progress(ProgressState::Replicate, matched, 5, 0, 256), 2),
-        // snapshot finish
-        (new_progress(ProgressState::Snapshot, matched, 5, 10, 256), 11),
-        // snapshot failure
-        (new_progress(ProgressState::Snapshot, matched, 5, 0, 256), 2),
-    ];
+    let mut tests = vec![(new_progress(ProgressState::Replicate, matched, 5, 0, 256), 2),
+                         // snapshot finish
+                         (new_progress(ProgressState::Snapshot, matched, 5, 10, 256), 11),
+                         // snapshot failure
+                         (new_progress(ProgressState::Snapshot, matched, 5, 0, 256), 2)];
     for (i, &mut (ref mut p, wnext)) in tests.iter_mut().enumerate() {
         p.become_probe();
         if p.state != ProgressState::Probe {
@@ -434,12 +432,10 @@ fn test_progress_become_snapshot() {
 #[test]
 fn test_progress_update() {
     let (prev_m, prev_n) = (3u64, 5u64);
-    let tests = vec![
-        (prev_m - 1, prev_m, prev_n, false),
-        (prev_m, prev_m, prev_n, false),
-        (prev_m + 1, prev_m + 1, prev_n, true),
-        (prev_m + 2, prev_m + 2, prev_n + 1, true),
-    ];
+    let tests = vec![(prev_m - 1, prev_m, prev_n, false),
+                     (prev_m, prev_m, prev_n, false),
+                     (prev_m + 1, prev_m + 1, prev_n, true),
+                     (prev_m + 2, prev_m + 2, prev_n + 1, true)];
     for (i, &(update, wm, wn, wok)) in tests.iter().enumerate() {
         let mut p = Progress {
             matched: prev_m,
@@ -461,29 +457,27 @@ fn test_progress_update() {
 
 #[test]
 fn test_progress_maybe_decr() {
-    let tests = vec![
-        // state replicate and rejected is not greater than match
-        (ProgressState::Replicate, 5, 10, 5, 5, false, 10),
-        // state replicate and rejected is not greater than match
-        (ProgressState::Replicate, 5, 10, 4, 4, false, 10),
-        // state replicate and rejected is greater than match
-        // directly decrease to match+1
-        (ProgressState::Replicate, 5, 10, 9, 9, true, 6),
-        // next-1 != rejected is always false
-        (ProgressState::Probe, 0, 0, 0, 0, false, 0),
-        // next-1 != rejected is always false
-        (ProgressState::Probe, 0, 10, 5, 5, false, 10),
-        // next>1 = decremented by 1
-        (ProgressState::Probe, 0, 10, 9, 9, true, 9),
-        // next>1 = decremented by 1
-        (ProgressState::Probe, 0, 2, 1, 1, true, 1),
-        // next<=1 = reset to 1
-        (ProgressState::Probe, 0, 1, 0, 0, true, 1),
-        // decrease to min(rejected, last+1)
-        (ProgressState::Probe, 0, 10, 9, 2, true, 3),
-        // rejected < 1, reset to 1
-        (ProgressState::Probe, 0, 10, 9, 0, true, 1),
-    ];
+    let tests = vec![// state replicate and rejected is not greater than match
+                     (ProgressState::Replicate, 5, 10, 5, 5, false, 10),
+                     // state replicate and rejected is not greater than match
+                     (ProgressState::Replicate, 5, 10, 4, 4, false, 10),
+                     // state replicate and rejected is greater than match
+                     // directly decrease to match+1
+                     (ProgressState::Replicate, 5, 10, 9, 9, true, 6),
+                     // next-1 != rejected is always false
+                     (ProgressState::Probe, 0, 0, 0, 0, false, 0),
+                     // next-1 != rejected is always false
+                     (ProgressState::Probe, 0, 10, 5, 5, false, 10),
+                     // next>1 = decremented by 1
+                     (ProgressState::Probe, 0, 10, 9, 9, true, 9),
+                     // next>1 = decremented by 1
+                     (ProgressState::Probe, 0, 2, 1, 1, true, 1),
+                     // next<=1 = reset to 1
+                     (ProgressState::Probe, 0, 1, 0, 0, true, 1),
+                     // decrease to min(rejected, last+1)
+                     (ProgressState::Probe, 0, 10, 9, 2, true, 3),
+                     // rejected < 1, reset to 1
+                     (ProgressState::Probe, 0, 10, 9, 0, true, 1)];
     for (i, &(state, m, n, rejected, last, w, wn)) in tests.iter().enumerate() {
         let mut p = new_progress(state, m, n, 0, 0);
         if p.maybe_decr_to(rejected, last) != w {
@@ -500,14 +494,12 @@ fn test_progress_maybe_decr() {
 
 #[test]
 fn test_progress_is_paused() {
-    let tests = vec![
-        (ProgressState::Probe, false, false),
-        (ProgressState::Probe, true, true),
-        (ProgressState::Replicate, false, false),
-        (ProgressState::Replicate, true, false),
-        (ProgressState::Snapshot, false, true),
-        (ProgressState::Snapshot, true, true),
-    ];
+    let tests = vec![(ProgressState::Probe, false, false),
+                     (ProgressState::Probe, true, true),
+                     (ProgressState::Replicate, false, false),
+                     (ProgressState::Replicate, true, false),
+                     (ProgressState::Snapshot, false, true),
+                     (ProgressState::Snapshot, true, true)];
     for (i, &(state, paused, w)) in tests.iter().enumerate() {
         let p = Progress {
             state: state,
@@ -584,30 +576,32 @@ fn test_leader_election_pre_vote() {
 }
 
 fn test_leader_election_with_config(pre_vote: bool) {
-    let mut tests = vec![
-        (Network::new_with_config(vec![None, None, None], pre_vote), StateRole::Leader, 1),
-        (Network::new_with_config(vec![None, None, NOP_STEPPER], pre_vote), StateRole::Leader, 1),
-        (Network::new_with_config(vec![None,
-                                       NOP_STEPPER,
-                                       NOP_STEPPER], pre_vote), StateRole::Candidate, 1),
-        (Network::new_with_config(vec![None,
-                                       NOP_STEPPER,
-                                       NOP_STEPPER,
-                                       None], pre_vote), StateRole::Candidate, 1),
-        (Network::new_with_config(vec![None,
-                                       NOP_STEPPER,
-                                       NOP_STEPPER,
-                                       None,
-                                       None], pre_vote), StateRole::Leader, 1),
+    let mut tests =
+        vec![(Network::new_with_config(vec![None, None, None], pre_vote), StateRole::Leader, 1),
+             (Network::new_with_config(vec![None, None, NOP_STEPPER], pre_vote),
+              StateRole::Leader,
+              1),
+             (Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER], pre_vote),
+              StateRole::Candidate,
+              1),
+             (Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER, None], pre_vote),
+              StateRole::Candidate,
+              1),
+             (Network::new_with_config(vec![None, NOP_STEPPER, NOP_STEPPER, None, None],
+                                       pre_vote),
+              StateRole::Leader,
+              1),
 
-        // three logs futher along than 0, but in the same term so rejection
-        // are returned instead of the votes being ignored.
-        (Network::new_with_config(vec![None,
-                                       Some(ents_with_config(vec![1], pre_vote)),
-                                       Some(ents_with_config(vec![1], pre_vote)),
-                                       Some(ents_with_config(vec![1,1], pre_vote)),
-                                       None], pre_vote), StateRole::Follower, 1),
-    ];
+             // three logs futher along than 0, but in the same term so rejection
+             // are returned instead of the votes being ignored.
+             (Network::new_with_config(vec![None,
+                                            Some(ents_with_config(vec![1], pre_vote)),
+                                            Some(ents_with_config(vec![1], pre_vote)),
+                                            Some(ents_with_config(vec![1, 1], pre_vote)),
+                                            None],
+                                       pre_vote),
+              StateRole::Follower,
+              1)];
 
     for (i, &mut (ref mut network, state, term)) in tests.iter_mut().enumerate() {
         let mut m = Message::new();
@@ -700,13 +694,11 @@ fn test_leader_election_overwrite_newer_logs_with_config(pre_vote: bool) {
     // entry overwrites the loser's. (test_leader_sync_follower_log tests
     // the case where older log entries are overwritten, so this test
     // focuses on the case where the newer entries are lost).
-    let mut network = Network::new_with_config(vec![
-        Some(ents_with_config(vec![1], pre_vote)), // Node 1: Won first election
-        Some(ents_with_config(vec![1], pre_vote)), // Node 2: Get logs from node 1
-        Some(ents_with_config(vec![2], pre_vote)), // Node 3: Won second election
-        Some(voted_with_config(3, 2, pre_vote)),  // Node 4: Voted but didn't get logs
-        Some(voted_with_config(3, 2, pre_vote)),   // Node 5: Voted but didn't get logs
-    ],
+    let mut network = Network::new_with_config(vec![Some(ents_with_config(vec![1], pre_vote)), /* Node 1: Won first election */
+                                                    Some(ents_with_config(vec![1], pre_vote)), /* Node 2: Get logs from node 1 */
+                                                    Some(ents_with_config(vec![2], pre_vote)), /* Node 3: Won second election */
+                                                    Some(voted_with_config(3, 2, pre_vote)), /* Node 4: Voted but didn't get logs */
+                                                    Some(voted_with_config(3, 2, pre_vote)) /* Node 5: Voted but didn't get logs */],
                                                pre_vote);
 
     // Node 1 campaigns. The election fails because a quorum of nodes
@@ -849,17 +841,15 @@ fn test_vote_from_any_state_for_type(vt: MessageType) {
 
 #[test]
 fn test_log_replicatioin() {
-    let mut tests = vec![
-        (Network::new(vec![None, None, None]),
-            vec![new_message(1, 1, MessageType::MsgPropose, 1)],
-            2),
+    let mut tests = vec![(Network::new(vec![None, None, None]),
+                          vec![new_message(1, 1, MessageType::MsgPropose, 1)],
+                          2),
 
-        (Network::new(vec![None, None, None]),
-            vec![new_message(1, 1, MessageType::MsgPropose, 1),
-                new_message(1, 2, MessageType::MsgHup, 0),
-                new_message(1, 2, MessageType::MsgPropose, 1)],
-            4),
-    ];
+                         (Network::new(vec![None, None, None]),
+                          vec![new_message(1, 1, MessageType::MsgPropose, 1),
+                               new_message(1, 2, MessageType::MsgHup, 0),
+                               new_message(1, 2, MessageType::MsgPropose, 1)],
+                          4)];
 
     for (i, &mut (ref mut network, ref msgs, wcommitted)) in tests.iter_mut().enumerate() {
         network.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
@@ -997,11 +987,9 @@ fn test_dueling_candidates() {
 
     let wlog = new_raft_log(vec![empty_entry(1, 1)], 2, 1);
     let wlog2 = new_raft_log_with_storage(new_storage());
-    let tests = vec![
-        (StateRole::Follower, 2, &wlog),
-        (StateRole::Follower, 2, &wlog),
-        (StateRole::Follower, 2, &wlog2),
-    ];
+    let tests = vec![(StateRole::Follower, 2, &wlog),
+                     (StateRole::Follower, 2, &wlog),
+                     (StateRole::Follower, 2, &wlog2)];
 
     for (i, &(state, term, raft_log)) in tests.iter().enumerate() {
         let id = i as u64 + 1;
@@ -1048,11 +1036,9 @@ fn test_dueling_pre_candidates() {
 
     let wlog = new_raft_log(vec![empty_entry(0, 0), empty_entry(1, 1)], 2, 1);
     let wlog2 = new_raft_log_with_storage(new_storage());
-    let tests = vec![
-        (1, StateRole::Leader, 1, &wlog),
-        (2, StateRole::Follower, 1, &wlog),
-        (3, StateRole::Follower, 1, &wlog2),
-    ];
+    let tests = vec![(1, StateRole::Leader, 1, &wlog),
+                     (2, StateRole::Follower, 1, &wlog),
+                     (3, StateRole::Follower, 1, &wlog2)];
     for (i, &(id, state, term, raft_log)) in tests.iter().enumerate() {
         if nt.peers[&id].state != state {
             panic!("#{}: state = {:?}, want {:?}",
@@ -1152,13 +1138,11 @@ fn test_old_messages() {
 
 #[test]
 fn test_proposal() {
-    let mut tests = vec![
-        (Network::new(vec![None, None, None]), true),
-        (Network::new(vec![None, None, NOP_STEPPER]), true),
-        (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER]), false),
-        (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None]), false),
-        (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None, None]), true),
-    ];
+    let mut tests = vec![(Network::new(vec![None, None, None]), true),
+                         (Network::new(vec![None, None, NOP_STEPPER]), true),
+                         (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER]), false),
+                         (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None]), false),
+                         (Network::new(vec![None, NOP_STEPPER, NOP_STEPPER, None, None]), true)];
 
     for (j, (mut nw, success)) in tests.drain(..).enumerate() {
         let send = |nw: &mut Network, m| {
@@ -1192,10 +1176,8 @@ fn test_proposal() {
 
 #[test]
 fn test_proposal_by_proxy() {
-    let mut tests = vec![
-        Network::new(vec![None, None, None]),
-        Network::new(vec![None, None, NOP_STEPPER]),
-    ];
+    let mut tests = vec![Network::new(vec![None, None, None]),
+                         Network::new(vec![None, None, NOP_STEPPER])];
     for (j, tt) in tests.iter_mut().enumerate() {
         // promote 0 the leader
         tt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
@@ -1222,27 +1204,25 @@ fn test_proposal_by_proxy() {
 
 #[test]
 fn test_commit() {
-    let mut tests = vec![
-        // single
-        (vec![1u64], vec![empty_entry(1, 1)], 1u64, 1u64),
-        (vec![1], vec![empty_entry(1, 1)], 2, 0),
-        (vec![2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
-        (vec![1], vec![empty_entry(2, 1)], 2, 1),
+    let mut tests = vec![// single
+                         (vec![1u64], vec![empty_entry(1, 1)], 1u64, 1u64),
+                         (vec![1], vec![empty_entry(1, 1)], 2, 0),
+                         (vec![2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
+                         (vec![1], vec![empty_entry(2, 1)], 2, 1),
 
-        // odd
-        (vec![2, 1, 1], vec![empty_entry(1, 1), empty_entry(2, 2)], 1, 1),
-        (vec![2, 1, 1], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
-        (vec![2, 1, 2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
-        (vec![2, 1, 2], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
+                         // odd
+                         (vec![2, 1, 1], vec![empty_entry(1, 1), empty_entry(2, 2)], 1, 1),
+                         (vec![2, 1, 1], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
+                         (vec![2, 1, 2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
+                         (vec![2, 1, 2], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
 
-        // even
-        (vec![2, 1, 1, 1], vec![empty_entry(1, 1), empty_entry(2, 2)], 1, 1),
-        (vec![2, 1, 1, 1], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
-        (vec![2, 1, 1, 2], vec![empty_entry(1, 1), empty_entry(2, 2)], 1, 1),
-        (vec![2, 1, 1, 2], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
-        (vec![2, 1, 2, 2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
-        (vec![2, 1, 2, 2], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
-    ];
+                         // even
+                         (vec![2, 1, 1, 1], vec![empty_entry(1, 1), empty_entry(2, 2)], 1, 1),
+                         (vec![2, 1, 1, 1], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
+                         (vec![2, 1, 1, 2], vec![empty_entry(1, 1), empty_entry(2, 2)], 1, 1),
+                         (vec![2, 1, 1, 2], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0),
+                         (vec![2, 1, 2, 2], vec![empty_entry(1, 1), empty_entry(2, 2)], 2, 2),
+                         (vec![2, 1, 2, 2], vec![empty_entry(1, 1), empty_entry(1, 2)], 2, 0)];
 
     for (i, (matches, logs, sm_term, w)) in tests.drain(..).enumerate() {
         let store = MemStorage::new();
@@ -1264,14 +1244,12 @@ fn test_commit() {
 
 #[test]
 fn test_pass_election_timeout() {
-    let tests = vec![
-        (5, 0f64, false),
-        (10, 0.1, true),
-        (13, 0.4, true),
-        (15, 0.6, true),
-        (18, 0.9, true),
-        (20, 1.0, false),
-    ];
+    let tests = vec![(5, 0f64, false),
+                     (10, 0.1, true),
+                     (13, 0.4, true),
+                     (15, 0.6, true),
+                     (18, 0.9, true),
+                     (20, 1.0, false)];
 
     for (i, &(elapse, wprobability, round)) in tests.iter().enumerate() {
         let mut sm = new_test_raft(1, vec![1], 10, 1, new_storage());
@@ -1329,25 +1307,23 @@ fn test_handle_msg_append() {
         }
         m
     };
-    let mut tests = vec![
-        // Ensure 1
-        (nm(2, 3, 2, 3, None), 2, 0, true), // previous log mismatch
-        (nm(2, 3, 3, 3, None), 2, 0, true), // previous log non-exist
+    let mut tests = vec![// Ensure 1
+                         (nm(2, 3, 2, 3, None), 2, 0, true), // previous log mismatch
+                         (nm(2, 3, 3, 3, None), 2, 0, true), // previous log non-exist
 
-        // Ensure 2
-        (nm(2, 1, 1, 1, None), 2, 1, false),
-        (nm(2, 0, 0, 1, Some(vec![(1, 2)])), 1, 1, false),
-        (nm(2, 2, 2, 3, Some(vec![(3, 2), (4, 2)])), 4, 3, false),
-        (nm(2, 2, 2, 4, Some(vec![(3, 2)])), 3, 3, false),
-        (nm(2, 1, 1, 4, Some(vec![(2, 2)])), 2, 2, false),
+                         // Ensure 2
+                         (nm(2, 1, 1, 1, None), 2, 1, false),
+                         (nm(2, 0, 0, 1, Some(vec![(1, 2)])), 1, 1, false),
+                         (nm(2, 2, 2, 3, Some(vec![(3, 2), (4, 2)])), 4, 3, false),
+                         (nm(2, 2, 2, 4, Some(vec![(3, 2)])), 3, 3, false),
+                         (nm(2, 1, 1, 4, Some(vec![(2, 2)])), 2, 2, false),
 
-        // Ensure 3
-        (nm(1, 1, 1, 3, None), 2, 1, false), // match entry 1, commit up to last new entry 1
-        (nm(1, 1, 1, 3, Some(vec![(2, 2)])), 2, 2, false), // match entry 1, commit up to last new
-                                                           // entry 2
-        (nm(2, 2, 2, 3, None), 2, 2, false), // match entry 2, commit up to last new entry 2
-        (nm(2, 2, 2, 4, None), 2, 2, false), // commit up to log.last()
-    ];
+                         // Ensure 3
+                         (nm(1, 1, 1, 3, None), 2, 1, false), /* match entry 1, commit up to last new entry 1 */
+                         (nm(1, 1, 1, 3, Some(vec![(2, 2)])), 2, 2, false), /* match entry 1, commit up to last new */
+                         // entry 2
+                         (nm(2, 2, 2, 3, None), 2, 2, false), /* match entry 2, commit up to last new entry 2 */
+                         (nm(2, 2, 2, 4, None), 2, 2, false) /* commit up to log.last() */];
 
     for (j, (m, w_index, w_commit, w_reject)) in tests.drain(..).enumerate() {
         let store = new_storage();
@@ -1388,10 +1364,8 @@ fn test_handle_heartbeat() {
         m.set_commit(commit);
         m
     };
-    let mut tests = vec![
-        (nw(2, 1, 2, commit + 1), commit + 1),
-        (nw(2, 1, 2, commit - 1), commit), // do not decrease commit
-    ];
+    let mut tests = vec![(nw(2, 1, 2, commit + 1), commit + 1),
+                         (nw(2, 1, 2, commit - 1), commit) /* do not decrease commit */];
     for (i, (m, w_commit)) in tests.drain(..).enumerate() {
         let store = new_storage();
         store.wl()
@@ -1549,34 +1523,32 @@ fn test_recv_msg_request_vote() {
 }
 
 fn test_recv_msg_request_vote_for_type(msg_type: MessageType) {
-    let mut tests = vec![
-        (StateRole::Follower, 0, 0, INVALID_ID, true),
-        (StateRole::Follower, 0, 1, INVALID_ID, true),
-        (StateRole::Follower, 0, 2, INVALID_ID, true),
-        (StateRole::Follower, 0, 3, INVALID_ID, false),
+    let mut tests = vec![(StateRole::Follower, 0, 0, INVALID_ID, true),
+                         (StateRole::Follower, 0, 1, INVALID_ID, true),
+                         (StateRole::Follower, 0, 2, INVALID_ID, true),
+                         (StateRole::Follower, 0, 3, INVALID_ID, false),
 
-        (StateRole::Follower, 1, 0, INVALID_ID, true),
-        (StateRole::Follower, 1, 1, INVALID_ID, true),
-        (StateRole::Follower, 1, 2, INVALID_ID, true),
-        (StateRole::Follower, 1, 3, INVALID_ID, false),
+                         (StateRole::Follower, 1, 0, INVALID_ID, true),
+                         (StateRole::Follower, 1, 1, INVALID_ID, true),
+                         (StateRole::Follower, 1, 2, INVALID_ID, true),
+                         (StateRole::Follower, 1, 3, INVALID_ID, false),
 
-        (StateRole::Follower, 2, 0, INVALID_ID, true),
-        (StateRole::Follower, 2, 1, INVALID_ID, true),
-        (StateRole::Follower, 2, 2, INVALID_ID, false),
-        (StateRole::Follower, 2, 3, INVALID_ID, false),
+                         (StateRole::Follower, 2, 0, INVALID_ID, true),
+                         (StateRole::Follower, 2, 1, INVALID_ID, true),
+                         (StateRole::Follower, 2, 2, INVALID_ID, false),
+                         (StateRole::Follower, 2, 3, INVALID_ID, false),
 
-        (StateRole::Follower, 3, 0, INVALID_ID, true),
-        (StateRole::Follower, 3, 1, INVALID_ID, true),
-        (StateRole::Follower, 3, 2, INVALID_ID, false),
-        (StateRole::Follower, 3, 3, INVALID_ID, false),
+                         (StateRole::Follower, 3, 0, INVALID_ID, true),
+                         (StateRole::Follower, 3, 1, INVALID_ID, true),
+                         (StateRole::Follower, 3, 2, INVALID_ID, false),
+                         (StateRole::Follower, 3, 3, INVALID_ID, false),
 
-        (StateRole::Follower, 3, 2, 2, false),
-        (StateRole::Follower, 3, 2, 1, true),
+                         (StateRole::Follower, 3, 2, 2, false),
+                         (StateRole::Follower, 3, 2, 1, true),
 
-        (StateRole::Leader, 3, 3, 1, true),
-        (StateRole::PreCandidate, 3, 3, 1, true),
-        (StateRole::Candidate, 3, 3, 1, true),
-    ];
+                         (StateRole::Leader, 3, 3, 1, true),
+                         (StateRole::PreCandidate, 3, 3, 1, true),
+                         (StateRole::Candidate, 3, 3, 1, true)];
 
     for (j, (state, i, term, vote_for, w_reject)) in tests.drain(..).enumerate() {
         let raft_log = new_raft_log(vec![empty_entry(0, 0), empty_entry(2, 1), empty_entry(2, 2)],
@@ -1612,27 +1584,25 @@ fn test_recv_msg_request_vote_for_type(msg_type: MessageType) {
 
 #[test]
 fn test_state_transition() {
-    let mut tests = vec![
-        (StateRole::Follower, StateRole::Follower, true, 1, INVALID_ID),
-        (StateRole::Follower, StateRole::PreCandidate, true, 0, INVALID_ID),
-        (StateRole::Follower, StateRole::Candidate, true, 1, INVALID_ID),
-        (StateRole::Follower, StateRole::Leader, false, 0, INVALID_ID),
+    let mut tests = vec![(StateRole::Follower, StateRole::Follower, true, 1, INVALID_ID),
+                         (StateRole::Follower, StateRole::PreCandidate, true, 0, INVALID_ID),
+                         (StateRole::Follower, StateRole::Candidate, true, 1, INVALID_ID),
+                         (StateRole::Follower, StateRole::Leader, false, 0, INVALID_ID),
 
-        (StateRole::PreCandidate, StateRole::Follower, true, 0, INVALID_ID),
-        (StateRole::PreCandidate, StateRole::PreCandidate, true, 0, INVALID_ID),
-        (StateRole::PreCandidate, StateRole::Candidate, true, 1, INVALID_ID),
-        (StateRole::PreCandidate, StateRole::Leader, true, 0, 1),
+                         (StateRole::PreCandidate, StateRole::Follower, true, 0, INVALID_ID),
+                         (StateRole::PreCandidate, StateRole::PreCandidate, true, 0, INVALID_ID),
+                         (StateRole::PreCandidate, StateRole::Candidate, true, 1, INVALID_ID),
+                         (StateRole::PreCandidate, StateRole::Leader, true, 0, 1),
 
-        (StateRole::Candidate, StateRole::Follower, true, 0, INVALID_ID),
-        (StateRole::Candidate, StateRole::PreCandidate, true, 0, INVALID_ID),
-        (StateRole::Candidate, StateRole::Candidate, true, 1, INVALID_ID),
-        (StateRole::Candidate, StateRole::Leader, true, 0, 1),
+                         (StateRole::Candidate, StateRole::Follower, true, 0, INVALID_ID),
+                         (StateRole::Candidate, StateRole::PreCandidate, true, 0, INVALID_ID),
+                         (StateRole::Candidate, StateRole::Candidate, true, 1, INVALID_ID),
+                         (StateRole::Candidate, StateRole::Leader, true, 0, 1),
 
-        (StateRole::Leader, StateRole::Follower, true, 1, INVALID_ID),
-        (StateRole::Leader, StateRole::PreCandidate, false, 0, INVALID_ID),
-        (StateRole::Leader, StateRole::Candidate, false, 1, INVALID_ID),
-        (StateRole::Leader, StateRole::Leader, true, 0, 1),
-    ];
+                         (StateRole::Leader, StateRole::Follower, true, 1, INVALID_ID),
+                         (StateRole::Leader, StateRole::PreCandidate, false, 0, INVALID_ID),
+                         (StateRole::Leader, StateRole::Candidate, false, 1, INVALID_ID),
+                         (StateRole::Leader, StateRole::Leader, true, 0, 1)];
     for (i, (from, to, wallow, wterm, wlead)) in tests.drain(..).enumerate() {
         let mut sm: &mut Raft<MemStorage> = &mut new_test_raft(1, vec![1], 10, 1, new_storage());
         sm.state = from;
@@ -1663,12 +1633,10 @@ fn test_state_transition() {
 
 #[test]
 fn test_all_server_stepdown() {
-    let mut tests = vec![
-        (StateRole::Follower, StateRole::Follower, 3, 0),
-        (StateRole::PreCandidate, StateRole::Follower, 3, 0),
-        (StateRole::Candidate, StateRole::Follower, 3, 0),
-        (StateRole::Leader, StateRole::Follower, 3, 1),
-    ];
+    let mut tests = vec![(StateRole::Follower, StateRole::Follower, 3, 0),
+                         (StateRole::PreCandidate, StateRole::Follower, 3, 0),
+                         (StateRole::Candidate, StateRole::Follower, 3, 0),
+                         (StateRole::Leader, StateRole::Follower, 3, 1)];
 
     let tmsg_types = vec![MessageType::MsgRequestVote, MessageType::MsgAppend];
     let tterm = 3u64;
@@ -1938,14 +1906,12 @@ fn test_read_only_option_safe() {
 
     assert_eq!(nt.peers[&1].state, StateRole::Leader);
 
-    let mut tests = vec![
-        (1, 10, 11, "ctx1"),
-        (2, 10, 21, "ctx2"),
-        (3, 10, 31, "ctx3"),
-        (1, 10, 41, "ctx4"),
-        (2, 10, 51, "ctx5"),
-        (3, 10, 61, "ctx6"),
-    ];
+    let mut tests = vec![(1, 10, 11, "ctx1"),
+                         (2, 10, 21, "ctx2"),
+                         (3, 10, 31, "ctx3"),
+                         (1, 10, 41, "ctx4"),
+                         (2, 10, 51, "ctx5"),
+                         (3, 10, 61, "ctx6")];
 
     for (i, (id, proposals, wri, wctx)) in tests.drain(..).enumerate() {
         for _ in 0..proposals {
@@ -2001,14 +1967,12 @@ fn test_read_only_option_lease() {
 
     assert_eq!(nt.peers[&1].state, StateRole::Leader);
 
-    let mut tests = vec![
-        (1, 10, 11, "ctx1"),
-        (2, 10, 21, "ctx2"),
-        (3, 10, 31, "ctx3"),
-        (1, 10, 41, "ctx4"),
-        (2, 10, 51, "ctx5"),
-        (3, 10, 61, "ctx6"),
-    ];
+    let mut tests = vec![(1, 10, 11, "ctx1"),
+                         (2, 10, 21, "ctx2"),
+                         (3, 10, 31, "ctx3"),
+                         (1, 10, 41, "ctx4"),
+                         (2, 10, 51, "ctx5"),
+                         (3, 10, 61, "ctx6")];
 
     for (i, (id, proposals, wri, wctx)) in tests.drain(..).enumerate() {
         for _ in 0..proposals {
@@ -2066,11 +2030,7 @@ fn test_read_only_option_lease_without_check_quorum() {
 #[test]
 fn test_read_only_for_new_leader() {
     let heartbeat_ticks = 1;
-    let node_configs = vec![
-        (1, 1, 1, 0),
-        (2, 2, 2, 2),
-        (3, 2, 2, 2),
-    ];
+    let node_configs = vec![(1, 1, 1, 0), (2, 2, 2, 2), (3, 2, 2, 2)];
     let mut peers = vec![];
     for (id, committed, applied, compact_index) in node_configs {
         let mut cfg = new_test_config(id, vec![1, 2, 3], 10, heartbeat_ticks);
@@ -2132,16 +2092,15 @@ fn test_read_only_for_new_leader() {
 #[test]
 fn test_leader_append_response() {
     // initial progress: match = 0; next = 3
-    let mut tests = vec![
-        (3, true, 0, 3, 0, 0, 0), // stale resp; no replies
-        (2, true, 0, 2, 1, 1, 0), // denied resp; leader does not commit; descrease next and send
-                                  // probing msg
-        (2, false, 2, 4, 2, 2, 2), // accept resp; leader commits; broadcast with commit index
-        (0, false, 0, 3, 0, 0, 0),
-    ];
+    let mut tests = vec![(3, true, 0, 3, 0, 0, 0), // stale resp; no replies
+                         (2, true, 0, 2, 1, 1, 0), /* denied resp; leader does not commit; descrease next and send */
+                         // probing msg
+                         (2, false, 2, 4, 2, 2, 2), /* accept resp; leader commits; broadcast with commit index */
+                         (0, false, 0, 3, 0, 0, 0)];
 
-    for (i, (index, reject, wmatch, wnext, wmsg_num, windex, wcommitted)) in tests.drain(..)
-        .enumerate() {
+    for (i, (index, reject, wmatch, wnext, wmsg_num, windex, wcommitted)) in
+        tests.drain(..)
+            .enumerate() {
         // sm term is 1 after it becomes the leader.
         // thus the last log term must be 1 to be committed.
         let mut sm = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
@@ -2250,12 +2209,10 @@ fn test_bcast_beat() {
 // tests the output of the statemachine when receiving MsgBeat
 #[test]
 fn test_recv_msg_beat() {
-    let mut tests = vec![
-        (StateRole::Leader, 2),
-        // candidate and follower should ignore MsgBeat
-        (StateRole::Candidate, 0),
-        (StateRole::Follower, 0),
-    ];
+    let mut tests = vec![(StateRole::Leader, 2),
+                         // candidate and follower should ignore MsgBeat
+                         (StateRole::Candidate, 0),
+                         (StateRole::Follower, 0)];
 
     for (i, (state, w_msg)) in tests.drain(..).enumerate() {
         let mut sm = new_test_raft(1, vec![1, 2, 3], 10, 1, new_storage());
@@ -2282,13 +2239,11 @@ fn test_recv_msg_beat() {
 #[test]
 fn test_leader_increase_next() {
     let previous_ents = vec![empty_entry(1, 1), empty_entry(1, 2), empty_entry(1, 3)];
-    let mut tests = vec![
-        // state replicate; optimistically increase next
-        // previous entries + noop entry + propose + 1
-        (ProgressState::Replicate, 2, previous_ents.len() as u64 + 1 + 1 + 1),
-        // state probe, not optimistically increase next
-        (ProgressState::Probe, 2, 2),
-    ];
+    let mut tests = vec![// state replicate; optimistically increase next
+                         // previous entries + noop entry + propose + 1
+                         (ProgressState::Replicate, 2, previous_ents.len() as u64 + 1 + 1 + 1),
+                         // state probe, not optimistically increase next
+                         (ProgressState::Probe, 2, 2)];
     for (i, (state, next_idx, wnext)) in tests.drain(..).enumerate() {
         let mut sm = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
         sm.raft_log.append(&previous_ents);
@@ -2578,10 +2533,7 @@ fn test_step_ignore_config() {
 // based on uncommitted entries.
 #[test]
 fn test_recover_pending_config() {
-    let mut tests = vec![
-        (EntryType::EntryNormal, false),
-        (EntryType::EntryConfChange, true),
-    ];
+    let mut tests = vec![(EntryType::EntryNormal, false), (EntryType::EntryConfChange, true)];
     for (i, (ent_type, wpending)) in tests.drain(..).enumerate() {
         let mut r = new_test_raft(1, vec![1, 2], 10, 1, new_storage());
         let mut e = Entry::new();
@@ -2639,12 +2591,8 @@ fn test_remove_node() {
 #[test]
 fn test_promotable() {
     let id = 1u64;
-    let mut tests = vec![
-        (vec![1], true),
-        (vec![1, 2, 3], true),
-        (vec![], false),
-        (vec![2, 3], false),
-    ];
+    let mut tests =
+        vec![(vec![1], true), (vec![1, 2, 3], true), (vec![], false), (vec![2, 3], false)];
     for (i, (peers, wp)) in tests.drain(..).enumerate() {
         let r = new_test_raft(id, peers, 5, 1, new_storage());
         if r.promotable() != wp {
@@ -2655,10 +2603,7 @@ fn test_promotable() {
 
 #[test]
 fn test_raft_nodes() {
-    let mut tests = vec![
-        (vec![1, 2, 3], vec![1, 2, 3]),
-        (vec![3, 2, 1], vec![1, 2, 3]),
-    ];
+    let mut tests = vec![(vec![1, 2, 3], vec![1, 2, 3]), (vec![3, 2, 1], vec![1, 2, 3])];
     for (i, (ids, wids)) in tests.drain(..).enumerate() {
         let r = new_test_raft(1, ids, 10, 1, new_storage());
         if r.nodes() != wids {

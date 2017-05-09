@@ -140,7 +140,7 @@ fn on_result(mut resp: RaftCmdResponse,
         return (cb_ctx,
                 Err(Error::InvalidResponse("response count is not equal to requests, something \
                                             must go wrong."
-            .to_owned())));
+                    .to_owned())));
     }
     let mut resps = resp.take_responses();
     if resps.len() != 1 || resps[0].get_cmd_type() != CmdType::Snap {
