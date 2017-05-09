@@ -85,6 +85,7 @@ pub struct ReachConcurrencyLimit<T: Debug>(pub T);
 struct GroupStatisticsItem {
     running_count: usize,
     high_priority_queue_count: usize,
+    low_priority_queue_count: usize,
 }
 
 impl GroupStatisticsItem {
@@ -92,11 +93,113 @@ impl GroupStatisticsItem {
         GroupStatisticsItem {
             running_count: 0,
             high_priority_queue_count: 0,
+            low_priority_queue_count: 0,
         }
     }
 
     fn sum(&self) -> usize {
-        self.running_count + self.high_priority_queue_count
+        self.running_count + self.high_priority_queue_count + self.low_priority_queue_count
+    }
+}
+
+// `SpeedupSmallGroups` tries speedup groups with number of
+//  tasks smaller than small_group_tasks_limit when all threads are busy.
+pub struct SpeedupSmallGroups<T> {
+    high_priority_queue: VecDeque<Task<T>>,
+    low_priority_queue: VecDeque<Task<T>>,
+    big_group_currency_on_busy: usize,
+    small_group_tasks_limit: usize,
+    statistics: HashMap<T, GroupStatisticsItem>,
+}
+
+impl<T: Hash + Eq + Ord + Send + Clone + Debug> SpeedupSmallGroups<T> {
+    pub fn new(group_concurrency_on_busy: usize,
+               small_group_tasks_limit: usize)
+               -> SpeedupSmallGroups<T> {
+        SpeedupSmallGroups {
+            high_priority_queue: VecDeque::new(),
+            low_priority_queue: VecDeque::new(),
+            statistics: HashMap::new(),
+            big_group_currency_on_busy: group_concurrency_on_busy,
+            small_group_tasks_limit: small_group_tasks_limit,
+        }
+    }
+
+    fn pop_from_high_priority_queue(&mut self) -> Option<Task<T>> {
+        if self.high_priority_queue.is_empty() {
+            return None;
+        }
+        let task = self.high_priority_queue.pop_front().unwrap();
+        let mut statistics = self.statistics.get_mut(&task.gid).unwrap();
+        statistics.high_priority_queue_count -= 1;
+        Some(task)
+    }
+
+    fn pop_from_low_priority_queue(&mut self) -> Option<Task<T>> {
+        if self.low_priority_queue.is_empty() {
+            return None;
+        }
+        let task = self.low_priority_queue.pop_front().unwrap();
+        let mut statistics = self.statistics
+            .get_mut(&task.gid)
+            .unwrap();
+        statistics.low_priority_queue_count -= 1;
+        Some(task)
+    }
+}
+
+impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for SpeedupSmallGroups<T> {
+    fn push(&mut self, task: Task<T>) {
+        let mut statistics = self.statistics
+            .entry(task.gid.clone())
+            .or_insert(GroupStatisticsItem::new());
+        if statistics.low_priority_queue_count == 0 &&
+           statistics.running_count + statistics.high_priority_queue_count <
+           self.small_group_tasks_limit {
+            self.high_priority_queue.push_back(task);
+            statistics.high_priority_queue_count += 1;
+        } else {
+            self.low_priority_queue.push_back(task);
+            statistics.low_priority_queue_count += 1;
+        }
+    }
+
+    fn pop(&mut self) -> Option<Task<T>> {
+        if self.low_priority_queue.is_empty() {
+            return self.pop_from_high_priority_queue();
+        }
+
+        if self.high_priority_queue.is_empty() {
+            return self.pop_from_low_priority_queue();
+        }
+
+        let pop_from_waiting1 = {
+            let t1 = self.high_priority_queue.front().unwrap();
+            let t2 = self.low_priority_queue.front().unwrap();
+            t1.id < t2.id ||
+            (self.statistics[&t2.gid].running_count >= self.big_group_currency_on_busy)
+        };
+
+        if !pop_from_waiting1 {
+            return self.pop_from_low_priority_queue();
+        }
+        self.pop_from_high_priority_queue()
+    }
+
+    fn on_task_started(&mut self, gid: &T) {
+        let mut statistics = self.statistics.get_mut(gid).unwrap();
+        statistics.running_count += 1;
+    }
+
+    fn on_task_finished(&mut self, gid: &T) {
+        let count = {
+            let mut statistics = self.statistics.get_mut(gid).unwrap();
+            statistics.running_count -= 1;
+            statistics.sum()
+        };
+        if count == 0 {
+            self.statistics.remove(gid);
+        }
     }
 }
 
@@ -439,7 +542,7 @@ impl<Q, T> Worker<Q, T>
 
 #[cfg(test)]
 mod test {
-    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue};
+    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SpeedupSmallGroups};
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Mutex};
@@ -568,5 +671,63 @@ mod test {
         let task = queue.pop().unwrap();
         assert_eq!(task.gid, group2);
         queue.on_task_started(&group2);
+    }
+
+
+    #[test]
+    fn test_speedup_small_groups_queue() {
+        let concurrency_limit = 2;
+        let small_group_tasks_limit = 2;
+        let mut queue = SpeedupSmallGroups::new(concurrency_limit, small_group_tasks_limit);
+        let mut id = 1;
+        let mut pre_id = 0;
+        // Push 2 tasks of `group1` into queue
+        let group1 = 1001;
+        for _ in 0..small_group_tasks_limit {
+            let mut task = Task::new(group1, move || {});
+            task.id = id;
+            id += 1;
+            queue.push(task);
+        }
+
+        // high:[g11,g12]; low:[]
+        assert!(queue.low_priority_queue.is_empty());
+
+        for _ in 0..small_group_tasks_limit {
+            let mut task = Task::new(group1, move || {});
+            task.id = id;
+            id += 1;
+            queue.push(task);
+        }
+
+        // high:[g11,g12]; low:[g13,g14]
+        assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
+
+        let task = queue.pop().unwrap();
+        assert!(task.id > pre_id);
+        pre_id = task.id;
+        queue.on_task_started(&task.gid);
+        // high:[g12]; low:[g13,g14]; running:[g11]
+        assert_eq!(queue.high_priority_queue.len(), small_group_tasks_limit - 1);
+        assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
+
+        let group2 = 1002;
+        for _ in 0..small_group_tasks_limit {
+            let mut task = Task::new(group2, move || {});
+            task.id = id;
+            id += 1;
+            queue.push(task);
+        }
+        // high:[g12,g21,g22], low:[g13,g14],running:[g11]
+        let task = queue.pop().unwrap();
+        assert!(task.id > pre_id);
+        queue.on_task_started(&task.gid);
+        // high:[g21,g22],low:[g13,g14],running:[g11,g12]
+        queue.on_task_finished(&task.gid);
+        // high:[g21,g22],low:[g13,g14],running:[g11]
+        let task = queue.pop().unwrap();
+        // since g13 comes before g21,
+        // and group g1's running number is smaller than 2
+        assert_eq!(task.gid, group1);
     }
 }
