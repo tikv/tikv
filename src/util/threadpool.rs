@@ -102,9 +102,9 @@ impl GroupStatisticsItem {
     }
 }
 
-// `SpeedupSmallGroups` tries speedup groups with number of
+// `SpeedupSmallGroupsQueue` tries speedup groups with number of
 //  tasks smaller than small_group_tasks_limit when all threads are busy.
-pub struct SpeedupSmallGroups<T> {
+pub struct SpeedupSmallGroupsQueue<T> {
     high_priority_queue: VecDeque<Task<T>>,
     low_priority_queue: VecDeque<Task<T>>,
     big_group_currency_on_busy: usize,
@@ -112,11 +112,11 @@ pub struct SpeedupSmallGroups<T> {
     statistics: HashMap<T, GroupStatisticsItem>,
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone + Debug> SpeedupSmallGroups<T> {
+impl<T: Hash + Eq + Ord + Send + Clone + Debug> SpeedupSmallGroupsQueue<T> {
     pub fn new(group_concurrency_on_busy: usize,
                small_group_tasks_limit: usize)
-               -> SpeedupSmallGroups<T> {
-        SpeedupSmallGroups {
+               -> SpeedupSmallGroupsQueue<T> {
+        SpeedupSmallGroupsQueue {
             high_priority_queue: VecDeque::new(),
             low_priority_queue: VecDeque::new(),
             statistics: HashMap::new(),
@@ -148,7 +148,7 @@ impl<T: Hash + Eq + Ord + Send + Clone + Debug> SpeedupSmallGroups<T> {
     }
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for SpeedupSmallGroups<T> {
+impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for SpeedupSmallGroupsQueue<T> {
     fn push(&mut self, task: Task<T>) {
         let mut statistics = self.statistics
             .entry(task.gid.clone())
@@ -542,7 +542,7 @@ impl<Q, T> Worker<Q, T>
 
 #[cfg(test)]
 mod test {
-    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SpeedupSmallGroups};
+    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SpeedupSmallGroupsQueue};
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Mutex};
@@ -678,7 +678,7 @@ mod test {
     fn test_speedup_small_groups_queue() {
         let concurrency_limit = 2;
         let small_group_tasks_limit = 2;
-        let mut queue = SpeedupSmallGroups::new(concurrency_limit, small_group_tasks_limit);
+        let mut queue = SpeedupSmallGroupsQueue::new(concurrency_limit, small_group_tasks_limit);
         let mut id = 1;
         let mut pre_id = 0;
         // Push 2 tasks of `group1` into queue
