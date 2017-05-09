@@ -111,7 +111,7 @@ fn get_flag_string(matches: &ArgMatches, name: &str) -> Option<String> {
 fn get_flag_int(matches: &ArgMatches, name: &str) -> Option<i64> {
     let i = matches.value_of(name).map(|x| {
         x.parse::<i64>()
-            .or_else(|_| util::config::parse_readable_int(&x))
+            .or_else(|_| util::config::parse_readable_int(x))
             .unwrap_or_else(|e| exit_with_err(format!("parse {} failed: {:?}", name, e)))
     });
     info!("flag {}: {:?}", name, i);
