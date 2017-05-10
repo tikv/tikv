@@ -666,7 +666,6 @@ mod test {
         queue.on_task_started(&group2);
     }
 
-
     #[test]
     fn test_small_group_first_queue() {
         let concurrency_limit = 2;
