@@ -1247,7 +1247,7 @@ impl Peer {
         let leader = self.get_peer_from_cache(self.leader_id());
 
         let data: Vec<u8> = self.pending_proposal.data.take().unwrap();
-        metrics.batch_data_size += data.len() as u64;
+        metrics.batch_data_size.observe(data.len() as f64);
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
@@ -1275,7 +1275,7 @@ impl Peer {
 
         let ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
             self.pending_proposal.ctx.take().unwrap();
-        metrics.batch_msg_cnt += ctx.len() as u64;
+        metrics.batch_msg_cnt.observe(ctx.len() as f64);
 
         for (meta, cb, mut err_resp) in ctx {
             if err.is_none() {
