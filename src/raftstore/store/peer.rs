@@ -721,7 +721,7 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   ctx: &mut ReadyContext<T>,
                                                   worker: &Worker<PdTask>) {
-        self.flush_pending_proposal();
+        self.flush_pending_proposal(&mut ctx.metrics.propose);
 
         self.marked_to_be_checked = false;
         if self.mut_store().check_applying_snap() {
@@ -1239,7 +1239,7 @@ impl Peer {
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
-    fn flush_pending_proposal(&mut self) {
+    fn flush_pending_proposal(&mut self, metrics: &mut RaftProposeMetrics) {
         if self.pending_proposal.is_empty() {
             return;
         }
@@ -1247,6 +1247,8 @@ impl Peer {
         let leader = self.get_peer_from_cache(self.leader_id());
 
         let data: Vec<u8> = self.pending_proposal.data.take().unwrap();
+        metrics.batch_data_size += data.len() as u64;
+
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
         let last_index = self.raft_group.raft.raft_log.last_index();
@@ -1273,6 +1275,8 @@ impl Peer {
 
         let ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
             self.pending_proposal.ctx.take().unwrap();
+        metrics.batch_msg_cnt += ctx.len() as u64;
+
         for (meta, cb, mut err_resp) in ctx {
             if err.is_none() {
                 self.post_propose(meta, false, cb);
@@ -1397,14 +1401,14 @@ impl Peer {
 
         let total_size = req_size + self.pending_proposal.size();
         if total_size >= PROPOSAL_BATCH_SIZE || total_size >= self.raft_entry_max_size {
-            self.flush_pending_proposal();
+            self.flush_pending_proposal(metrics);
         } else if is_compute_hash {
-            self.flush_pending_proposal();
+            self.flush_pending_proposal(metrics);
         }
 
         self.pending_proposal.enqueue(meta, cb, req, req_size, err_resp);
         if is_compute_hash {
-            self.flush_pending_proposal();
+            self.flush_pending_proposal(metrics);
         }
     }
 
@@ -1452,7 +1456,7 @@ impl Peer {
 
         let transfered = if self.is_tranfer_leader_allowed(peer) {
             // Before propose transfer leader, propose all pending normal proposal
-            self.flush_pending_proposal();
+            self.flush_pending_proposal(metrics);
             self.transfer_leader(peer);
             true
         } else {
@@ -1485,7 +1489,7 @@ impl Peer {
         let data = try!(req.write_to_bytes());
 
         // Before propose conf change, propose all pending normal proposal
-        self.flush_pending_proposal();
+        self.flush_pending_proposal(metrics);
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
