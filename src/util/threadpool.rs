@@ -158,12 +158,12 @@ impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQ
     }
 
     fn pop(&mut self) -> Option<Task<T>> {
-        if self.low_priority_queue.is_empty() {
-            return self.pop_from_high_priority_queue();
-        }
-
         if self.high_priority_queue.is_empty() {
             return self.pop_from_low_priority_queue();
+        }
+
+        if self.low_priority_queue.is_empty() {
+            return self.pop_from_high_priority_queue();
         }
 
         let pop_from_high_priority_queue = {
@@ -673,7 +673,7 @@ mod test {
         let small_group_tasks_limit = 2;
         let mut queue = SmallGroupFirstQueue::new(concurrency_limit, small_group_tasks_limit);
         let mut id = 1;
-        let mut pre_id = 0;
+        let mut expect_task_id = 0;
 
         // high_priority_queue and low_priority_queue is both empty.
         assert!(queue.pop().is_none());
@@ -692,8 +692,8 @@ mod test {
 
         // low_priority_queue is empty
         let task = queue.pop().unwrap();
-        assert!(task.id > pre_id);
-        pre_id = task.id;
+        assert!(task.id > expect_task_id);
+        expect_task_id = task.id;
         queue.on_task_started(&task.gid);
 
         // high:[g12]; low:[];running:g11
@@ -704,8 +704,8 @@ mod test {
             queue.push(task);
         }
 
-        // since g11(front in high_queue) comes before g13(front in high_queue),
-        // g11 would run first. high:[g12]; low:[g13,g14];running:[g11]
+        // since g11(front in high_queue) comes before g13(front in low_priority_queue),
+        // g11 would run first. high:[g12]; low:[g13,g14]; running:[g11]
         assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
         assert_eq!(queue.high_priority_queue.len(), small_group_tasks_limit - 1);
 
@@ -716,17 +716,17 @@ mod test {
             id += 1;
             queue.push(task);
         }
-        // high:[g12,g21,g22], low:[g13,g14],running:[g11]
+        // high:[g12,g21,g22], low:[g13,g14], running:[g11]
         let task = queue.pop().unwrap();
-        assert!(task.id > pre_id);
+        assert!(task.id > expect_task_id);
         queue.on_task_started(&task.gid);
         // since g12(front in high_queue) comes before g13(front in low_queue),
         // g12 would run first.
         assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
 
-        // high:[g21,g22],low:[g13,g14],running:[g11,g12]
+        // high:[g21,g22], low:[g13,g14], running:[g11,g12]
         queue.on_task_finished(&task.gid);
-        // high:[g21,g22],low:[g13,g14],running:[g11]
+        // high:[g21,g22], low:[g13,g14], running:[g11]
         let task = queue.pop().unwrap();
         queue.on_task_started(&task.gid);
         // since g13(font in low_queue) comes before g21(front in high_queue),
@@ -734,19 +734,19 @@ mod test {
         // g13 would run first.
         assert_eq!(task.gid, group1);
 
-        // high:[g21,g22],low:[g14], running:[g11,g13]
+        // high:[g21,g22], low:[g14], running:[g11,g13]
         let task = queue.pop().unwrap();
         queue.on_task_started(&task.gid);
-        // since group g1's running number >= 2(group_concurrency_on_busy),
+        // since group g1's running number >= group_concurrency_on_busy(2),
         // the task should be g21
         assert_eq!(task.gid, group2);
 
-        // high:[g22],low:[g14],running:[g11,g13,g21]
+        // high:[g22], low:[g14], running:[g11,g13,g21]
         let task = queue.pop().unwrap();
         queue.on_task_started(&task.gid);
         assert_eq!(task.gid, group2);
 
-        // high:[],low:[g14],running:[g11,g13,g21,g22]
+        // high:[], low:[g14], running:[g11,g13,g21,g22]
         let mut task = Task::new(group1, move || {});
         task.id = id;
         id += 1;
@@ -757,7 +757,7 @@ mod test {
         assert_eq!(queue.low_priority_queue.len(), 2);
 
         // push new job g23
-        // high:[],low:[g14,g15],running:[g11,g13,g21,g22]
+        // high:[], low:[g14,g15], running:[g11,g13,g21,g22]
         let mut task = Task::new(group2, move || {});
         task.id = id;
         queue.push(task);
@@ -766,11 +766,9 @@ mod test {
         // into low_priority_queue
         assert!(queue.high_priority_queue.is_empty());
 
-
-        // high:[],low:[g14,g15,g23],running:[g11,g13,g21,g22]
+        // high:[], low:[g14,g15,g23], running:[g11,g13,g21,g22]
         let task = queue.pop().unwrap();
         queue.on_task_started(&task.gid);
-        // high_priority_queue is empty
         assert_eq!(task.gid, group1);
     }
 }
