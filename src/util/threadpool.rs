@@ -105,7 +105,7 @@ pub struct SmallGroupFirstQueue<T> {
     statistics: HashMap<T, GroupStatisticsItem>,
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone + Debug> SmallGroupFirstQueue<T> {
+impl<T: Hash + Ord + Send + Clone + Debug> SmallGroupFirstQueue<T> {
     pub fn new(group_concurrency_on_busy: usize,
                small_group_tasks_limit: usize)
                -> SmallGroupFirstQueue<T> {
@@ -141,7 +141,7 @@ impl<T: Hash + Eq + Ord + Send + Clone + Debug> SmallGroupFirstQueue<T> {
     }
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQueue<T> {
+impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQueue<T> {
     fn push(&mut self, task: Task<T>) {
         let mut statistics = self.statistics
             .entry(task.gid.clone())
@@ -227,7 +227,7 @@ pub struct BigGroupThrottledQueue<T> {
     group_concurrency_limit: usize,
 }
 
-impl<T: Debug + Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
+impl<T: Debug + Hash + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     pub fn new(group_concurrency_limit: usize) -> BigGroupThrottledQueue<T> {
         BigGroupThrottledQueue {
             high_priority_queue: BinaryHeap::new(),
@@ -290,7 +290,7 @@ impl<T: Debug + Hash + Eq + Ord + Send + Clone> BigGroupThrottledQueue<T> {
     }
 }
 
-impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
+impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for BigGroupThrottledQueue<T> {
     fn push(&mut self, task: Task<T>) {
         if let Err(ReachConcurrencyLimit(task)) = self.try_push_into_high_priority_queue(task) {
             self.low_priority_queue
@@ -411,7 +411,7 @@ pub struct ThreadPool<Q, T> {
 
 impl<Q, T> ThreadPool<Q, T>
     where Q: ScheduleQueue<T> + Send + 'static,
-          T: Hash + Eq + Send + Clone + 'static + Debug
+          T: Hash + Send + Clone + 'static + Debug
 {
     pub fn new(name: String, num_threads: usize, queue: Q) -> ThreadPool<Q, T> {
         assert!(num_threads >= 1);
