@@ -273,8 +273,11 @@ mod tests {
         }
 
         // test sort.
-        let tbls: Vec<(u64, u64, Ordering)> =
-            vec![(1, 2, Ordering::Less), (1, 1, Ordering::Equal), (2, 1, Ordering::Greater)];
+        let tbls: Vec<(u64, u64, Ordering)> = vec![
+        (1, 2, Ordering::Less),
+        (1, 1, Ordering::Equal),
+        (2, 1, Ordering::Greater),
+        ];
 
         for (lkey, rkey, order) in tbls {
             let lhs = region_state_key(lkey);

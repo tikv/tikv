@@ -808,9 +808,11 @@ mod tests {
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
-                            vec![Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-                                 Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-                                 Mutation::Put((make_key(b"c"), b"cc".to_vec()))],
+                            vec![
+            Mutation::Put((make_key(b"a"), b"aa".to_vec())),
+            Mutation::Put((make_key(b"b"), b"bb".to_vec())),
+            Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+            ],
                             b"a".to_vec(),
                             1,
                             Options::default(),
@@ -827,9 +829,11 @@ mod tests {
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
-                            vec![Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-                                 Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-                                 Mutation::Put((make_key(b"c"), b"cc".to_vec()))],
+                            vec![
+            Mutation::Put((make_key(b"a"), b"aa".to_vec())),
+            Mutation::Put((make_key(b"b"), b"bb".to_vec())),
+            Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+            ],
                             b"a".to_vec(),
                             1,
                             Options::default(),
@@ -837,7 +841,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage.async_commit(Context::new(),
-                          vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
+                          vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
                           1,
                           2,
                           expect_ok(tx.clone()))
@@ -849,9 +853,11 @@ mod tests {
                         5,
                         Options::default(),
                         expect_scan(tx.clone(),
-                                    vec![Some((b"a".to_vec(), b"aa".to_vec())),
-                                         Some((b"b".to_vec(), b"bb".to_vec())),
-                                         Some((b"c".to_vec(), b"cc".to_vec()))]))
+                                    vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            ]))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -864,9 +870,11 @@ mod tests {
         storage.start(&config).unwrap();
         let (tx, rx) = channel();
         storage.async_prewrite(Context::new(),
-                            vec![Mutation::Put((make_key(b"a"), b"aa".to_vec())),
-                                 Mutation::Put((make_key(b"b"), b"bb".to_vec())),
-                                 Mutation::Put((make_key(b"c"), b"cc".to_vec()))],
+                            vec![
+            Mutation::Put((make_key(b"a"), b"aa".to_vec())),
+            Mutation::Put((make_key(b"b"), b"bb".to_vec())),
+            Mutation::Put((make_key(b"c"), b"cc".to_vec())),
+            ],
                             b"a".to_vec(),
                             1,
                             Options::default(),
@@ -874,7 +882,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage.async_commit(Context::new(),
-                          vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
+                          vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
                           1,
                           2,
                           expect_ok(tx.clone()))
@@ -884,9 +892,11 @@ mod tests {
                              vec![make_key(b"a"), make_key(b"b"), make_key(b"c")],
                              5,
                              expect_batch_get_vals(tx.clone(),
-                                                   vec![Some((b"a".to_vec(), b"aa".to_vec())),
-                                                        Some((b"b".to_vec(), b"bb".to_vec())),
-                                                        Some((b"c".to_vec(), b"cc".to_vec()))]))
+                                                   vec![
+            Some((b"a".to_vec(), b"aa".to_vec())),
+            Some((b"b".to_vec(), b"bb".to_vec())),
+            Some((b"c".to_vec(), b"cc".to_vec())),
+            ]))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();

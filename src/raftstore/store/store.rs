@@ -607,10 +607,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let start_key = data_key(msg.get_start_key());
-        if let Some((_, &exist_region_id)) =
-            self.region_ranges
-                .range((Excluded(start_key), Unbounded::<Key>))
-                .next() {
+        if let Some((_, &exist_region_id)) = self.region_ranges
+            .range((Excluded(start_key), Unbounded::<Key>))
+            .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
                 debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
@@ -846,10 +845,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   msg.get_to_peer());
             return Ok(false);
         }
-        if let Some((_, &exist_region_id)) =
-            self.region_ranges
-                .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
-                .next() {
+        if let Some((_, &exist_region_id)) = self.region_ranges
+            .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
+            .next() {
             let exist_region = self.region_peers[&exist_region_id].region();
             if enc_start_key(exist_region) < enc_end_key(&snap_region) {
                 info!("region overlapped {:?}, {:?}", exist_region, snap_region);

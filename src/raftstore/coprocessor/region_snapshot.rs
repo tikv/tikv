@@ -309,10 +309,12 @@ mod tests {
         r.set_start_key(b"a2".to_vec());
         r.set_end_key(b"a7".to_vec());
 
-        let base_data = vec![(b"a1".to_vec(), b"v1".to_vec()),
-                             (b"a3".to_vec(), b"v3".to_vec()),
-                             (b"a5".to_vec(), b"v5".to_vec()),
-                             (b"a7".to_vec(), b"v7".to_vec())];
+        let base_data = vec![
+            (b"a1".to_vec(), b"v1".to_vec()),
+            (b"a3".to_vec(), b"v3".to_vec()),
+            (b"a5".to_vec(), b"v5".to_vec()),
+            (b"a7".to_vec(), b"v7".to_vec()),
+        ];
 
         for &(ref k, ref v) in &base_data {
             engine.put(&data_key(k), v).expect("");
@@ -374,14 +376,15 @@ mod tests {
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
-        let seek_table: Vec<(_, _, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> =
-            vec![(b"a1", false, None, None),
-                 (b"a2", true, Some((b"a3", b"v3")), None),
-                 (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
-                 (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
-                 (b"a6", true, None, Some((b"a5", b"v5"))),
-                 (b"a7", true, None, Some((b"a5", b"v5"))),
-                 (b"a8", false, None, None)];
+        let seek_table: Vec<(_, _, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> = vec![
+            (b"a1", false, None, None),
+            (b"a2", true, Some((b"a3", b"v3")), None),
+            (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
+            (b"a4", true, Some((b"a5", b"v5")), Some((b"a3", b"v3"))),
+            (b"a6", true, None, Some((b"a5", b"v5"))),
+            (b"a7", true, None, Some((b"a5", b"v5"))),
+            (b"a8", false, None, None),
+        ];
         let upper_bounds: Vec<Option<&[u8]>> = vec![None, Some(b"a7")];
         for upper_bound in upper_bounds {
             let iter_opt = IterOption::new(upper_bound.map(|v| v.to_vec()), true);

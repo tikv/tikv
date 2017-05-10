@@ -497,13 +497,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                 rep.report(SnapshotStatus::Finish);
             }
         };
-        if let Err(Stopped(SnapTask::SendTo { cb, .. })) =
-            self.snap_worker
-                .schedule(SnapTask::SendTo {
-                    addr: sock_addr,
-                    data: data,
-                    cb: cb,
-                }) {
+        if let Err(Stopped(SnapTask::SendTo { cb, .. })) = self.snap_worker
+            .schedule(SnapTask::SendTo {
+                addr: sock_addr,
+                data: data,
+                cb: cb,
+            }) {
             error!("channel is closed, failed to schedule snapshot to {}",
                    sock_addr);
             cb(Err(box_err!("failed to schedule snapshot")));

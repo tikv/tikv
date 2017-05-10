@@ -177,7 +177,7 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
 
         // For memtable
         if let Some(mem_table) =
-            engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
+               engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES) {
             STORE_ENGINE_MEMORY_GAUGE_VEC.with_label_values(&[cf, "mem-tables"])
                 .set(mem_table as f64);
             used_size += mem_table;
@@ -192,7 +192,7 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
 
         // Pending compaction bytes
         if let Some(pending_compaction_bytes) =
-            engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES) {
+               engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES) {
             STORE_ENGINE_PENDING_COMACTION_BYTES_VEC.with_label_values(&[cf])
                 .set(pending_compaction_bytes as f64);
         }

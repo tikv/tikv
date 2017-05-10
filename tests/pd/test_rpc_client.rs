@@ -84,7 +84,9 @@ fn test_rpc_client() {
 
 #[test]
 fn test_reboot() {
-    let mut eps = vec!["http://127.0.0.1:52730".to_owned()];
+    let mut eps = vec![
+        "http://127.0.0.1:52730".to_owned(),
+    ];
 
     let se = Arc::new(Service::new(eps.clone()));
     let lc = Arc::new(AlreadyBootstrap::new());
@@ -106,9 +108,11 @@ fn test_reboot() {
 
 #[test]
 fn test_validate_endpoints() {
-    let eps = vec!["http://127.0.0.1:13079".to_owned(),
-                   "http://127.0.0.1:23079".to_owned(),
-                   "http://127.0.0.1:33079".to_owned()];
+    let eps = vec![
+        "http://127.0.0.1:13079".to_owned(),
+        "http://127.0.0.1:23079".to_owned(),
+        "http://127.0.0.1:33079".to_owned(),
+    ];
 
     let se = Arc::new(Service::new(eps.clone()));
     let sp = Arc::new(Split::new(eps.clone()));
@@ -124,7 +128,9 @@ fn test_validate_endpoints() {
 
 #[test]
 fn test_retry_async() {
-    let mut eps = vec!["http://127.0.0.1:63080".to_owned()];
+    let mut eps = vec![
+        "http://127.0.0.1:63080".to_owned(),
+    ];
 
     let se = Arc::new(Service::new(eps.clone()));
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
@@ -144,9 +150,11 @@ fn test_retry_async() {
 
 #[test]
 fn test_restart_leader() {
-    let eps = vec!["http://127.0.0.1:42978".to_owned(),
-                   "http://127.0.0.1:52978".to_owned(),
-                   "http://127.0.0.1:62978".to_owned()];
+    let eps = vec![
+        "http://127.0.0.1:42978".to_owned(),
+        "http://127.0.0.1:52978".to_owned(),
+        "http://127.0.0.1:62978".to_owned(),
+    ];
 
     // Service has only one GetMembersResponse, so the leader never changes.
     let se = Arc::new(Service::new(eps.clone()));
@@ -195,9 +203,11 @@ fn test_restart_leader() {
 
 #[test]
 fn test_change_leader_async() {
-    let mut eps = vec!["http://127.0.0.1:42979".to_owned(),
-                       "http://127.0.0.1:52979".to_owned(),
-                       "http://127.0.0.1:62979".to_owned()];
+    let mut eps = vec![
+        "http://127.0.0.1:42979".to_owned(),
+        "http://127.0.0.1:52979".to_owned(),
+        "http://127.0.0.1:62979".to_owned(),
+    ];
 
     let se = Arc::new(Service::new(eps.clone()));
     let lc = Arc::new(LeaderChange::new(eps.clone()));

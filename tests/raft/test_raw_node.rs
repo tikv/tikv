@@ -269,10 +269,9 @@ fn test_raw_node_read_index() {
         true
     });
     let wrequest_ctx = b"somedata".to_vec();
-    let wrs = vec![ReadState {
-                       index: 1u64,
-                       request_ctx: wrequest_ctx.clone(),
-                   }];
+    let wrs = vec![
+        ReadState {index: 1u64, request_ctx: wrequest_ctx.clone()},
+    ];
 
     let s = new_storage();
     let mut raw_node = new_raw_node(1, vec![], 10, 1, s.clone(), vec![new_peer(1)]);
@@ -316,15 +315,18 @@ fn test_raw_node_read_index() {
 fn test_raw_node_start() {
     let cc = conf_change(ConfChangeType::AddNode, 1);
     let ccdata = protobuf::Message::write_to_bytes(&cc).unwrap();
-    let wants =
-        vec![new_ready(None,
-                       Some(hard_state(1, 1, 0)),
-                       vec![entry(EntryType::EntryConfChange, 1, 1, Some(ccdata.clone()))],
-                       vec![entry(EntryType::EntryConfChange, 1, 1, Some(ccdata.clone()))]),
-             new_ready(None,
-                       Some(hard_state(2, 3, 1)),
-                       vec![new_entry(2, 3, Some("foo"))],
-                       vec![new_entry(2, 3, Some("foo"))])];
+    let wants = vec![new_ready(None,
+                               Some(hard_state(1, 1, 0)),
+                               vec![
+                entry(EntryType::EntryConfChange, 1, 1, Some(ccdata.clone())),
+            ],
+                               vec![
+                entry(EntryType::EntryConfChange, 1, 1, Some(ccdata.clone())),
+            ]),
+                     new_ready(None,
+                               Some(hard_state(2, 3, 1)),
+                               vec![new_entry(2, 3, Some("foo"))],
+                               vec![new_entry(2, 3, Some("foo"))])];
 
     let store = new_storage();
     let mut raw_node = new_raw_node(1, vec![], 10, 1, store.clone(), vec![new_peer(1)]);
@@ -353,7 +355,10 @@ fn test_raw_node_start() {
 
 #[test]
 fn test_raw_node_restart() {
-    let entries = vec![empty_entry(1, 1), new_entry(1, 2, Some("foo"))];
+    let entries = vec![
+        empty_entry(1, 1),
+        new_entry(1, 2, Some("foo")),
+    ];
     let st = hard_state(1, 1, 0);
 
     let want = new_ready(None, None, vec![], entries[..1].to_vec());
