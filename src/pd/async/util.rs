@@ -291,11 +291,7 @@ pub fn validate_endpoints(env: Arc<Environment>,
 
 fn connect(env: Arc<Environment>, addr: &str) -> Result<(PDClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
-    let addr = if addr.starts_with("http://") {
-        &addr[7..]
-    } else {
-        addr
-    };
+    let addr = addr.trim_left_matches("http://");
     let channel = ChannelBuilder::new(env).connect(addr);
     let client = PDClient::new(channel);
     match client.get_members(GetMembersRequest::new()) {
