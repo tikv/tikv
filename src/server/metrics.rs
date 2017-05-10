@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{Gauge, CounterVec, Histogram};
+use prometheus::{Gauge, Counter, CounterVec, Histogram};
 
 lazy_static! {
     pub static ref SEND_SNAP_HISTOGRAM: Histogram =
@@ -52,5 +52,23 @@ lazy_static! {
             "tikv_server_report_failure_msg_total",
             "Total number of reporting failure messages",
             &["type", "store_id"]
+        ).unwrap();
+
+    pub static ref CONN_SEND_BYTES_COUNTER: Counter =
+        register_counter!(
+            "tikv_server_conn_send_bytes_total",
+            "Total bytes of connection send data"
+        ).unwrap();
+
+   pub static ref CONN_PENDING_SEND_BYTES_COUNTER: Counter =
+        register_counter!(
+            "tikv_server_conn_pending_send_bytes_total",
+            "Total bytes of connection pending send data"
+        ).unwrap();
+
+    pub static ref CONN_RECV_BYTES_COUNTER: Counter =
+        register_counter!(
+            "tikv_server_conn_recv_bytes_total",
+            "Total bytes of connection receive data"
         ).unwrap();
 }
