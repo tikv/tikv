@@ -18,6 +18,8 @@ mod metrics;
 mod future;
 
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::sync::Condvar;
 use std::thread::{self, JoinHandle, Builder};
 use std::io;
 use std::fmt::{self, Formatter, Display, Debug};
@@ -80,21 +82,53 @@ impl<T: Display, R: Runnable<T>> BatchRunnable<T> for R {
     }
 }
 
+#[derive(Clone)]
+struct ScheduleContext {
+    counter: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pause: Arc<(Mutex<bool>, Condvar)>,
+}
+
+#[cfg(not(test))]
+impl ScheduleContext {
+    fn new() -> ScheduleContext {
+        ScheduleContext { counter: Arc::new(AtomicUsize::new(0)) }
+    }
+
+    fn pause_if_neccessary(&self) {}
+}
+
+#[cfg(test)]
+#[allow(mutex_atomic)]
+impl ScheduleContext {
+    fn new() -> ScheduleContext {
+        ScheduleContext {
+            counter: Arc::new(AtomicUsize::new(0)),
+            pause: Arc::new((Mutex::new(false), Condvar::new())),
+        }
+    }
+
+    fn pause_if_neccessary(&self) {
+        let &(ref lock, ref cond) = &*self.pause;
+        let mut pause = lock.lock().unwrap();
+        while *pause {
+            pause = cond.wait(pause).unwrap();
+        }
+    }
+}
+
 /// Scheduler provides interface to schedule task to underlying workers.
 pub struct Scheduler<T> {
+    ctx: ScheduleContext,
     name: Arc<String>,
-    counter: Arc<AtomicUsize>,
     sender: Sender<Option<T>>,
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S: Into<String>>(name: S,
-                            counter: AtomicUsize,
-                            sender: Sender<Option<T>>)
-                            -> Scheduler<T> {
+    fn new<S: Into<String>>(name: S, sender: Sender<Option<T>>) -> Scheduler<T> {
         Scheduler {
+            ctx: ScheduleContext::new(),
             name: Arc::new(name.into()),
-            counter: Arc::new(counter),
             sender: sender,
         }
     }
@@ -107,22 +141,38 @@ impl<T: Display> Scheduler<T> {
         if let Err(SendError(Some(t))) = self.sender.send(Some(task)) {
             return Err(Stopped(t));
         }
-        self.counter.fetch_add(1, Ordering::SeqCst);
+        self.ctx.counter.fetch_add(1, Ordering::SeqCst);
         PENDING_TASKS.with_label_values(&[&self.name]).inc();
         Ok(())
     }
 
     /// Check if underlying worker can't handle task immediately.
     pub fn is_busy(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) > 0
+        self.ctx.counter.load(Ordering::SeqCst) > 0
+    }
+
+    #[cfg(test)]
+    pub fn pause(&self) {
+        let &(ref lock, ref cond) = &*self.ctx.pause;
+        let mut guard = lock.lock().unwrap();
+        *guard = true;
+        cond.notify_all();
+    }
+
+    #[cfg(test)]
+    pub fn resume(&self) {
+        let &(ref lock, ref cond) = &*self.ctx.pause;
+        let mut guard = lock.lock().unwrap();
+        *guard = false;
+        cond.notify_all();
     }
 }
 
 impl<T: Display> Clone for Scheduler<T> {
     fn clone(&self) -> Scheduler<T> {
         Scheduler {
+            ctx: self.ctx.clone(),
             name: self.name.clone(),
-            counter: self.counter.clone(),
             sender: self.sender.clone(),
         }
     }
@@ -134,7 +184,7 @@ impl<T: Display> Clone for Scheduler<T> {
 #[cfg(test)]
 pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
     let (tx, _) = mpsc::channel();
-    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
+    Scheduler::new("dummy scheduler", tx)
 }
 
 /// A worker that can schedule time consuming tasks.
@@ -144,7 +194,7 @@ pub struct Worker<T: Display> {
     handle: Option<JoinHandle<()>>,
 }
 
-fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>, batch_size: usize)
+fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, ctx: ScheduleContext, batch_size: usize)
     where R: BatchRunnable<T> + Send + 'static,
           T: Display + Send + 'static
 {
@@ -153,6 +203,7 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
     let mut buffer = Vec::with_capacity(batch_size);
     while keep_going {
         let t = rx.recv();
+        ctx.pause_if_neccessary();
         match t {
             Ok(Some(t)) => buffer.push(t),
             _ => break,
@@ -167,7 +218,7 @@ fn poll<R, T>(mut runner: R, rx: Receiver<Option<T>>, counter: Arc<AtomicUsize>,
                 _ => break,
             }
         }
-        counter.fetch_sub(buffer.len(), Ordering::SeqCst);
+        ctx.counter.fetch_sub(buffer.len(), Ordering::SeqCst);
         PENDING_TASKS.with_label_values(&[&name]).sub(buffer.len() as f64);
         runner.run_batch(&mut buffer);
         buffer.clear();
@@ -180,7 +231,7 @@ impl<T: Display + Send + 'static> Worker<T> {
     pub fn new<S: Into<String>>(name: S) -> Worker<T> {
         let (tx, rx) = mpsc::channel();
         Worker {
-            scheduler: Scheduler::new(name, AtomicUsize::new(0), tx),
+            scheduler: Scheduler::new(name, tx),
             receiver: Mutex::new(Some(rx)),
             handle: None,
         }
@@ -202,10 +253,10 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = receiver.take().unwrap();
-        let counter = self.scheduler.counter.clone();
+        let ctx = self.scheduler.ctx.clone();
         let h = try!(Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx, counter, batch_size)));
+            .spawn(move || poll(runner, rx, ctx, batch_size)));
         self.handle = Some(h);
         Ok(())
     }
@@ -242,6 +293,19 @@ impl<T: Display + Send + 'static> Worker<T> {
             warn!("failed to stop worker thread: {:?}", e);
         }
         self.handle.take()
+    }
+
+    /// Try to pause the worker thread.
+    ///
+    /// The thread will be paused when current task is finished.
+    #[cfg(test)]
+    pub fn pause(&mut self) {
+        self.scheduler.pause()
+    }
+
+    #[cfg(test)]
+    pub fn resume(&mut self) {
+        self.scheduler.resume()
     }
 }
 
@@ -355,5 +419,24 @@ mod test {
             rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         assert_eq!(rx.recv().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_pause() {
+        let mut worker = Worker::new("test-worker-pause");
+        let (tx, rx) = mpsc::channel();
+        worker.start(StepRunner { ch: tx }).unwrap();
+
+        worker.pause();
+        for _ in 0..10 {
+            worker.schedule(50).unwrap();
+        }
+        assert_eq!(Err(RecvTimeoutError::Timeout),
+                   rx.recv_timeout(Duration::from_secs(1)));
+        worker.resume();
+        for _ in 0..10 {
+            rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        worker.stop().unwrap().join().unwrap();
     }
 }
