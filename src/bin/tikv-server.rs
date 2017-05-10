@@ -741,7 +741,7 @@ fn build_raftkv(config: &toml::Value,
 
     (node,
      create_raft_storage(router.clone(), engine.clone(), cfg)
-         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))),
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))),
      router,
      snap_mgr,
      engine)
