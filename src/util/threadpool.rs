@@ -100,7 +100,7 @@ impl GroupStatisticsItem {
 pub struct SmallGroupFirstQueue<T> {
     high_priority_queue: VecDeque<Task<T>>,
     low_priority_queue: VecDeque<Task<T>>,
-    big_group_currency_on_busy: usize,
+    group_concurrency_on_busy: usize,
     small_group_tasks_limit: usize,
     statistics: HashMap<T, GroupStatisticsItem>,
 }
@@ -113,7 +113,7 @@ impl<T: Hash + Eq + Ord + Send + Clone + Debug> SmallGroupFirstQueue<T> {
             high_priority_queue: VecDeque::new(),
             low_priority_queue: VecDeque::new(),
             statistics: HashMap::new(),
-            big_group_currency_on_busy: group_concurrency_on_busy,
+            group_concurrency_on_busy: group_concurrency_on_busy,
             small_group_tasks_limit: small_group_tasks_limit,
         }
     }
@@ -170,7 +170,7 @@ impl<T: Hash + Eq + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupF
             let t1 = self.high_priority_queue.front().unwrap();
             let t2 = self.low_priority_queue.front().unwrap();
             t1.id < t2.id ||
-            (self.statistics[&t2.gid].running_count >= self.big_group_currency_on_busy)
+            (self.statistics[&t2.gid].running_count >= self.group_concurrency_on_busy)
         };
 
         if pop_from_high_priority_queue {
@@ -674,6 +674,10 @@ mod test {
         let mut queue = SmallGroupFirstQueue::new(concurrency_limit, small_group_tasks_limit);
         let mut id = 1;
         let mut pre_id = 0;
+
+        // high_priority_queue and low_priority_queue is both empty.
+        assert!(queue.pop().is_none());
+
         // Push 2 tasks of `group1` into queue
         let group1 = 1001;
         for _ in 0..small_group_tasks_limit {
@@ -686,6 +690,13 @@ mod test {
         // high:[g11,g12]; low:[]
         assert!(queue.low_priority_queue.is_empty());
 
+        // low_priority_queue is empty
+        let task = queue.pop().unwrap();
+        assert!(task.id > pre_id);
+        pre_id = task.id;
+        queue.on_task_started(&task.gid);
+
+        // high:[g12]; low:[];running:g11
         for _ in 0..small_group_tasks_limit {
             let mut task = Task::new(group1, move || {});
             task.id = id;
@@ -693,16 +704,10 @@ mod test {
             queue.push(task);
         }
 
-        // high:[g11,g12]; low:[g13,g14]
+        // since g11(front in high_queue) comes before g13(front in high_queue),
+        // g11 would run first. high:[g12]; low:[g13,g14];running:[g11]
         assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
-
-        let task = queue.pop().unwrap();
-        assert!(task.id > pre_id);
-        pre_id = task.id;
-        queue.on_task_started(&task.gid);
-        // high:[g12]; low:[g13,g14]; running:[g11]
         assert_eq!(queue.high_priority_queue.len(), small_group_tasks_limit - 1);
-        assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
 
         let group2 = 1002;
         for _ in 0..small_group_tasks_limit {
@@ -715,12 +720,57 @@ mod test {
         let task = queue.pop().unwrap();
         assert!(task.id > pre_id);
         queue.on_task_started(&task.gid);
+        // since g12(front in high_queue) comes before g13(front in low_queue),
+        // g12 would run first.
+        assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
+
         // high:[g21,g22],low:[g13,g14],running:[g11,g12]
         queue.on_task_finished(&task.gid);
         // high:[g21,g22],low:[g13,g14],running:[g11]
         let task = queue.pop().unwrap();
-        // since g13 comes before g21,
-        // and group g1's running number is smaller than 2
+        queue.on_task_started(&task.gid);
+        // since g13(font in low_queue) comes before g21(front in high_queue),
+        // and group g1's running number < group_concurrency_on_busy(2)
+        // g13 would run first.
+        assert_eq!(task.gid, group1);
+
+        // high:[g21,g22],low:[g14], running:[g11,g13]
+        let task = queue.pop().unwrap();
+        queue.on_task_started(&task.gid);
+        // since group g1's running number >= 2(group_concurrency_on_busy),
+        // the task should be g21
+        assert_eq!(task.gid, group2);
+
+        // high:[g22],low:[g14],running:[g11,g13,g21]
+        let task = queue.pop().unwrap();
+        queue.on_task_started(&task.gid);
+        assert_eq!(task.gid, group2);
+
+        // high:[],low:[g14],running:[g11,g13,g21,g22]
+        let mut task = Task::new(group1, move || {});
+        task.id = id;
+        id += 1;
+        queue.push(task);
+        // since low_priority_queue_count of g1 > 0, g15 should be
+        // pushed into low_priority_queue
+        assert!(queue.high_priority_queue.is_empty());
+        assert_eq!(queue.low_priority_queue.len(), 2);
+
+        // push new job g23
+        // high:[],low:[g14,g15],running:[g11,g13,g21,g22]
+        let mut task = Task::new(group2, move || {});
+        task.id = id;
+        queue.push(task);
+        // since sum of  running_count and high_priority_queue_count for
+        // g2 is 2 >= small_group_tasks_limit, the task g23 would be pushed
+        // into low_priority_queue
+        assert!(queue.high_priority_queue.is_empty());
+
+
+        // high:[],low:[g14,g15,g23],running:[g11,g13,g21,g22]
+        let task = queue.pop().unwrap();
+        queue.on_task_started(&task.gid);
+        // high_priority_queue is empty
         assert_eq!(task.gid, group1);
     }
 }
