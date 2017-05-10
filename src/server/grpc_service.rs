@@ -17,7 +17,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use mio::Token;
-use grpc::{RpcContext, UnarySink, ClientStreamingSink, RequestStream};
+use grpc::{RpcContext, UnarySink, ClientStreamingSink, RequestStream, RpcStatus, RpcStatusCode};
 use futures::{future, Future, Stream};
 use futures::sync::oneshot;
 use tokio_core::reactor::Remote;
@@ -87,28 +87,36 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let storage = self.storage.clone();
         self.core.spawn(move |_| {
             let (cb, future) = make_callback();
-            storage.async_get(req.take_context(),
-                           Key::from_raw(req.get_key()),
-                           req.get_version(),
-                           cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut res = GetResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        res.set_region_error(err);
-                    } else {
-                        match v {
-                            Ok(Some(val)) => res.set_value(val),
-                            Ok(None) => res.set_value(vec![]),
-                            Err(e) => res.set_error(extract_key_error(&e)),
-                        }
-                    }
-                    res
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("kv_get failed: {:?}", e))
+            let res = storage.async_get(req.take_context(),
+                                        Key::from_raw(req.get_key()),
+                                        req.get_version(),
+                                        cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut res = GetResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                res.set_region_error(err);
+                            } else {
+                                match v {
+                                    Ok(Some(val)) => res.set_value(val),
+                                    Ok(None) => res.set_value(vec![]),
+                                    Err(e) => res.set_error(extract_key_error(&e)),
+                                }
+                            }
+                            res
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("kv_get failed: {:?}", e))
         });
     }
 
@@ -122,26 +130,34 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 options.key_only = req.get_key_only();
 
                 let (cb, future) = make_callback();
-                storage.async_scan(req.take_context(),
-                                Key::from_raw(req.get_start_key()),
-                                req.get_limit() as usize,
-                                req.get_version(),
-                                options,
-                                cb)
-                    .unwrap();
-                future.map_err(Error::from)
-                    .map(|v| {
-                        let mut resp = ScanResponse::new();
-                        if let Some(err) = extract_region_error(&v) {
-                            resp.set_region_error(err);
-                        } else {
-                            resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
-                        }
-                        resp
-                    })
-                    .and_then(|res| sink.success(res).map_err(Error::from))
-                    .map(|_| timer.observe_duration())
-                    .map_err(|e| error!("kv_scan failed: {:?}", e))
+                let res = storage.async_scan(req.take_context(),
+                                             Key::from_raw(req.get_start_key()),
+                                             req.get_limit() as usize,
+                                             req.get_version(),
+                                             options,
+                                             cb);
+                let f = match res {
+                    Ok(_) => {
+                        future.map_err(Error::from)
+                            .map(|v| {
+                                let mut resp = ScanResponse::new();
+                                if let Some(err) = extract_region_error(&v) {
+                                    resp.set_region_error(err);
+                                } else {
+                                    resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                                }
+                                resp
+                            })
+                            .and_then(|res| sink.success(res).map_err(Error::from))
+                            .boxed()
+                    }
+                    Err(e) => {
+                        let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                    Some(format!("{}", e)));
+                        sink.fail(status).map_err(Error::from).boxed()
+                    }
+                };
+                f.map(|_| timer.observe_duration()).map_err(|e| error!("kv_scan failed: {:?}", e))
             })
     }
 
@@ -168,26 +184,34 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             options.skip_constraint_check = req.get_skip_constraint_check();
 
             let (cb, future) = make_callback();
-            storage.async_prewrite(req.take_context(),
-                                mutations,
-                                req.take_primary_lock(),
-                                req.get_start_version(),
-                                options,
-                                cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = PrewriteResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("kv_prewrite failed: {:?}", e))
+            let res = storage.async_prewrite(req.take_context(),
+                                             mutations,
+                                             req.take_primary_lock(),
+                                             req.get_start_version(),
+                                             options,
+                                             cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = PrewriteResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else {
+                                resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("kv_prewrite failed: {:?}", e))
         });
     }
 
@@ -199,25 +223,33 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
             let (cb, future) = make_callback();
-            storage.async_commit(req.take_context(),
-                              keys,
-                              req.get_start_version(),
-                              req.get_commit_version(),
-                              cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = CommitResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else if let Err(e) = v {
-                        resp.set_error(extract_key_error(&e));
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("kv_commit failed: {:?}", e))
+            let res = storage.async_commit(req.take_context(),
+                                           keys,
+                                           req.get_start_version(),
+                                           req.get_commit_version(),
+                                           cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = CommitResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = v {
+                                resp.set_error(extract_key_error(&e));
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("kv_commit failed: {:?}", e))
         });
     }
 
@@ -230,28 +262,36 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let storage = self.storage.clone();
         self.core.spawn(move |_| {
             let (cb, future) = make_callback();
-            storage.async_cleanup(req.take_context(),
-                               Key::from_raw(req.get_key()),
-                               req.get_start_version(),
-                               cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = CleanupResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else if let Err(e) = v {
-                        if let Some(ts) = extract_committed(&e) {
-                            resp.set_commit_version(ts);
-                        } else {
-                            resp.set_error(extract_key_error(&e));
-                        }
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("kv_cleanup failed: {:?}", e))
+            let res = storage.async_cleanup(req.take_context(),
+                                            Key::from_raw(req.get_key()),
+                                            req.get_start_version(),
+                                            cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = CleanupResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = v {
+                                if let Some(ts) = extract_committed(&e) {
+                                    resp.set_commit_version(ts);
+                                } else {
+                                    resp.set_error(extract_key_error(&e));
+                                }
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("kv_cleanup failed: {:?}", e))
         });
     }
 
@@ -265,21 +305,29 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             let keys = req.get_keys().into_iter().map(|x| Key::from_raw(x)).collect();
 
             let (cb, future) = make_callback();
-            storage.async_batch_get(req.take_context(), keys, req.get_version(), cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = BatchGetResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)))
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("kv_batch_get failed: {:?}", e))
+            let res = storage.async_batch_get(req.take_context(), keys, req.get_version(), cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = BatchGetResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else {
+                                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)))
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("kv_batch_get failed: {:?}", e))
         });
     }
 
@@ -294,20 +342,29 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             let keys = req.get_keys().into_iter().map(|x| Key::from_raw(x)).collect();
 
             let (cb, future) = make_callback();
-            storage.async_rollback(req.take_context(), keys, req.get_start_version(), cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = BatchRollbackResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else if let Err(e) = v {
-                        resp.set_error(extract_key_error(&e));
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
+            let res = storage.async_rollback(req.take_context(), keys, req.get_start_version(), cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = BatchRollbackResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = v {
+                                resp.set_error(extract_key_error(&e));
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration())
                 .map_err(|e| error!("kv_batch_rollback failed: {:?}", e))
         });
     }
@@ -321,24 +378,32 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let storage = self.storage.clone();
         self.core.spawn(move |_| {
             let (cb, future) = make_callback();
-            storage.async_scan_lock(req.take_context(), req.get_max_version(), cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = ScanLockResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        match v {
-                            Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
-                            Err(e) => resp.set_error(extract_key_error(&e)),
-                        }
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("kv_scan_lock failed: {:?}", e))
+            let res = storage.async_scan_lock(req.take_context(), req.get_max_version(), cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = ScanLockResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else {
+                                match v {
+                                    Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
+                                    Err(e) => resp.set_error(extract_key_error(&e)),
+                                }
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("kv_scan_lock failed: {:?}", e))
         });
     }
 
@@ -356,20 +421,32 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             };
 
             let (cb, future) = make_callback();
-            storage.async_resolve_lock(req.take_context(), req.get_start_version(), commit_ts, cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = ResolveLockResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else if let Err(e) = v {
-                        resp.set_error(extract_key_error(&e));
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
+            let res = storage.async_resolve_lock(req.take_context(),
+                                                 req.get_start_version(),
+                                                 commit_ts,
+                                                 cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = ResolveLockResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = v {
+                                resp.set_error(extract_key_error(&e));
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration())
                 .map_err(|e| error!("kv_resolve_lock failed: {:?}", e))
         });
     }
@@ -380,20 +457,29 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let storage = self.storage.clone();
         self.core.spawn(move |_| {
             let (cb, future) = make_callback();
-            storage.async_gc(req.take_context(), req.get_safe_point(), cb).unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = GCResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else if let Err(e) = v {
-                        resp.set_error(extract_key_error(&e));
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("kv_gc failed: {:?}", e))
+            let res = storage.async_gc(req.take_context(), req.get_safe_point(), cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = GCResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = v {
+                                resp.set_error(extract_key_error(&e));
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("kv_gc failed: {:?}", e))
         });
     }
 
@@ -403,24 +489,33 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let storage = self.storage.clone();
         self.core.spawn(move |_| {
             let (cb, future) = make_callback();
-            storage.async_raw_get(req.take_context(), req.take_key(), cb).unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = RawGetResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        match v {
-                            Ok(Some(val)) => resp.set_value(val),
-                            Ok(None) => {}
-                            Err(e) => resp.set_error(format!("{}", e)),
-                        }
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("raw_get failed: {:?}", e))
+            let res = storage.async_raw_get(req.take_context(), req.take_key(), cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = RawGetResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else {
+                                match v {
+                                    Ok(Some(val)) => resp.set_value(val),
+                                    Ok(None) => {}
+                                    Err(e) => resp.set_error(format!("{}", e)),
+                                }
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("raw_get failed: {:?}", e))
         });
     }
 
@@ -430,21 +525,30 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let storage = self.storage.clone();
         self.core.spawn(move |_| {
             let (cb, future) = make_callback();
-            storage.async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb)
-                .unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = RawPutResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else if let Err(e) = v {
-                        resp.set_error(format!("{}", e));
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("raw_put failed: {:?}", e))
+            let res =
+                storage.async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = RawPutResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = v {
+                                resp.set_error(format!("{}", e));
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("raw_put failed: {:?}", e))
         });
     }
 
@@ -457,20 +561,29 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let storage = self.storage.clone();
         self.core.spawn(move |_| {
             let (cb, future) = make_callback();
-            storage.async_raw_delete(req.take_context(), req.take_key(), cb).unwrap();
-            future.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = RawDeleteResponse::new();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else if let Err(e) = v {
-                        resp.set_error(format!("{}", e));
-                    }
-                    resp
-                })
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("raw_delete failed: {:?}", e))
+            let res = storage.async_raw_delete(req.take_context(), req.take_key(), cb);
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .map(|v| {
+                            let mut resp = RawDeleteResponse::new();
+                            if let Some(err) = extract_region_error(&v) {
+                                resp.set_region_error(err);
+                            } else if let Err(e) = v {
+                                resp.set_error(format!("{}", e));
+                            }
+                            resp
+                        })
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("raw_delete failed: {:?}", e))
         });
     }
 
@@ -480,11 +593,21 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let end_point_scheduler = self.end_point_scheduler.clone();
         self.core.spawn(move |_| {
             let (cb, future) = make_callback();
-            end_point_scheduler.schedule(EndPointTask::Request(RequestTask::new(req, cb))).unwrap();
-            future.map_err(Error::from)
-                .and_then(|res| sink.success(res).map_err(Error::from))
-                .map(|_| timer.observe_duration())
-                .map_err(|e| error!("coprocessor failed: {:?}", e))
+            let res =
+                end_point_scheduler.schedule(EndPointTask::Request(RequestTask::new(req, cb)));
+            let f = match res {
+                Ok(_) => {
+                    future.map_err(Error::from)
+                        .and_then(|res| sink.success(res).map_err(Error::from))
+                        .boxed()
+                }
+                Err(e) => {
+                    let status = RpcStatus::new(RpcStatusCode::ResourceExhausted,
+                                                Some(format!("{}", e)));
+                    sink.fail(status).map_err(Error::from).boxed()
+                }
+            };
+            f.map(|_| timer.observe_duration()).map_err(|e| error!("coprocessor failed: {:?}", e))
         });
     }
 
@@ -592,45 +715,42 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
 }
 
 fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>) -> Vec<KvPair> {
-    let mut pairs = vec![];
     match res {
         Ok(res) => {
-            for r in res {
-                let mut pair = KvPair::new();
-                match r {
+            res.into_iter()
+                .map(|r| match r {
                     Ok((key, value)) => {
+                        let mut pair = KvPair::new();
                         pair.set_key(key);
                         pair.set_value(value);
+                        pair
                     }
                     Err(e) => {
+                        let mut pair = KvPair::new();
                         pair.set_error(extract_key_error(&e));
+                        pair
                     }
-                }
-                pairs.push(pair);
-            }
+                })
+                .collect()
         }
         Err(e) => {
             let mut pair = KvPair::new();
             pair.set_error(extract_key_error(&e));
-            pairs.push(pair);
+            vec![pair]
         }
     }
-    pairs
 }
 
 fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {
-    let mut errs = vec![];
     match res {
         Ok(res) => {
-            for r in res {
-                if let Err(e) = r {
-                    errs.push(extract_key_error(&e));
-                }
-            }
+            res.into_iter()
+                .filter_map(|x| match x {
+                    Err(e) => Some(extract_key_error(&e)),
+                    Ok(_) => None,
+                })
+                .collect()
         }
-        Err(e) => {
-            errs.push(extract_key_error(&e));
-        }
+        Err(e) => vec![extract_key_error(&e)],
     }
-    errs
 }
