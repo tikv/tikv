@@ -23,6 +23,9 @@ pub struct RaftReadyMetrics {
     pub commit: u64,
     pub append: u64,
     pub snapshot: u64,
+    pub read_state: u64,
+    pub soft_state: u64,
+    pub hard_state: u64,
 }
 
 impl RaftReadyMetrics {
@@ -52,6 +55,27 @@ impl RaftReadyMetrics {
                 .inc_by(self.snapshot as f64)
                 .unwrap();
             self.snapshot = 0;
+        }
+
+        if self.read_state > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["read_state"])
+                .inc_by(self.read_state as f64)
+                .unwrap();
+            self.read_state = 0;
+        }
+
+        if self.soft_state > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["soft_state"])
+                .inc_by(self.soft_state as f64)
+                .unwrap();
+            self.soft_state = 0;
+        }
+
+        if self.hard_state > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["hard_state"])
+                .inc_by(self.hard_state as f64)
+                .unwrap();
+            self.hard_state = 0;
         }
     }
 }
