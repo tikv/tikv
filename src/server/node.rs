@@ -170,7 +170,7 @@ impl<C> Node<C>
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
             error!("cluster ID mismatch: local_id {} remote_id {}. \
-                    you try to connect another cluster, please reconnect to the correct PD",
+            you are trying to connect to another cluster, please reconnect to the correct PD",
                    ident.get_cluster_id(),
                    self.cluster_id);
             process::exit(1);
