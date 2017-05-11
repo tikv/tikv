@@ -24,7 +24,7 @@ use std::fmt::{self, Write, Debug, Formatter};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use super::collections::HashMap;
 
-const DEFAULT_QUEUE_CAPACITY: usize = (1 << 10) - 1;
+const DEFAULT_QUEUE_CAPACITY: usize = 1023;
 
 pub struct Task<T> {
     // The task's id in the pool. Each task has a unique id,
@@ -674,7 +674,6 @@ mod test {
         let small_group_tasks_limit = 2;
         let mut queue = SmallGroupFirstQueue::new(concurrency_limit, small_group_tasks_limit);
         let mut id = 1;
-        let mut expect_task_id = 0;
 
         // high_priority_queue and low_priority_queue is both empty.
         assert!(queue.pop().is_none());
@@ -693,8 +692,8 @@ mod test {
 
         // low_priority_queue is empty
         let task = queue.pop().unwrap();
-        assert!(task.id > expect_task_id);
-        expect_task_id = task.id;
+        let expect_task_id = 1;
+        assert_eq!(task.id, expect_task_id);
         queue.on_task_started(&task.gid);
 
         // high:[g12]; low:[];running:g11
@@ -705,7 +704,7 @@ mod test {
             queue.push(task);
         }
 
-        // since g11(front in high_queue) comes before g13(front in low_priority_queue),
+        // since g11(front in high) comes before g13(front in low),
         // g11 would run first. high:[g12]; low:[g13,g14]; running:[g11]
         assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
         assert_eq!(queue.high_priority_queue.len(), small_group_tasks_limit - 1);
@@ -719,9 +718,10 @@ mod test {
         }
         // high:[g12,g21,g22], low:[g13,g14], running:[g11]
         let task = queue.pop().unwrap();
-        assert!(task.id > expect_task_id);
+        let expect_task_id = 2;
+        assert_eq!(task.id, expect_task_id);
         queue.on_task_started(&task.gid);
-        // since g12(front in high_queue) comes before g13(front in low_queue),
+        // since g12(front in high) comes before g13(front in low),
         // g12 would run first.
         assert_eq!(queue.low_priority_queue.len(), small_group_tasks_limit);
 
@@ -730,7 +730,7 @@ mod test {
         // high:[g21,g22], low:[g13,g14], running:[g11]
         let task = queue.pop().unwrap();
         queue.on_task_started(&task.gid);
-        // since g13(font in low_queue) comes before g21(front in high_queue),
+        // since g13(font in low) comes before g21(front in high),
         // and group g1's running number < group_concurrency_on_busy(2)
         // g13 would run first.
         assert_eq!(task.gid, group1);
