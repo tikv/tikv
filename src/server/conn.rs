@@ -279,7 +279,7 @@ impl Conn {
     {
         let n = self.send_buffer.len();
         msg.encode_to(&mut self.send_buffer).unwrap();
-        CONN_PENDING_SEND_BYTES_COUNTER.inc_by((self.send_buffer.len() - n) as f64).unwrap();
+        CONN_BUFFERED_SEND_BYTES_COUNTER.inc_by((self.send_buffer.len() - n) as f64).unwrap();
 
         if !self.interest.is_writable() {
             // re-register writable if we have not,
