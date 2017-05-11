@@ -79,7 +79,7 @@ git = "https://github.com/pingcap/tipb.git"
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
-features = ["nightly", "push"]
+features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
 git = "https://github.com/stepancheg/grpc-rust.git"
