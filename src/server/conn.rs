@@ -28,6 +28,7 @@ use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
 use util::buf::PipeBuffer;
+use super::metrics::*;
 
 
 #[derive(PartialEq)]
@@ -163,7 +164,8 @@ impl Conn {
         loop {
             {
                 let recv_buffer = self.recv_buffer.as_mut().unwrap();
-                try!(recv_buffer.read_from(&mut self.sock));
+                let n = try!(recv_buffer.read_from(&mut self.sock));
+                CONN_RECV_BYTES_COUNTER.inc_by(n as f64).unwrap();
                 // if the snapshot is too small, the default buffer may be not filled.
                 if !recv_buffer.is_full() && recv_buffer.len() < self.expect_size {
                     break;
@@ -197,7 +199,8 @@ impl Conn {
         if self.last_msg_id.is_none() {
             recv_buffer.ensure(rpc::MSG_HEADER_LEN);
             if recv_buffer.len() < rpc::MSG_HEADER_LEN {
-                try!(recv_buffer.read_from(&mut self.sock));
+                let n = try!(recv_buffer.read_from(&mut self.sock));
+                CONN_RECV_BYTES_COUNTER.inc_by(n as f64).unwrap();
             }
             if recv_buffer.len() < rpc::MSG_HEADER_LEN {
                 // we need to read more data for header
@@ -209,7 +212,8 @@ impl Conn {
             self.expect_size = payload_len;
         }
         recv_buffer.ensure(self.expect_size);
-        try!(recv_buffer.read_from(&mut self.sock));
+        let n = try!(recv_buffer.read_from(&mut self.sock));
+        CONN_RECV_BYTES_COUNTER.inc_by(n as f64).unwrap();
         if recv_buffer.len() < self.expect_size {
             // we need to read more data for payload
             return Ok(None);
@@ -246,7 +250,9 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        try!(self.send_buffer.write_to(&mut self.sock));
+        let n = try!(self.send_buffer.write_to(&mut self.sock));
+        CONN_SEND_BYTES_COUNTER.inc_by(n as f64).unwrap();
+
         if !self.send_buffer.is_empty() {
             // we don't write all data, so must try later.
             // we have already registered writable, no need registering again.
@@ -271,7 +277,9 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
+        let n = self.send_buffer.len();
         msg.encode_to(&mut self.send_buffer).unwrap();
+        CONN_BUFFERED_SEND_BYTES_COUNTER.inc_by((self.send_buffer.len() - n) as f64).unwrap();
 
         if !self.interest.is_writable() {
             // re-register writable if we have not,
