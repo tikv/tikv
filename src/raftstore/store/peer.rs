@@ -446,6 +446,15 @@ impl Peer {
         metrics.message += ready.messages.len() as u64;
         metrics.commit += ready.committed_entries.as_ref().map_or(0, |v| v.len() as u64);
         metrics.append += ready.entries.len() as u64;
+        metrics.read_state += ready.read_states.len() as u64;
+
+        if ready.ss.is_some() {
+            metrics.soft_state += 1;
+        }
+
+        if ready.hs.is_some() {
+            metrics.hard_state += 1;
+        }
 
         if !raft::is_empty_snap(&ready.snapshot) {
             metrics.snapshot += 1;
