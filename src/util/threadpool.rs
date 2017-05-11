@@ -24,7 +24,7 @@ use std::fmt::{self, Write, Debug, Formatter};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use super::collections::HashMap;
 
-const DEFAULT_QUEUE_CAPACITY: usize = 1023;
+const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 
 pub struct Task<T> {
     // The task's id in the pool. Each task has a unique id,
