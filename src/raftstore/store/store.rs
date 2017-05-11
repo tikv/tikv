@@ -471,6 +471,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_timer();
         for peer in &mut self.region_peers.values_mut() {
+            if peer.pending_remove {
+                continue;
+            }
             // When having pending snapshot, if election timeout is met, it can't pass
             // the pending conf change check because first index has been updated to
             // a value that is larger than last index.
@@ -569,6 +572,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                           p.peer_id());
                     return Ok(false);
                 }
+                p.pending_remove = true;
                 stale_peer = Some(p.peer.clone());
                 async_remove = p.get_store().is_initialized();
             } else if p.peer_id() > target_peer_id {
@@ -802,7 +806,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut need_remove = false;
         let mut async_remove = true;
-        if let Some(peer) = self.region_peers.get(&region_id) {
+        if let Some(peer) = self.region_peers.get_mut(&region_id) {
             // TODO: need checking peer id changed?
             let from_epoch = msg.get_region_epoch();
             if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
@@ -811,6 +815,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                       region_id,
                       msg.get_to_peer());
                 need_remove = true;
+                peer.pending_remove = true;
                 async_remove = peer.get_store().is_initialized();
             }
         }
