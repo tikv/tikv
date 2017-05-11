@@ -39,7 +39,7 @@ use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker as Worker, Scheduler};
-use raftstore::store::worker::{ApplyTask, ApplyRes};
+use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either, strftimespec};
 use util::collections::{HashMap, HashSet, HashMapValues as Values};
 
@@ -211,6 +211,8 @@ pub struct Peer {
 
     apply_scheduler: Scheduler<ApplyTask>,
 
+    pub pending_remove: bool,
+
     marked_to_be_checked: bool,
 
     leader_missing_time: Option<Instant>,
@@ -314,6 +316,7 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             apply_scheduler: store.apply_scheduler(),
+            pending_remove: false,
             marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
@@ -634,6 +637,9 @@ impl Peer {
                                                   ready_res: &mut Vec<(Ready, InvokeContext)>)
                                                   -> bool {
         self.marked_to_be_checked = false;
+        if self.pending_remove {
+            return;
+        }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
@@ -732,7 +738,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready) {
+    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -763,8 +769,7 @@ impl Peer {
             }
             if !committed_entries.is_empty() {
                 self.last_ready_idx = committed_entries.last().unwrap().get_index();
-                let apply_task = ApplyTask::apply(self.region_id, self.term(), committed_entries);
-                self.apply_scheduler.schedule(apply_task).unwrap();
+                apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
 
@@ -950,6 +955,10 @@ impl Peer {
                    mut err_resp: RaftCmdResponse,
                    metrics: &mut RaftProposeMetrics)
                    -> bool {
+        if self.pending_remove {
+            return false;
+        }
+
         if self.proposals.contains(&meta.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", meta.uuid));
             cb(err_resp);

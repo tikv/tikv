@@ -19,10 +19,11 @@
 #![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
+#[macro_use]
+extern crate clap;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
 extern crate tikv;
-extern crate getopts;
 #[macro_use]
 extern crate log;
 extern crate rocksdb;
@@ -43,7 +44,7 @@ mod signal_handler;
 mod profiling;
 
 use std::process;
-use std::{env, thread};
+use std::thread;
 use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
@@ -51,7 +52,7 @@ use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
 
-use getopts::{Options, Matches};
+use clap::{Arg, App, ArgMatches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
@@ -95,27 +96,22 @@ fn align_to_mb(n: u64) -> u64 {
     n & 0xFFFFFFFFFFF00000
 }
 
-fn print_usage(program: &str, opts: &Options) {
-    let brief = format!("Usage: {} [options]", program);
-    print!("{}", opts.usage(&brief));
-}
-
 fn exit_with_err(msg: String) -> ! {
     error!("{}", msg);
     process::exit(1)
 }
 
-fn get_flag_string(matches: &Matches, name: &str) -> Option<String> {
-    let s = matches.opt_str(name);
+fn get_flag_string(matches: &ArgMatches, name: &str) -> Option<String> {
+    let s = matches.value_of(name);
     info!("flag {}: {:?}", name, s);
 
-    s
+    s.map(|s| s.to_owned())
 }
 
-fn get_flag_int(matches: &Matches, name: &str) -> Option<i64> {
-    let i = matches.opt_str(name).map(|x| {
+fn get_flag_int(matches: &ArgMatches, name: &str) -> Option<i64> {
+    let i = matches.value_of(name).map(|x| {
         x.parse::<i64>()
-            .or_else(|_| util::config::parse_readable_int(&x))
+            .or_else(|_| util::config::parse_readable_int(x))
             .unwrap_or_else(|e| exit_with_err(format!("parse {} failed: {:?}", name, e)))
     });
     info!("flag {}: {:?}", name, i);
@@ -149,6 +145,12 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
     info!("toml value {}: {:?}", name, s);
 
     s
+}
+
+fn get_toml_string_opt(config: &toml::Value, name: &str) -> Option<String> {
+    config.lookup(name)
+        .and_then(|val| val.as_str())
+        .map(|s| s.to_owned())
 }
 
 fn get_toml_int_opt(config: &toml::Value, name: &str) -> Option<i64> {
@@ -212,20 +214,23 @@ fn cfg_duration(target: &mut Duration, config: &toml::Value, name: &str) {
     }
 }
 
-fn initial_log(matches: &Matches, config: &toml::Value) {
-    let level = get_flag_string(matches, "L")
-        .unwrap_or_else(|| get_toml_string(config, "server.log-level", Some("info".to_owned())));
+fn init_log(matches: &ArgMatches, config: &toml::Value) {
+    let level = matches.value_of("log-level")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(config, "server.log-level"))
+        .unwrap_or_else(|| "info".to_owned());
 
-    let log_file_path = get_flag_string(matches, "f")
-        .unwrap_or_else(|| get_toml_string(config, "server.log-file", Some("".to_owned())));
+    let log_file_opt = matches.value_of("log-file")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(config, "server.log-file"));
 
     let level_filter = logger::get_level_by_string(&level);
-    if log_file_path.is_empty() {
-        let w = StderrLogger;
+    if let Some(log_file) = log_file_opt {
+        let w = RotatingFileLogger::new(&log_file)
+            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
         logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     } else {
-        let w = RotatingFileLogger::new(&log_file_path)
-            .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+        let w = StderrLogger;
         logger::init_log(w, level_filter).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     }
 }
@@ -316,6 +321,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
     opts.set_max_background_flushes(max_background_flushes as i32);
 
+    let base_bg_compactions = get_toml_int(config, "rocksdb.base-background-compactions", Some(1));
+    opts.set_base_background_compactions(base_bg_compactions as i32);
+
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
                                               Some(20 * 1024 * 1024));
@@ -357,6 +365,14 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     if rate_bytes_per_sec > 0 {
         opts.set_ratelimiter(rate_bytes_per_sec as i64);
     }
+
+    let max_sub_compactions = get_toml_int(config, "rocksdb.max-sub-compactions", Some(1));
+    opts.set_max_subcompactions(max_sub_compactions as usize);
+
+    let writable_file_max_buffer_size = get_toml_int(config,
+                                                     "rocksdb.writable-file-max-buffer-size",
+                                                     Some(1024 * 1024));
+    opts.set_writable_file_max_buffer_size(writable_file_max_buffer_size as i32);
 
     opts
 }
@@ -557,7 +573,7 @@ fn adjust_sched_workers_by_cpu_num(total_cpu_num: usize) -> usize {
 // Currently, to add a new option, we will define three default value
 // in config.rs, this file and config-template.toml respectively. It may be more
 // maintainable to keep things in one place.
-fn build_cfg(matches: &Matches,
+fn build_cfg(matches: &ArgMatches,
              config: &toml::Value,
              cluster_id: u64,
              addr: String,
@@ -692,11 +708,14 @@ fn build_raftkv(config: &toml::Value,
     let trans = ServerTransport::new(ch);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let db_opts = get_rocksdb_db_option(config);
-    let mut cfs_opts = HashMap::default();
-    cfs_opts.insert(CF_DEFAULT, get_rocksdb_default_cf_option(config, total_mem));
-    cfs_opts.insert(CF_LOCK, get_rocksdb_lock_cf_option(config));
-    cfs_opts.insert(CF_WRITE, get_rocksdb_write_cf_option(config, total_mem));
-    cfs_opts.insert(CF_RAFT, get_rocksdb_raftlog_cf_option(config, total_mem));
+    let cfs_opts =
+        vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
+                                          get_rocksdb_default_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config)),
+             rocksdb_util::CFOptions::new(CF_WRITE,
+                                          get_rocksdb_write_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_RAFT,
+                                          get_rocksdb_raftlog_cf_option(config, total_mem))];
     let mut db_path = path.clone();
     db_path.push("db");
     let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
@@ -740,35 +759,42 @@ fn canonicalize_path(path: &str) -> String {
             p.canonicalize().unwrap_or_else(|err| exit_with_err(format!("{:?}", err))).display())
 }
 
-fn get_store_and_backup_path(matches: &Matches, config: &toml::Value) -> (String, String) {
-    // Store path
-    let store_path = get_flag_string(matches, "s")
-        .unwrap_or_else(|| get_toml_string(config, "server.store", Some(TEMP_DIR.to_owned())));
-    let store_abs_path = if store_path == TEMP_DIR {
-        TEMP_DIR.to_owned()
-    } else {
-        canonicalize_path(&store_path)
-    };
+fn get_data_and_backup_dirs(matches: &ArgMatches, config: &toml::Value) -> (String, String) {
+    // store data path
+    let abs_data_dir = matches.value_of("data-dir")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(config, "server.data-dir"))
+        .or_else(|| get_toml_string_opt(config, "server.store"))
+        .map(|s| canonicalize_path(&s))
+        .unwrap_or_else(|| {
+            warn!("data dir parsing failed, use default data dir {}", TEMP_DIR);
+            TEMP_DIR.to_owned()
+        });
+    info!("server.data-dir uses {:?}", abs_data_dir);
 
     // Backup path
-    let mut backup_path = get_toml_string(config, "server.backup", Some(String::new()));
-    if backup_path.is_empty() && store_abs_path != TEMP_DIR {
-        backup_path = format!("{}", Path::new(&store_abs_path).join("backup").display())
+    let mut backup_dir = get_toml_string_opt(config, "server.backup-dir")
+        .or_else(|| get_toml_string_opt(config, "server.backup"))
+        .unwrap_or_default();
+    if backup_dir.is_empty() && abs_data_dir != TEMP_DIR {
+        backup_dir = format!("{}", Path::new(&abs_data_dir).join("backup").display())
     }
 
-    if backup_path.is_empty() {
+    if backup_dir.is_empty() {
         info!("empty backup path, backup is disabled");
-        (store_abs_path, backup_path)
+        (abs_data_dir, backup_dir)
     } else {
-        let backup_abs_path = canonicalize_path(&backup_path);
-        info!("backup path: {}", backup_abs_path);
-        (store_abs_path, backup_abs_path)
+        let abs_backup_dir = canonicalize_path(&backup_dir);
+        info!("server.backup-dir uses {:?}", abs_backup_dir);
+        (abs_data_dir, abs_backup_dir)
     }
 }
 
-fn get_store_labels(matches: &Matches, config: &toml::Value) -> HashMap<String, String> {
-    let labels = get_flag_string(matches, "labels")
-        .unwrap_or_else(|| get_toml_string(config, "server.labels", Some("".to_owned())));
+fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<String, String> {
+    let labels = matches.value_of("labels")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(config, "server.labels"))
+        .unwrap_or_default();
     util::config::parse_store_labels(&labels)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
 }
@@ -843,70 +869,99 @@ fn run_raft_server(pd_client: RpcClient,
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let program = args[0].clone();
-    let mut opts = Options::new();
-    opts.optopt("A",
-                "addr",
-                "set listening address",
-                "default is 127.0.0.1:20160");
-    opts.optopt("",
-                "advertise-addr",
-                "set advertise listening address for client communication",
-                "if not set, use ${addr} instead.");
-    opts.optopt("L",
-                "log",
-                "set log level",
-                "log level: trace, debug, info, warn, error, off");
-    opts.optopt("f",
-                "log-file",
-                "set log file",
-                "if not set, output log to stdout");
-    opts.optflag("V", "version", "print version information");
-    opts.optflag("h", "help", "print this help menu");
-    opts.optopt("C", "config", "set configuration file", "file path");
-    opts.optopt("s",
-                "store",
-                "set the path to store directory",
-                "/tmp/tikv/store");
-    opts.optopt("",
-                "capacity",
-                "set the store capacity",
-                "default: 0 (disk capacity)");
-    opts.optopt("", "pd", "pd endpoints", "127.0.0.1:2379,127.0.0.1:3379");
-    opts.optopt("",
-                "labels",
-                "attributes about this server",
-                "zone=example-zone,disk=example-disk");
+    let long_version: String = {
+        let (hash, time, rust_ver) = util::build_info();
+        format!("{}\nGit Commit Hash: {}\nUTC Build Time:  {}\nRust Version:    {}",
+                crate_version!(),
+                hash,
+                time,
+                rust_ver)
+    };
+    let matches = App::new("TiKV")
+        .long_version(long_version.as_ref())
+        .author("PingCAP Inc. <info@pingcap.com>")
+        .about("A Distributed transactional key-value database powered by Rust and Raft")
+        .arg(Arg::with_name("config")
+            .short("C")
+            .long("config")
+            .value_name("FILE")
+            .help("Sets config file")
+            .takes_value(true))
+        .arg(Arg::with_name("addr")
+            .short("A")
+            .long("addr")
+            .takes_value(true)
+            .value_name("IP:PORT")
+            .help("Sets listening address"))
+        .arg(Arg::with_name("advertise-addr")
+            .long("advertise-addr")
+            .takes_value(true)
+            .value_name("IP:PORT")
+            .help("Sets advertise listening address for client communication"))
+        .arg(Arg::with_name("log-level")
+            .short("L")
+            .long("log-level")
+            .alias("log")
+            .takes_value(true)
+            .value_name("LEVEL")
+            .possible_values(&["trace", "debug", "info", "warn", "error", "off"])
+            .help("Sets log level"))
+        .arg(Arg::with_name("log-file")
+            .short("f")
+            .long("log-file")
+            .takes_value(true)
+            .value_name("FILE")
+            .help("Sets log file")
+            .long_help("Sets log file. If not set, output log to stderr"))
+        .arg(Arg::with_name("data-dir")
+            .long("data-dir")
+            .aliases(&["s", "store"])
+            .takes_value(true)
+            .value_name("PATH")
+            .help("Sets the path to store directory"))
+        .arg(Arg::with_name("capacity")
+            .long("capacity")
+            .takes_value(true)
+            .value_name("CAPACITY")
+            .help("Sets the store capacity")
+            .long_help("Sets the store capacity. If not set, use entire partition"))
+        .arg(Arg::with_name("pd-endpoints")
+            .long("pd-endpoints")
+            .aliases(&["pd", "pd-endpoint"])
+            .takes_value(true)
+            .value_name("PD_URL")
+            .multiple(true)
+            .use_delimiter(true)
+            .require_delimiter(true)
+            .value_delimiter(",")
+            .help("Sets PD endpoints")
+            .long_help("Sets PD endpoints. Uses `,` to separate multiple PDs"))
+        .arg(Arg::with_name("labels")
+            .long("labels")
+            .alias("label")
+            .takes_value(true)
+            .value_name("KEY=VALUE")
+            .multiple(true)
+            .use_delimiter(true)
+            .require_delimiter(true)
+            .value_delimiter(",")
+            .help("Sets server labels")
+            .long_help("Sets server labels. Uses `,` to separate kv pairs, like \
+                        `zone=cn,disk=ssd`"))
+        .get_matches();
 
-    let matches = opts.parse(&args[1..]).unwrap_or_else(|e| {
-        println!("opts parse failed, {:?}", e);
-        print_usage(&program, &opts);
-        process::exit(1);
-    });
-    if matches.opt_present("h") {
-        print_usage(&program, &opts);
-        return;
-    }
-    if matches.opt_present("V") {
-        let (hash, date, rustc) = util::build_info();
-        println!("Git Commit Hash: {}", hash);
-        println!("UTC Build Time:  {}", date);
-        println!("Rustc Version:   {}", rustc);
-        return;
-    }
-    let config = match matches.opt_str("C") {
+    let config = match matches.value_of("config") {
         Some(path) => {
-            let mut config_file = fs::File::open(&path).expect("config open failed");
+            let mut config_file = File::open(&path).expect("config open failed");
             let mut s = String::new();
             config_file.read_to_string(&mut s).expect("config read failed");
             toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
         }
-        // Empty value, lookup() always return `None`.
+        // Default empty value, lookup() always returns `None`.
         None => toml::Value::Integer(0),
     };
 
-    initial_log(&matches, &config);
+    init_log(&matches, &config);
 
     // Print version information.
     util::print_tikv_info();
@@ -916,18 +971,20 @@ fn main() {
     // Before any startup, check system configuration.
     check_system_config(&config);
 
-    let addr = get_flag_string(&matches, "A").unwrap_or_else(|| {
-        let addr = get_toml_string(&config,
-                                   "server.addr",
-                                   Some(DEFAULT_LISTENING_ADDR.to_owned()));
-        if let Err(e) = util::config::check_addr(&addr) {
-            exit_with_err(format!("{:?}", e));
-        }
-        addr
-    });
+    let addr = matches.value_of("addr")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(&config, "server.addr"))
+        .unwrap_or_else(|| DEFAULT_LISTENING_ADDR.to_owned());
 
-    let pd_endpoints = get_flag_string(&matches, "pd")
-        .unwrap_or_else(|| get_toml_string(&config, "pd.endpoints", None));
+    if let Err(e) = util::config::check_addr(&addr) {
+        exit_with_err(format!("{:?}", e));
+    }
+
+    let pd_endpoints = matches.value_of("pd-endpoints")
+        .map(|s| s.to_owned())
+        .or_else(|| get_toml_string_opt(&config, "pd.endpoints"))
+        .expect("empty pd endpoints");
+
     for addr in pd_endpoints.split(',')
         .map(|s| s.trim())
         .filter_map(|s| if s.is_empty() {
@@ -949,7 +1006,7 @@ fn main() {
     info!("connect to PD cluster {}", cluster_id);
 
     let total_cpu_num = cpu_num().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    // return  memory in KB.
+    // return memory in KB.
     let mem = mem_info().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let total_mem = mem.total * KB;
     if !sanitize_memory_usage() {
@@ -958,7 +1015,7 @@ fn main() {
 
     let mut cfg = build_cfg(&matches, &config, cluster_id, addr, total_cpu_num as usize);
     cfg.labels = get_store_labels(&matches, &config);
-    let (store_path, backup_path) = get_store_and_backup_path(&matches, &config);
+    let (store_path, backup_path) = get_data_and_backup_dirs(&matches, &config);
     cfg.storage.path = store_path;
 
     if cluster_id == DEFAULT_CLUSTER_ID {

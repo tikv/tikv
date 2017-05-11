@@ -7,9 +7,9 @@ use tikv::storage::{Mutation, Key, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::Worker;
 use kvproto::coprocessor::{Request, KeyRange};
-use tipb::select::{ByItem, SelectRequest, SelectResponse, Chunk};
+use tipb::select::{SelectRequest, SelectResponse, Chunk};
 use tipb::schema::{self, ColumnInfo};
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::{Expr, ExprType, ByItem};
 use storage::sync_storage::SyncStorage;
 use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
 
