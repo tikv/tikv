@@ -598,6 +598,10 @@ fn build_cfg(matches: &Matches,
               cfg.end_point_txn_concurrency_on_busy);
     }
 
+    cfg_usize(&mut cfg.end_point_small_txn_tasks_limit,
+              config,
+              "server.end-point-small-txn-tasks-limit");
+
     cfg_usize(&mut cfg.messages_per_tick,
               config,
               "server.messages-per-tick");

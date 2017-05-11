@@ -24,6 +24,7 @@ const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_END_POINT_CONCURRENCY: usize = 8;
 const DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO: f64 = 0.25;
+const DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT: usize = 2;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 const DEFAULT_SEND_BUFFER_SIZE: usize = 128 * 1024;
 const DEFAULT_RECV_BUFFER_SIZE: usize = 128 * 1024;
@@ -49,6 +50,7 @@ pub struct Config {
     pub raft_store: RaftStoreConfig,
     pub end_point_concurrency: usize,
     pub end_point_txn_concurrency_on_busy: usize,
+    pub end_point_small_txn_tasks_limit: usize,
 }
 
 impl Default for Config {
@@ -64,6 +66,7 @@ impl Default for Config {
             recv_buffer_size: DEFAULT_RECV_BUFFER_SIZE,
             end_point_concurrency: DEFAULT_END_POINT_CONCURRENCY,
             end_point_txn_concurrency_on_busy: usize::default(),
+            end_point_small_txn_tasks_limit: DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT,
             storage: StorageConfig::default(),
             raft_store: RaftStoreConfig::default(),
         };
@@ -86,6 +89,12 @@ impl Config {
                                 self.end_point_txn_concurrency_on_busy,
                                 self.end_point_concurrency));
         }
+
+        if self.end_point_small_txn_tasks_limit == 0 {
+            return Err(box_err!("server.end-point-small-txn-tasks-limit: \
+                                    shouldn't be 0"));
+        }
+
         Ok(())
     }
 

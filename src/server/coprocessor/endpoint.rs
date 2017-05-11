@@ -78,7 +78,8 @@ impl Host {
     pub fn new(engine: Box<Engine>,
                scheduler: Scheduler<Task>,
                concurrency: usize,
-               txn_concurrency_on_busy: usize)
+               txn_concurrency_on_busy: usize,
+               small_txn_tasks_limit: usize)
                -> Host {
         let queue: BigGroupThrottledQueue<u64> =
             BigGroupThrottledQueue::new(txn_concurrency_on_busy);
@@ -1187,7 +1188,7 @@ mod tests {
     fn test_req_outdated() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let end_point = Host::new(engine, worker.scheduler(), 1, 1);
+        let end_point = Host::new(engine, worker.scheduler(), 1, 1, 1);
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut task = RequestTask::new(Request::new(),
@@ -1207,7 +1208,7 @@ mod tests {
     fn test_too_many_reqs() {
         let mut worker = Worker::new("test-endpoint");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
-        let mut end_point = Host::new(engine, worker.scheduler(), 1, 1);
+        let mut end_point = Host::new(engine, worker.scheduler(), 1, 1, 1);
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();

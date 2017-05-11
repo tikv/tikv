@@ -144,7 +144,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let end_point = EndPointHost::new(self.store.engine(),
                                           self.end_point_worker.scheduler(),
                                           self.cfg.end_point_concurrency,
-                                          self.cfg.end_point_txn_concurrency_on_busy);
+                                          self.cfg.end_point_txn_concurrency_on_busy,
+                                          self.cfg.end_point_small_txn_tasks_limit);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
 
         let ch = self.get_sendch();
