@@ -53,4 +53,16 @@ lazy_static! {
             "Total number of reporting failure messages",
             &["type", "store_id"]
         ).unwrap();
+
+    pub static ref CONN_SEND_BUFFER_CAPACITY_GAUGE: Gauge =
+        register_gauge!(
+            "tikv_server_conn_send_buffer_capacity_total",
+            "Total capacity of connection send buffer"
+        ).unwrap();
+
+    pub static ref CONN_RECV_BUFFER_CAPACITY_GAUGE: Gauge =
+        register_gauge!(
+            "tikv_server_conn_recv_buffer_capacity_total",
+            "Total capacity of connection recv buffer"
+        ).unwrap();
 }

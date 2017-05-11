@@ -28,6 +28,7 @@ use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use util::worker::Scheduler;
 use util::buf::PipeBuffer;
+use super::metrics::*;
 
 
 #[derive(PartialEq)]
@@ -72,7 +73,7 @@ impl Conn {
                store_id: Option<u64>,
                snap_scheduler: Scheduler<SnapTask>)
                -> Conn {
-        Conn {
+        let conn = Conn {
             sock: sock,
             token: token,
             interest: EventSet::readable() | EventSet::hup(),
@@ -85,7 +86,12 @@ impl Conn {
             send_buffer: PipeBuffer::new(DEFAULT_SEND_BUFFER_SIZE),
             recv_buffer: Some(PipeBuffer::new(DEFAULT_RECV_BUFFER_SIZE)),
             buffer_shrink_threshold: DEFAULT_BUFFER_SHRINK_THRESHOLD,
-        }
+        };
+
+        CONN_SEND_BUFFER_CAPACITY_GAUGE.add(conn.send_capacity());
+        CONN_RECV_BUFFER_CAPACITY_GAUGE.add(conn.recv_capacity());
+
+        conn
     }
 
     pub fn close(&mut self) {
@@ -110,12 +116,14 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
+        let old_cap = self.recv_capacity();
         let mut bufs = vec![];
         match self.conn_type {
             ConnType::Handshake => try!(self.handshake(event_loop, &mut bufs)),
             ConnType::Rpc => try!(self.read_rpc(event_loop, &mut bufs)),
             ConnType::Snapshot => try!(self.read_snapshot(event_loop)),
         };
+        CONN_RECV_BUFFER_CAPACITY_GAUGE.add(self.recv_capacity() - old_cap);
         Ok(bufs)
     }
 
@@ -255,7 +263,9 @@ impl Conn {
 
         // no data for writing, remove writable
         if self.send_buffer.capacity() > self.buffer_shrink_threshold {
+            let old_cap = self.send_capacity();
             self.send_buffer.shrink_to(DEFAULT_SEND_BUFFER_SIZE);
+            CONN_SEND_BUFFER_CAPACITY_GAUGE.add(self.send_capacity() - old_cap);
         }
         self.interest.remove(EventSet::writable());
         try!(self.reregister(event_loop));
@@ -271,7 +281,9 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
+        let old_cap = self.send_capacity();
         msg.encode_to(&mut self.send_buffer).unwrap();
+        CONN_SEND_BUFFER_CAPACITY_GAUGE.add(self.send_capacity() - old_cap);
 
         if !self.interest.is_writable() {
             // re-register writable if we have not,
@@ -282,5 +294,22 @@ impl Conn {
         }
 
         Ok(())
+    }
+
+    #[inline]
+    fn send_capacity(&self) -> f64 {
+        self.send_buffer.capacity() as f64
+    }
+
+    #[inline]
+    fn recv_capacity(&self) -> f64 {
+        self.recv_buffer.as_ref().map_or_else(|| 0.0, |v| v.capacity() as f64)
+    }
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        CONN_SEND_BUFFER_CAPACITY_GAUGE.sub(self.send_capacity());
+        CONN_RECV_BUFFER_CAPACITY_GAUGE.sub(self.recv_capacity());
     }
 }
