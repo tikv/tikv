@@ -238,6 +238,8 @@ pub struct Peer {
     pub written_bytes: u64,
     pub written_keys: u64,
     pub last_written_bytes: u64,
+
+    is_appending_log: bool,
 }
 
 impl Peer {
@@ -332,6 +334,7 @@ impl Peer {
             written_bytes: 0,
             written_keys: 0,
             last_written_bytes: 0,
+            is_appending_log: false,
         };
 
         peer.load_all_coprocessors();
@@ -630,7 +633,9 @@ impl Peer {
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   ctx: &mut ReadyContext<T>,
-                                                  worker: &Worker<PdTask>) {
+                                                  worker: &Worker<PdTask>,
+                                                  ready_res: &mut Vec<(Ready, InvokeContext)>)
+                                                  -> bool {
         self.marked_to_be_checked = false;
         if self.pending_remove {
             return;
@@ -641,7 +646,7 @@ impl Peer {
             // to full message queue under high load.
             debug!("{} still applying snapshot, skip further handling.",
                    self.tag);
-            return;
+            return true;
         }
 
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
@@ -649,12 +654,19 @@ impl Peer {
                    self.tag,
                    self.get_store().applied_index(),
                    self.get_store().committed_index());
-            return;
+            return true;
         }
 
         if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
-            return;
+            return true;
         }
+
+        if self.is_appending_log {
+            debug!("region [{}] is async appending log, will handled next time",
+                   self.region_id);
+            return false;
+        }
+        self.is_appending_log = true;
 
         debug!("{} handle raft ready", self.tag);
 
@@ -674,7 +686,8 @@ impl Peer {
             });
         }
 
-        let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
+        let wb_old_size = ctx.wb.data_size();
+        let invoke_ctx = match self.mut_store().handle_raft_ready(&mut ctx.wb, &ready) {
             Ok(r) => r,
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
@@ -683,7 +696,14 @@ impl Peer {
             }
         };
 
-        ctx.ready_res.push((ready, invoke_ctx));
+        // this ready write something.
+        if ctx.wb.data_size() > wb_old_size {
+            ctx.ready_res.push((ready, invoke_ctx));
+        } else {
+            ready_res.push((ready, invoke_ctx));
+        }
+
+        true
     }
 
     pub fn post_raft_ready_append<T: Transport>(&mut self,
@@ -692,6 +712,11 @@ impl Peer {
                                                 ready: &mut Ready,
                                                 invoke_ctx: InvokeContext)
                                                 -> Option<ApplySnapResult> {
+        if !self.is_appending_log {
+            panic!("is appending log should be true");
+        }
+        self.is_appending_log = false;
+
         if invoke_ctx.has_snapshot() {
             // When apply snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;

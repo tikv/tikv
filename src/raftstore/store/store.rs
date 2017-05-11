@@ -38,7 +38,7 @@ use pd::PdClient;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
-use raft::{self, SnapshotStatus, INVALID_INDEX};
+use raft::{self, SnapshotStatus, INVALID_INDEX, Ready};
 use raftstore::{Result, Error};
 use kvproto::metapb;
 use util::worker::{Worker, Scheduler, FutureWorker};
@@ -50,14 +50,14 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
-                    ApplyTaskRes};
+                    ApplyTaskRes, AppendRunner, AppendTask, AppendTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState, ReadyContext};
-use super::peer_storage::ApplySnapResult;
+use super::peer_storage::{ApplySnapResult, InvokeContext};
 use super::msg::Callback;
 use super::cmd_resp::{bind_uuid, bind_term, bind_error};
 use super::transport::Transport;
@@ -120,6 +120,9 @@ pub struct Store<T, C: 'static> {
 
     pub apply_worker: Worker<ApplyTask>,
     apply_res_receiver: Option<StdReceiver<ApplyTaskRes>>,
+
+    pub append_worker: Worker<AppendTask>,
+    append_res_receiver: Option<StdReceiver<AppendTaskRes>>,
 
     trans: T,
     pd_client: Arc<C>,
@@ -199,6 +202,8 @@ impl<T, C> Store<T, C> {
             consistency_check_worker: Worker::new("consistency check worker"),
             apply_worker: Worker::new("apply worker"),
             apply_res_receiver: None,
+            append_worker: Worker::new("append worker"),
+            append_res_receiver: None,
             region_ranges: BTreeMap::new(),
             pending_snapshot_regions: vec![],
             trans: trans,
@@ -317,6 +322,10 @@ impl<T, C> Store<T, C> {
         self.apply_worker.scheduler()
     }
 
+    pub fn append_scheduler(&self) -> Scheduler<AppendTask> {
+        self.append_worker.scheduler()
+    }
+
     pub fn engine(&self) -> Arc<DB> {
         self.engine.clone()
     }
@@ -429,6 +438,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
+        let (tx, rx) = mpsc::channel();
+        let append_runner = AppendRunner::new(self.tag.clone(), self.engine.clone(), tx);
+        self.append_res_receiver = Some(rx);
+        box_try!(self.append_worker.start(append_runner));
+
         try!(event_loop.run(self));
         Ok(())
     }
@@ -450,6 +464,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         handles.push(self.pd_worker.stop());
         handles.push(self.consistency_check_worker.stop());
         handles.push(self.apply_worker.stop());
+        handles.push(self.append_worker.stop());
 
         for h in handles {
             if let Some(h) = h {
@@ -548,6 +563,20 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Err(e) => panic!("unexpected error {:?}", e),
             }
         }
+    }
+
+    fn poll_append(&self) -> Vec<(Ready, InvokeContext)> {
+        let mut ready_res = vec![];
+        loop {
+            match self.append_res_receiver.as_ref().unwrap().try_recv() {
+                Ok(mut res) => {
+                    ready_res.append(&mut res.ready_res);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(e) => panic!("unexcepted error {:?}", e),
+            }
+        }
+        ready_res
     }
 
     /// If target peer doesn't exist, create it.
@@ -877,30 +906,40 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self) {
+    fn on_raft_ready(&mut self, mut ready_res: Vec<(Ready, InvokeContext)>) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
-        let (wb, append_res) = {
+        {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
+            let mut regions_not_handled = HashSet::default();
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                    peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
+                    if !peer.handle_raft_ready_append(&mut ctx, &self.pd_worker, &mut ready_res) {
+                        regions_not_handled.insert(region_id);
+                    }
                 }
             }
-            (ctx.wb, ctx.ready_res)
-        };
+            self.pending_raft_groups = regions_not_handled;
 
-        if !wb.is_empty() {
-            self.engine.write(wb).unwrap_or_else(|e| {
-                panic!("{} failed to save append result: {:?}", self.tag, e);
-            });
+            let need_schedule_append = !ctx.ready_res.is_empty();
+            if need_schedule_append {
+                self.append_worker
+                    .schedule(AppendTask {
+                        wb: ctx.wb,
+                        ready_res: ctx.ready_res,
+                    })
+                    .unwrap();
+            }
         }
 
-        let mut ready_results = Vec::with_capacity(append_res.len());
-        for (mut ready, invoke_ctx) in append_res {
+        let mut new_res = self.poll_append();
+        ready_res.append(&mut new_res);
+
+        let mut ready_results = Vec::with_capacity(ready_res.len());
+        for (mut ready, invoke_ctx) in ready_res {
             let region_id = invoke_ctx.region_id;
             let res = self.region_peers
                 .get_mut(&region_id)
@@ -1569,7 +1608,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_pd_heartbeat_tick(event_loop);
     }
 
-
     fn register_pd_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::PdHeartbeat,
@@ -2063,9 +2101,11 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             return;
         }
 
+        let ready_res = self.poll_append();
+
         // We handle raft ready in event loop.
-        if !self.pending_raft_groups.is_empty() {
-            self.on_raft_ready();
+        if !self.pending_raft_groups.is_empty() || !ready_res.is_empty() {
+            self.on_raft_ready(ready_res);
         }
 
         self.poll_apply();
