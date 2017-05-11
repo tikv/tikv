@@ -24,6 +24,8 @@ use std::fmt::{self, Write, Debug, Formatter};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use super::collections::HashMap;
 
+const DEFAULT_QUEUE_CAPACITY: usize = (1 << 10) - 1;
+
 pub struct Task<T> {
     // The task's id in the pool. Each task has a unique id,
     // and it's always bigger than preceding ones.
@@ -110,8 +112,8 @@ impl<T: Hash + Ord + Send + Clone + Debug> SmallGroupFirstQueue<T> {
                small_group_tasks_limit: usize)
                -> SmallGroupFirstQueue<T> {
         SmallGroupFirstQueue {
-            high_priority_queue: VecDeque::new(),
-            low_priority_queue: VecDeque::new(),
+            high_priority_queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
+            low_priority_queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY),
             statistics: HashMap::new(),
             group_concurrency_on_busy: group_concurrency_on_busy,
             small_group_tasks_limit: small_group_tasks_limit,
