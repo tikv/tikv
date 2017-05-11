@@ -35,7 +35,7 @@ use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either};
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
-use util::threadpool::{ThreadPool, BigGroupThrottledQueue};
+use util::threadpool::{ThreadPool, SmallGroupFirstQueue};
 use server::OnResponse;
 
 use super::{Error, Result};
@@ -70,7 +70,7 @@ pub struct Host {
     sched: Scheduler<Task>,
     reqs: HashMap<u64, Vec<RequestTask>>,
     last_req_id: u64,
-    pool: ThreadPool<BigGroupThrottledQueue<u64>, u64>,
+    pool: ThreadPool<SmallGroupFirstQueue<u64>, u64>,
     max_running_task_count: usize,
 }
 
@@ -81,8 +81,8 @@ impl Host {
                txn_concurrency_on_busy: usize,
                small_txn_tasks_limit: usize)
                -> Host {
-        let queue: BigGroupThrottledQueue<u64> =
-            BigGroupThrottledQueue::new(txn_concurrency_on_busy);
+        let queue: SmallGroupFirstQueue<u64> = SmallGroupFirstQueue::new(txn_concurrency_on_busy,
+                                                                         small_txn_tasks_limit);
         Host {
             engine: engine,
             sched: scheduler,
@@ -117,42 +117,46 @@ pub struct RequestTask {
     deadline: Instant,
     statistics: Statistics,
     on_resp: OnResponse,
+    sel_req: Option<SelectRequest>,
+    sel_err: Option<Error>,
 }
 
 impl RequestTask {
     pub fn new(req: Request, on_resp: OnResponse) -> RequestTask {
         let timer = Instant::now();
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
+        let mut start_ts = None;
+        let tp = req.get_tp();
+        let mut sel_req = None;
+        let mut sel_err = None;
+        match tp {
+            REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
+                let mut sel = SelectRequest::new();
+                if let Err(e) = sel.merge_from_bytes(req.get_data()) {
+                    sel_err = Some(box_err!(e));
+                } else {
+                    start_ts = Some(sel.get_start_ts());
+                    sel_req = Some(sel);
+                }
+            }
+            _ => sel_err = Some(box_err!("unsupported tp {}", tp)),
+        };
         RequestTask {
             req: req,
-            start_ts: None,
+            start_ts: start_ts,
             wait_time: None,
             timer: timer,
             deadline: deadline,
             statistics: Default::default(),
             on_resp: on_resp,
+            sel_req: sel_req,
+            sel_err: sel_err,
         }
     }
 
     #[inline]
     fn check_outdated(&self) -> Result<()> {
         check_if_outdated(self.deadline, self.req.get_tp())
-    }
-
-    pub fn parse_sel(&mut self) -> Result<SelectRequest> {
-        let tp = self.req.get_tp();
-        match tp {
-            REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
-                let mut sel = SelectRequest::new();
-                if let Err(e) = sel.merge_from_bytes(self.req.get_data()) {
-                    return Err(box_err!(e));
-                }
-                let start_ts = sel.get_start_ts();
-                self.start_ts = Some(start_ts);
-                Ok(sel)
-            }
-            _ => Err(box_err!("unsupported tp {}", tp)),
-        }
     }
 
     fn stop_record_waiting(&mut self) {
@@ -246,12 +250,11 @@ impl BatchRunnable<Task> for Host {
                         continue;
                     }
                     COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
-                    for mut req in reqs {
+                    for req in reqs {
                         let end_point = TiDbEndPoint::new(snap.clone());
-                        let sel = req.parse_sel();
                         let txn_id = req.start_ts.unwrap_or_default();
                         self.pool.execute(txn_id, move || {
-                            end_point.handle_request(req, sel);
+                            end_point.handle_request(req);
                             COPR_PENDING_REQS.with_label_values(&["select"]).sub(1.0);
                         });
                     }
@@ -358,22 +361,24 @@ impl TiDbEndPoint {
 }
 
 impl TiDbEndPoint {
-    fn handle_request(&self, mut t: RequestTask, sel: Result<SelectRequest>) {
+    fn handle_request(&self, mut t: RequestTask) {
         t.stop_record_waiting();
         if let Err(e) = t.check_outdated() {
             on_error(e, t);
             return;
         }
-        if let Err(e) = sel {
-            on_error(e, t);
-            return;
-        }
-        match self.handle_select(&mut t, sel.unwrap()) {
+        match self.handle_select(&mut t) {
             Ok(r) => respond(r, t),
             Err(e) => on_error(e, t),
         }
     }
-    pub fn handle_select(&self, t: &mut RequestTask, sel: SelectRequest) -> Result<Response> {
+
+    pub fn handle_select(&self, t: &mut RequestTask) -> Result<Response> {
+        let err = t.sel_err.take();
+        if err.is_some() {
+            return Err(err.unwrap());
+        }
+        let sel = t.sel_req.take().unwrap();
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let mut range = t.req.get_ranges().to_vec();
