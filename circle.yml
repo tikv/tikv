@@ -61,6 +61,14 @@ dependencies:
         cd rocksdb-5.2.1 && \
         INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared;
       fi
+    # install grpc
+    - |
+      if [[ ! -e $HOME/.local/include/grpc/grpc.h ]]; then
+        git clone -b v1.2.5 https://github.com/grpc/grpc && \
+        cd grpc && \
+        git submodule update --init && \
+        env prefix=$HOME/.local make install_c;
+      fi
   post:
     # cargo test also use debug
     - cargo build:
