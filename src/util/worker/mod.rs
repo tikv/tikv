@@ -154,16 +154,16 @@ impl<T: Display> Scheduler<T> {
     #[cfg(test)]
     pub fn pause(&self) {
         let &(ref lock, ref cond) = &*self.ctx.pause;
-        let mut guard = lock.lock().unwrap();
-        *guard = true;
+        let mut pause = lock.lock().unwrap();
+        *pause = true;
         cond.notify_all();
     }
 
     #[cfg(test)]
     pub fn resume(&self) {
         let &(ref lock, ref cond) = &*self.ctx.pause;
-        let mut guard = lock.lock().unwrap();
-        *guard = false;
+        let mut pause = lock.lock().unwrap();
+        *pause = false;
         cond.notify_all();
     }
 }
