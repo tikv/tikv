@@ -54,7 +54,7 @@ impl<'a> TableScanExecutor<'a> {
 
     fn get_row_from_range(&mut self) -> Result<Option<Row>> {
         let range = &self.key_ranges[self.cursor];
-        let kv = try!(self.scanner.get_row_from_range(range));
+        let kv = try!(self.scanner.next_row(range));
         let (key, value) = match kv {
             Some((key, value)) => (key, value),
             None => return Ok(None),
@@ -72,7 +72,7 @@ impl<'a> TableScanExecutor<'a> {
 
     fn get_row_from_point(&mut self) -> Result<Option<Row>> {
         let key = self.key_ranges[self.cursor].get_start();
-        let value = try!(self.scanner.get_row_from_point(key));
+        let value = try!(self.scanner.get_row(key));
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
             let h = box_try!(table::decode_handle(key));

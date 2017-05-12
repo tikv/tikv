@@ -47,7 +47,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    pub fn get_row_from_range(&mut self, range: &KeyRange) -> Result<Option<(Vec<u8>, Value)>> {
+    pub fn next_row(&mut self, range: &KeyRange) -> Result<Option<(Vec<u8>, Value)>> {
         if self.seek_key.is_none() {
             self.init_with_range(range);
         }
@@ -76,7 +76,7 @@ impl<'a> Scanner<'a> {
         Ok(Some((key, value)))
     }
 
-    pub fn get_row_from_point(&mut self, key: &[u8]) -> Result<Option<Value>> {
+    pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
         let data = try!(self.store
             .get(&Key::from_raw(key), self.start_ts));
         Ok(data)
@@ -272,7 +272,7 @@ pub mod test {
         let mut test_store = TestStore::new(&test_data, pk.clone());
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut scanner = Scanner::new(false, false, snapshot, &mut statistics, start_ts);
-        let data = scanner.get_row_from_point(&pk).unwrap().unwrap();
+        let data = scanner.get_row(&pk).unwrap().unwrap();
         assert_eq!(data, pv);
     }
 
@@ -291,13 +291,13 @@ pub mod test {
         let mut scanner = Scanner::new(false, false, snapshot, &mut statistics, start_ts);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         for &(ref k, ref v) in &test_data {
-            let (key, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
+            let (key, value) = scanner.next_row(&range).unwrap().unwrap();
             let seek_key = prefix_next(&key);
             scanner.set_seek_key(Some(seek_key));
             assert_eq!(*k, key);
             assert_eq!(*v, value);
         }
-        assert!(scanner.get_row_from_range(&range).unwrap().is_none());
+        assert!(scanner.next_row(&range).unwrap().is_none());
     }
 
     #[test]
@@ -312,13 +312,13 @@ pub mod test {
         let range = get_range(table_id, i64::MIN, i64::MAX);
         data.kv_data.reverse();
         for &(ref k, ref v) in &data.kv_data {
-            let (key, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
+            let (key, value) = scanner.next_row(&range).unwrap().unwrap();
             let seek_key = table::truncate_as_row_key(&key).unwrap().to_vec();
             scanner.set_seek_key(Some(seek_key));
             assert_eq!(*k, key);
             assert_eq!(*v, value);
         }
-        assert!(scanner.get_row_from_range(&range).unwrap().is_none());
+        assert!(scanner.next_row(&range).unwrap().is_none());
     }
 
     #[test]
@@ -336,7 +336,7 @@ pub mod test {
         let mut scanner = Scanner::new(false, true, snapshot, &mut statistics, start_ts);
 
         let range = get_range(table_id, i64::MIN, i64::MAX);
-        let (_, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
+        let (_, value) = scanner.next_row(&range).unwrap().unwrap();
         assert!(value.is_empty());
     }
 
