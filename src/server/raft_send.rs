@@ -15,7 +15,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::net::SocketAddr;
 
-use futures::sync::mpsc;
+use futures::sync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
 use tokio_core::reactor::Handle;
 use grpc::{Environment, ChannelBuilder};
@@ -40,7 +40,7 @@ impl fmt::Display for SendTask {
 
 struct Conn {
     _client: TikvClient,
-    stream: mpsc::UnboundedSender<RaftMessage>,
+    stream: UnboundedSender<RaftMessage>,
 }
 
 impl Conn {
@@ -52,7 +52,7 @@ impl Conn {
             .sink_map_err(Error::from)
             .send_all(rx.map_err(|_| Error::Sink))
             .map(|_| ())
-            .map_err(|e| error!("send raftmessage failed: {:?}", e)));
+            .map_err(move |e| error!("send raftmessage to {} failed: {:?}", addr, e)));
         Conn {
             _client: client,
             stream: tx,
@@ -78,12 +78,12 @@ impl SendRunner {
         let env = self.env.clone();
         self.conns
             .entry(addr)
-            .or_insert_with(|| Conn::new(env.clone(), addr, handle))
+            .or_insert_with(|| Conn::new(env, addr, handle))
     }
 
     fn send(&mut self, t: SendTask, handle: &Handle) -> Result<()> {
         let conn = self.get_conn(t.addr, handle);
-        box_try!(mpsc::UnboundedSender::send(&conn.stream, t.msg));
+        box_try!(UnboundedSender::send(&conn.stream, t.msg));
         Ok(())
     }
 }
