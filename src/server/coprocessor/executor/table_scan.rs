@@ -227,7 +227,7 @@ mod test {
             let handle = KEY_NUMBER - tid - 1;
             let row = table_scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
-            assert_eq!(row.data.len(), 2);
+            assert_eq!(row.data.len(), meta.cols.len());
             let encode_data = &meta.data.encode_data[handle];
             for col in &meta.cols {
                 let cid = col.get_column_id();

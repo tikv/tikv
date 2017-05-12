@@ -48,7 +48,10 @@ impl<'a> Scanner<'a> {
     }
 
     pub fn get_row_from_range(&mut self, range: &KeyRange) -> Result<Option<(Vec<u8>, Value)>> {
-        let seek_key = self.prepare_and_get_seek_key(range);
+        if self.seek_key.is_none() {
+            self.init_with_range(range);
+        }
+        let seek_key = self.seek_key.take().unwrap();
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
@@ -84,17 +87,15 @@ impl<'a> Scanner<'a> {
         self.seek_key = seek_key;
     }
 
-    fn prepare_and_get_seek_key(&mut self, range: &KeyRange) -> Vec<u8> {
-        if self.seek_key.is_some() {
-            return self.seek_key.take().unwrap();
-        }
+    pub fn init_with_range(&mut self, range: &KeyRange) {
         if self.desc {
             self.store.reset_with_upper_bound(None);
-            return range.get_end().to_vec();
+            self.seek_key = Some(range.get_end().to_vec());
+            return;
         }
         let upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
         self.store.reset_with_upper_bound(upper_bound);
-        range.get_start().to_vec()
+        self.seek_key = Some(range.get_start().to_vec());
     }
 }
 
@@ -340,7 +341,7 @@ pub mod test {
     }
 
     #[test]
-    fn test_prepare_and_get_seek_key() {
+    fn test_init_with_range() {
         let table_id = 1;
         let pk = table::encode_row_key(table_id, b"key1");
         let pv = b"value1";
@@ -354,18 +355,20 @@ pub mod test {
         let range = get_range(table_id, i64::MIN, i64::MAX);
         // 1. seek_key is some
         scanner.set_seek_key(Some(pk.clone()));
-        let seek_key = scanner.prepare_and_get_seek_key(&range);
-        assert_eq!(seek_key, pk.clone());
+        assert_eq!(scanner.seek_key.take().unwrap(), pk.clone());
 
-        // 1. seek_key is none. 2. desc scan
-        let seek_key = scanner.prepare_and_get_seek_key(&range);
-        assert_eq!(seek_key, range.get_end());
+        // 1. desc scan
+        scanner.desc = true;
+        scanner.init_with_range(&range);
+        println!("s:{:?}", range.get_start());
+        println!("e:{:?}", range.get_end());
+        assert_eq!(scanner.seek_key.take().unwrap(), range.get_end());
         // assert!(scanner.upper_bound.is_none());
 
-        // 1.seek_key is none. 2.asc scan
+        // 1.asc scan
         scanner.desc = false;
-        let seek_key = scanner.prepare_and_get_seek_key(&range);
-        assert_eq!(seek_key, range.get_start());
+        scanner.init_with_range(&range);
+        assert_eq!(scanner.seek_key.take().unwrap(), range.get_start());
         // assert!(scanner.store.upper_bound.is_some());
     }
 }
