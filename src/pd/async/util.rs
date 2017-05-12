@@ -43,9 +43,6 @@ pub struct Inner {
     last_update: Instant,
 }
 
-unsafe impl Send for Inner {}
-unsafe impl Sync for Inner {}
-
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
     inner: Arc<RwLock<Inner>>,
