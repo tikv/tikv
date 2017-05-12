@@ -50,6 +50,7 @@ impl CbContext {
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
+    Prewrite(Key, Value, lock),
 }
 
 pub trait Engine: Send + Debug {

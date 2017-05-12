@@ -81,6 +81,16 @@ impl<'a> MvccTxn<'a> {
         self.writes.push(Modify::Put(CF_DEFAULT, key, value));
     }
 
+    fn put_prewrite(&mut self,
+                    key: Key,
+                    lock_type: LockType,
+                    primary: Vec<u8>,
+                    ttl: u64,
+                    value: Value) {
+        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, None).to_bytes();
+        self.writes.push(Modify::Prewrite(key, value, lock));
+    }
+
     fn delete_value(&mut self, key: &Key, ts: u64) {
         let key = key.append_ts(ts);
         self.write_size += key.encoded().len();
@@ -144,16 +154,17 @@ impl<'a> MvccTxn<'a> {
             None
         };
 
-        self.lock_key(key.clone(),
-                      LockType::from_mutation(&mutation),
-                      primary.to_vec(),
-                      options.lock_ttl,
-                      short_value);
-
-        if let Mutation::Put((_, ref value)) = mutation {
-            if !is_short_value(value) {
-                let ts = self.start_ts;
-                self.put_value(key, ts, value.clone());
+        let lock_type = LockType::from_mutation(&mutation);
+        match mutation {
+            Mutation::Put(_, ref value) if !is_short_value(value) => {
+                self.put_prewrite(key, lock_type, primary.to_vec(), options.lock_ttl, value)
+            }
+            _ => {
+                self.lock_key(key,
+                              lock_type,
+                              primary.to_vec(),
+                              options.lock_ttl,
+                              short_value)
             }
         }
         Ok(())

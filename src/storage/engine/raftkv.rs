@@ -233,6 +233,9 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
                 }
+                Modify::Prewrite(k, v, l) => {
+                    
+                }
             }
             reqs.push(req);
         }
