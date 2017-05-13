@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use protobuf::RepeatedField;
 use futures::Future;
-use grpc::Environment;
+use grpc::EnvBuilder;
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
@@ -25,6 +25,9 @@ use kvproto::pdpb_grpc::PDClient;
 use super::super::PdFuture;
 use super::super::{Result, Error, PdClient};
 use super::util::{validate_endpoints, sync_request, check_resp_header, LeaderClient};
+
+const CQ_COUNT: usize = 1;
+const CLIENT_PREFIX: &'static str = "pd";
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -41,7 +44,7 @@ impl RpcClient {
             })
             .collect();
 
-        let env = Arc::new(Environment::new(1));
+        let env = Arc::new(EnvBuilder::new().cq_count(CQ_COUNT).name_prefix(CLIENT_PREFIX).build());
         let (client, members) = try!(validate_endpoints(env.clone(), &endpoints));
 
         Ok(RpcClient {
