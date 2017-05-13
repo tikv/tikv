@@ -1293,9 +1293,6 @@ impl Runner {
         let region_id = s.region.get_id();
         let term = s.term;
         let delegate = ApplyDelegate::from_registration(self.db.clone(), s);
-        info!("{} register to apply delegates at term {}",
-              delegate.tag,
-              delegate.term);
         if let Some(mut old_delegate) = self.delegates.insert(region_id, delegate) {
             assert_eq!(old_delegate.id, peer_id);
             old_delegate.term = term;
@@ -1307,7 +1304,6 @@ impl Runner {
         // Only respond when the meta exists. Otherwise if destroy is triggered
         // multiple times, the store may destroy wrong target peer.
         if let Some(mut meta) = self.delegates.remove(&d.region_id) {
-            info!("{} remove from apply delegates", meta.tag);
             meta.destroy();
             self.notifier.send(TaskRes::Destroy(meta)).unwrap();
         }
