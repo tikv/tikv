@@ -23,6 +23,8 @@ pub struct RaftReadyMetrics {
     pub commit: u64,
     pub append: u64,
     pub snapshot: u64,
+    pub pending_region: u64,
+    pub has_ready_region: u64,
 }
 
 impl RaftReadyMetrics {
@@ -52,6 +54,18 @@ impl RaftReadyMetrics {
                 .inc_by(self.snapshot as f64)
                 .unwrap();
             self.snapshot = 0;
+        }
+        if self.pending_region > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["pending_region"])
+                .inc_by(self.pending_region as f64)
+                .unwrap();
+            self.pending_region = 0;
+        }
+        if self.has_ready_region > 0 {
+            STORE_RAFT_READY_COUNTER_VEC.with_label_values(&["has_ready_region"])
+                .inc_by(self.has_ready_region as f64)
+                .unwrap();
+            self.has_ready_region = 0;
         }
     }
 }
