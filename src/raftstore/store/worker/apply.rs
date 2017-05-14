@@ -881,6 +881,7 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::Snap => self.handle_snap(ctx, req),
+                CmdType::Prewrite => self.handle_prewrite(ctx, req),
                 CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted")),
             });
 
@@ -971,6 +972,41 @@ impl ApplyDelegate {
 
     fn handle_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
         do_snap(self.region.clone())
+    }
+
+    fn handle_prewrite(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
+        let (key, value, lock) =
+            (req.get_put().get_key(), req.get_put().get_value(), req.get_put().get_lock());
+        try!(check_data_key(key, &self.region));
+
+        let key = keys::data_key(key);
+        rocksdb::get_cf_handle(&self.engine, CF_LOCK)
+            .and_then(|handle| ctx.wb.put_cf(handle, key, lock))
+            .unwrap_or_else(|e| {
+                panic!("{} failed to write ({}, {}) to cf {}: {:?}",
+                       self.tag,
+                       escape(&key),
+                       escape(lock),
+                       CF_LOCK,
+                       e)
+            });
+        self.metrics.lock_cf_written_bytes += key.len() as u64;
+        self.metrics.lock_cf_written_bytes += lock.len() as u64;
+        self.metrics.size_diff_hint += key.len() as i64;
+        self.metrics.size_diff_hint += lock.len() as i64;
+
+        key.encode_u64_desc(lock.ts).unwrap();
+        ctx.wb.put(&key, value).unwrap_or_else(|e| {
+            panic!("{} failed to write ({}, {}): {:?}",
+                   self.tag,
+                   escape(&key),
+                   escape(value),
+                   e);
+        });
+        self.metrics.size_diff_hint += key.len() as i64;
+        self.metrics.size_diff_hint += value.len() as i64;
+
+        Ok(Response::new())
     }
 }
 
