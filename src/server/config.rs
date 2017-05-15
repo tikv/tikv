@@ -82,6 +82,12 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         try!(self.raft_store.validate());
+        if self.end_point_concurrency == 0 {
+            return Err(box_err!("server.server.end-point-concurrency: {} is invalid, \
+                                 shouldn't be 0",
+                                self.end_point_concurrency));
+        }
+
         if self.end_point_txn_concurrency_on_busy > self.end_point_concurrency ||
            self.end_point_txn_concurrency_on_busy == 0 {
             return Err(box_err!("server.end-point-txn-concurrency-on-busy: {} is invalid, \
@@ -135,22 +141,31 @@ mod tests {
 
         cfg.end_point_concurrency = 2;
         cfg.auto_adjust_end_point_txn_concurrency();
-        let expect = 1;
-        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, 1);
     }
 
     #[test]
     fn test_validate_endpoint_cfg() {
         let mut cfg = Config::new();
         assert!(cfg.validate().is_ok());
-        cfg.end_point_small_txn_tasks_limit = 0;
+
+        // invalid end-point-concurrency
+        cfg.end_point_concurrency = 0;
         assert!(cfg.validate().is_err());
-        cfg.end_point_small_txn_tasks_limit = 1;
+        cfg.end_point_concurrency = DEFAULT_END_POINT_CONCURRENCY;
+
+        // invalid end-point-txn-concurrency-on-busy
         cfg.end_point_txn_concurrency_on_busy = cfg.end_point_concurrency + 1;
         assert!(cfg.validate().is_err());
         cfg.end_point_txn_concurrency_on_busy = 0;
         assert!(cfg.validate().is_err());
         cfg.auto_adjust_end_point_txn_concurrency();
+
+        // invalid end-point-small-txn-tasks-limit
+        cfg.end_point_small_txn_tasks_limit = 0;
+        assert!(cfg.validate().is_err());
+        cfg.end_point_small_txn_tasks_limit = DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT;
+
         assert!(cfg.validate().is_ok());
     }
 }
