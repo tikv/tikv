@@ -204,8 +204,6 @@ mod tests {
         fn region_heartbeat(&self,
                             _: metapb::Region,
                             _: metapb::Peer,
-                            _: Vec<pdpb::PeerStats>,
-                            _: Vec<metapb::Peer>,
                             _: RegionStat)
                             -> PdFuture<pdpb::RegionHeartbeatResponse> {
             unimplemented!();

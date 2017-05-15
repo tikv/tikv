@@ -294,18 +294,16 @@ impl Cluster {
     fn region_heartbeat(&mut self,
                         region: metapb::Region,
                         leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
-                        _: RegionStat)
+                        region_stat: RegionStat)
                         -> Result<pdpb::RegionHeartbeatResponse> {
         for peer in region.get_peers() {
             self.down_peers.remove(&peer.get_id());
             self.pending_peers.remove(&peer.get_id());
         }
-        for peer in down_peers {
+        for peer in region_stat.down_peers {
             self.down_peers.insert(peer.get_peer().get_id(), peer);
         }
-        for p in pending_peers {
+        for p in region_stat.pending_peers {
             self.pending_peers.insert(p.get_id(), p);
         }
 
@@ -601,8 +599,6 @@ impl PdClient for TestPdClient {
     fn region_heartbeat(&self,
                         region: metapb::Region,
                         leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
                         region_stat: RegionStat)
                         -> PdFuture<pdpb::RegionHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
@@ -610,7 +606,7 @@ impl PdClient for TestPdClient {
         }
         match self.cluster
             .wl()
-            .region_heartbeat(region, leader, down_peers, pending_peers, region_stat) {
+            .region_heartbeat(region, leader, region_stat) {
             Ok(resp) => ok(resp).boxed(),
             Err(e) => err(e).boxed(),
         }

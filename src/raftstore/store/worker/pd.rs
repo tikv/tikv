@@ -139,8 +139,6 @@ impl<T: PdClient> Runner<T> {
                         handle: &Handle,
                         region: metapb::Region,
                         peer: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
                         region_stat: RegionStat) {
         PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "all"]).inc();
 
@@ -148,11 +146,7 @@ impl<T: PdClient> Runner<T> {
 
         // Now we use put region protocol for heartbeat.
         let f = self.pd_client
-            .region_heartbeat(region.clone(),
-                              peer.clone(),
-                              down_peers,
-                              pending_peers,
-                              region_stat)
+            .region_heartbeat(region.clone(), peer.clone(), region_stat)
             .then(move |resp| {
                 match resp {
                     Ok(mut resp) => {
@@ -298,9 +292,10 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 self.handle_heartbeat(handle,
                                       region,
                                       peer,
-                                      down_peers,
-                                      pending_peers,
-                                      RegionStat::new(written_bytes, written_keys))
+                                      RegionStat::new(down_peers,
+                                                      pending_peers,
+                                                      written_bytes,
+                                                      written_keys))
             }
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(handle, stats),
             Task::ReportSplit { left, right } => self.handle_report_split(handle, left, right),

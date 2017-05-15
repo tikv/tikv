@@ -72,8 +72,6 @@ fn test_rpc_client() {
     // Only check if it works.
     client.region_heartbeat(metapb::Region::new(),
                           metapb::Peer::new(),
-                          vec![],
-                          vec![],
                           RegionStat::default())
         .wait()
         .unwrap();
