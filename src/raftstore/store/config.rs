@@ -18,6 +18,7 @@ use time::Duration as TimeDuration;
 
 use raftstore::Result;
 
+const RAFT_LOG_SYNCHRONIZE: bool = false;
 const RAFT_BASE_TICK_INTERVAL: u64 = 1000;
 const RAFT_HEARTBEAT_TICKS: usize = 2;
 const RAFT_ELECTION_TIMEOUT_TICKS: usize = 10;
@@ -61,6 +62,9 @@ const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = false;
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    // true for high reliability needed, eg. prevent data loss when power failure.
+    pub raft_log_synchronize: bool,
+
     // store capacity.
     // TODO: if not set, we will use disk capacity instead.
     // Now we will use a default capacity if not set.
@@ -138,6 +142,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
+            raft_log_synchronize: RAFT_LOG_SYNCHRONIZE,
             capacity: STORE_CAPACITY,
             raft_base_tick_interval: RAFT_BASE_TICK_INTERVAL,
             raft_heartbeat_ticks: RAFT_HEARTBEAT_TICKS,

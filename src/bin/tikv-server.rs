@@ -607,6 +607,8 @@ fn build_cfg(matches: &ArgMatches,
     cfg_usize(&mut cfg.send_buffer_size, config, "server.send-buffer-size");
     cfg_usize(&mut cfg.recv_buffer_size, config, "server.recv-buffer-size");
 
+    cfg.raft_store.raft_log_synchronize =
+        get_toml_boolean(config, "raftstore.raft-log-synchronize", Some(false));
     cfg_usize(&mut cfg.raft_store.notify_capacity,
               config,
               "raftstore.notify-capacity");

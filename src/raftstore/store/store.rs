@@ -23,6 +23,7 @@ use std::thread;
 use std::u64;
 
 use rocksdb::{DB, DBStatisticsTickerType as TickerType};
+use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
@@ -425,7 +426,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         box_try!(self.consistency_check_worker.start(consistency_check_runner));
 
         let (tx, rx) = mpsc::channel();
-        let apply_runner = ApplyRunner::new(self, tx);
+        let apply_runner = ApplyRunner::new(self, tx, self.cfg.raft_log_synchronize);
         self.apply_res_receiver = Some(rx);
         box_try!(self.apply_worker.start(apply_runner));
 
@@ -885,20 +886,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
-        let (wb, append_res) = {
+        let (wb, append_res, must_sync) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
-            (ctx.wb, ctx.ready_res)
+            (ctx.wb, ctx.ready_res, ctx.must_sync)
         };
 
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
 
         if !wb.is_empty() {
-            self.engine.write(wb).unwrap_or_else(|e| {
+            let mut write_opts: WriteOptions = WriteOptions::new();
+            if self.cfg.raft_log_synchronize && must_sync {
+                write_opts.set_sync(true);
+            }
+            self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
                 panic!("{} failed to save append result: {:?}", self.tag, e);
             });
         }

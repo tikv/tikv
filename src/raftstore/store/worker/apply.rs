@@ -18,6 +18,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::collections::VecDeque;
 
 use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::rocksdb_options::WriteOptions;
 use uuid::Uuid;
 use protobuf::RepeatedField;
 
@@ -1195,10 +1196,11 @@ pub struct Runner {
     db: Arc<DB>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
+    must_sync: bool,
 }
 
 impl Runner {
-    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>) -> Runner {
+    pub fn new<T, C>(store: &Store<T, C>, notifier: Sender<TaskRes>, must_sync: bool) -> Runner {
         let mut delegates = HashMap::with_capacity(store.get_peers().len());
         for (&region_id, p) in store.get_peers() {
             delegates.insert(region_id, ApplyDelegate::from_peer(p));
@@ -1207,6 +1209,7 @@ impl Runner {
             db: store.engine(),
             delegates: delegates,
             notifier: notifier,
+            must_sync: must_sync,
         }
     }
 
@@ -1250,8 +1253,11 @@ impl Runner {
         }
 
         // Write to engine
+        // TODO: remove sync. currently we may gc raft_log, so we need sync apply to disk.
+        let mut write_opts: WriteOptions = WriteOptions::new();
+        write_opts.set_sync(self.must_sync);
         self.db
-            .write(apply_ctx.wb.take().unwrap())
+            .write_opt(apply_ctx.wb.take().unwrap(), &write_opts)
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
         // Call callbacks

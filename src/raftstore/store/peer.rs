@@ -142,6 +142,7 @@ pub struct ReadyContext<'a, T: 'a> {
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
     pub ready_res: Vec<(Ready, InvokeContext)>,
+    pub must_sync: bool,
 }
 
 impl<'a, T> ReadyContext<'a, T> {
@@ -151,6 +152,7 @@ impl<'a, T> ReadyContext<'a, T> {
             metrics: metrics,
             trans: t,
             ready_res: Vec::with_capacity(cap),
+            must_sync: false,
         }
     }
 }
@@ -683,6 +685,9 @@ impl Peer {
             }
         };
 
+        if ready.must_sync || invoke_ctx.snap_region.is_some() {
+            ctx.must_sync = true;
+        }
         ctx.ready_res.push((ready, invoke_ctx));
     }
 
