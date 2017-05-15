@@ -111,10 +111,6 @@ pub struct Ready {
     // If it contains a MsgSnap message, the application MUST report back to raft
     // when the snapshot has been received or has failed by calling ReportSnapshot.
     pub messages: Vec<Message>,
-
-    // MustSync indicates whether the HardState and Entries must be synchronously
-    // written to disk or if an asynchronous write is permissible.
-    pub must_sync: bool,
 }
 
 impl Ready {
@@ -138,7 +134,6 @@ impl Ready {
             rd.ss = Some(ss);
         }
         let hs = raft.hard_state();
-        rd.must_sync = Ready::must_sync(&hs, &prev_hs, rd.entries.len());
         if &hs != prev_hs {
             rd.hs = Some(hs);
         }
@@ -149,12 +144,6 @@ impl Ready {
             rd.read_states = raft.read_states.clone();
         }
         rd
-    }
-
-    #[inline]
-    fn must_sync(hs: &HardState, prev_hs: &HardState, ents_num: usize) -> bool {
-        ents_num != 0 || hs.get_vote() != prev_hs.get_vote() ||
-        hs.get_term() != prev_hs.get_term()
     }
 }
 

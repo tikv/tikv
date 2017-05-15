@@ -42,7 +42,7 @@ job = "tikv"
 
 [raftstore]
 # Set to true if high reliability needed, eg. prevent data loss when power failure.
-raft-log-synchronize = false
+# sync-log = false
 
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960
