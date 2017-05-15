@@ -84,6 +84,7 @@ features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
 git = "https://github.com/stepancheg/grpc-rust.git"
+rev = "13bdc724e5d9467792b289df822c2479812a9808"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"

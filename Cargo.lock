@@ -11,7 +11,7 @@ dependencies = [
  "fnv 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpc 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git)",
+ "grpc 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git?rev=13bdc724e5d9467792b289df822c2479812a9808)",
  "jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=lishihai/add-prewrite-request)",
  "lazy_static 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -311,12 +311,12 @@ dependencies = [
 [[package]]
 name = "grpc"
 version = "0.1.1"
-source = "git+https://github.com/stepancheg/grpc-rust.git#13bdc724e5d9467792b289df822c2479812a9808"
+source = "git+https://github.com/stepancheg/grpc-rust.git?rev=13bdc724e5d9467792b289df822c2479812a9808#13bdc724e5d9467792b289df822c2479812a9808"
 dependencies = [
  "bytes 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "httpbis 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git)",
+ "httpbis 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git?rev=13bdc724e5d9467792b289df822c2479812a9808)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-core 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -347,7 +347,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "httpbis"
 version = "0.1.1"
-source = "git+https://github.com/stepancheg/grpc-rust.git#13bdc724e5d9467792b289df822c2479812a9808"
+source = "git+https://github.com/stepancheg/grpc-rust.git?rev=13bdc724e5d9467792b289df822c2479812a9808#13bdc724e5d9467792b289df822c2479812a9808"
 dependencies = [
  "bytes 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -440,11 +440,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=lishihai/add-prewrite-request#1aca8e490eb67d30ab1c55fbb3e7312b5375f0f0"
+source = "git+https://github.com/pingcap/kvproto.git?branch=lishihai/add-prewrite-request#7a497540560bd42a00129eb5f1209e45eff0f684"
 dependencies = [
  "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpc 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git)",
+ "grpc 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git?rev=13bdc724e5d9467792b289df822c2479812a9808)",
  "protobuf 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1266,11 +1266,11 @@ dependencies = [
 "checksum futures-cpupool 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "bb982bb25cd8fa5da6a8eb3a460354c984ff1113da82bcb4f0b0862b5795db82"
 "checksum gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)" = "91ecd03771effb0c968fd6950b37e89476a578aaf1c70297d8e92b6516ec3312"
 "checksum gdi32-sys 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "0912515a8ff24ba900422ecda800b52f4016a56251922d397c576bf92c690518"
-"checksum grpc 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git)" = "<none>"
+"checksum grpc 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git?rev=13bdc724e5d9467792b289df822c2479812a9808)" = "<none>"
 "checksum hpack 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3d2da7d3a34cf6406d9d700111b8eafafe9a251de41ae71d8052748259343b58"
 "checksum hpack 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1c68f61350ad23817dd207b035b5258d91ac5eaef69e96f906628aaed8854dda"
 "checksum httparse 1.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "46534074dbb80b070d60a5cb8ecadd8963a00a438ae1a95268850a7ef73b67ae"
-"checksum httpbis 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git)" = "<none>"
+"checksum httpbis 0.1.1 (git+https://github.com/stepancheg/grpc-rust.git?rev=13bdc724e5d9467792b289df822c2479812a9808)" = "<none>"
 "checksum hyper 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)" = "eb27e8a3e8f17ac43ffa41bbda9cf5ad3f9f13ef66fa4873409d4902310275f7"
 "checksum idna 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1053236e00ce4f668aeca4a769a09b3bf5a682d802abd6f3cb39374f6b162c11"
 "checksum iovec 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "29d062ee61fccdf25be172e70f34c9f6efc597e1fb8f6526e8437b2046ab26be"
