@@ -70,7 +70,7 @@ impl Default for Config {
             storage: StorageConfig::default(),
             raft_store: RaftStoreConfig::default(),
         };
-        cfg.reset_end_point_txn_concurrency();
+        cfg.auto_adjust_end_point_txn_concurrency();
         cfg
     }
 }
@@ -98,7 +98,7 @@ impl Config {
         Ok(())
     }
 
-    pub fn reset_end_point_txn_concurrency(&mut self) {
+    pub fn auto_adjust_end_point_txn_concurrency(&mut self) {
         self.end_point_txn_concurrency_on_busy =
             ((self.end_point_concurrency as f64) *
              DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
@@ -128,9 +128,29 @@ mod tests {
                       DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
         assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
         cfg.end_point_concurrency = 18;
-        cfg.reset_end_point_txn_concurrency();
+        cfg.auto_adjust_end_point_txn_concurrency();
         let expect = ((cfg.end_point_concurrency as f64) *
                       DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
         assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
+
+        cfg.end_point_concurrency = 2;
+        cfg.auto_adjust_end_point_txn_concurrency();
+        let expect = 1;
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
+    }
+
+    #[test]
+    fn test_validate_endpoint_cfg() {
+        let mut cfg = Config::new();
+        assert!(cfg.validate().is_ok());
+        cfg.end_point_small_txn_tasks_limit = 0;
+        assert!(cfg.validate().is_err());
+        cfg.end_point_small_txn_tasks_limit = 1;
+        cfg.end_point_txn_concurrency_on_busy = cfg.end_point_concurrency + 1;
+        assert!(cfg.validate().is_err());
+        cfg.end_point_txn_concurrency_on_busy = 0;
+        assert!(cfg.validate().is_err());
+        cfg.auto_adjust_end_point_txn_concurrency();
+        assert!(cfg.validate().is_ok());
     }
 }

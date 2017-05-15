@@ -592,8 +592,8 @@ fn build_cfg(matches: &ArgMatches,
     if !cfg_usize(&mut cfg.end_point_txn_concurrency_on_busy,
                   config,
                   "server.end-point-txn-concurrency-on-busy") {
-        cfg.reset_end_point_txn_concurrency();
-        info!("server.end-point-txn-concurrency-on-busy keep default ratio with value = {}",
+        cfg.auto_adjust_end_point_txn_concurrency();
+        info!("server.end-point-txn-concurrency-on-busy keep default value with value = {}",
               cfg.end_point_txn_concurrency_on_busy);
     }
 

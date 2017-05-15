@@ -30,8 +30,8 @@ recv-buffer-size = "128KB"
 # The recommanded value is a quater of end-point-concurrency.
 # end-point-txn-concurrency-on-busy = 2
 
-# limit for small transaction's number of tasks. A transaction would be considered as small 
-# transaction when its number of tasks is smaller than end-point-small-txn-tasks-limit.
+# limit for small transaction's count of tasks. A transaction would be considered as small 
+# transaction when its total count of tasks is less than or equal to end-point-small-txn-tasks-limit.
 # end-point-small-txn-tasks-limit = 2
 
 # set store capacity, if no set, use disk capacity.

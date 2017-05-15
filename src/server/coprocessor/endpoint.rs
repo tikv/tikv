@@ -81,8 +81,7 @@ impl Host {
                txn_concurrency_on_busy: usize,
                small_txn_tasks_limit: usize)
                -> Host {
-        let queue: SmallGroupFirstQueue<u64> = SmallGroupFirstQueue::new(txn_concurrency_on_busy,
-                                                                         small_txn_tasks_limit);
+        let queue = SmallGroupFirstQueue::new(txn_concurrency_on_busy, small_txn_tasks_limit);
         Host {
             engine: engine,
             sched: scheduler,
@@ -117,8 +116,7 @@ pub struct RequestTask {
     deadline: Instant,
     statistics: Statistics,
     on_resp: OnResponse,
-    sel_req: Option<SelectRequest>,
-    sel_err: Option<Error>,
+    sel_req: Option<Result<SelectRequest>>,
 }
 
 impl RequestTask {
@@ -127,19 +125,17 @@ impl RequestTask {
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
         let tp = req.get_tp();
-        let mut sel_req = None;
-        let mut sel_err = None;
-        match tp {
+        let sel_req = match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
                 let mut sel = SelectRequest::new();
                 if let Err(e) = sel.merge_from_bytes(req.get_data()) {
-                    sel_err = Some(box_err!(e));
+                    Err(box_err!(e))
                 } else {
                     start_ts = Some(sel.get_start_ts());
-                    sel_req = Some(sel);
+                    Ok(sel)
                 }
             }
-            _ => sel_err = Some(box_err!("unsupported tp {}", tp)),
+            _ => Err(box_err!("unsupported tp {}", tp)),
         };
         RequestTask {
             req: req,
@@ -149,8 +145,7 @@ impl RequestTask {
             deadline: deadline,
             statistics: Default::default(),
             on_resp: on_resp,
-            sel_req: sel_req,
-            sel_err: sel_err,
+            sel_req: Some(sel_req),
         }
     }
 
@@ -278,7 +273,9 @@ impl BatchRunnable<Task> for Host {
     }
 
     fn shutdown(&mut self) {
-        self.pool.stop().unwrap();
+        if let Err(e) = self.pool.stop() {
+            warn!("Stop threadpool failed with {:?}", e);
+        }
     }
 }
 
@@ -374,11 +371,12 @@ impl TiDbEndPoint {
     }
 
     pub fn handle_select(&self, t: &mut RequestTask) -> Result<Response> {
-        let err = t.sel_err.take();
-        if err.is_some() {
-            return Err(err.unwrap());
-        }
-        let sel = t.sel_req.take().unwrap();
+        let sel = match t.sel_req.take().unwrap() {
+            Ok(sel) => sel,
+            Err(err) => {
+                return Err(err);
+            }
+        };
         let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
         let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let mut range = t.req.get_ranges().to_vec();
