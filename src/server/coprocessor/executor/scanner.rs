@@ -360,15 +360,11 @@ pub mod test {
         // 1. desc scan
         scanner.desc = true;
         scanner.init_with_range(&range);
-        println!("s:{:?}", range.get_start());
-        println!("e:{:?}", range.get_end());
         assert_eq!(scanner.seek_key.take().unwrap(), range.get_end());
-        // assert!(scanner.upper_bound.is_none());
 
         // 1.asc scan
         scanner.desc = false;
         scanner.init_with_range(&range);
         assert_eq!(scanner.seek_key.take().unwrap(), range.get_start());
-        // assert!(scanner.store.upper_bound.is_some());
     }
 }
