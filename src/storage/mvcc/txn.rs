@@ -75,11 +75,11 @@ impl<'a> MvccTxn<'a> {
         self.writes.push(Modify::Delete(CF_LOCK, key));
     }
 
-    fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
-        let key = key.append_ts(ts);
-        self.write_size += key.encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_DEFAULT, key, value));
-    }
+    // fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
+    //     let key = key.append_ts(ts);
+    //     self.write_size += key.encoded().len() + value.len();
+    //     self.writes.push(Modify::Put(CF_DEFAULT, key, value));
+    // }
 
     fn put_prewrite(&mut self,
                     key: Key,
@@ -87,7 +87,7 @@ impl<'a> MvccTxn<'a> {
                     primary: Vec<u8>,
                     ttl: u64,
                     value: Value) {
-        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, None).to_bytes();
+        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, None);
         self.writes.push(Modify::Prewrite(key, value, lock));
     }
 
@@ -156,11 +156,15 @@ impl<'a> MvccTxn<'a> {
 
         let lock_type = LockType::from_mutation(&mutation);
         match mutation {
-            Mutation::Put(_, ref value) if !is_short_value(value) => {
-                self.put_prewrite(key, lock_type, primary.to_vec(), options.lock_ttl, value)
+            Mutation::Put((ref key, ref value)) if !is_short_value(value) => {
+                self.put_prewrite(key.clone(),
+                                  lock_type,
+                                  primary.to_vec(),
+                                  options.lock_ttl,
+                                  value.clone())
             }
             _ => {
-                self.lock_key(key,
+                self.lock_key(key.clone(),
                               lock_type,
                               primary.to_vec(),
                               options.lock_ttl,

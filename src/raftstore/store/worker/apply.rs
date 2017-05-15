@@ -30,7 +30,9 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
+use util::codec::number::NumberEncoder;
 use storage::{CF_LOCK, CF_RAFT};
+use storage::mvcc::Lock;
 use raftstore::{Result, Error};
 use raftstore::store::{Store, cmd_resp, keys, util};
 use raftstore::store::msg::Callback;
@@ -975,13 +977,13 @@ impl ApplyDelegate {
     }
 
     fn handle_prewrite(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
-        let (key, value, lock) =
-            (req.get_put().get_key(), req.get_put().get_value(), req.get_put().get_lock());
+        let prewrite = req.get_prewrite();
+        let (key, value, lock) = (prewrite.get_key(), prewrite.get_value(), prewrite.get_lock());
         try!(check_data_key(key, &self.region));
 
-        let key = keys::data_key(key);
+        let mut key = keys::data_key(key);
         rocksdb::get_cf_handle(&self.engine, CF_LOCK)
-            .and_then(|handle| ctx.wb.put_cf(handle, key, lock))
+            .and_then(|handle| ctx.wb.put_cf(handle, &key, lock))
             .unwrap_or_else(|e| {
                 panic!("{} failed to write ({}, {}) to cf {}: {:?}",
                        self.tag,
@@ -995,6 +997,7 @@ impl ApplyDelegate {
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += lock.len() as i64;
 
+        let lock = Lock::parse(lock).unwrap();
         key.encode_u64_desc(lock.ts).unwrap();
         ctx.wb.put(&key, value).unwrap_or_else(|e| {
             panic!("{} failed to write ({}, {}): {:?}",

@@ -1500,7 +1500,7 @@ impl Peer {
             let mut resp = match cmd_type {
                 CmdType::Get => try!(apply::do_get(&self.tag, self.region(), &snap, req)),
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
-                CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
+                CmdType::Put | CmdType::Delete | CmdType::Prewrite | CmdType::Invalid => unreachable!(),
             };
 
             resp.set_cmd_type(cmd_type);
