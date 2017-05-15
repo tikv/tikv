@@ -30,9 +30,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
-use util::codec::number::NumberEncoder;
 use storage::{CF_LOCK, CF_RAFT};
-use storage::mvcc::Lock;
+use storage::types::Key;
 use raftstore::{Result, Error};
 use raftstore::store::{Store, cmd_resp, keys, util};
 use raftstore::store::msg::Callback;
@@ -981,24 +980,23 @@ impl ApplyDelegate {
         let (key, value, lock) = (prewrite.get_key(), prewrite.get_value(), prewrite.get_lock());
         try!(check_data_key(key, &self.region));
 
-        let mut key = keys::data_key(key);
+        let key = keys::data_key(key);
+        let lock_key = Key::from_encoded(key.clone()).truncate_ts().unwrap().encoded().to_owned();
         rocksdb::get_cf_handle(&self.engine, CF_LOCK)
-            .and_then(|handle| ctx.wb.put_cf(handle, &key, lock))
+            .and_then(|handle| ctx.wb.put_cf(handle, &lock_key, lock))
             .unwrap_or_else(|e| {
                 panic!("{} failed to write ({}, {}) to cf {}: {:?}",
                        self.tag,
-                       escape(&key),
+                       escape(&lock_key),
                        escape(lock),
                        CF_LOCK,
                        e)
             });
-        self.metrics.lock_cf_written_bytes += key.len() as u64;
+        self.metrics.lock_cf_written_bytes += lock_key.len() as u64;
         self.metrics.lock_cf_written_bytes += lock.len() as u64;
-        self.metrics.size_diff_hint += key.len() as i64;
+        self.metrics.size_diff_hint += lock_key.len() as i64;
         self.metrics.size_diff_hint += lock.len() as i64;
 
-        let lock = Lock::parse(lock).unwrap();
-        key.encode_u64_desc(lock.ts).unwrap();
         ctx.wb.put(&key, value).unwrap_or_else(|e| {
             panic!("{} failed to write ({}, {}): {:?}",
                    self.tag,
