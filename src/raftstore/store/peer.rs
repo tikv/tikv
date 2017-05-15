@@ -219,6 +219,8 @@ pub struct Peer {
 
     apply_scheduler: Scheduler<ApplyTask>,
 
+    pub pending_remove: bool,
+
     marked_to_be_checked: bool,
 
     leader_missing_time: Option<Instant>,
@@ -318,6 +320,7 @@ impl Peer {
             size_diff_hint: 0,
             delete_keys_hint: 0,
             apply_scheduler: store.apply_scheduler(),
+            pending_remove: false,
             marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
@@ -633,6 +636,9 @@ impl Peer {
                                                   ctx: &mut ReadyContext<T>,
                                                   worker: &Worker<PdTask>) {
         self.marked_to_be_checked = false;
+        if self.pending_remove {
+            return;
+        }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
@@ -928,6 +934,10 @@ impl Peer {
                    mut err_resp: RaftCmdResponse,
                    metrics: &mut RaftProposeMetrics)
                    -> bool {
+        if self.pending_remove {
+            return false;
+        }
+
         if self.proposals.contains(&meta.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", meta.uuid));
             cb(err_resp);
