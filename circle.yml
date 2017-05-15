@@ -1,17 +1,17 @@
 machine:
   environment:
-    PATH: "$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-    LD_LIBRARY_PATH: "$LD_LIBRARY_PATH:$HOME/.local/lib"
-    LD_RUN_PATH: "$LD_RUN_PATH:$HOME/.local/lib"
-    DYLD_LIBRARY_PATH: "$DYLD_LIBRARY_PATH:$HOME/.local/lib"
-    LDFLAGS: "-L$HOME/.local/lib"
-    CPPFLAGS: "-I$HOME/.local/include"
-    CXXFLAGS: "-I$HOME/.local/include"
-    PKG_CONFIG_PATH: "$PKG_CONFIG_PATH:$HOME/.local/lib/pkgconfig"
+    PATH: "$HOME/.cargo/bin:$HOME/.local2/bin:$PATH"
+    LD_LIBRARY_PATH: "$LD_LIBRARY_PATH:$HOME/.local2/lib"
+    LD_RUN_PATH: "$LD_RUN_PATH:$HOME/.local2/lib"
+    DYLD_LIBRARY_PATH: "$DYLD_LIBRARY_PATH:$HOME/.local2/lib"
+    LDFLAGS: "-L$HOME/.local2/lib"
+    CPPFLAGS: "-I$HOME/.local2/include"
+    CXXFLAGS: "-I$HOME/.local2/include"
+    PKG_CONFIG_PATH: "$PKG_CONFIG_PATH:$HOME/.local2/lib/pkgconfig"
     RUSTC_DATE: "2017-03-28"
-    LOCAL_PREFIX: "$HOME/.local"
+    LOCAL_PREFIX: "$HOME/.local2"
     # used by cargo
-    LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
+    LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local2/lib"
     RUST_TEST_THREADS: 1
     RUST_BACKTRACE: 1
     RUSTFLAGS: "-Dwarnings"
@@ -29,7 +29,7 @@ dependencies:
   cache_directories:
     - ~/.multirust
     - ~/.cargo
-    - ~/.local
+    - ~/.local2
     - target
   pre:
     # install rust/cargo
@@ -43,7 +43,7 @@ dependencies:
       fi
     - make -f travis-build/Makefile prepare-rustfmt
     - |
-      if [[ ! -e $HOME/.local/lib/libgflags.a ]]; then
+      if [[ ! -e $HOME/.local2/lib/libgflags.a ]]; then
         cd /tmp && \
         curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz && \
         tar xf gflags.tar.gz && \
@@ -53,7 +53,7 @@ dependencies:
         make install;
       fi
     - |
-      if [[ ! -e $HOME/.local/lib/librocksdb.so ]]; then
+      if [[ ! -e $HOME/.local2/lib/librocksdb.so ]]; then
         export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
         cd /tmp && \
         curl -L https://github.com/facebook/rocksdb/archive/v5.2.1.tar.gz -o rocksdb.tar.gz && \
