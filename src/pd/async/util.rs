@@ -317,11 +317,15 @@ pub fn try_connect_leader(previous: &GetMembersResponse)
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
                 Ok((_, r)) => {
-                    if r.get_header().get_cluster_id() == cluster_id {
+                    let new_cluster_id = r.get_header().get_cluster_id();
+                    if new_cluster_id == cluster_id {
                         resp = Some(r);
                         break 'outer;
                     } else {
-                        warn!("{} no longer belongs to cluster {}", ep, cluster_id);
+                        warn!("{} no longer belongs to cluster {}, it is in {}",
+                              ep,
+                              cluster_id,
+                              new_cluster_id);
                         continue 'outer;
                     }
                 }
