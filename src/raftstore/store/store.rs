@@ -899,7 +899,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
 
         if !wb.is_empty() {
-            let mut write_opts: WriteOptions = WriteOptions::new();
+            let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log);
             self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
                 panic!("{} failed to save append result: {:?}", self.tag, e);

@@ -41,8 +41,8 @@ address = ""
 job = "tikv"
 
 [raftstore]
-# Set to true if high reliability needed, eg. prevent data loss when power failure.
-# sync-log = false
+# true(default value) for high reliability, this can prevent data loss when power failure.
+sync-log = true
 
 # notify capacity, 40960 is suitable for about 7000 regions.
 notify-capacity = 40960

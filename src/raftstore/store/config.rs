@@ -61,7 +61,7 @@ const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = false;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    // true for high reliability, eg. prevent data loss when power failure.
+    // true for high reliability, prevent data loss when power failure.
     pub sync_log: bool,
 
     // store capacity.
@@ -141,7 +141,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            sync_log: false,
+            sync_log: true,
             capacity: STORE_CAPACITY,
             raft_base_tick_interval: RAFT_BASE_TICK_INTERVAL,
             raft_heartbeat_ticks: RAFT_HEARTBEAT_TICKS,
