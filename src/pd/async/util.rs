@@ -311,13 +311,19 @@ pub fn try_connect_leader(previous: &GetMembersResponse)
     let mut indexes: Vec<usize> = (0..members.len()).collect();
     rand::thread_rng().shuffle(&mut indexes);
 
+    let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
     'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
             match connect(ep.as_str()) {
                 Ok((_, r)) => {
-                    resp = Some(r);
-                    break 'outer;
+                    if r.get_header().get_cluster_id() == cluster_id {
+                        resp = Some(r);
+                        break 'outer;
+                    } else {
+                        warn!("{} no longer belongs to cluster {}", ep, cluster_id);
+                        continue 'outer;
+                    }
                 }
                 Err(e) => {
                     error!("failed to connect to {}, {:?}", ep, e);
