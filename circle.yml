@@ -29,7 +29,7 @@ dependencies:
   cache_directories:
     - ~/.multirust
     - ~/.cargo
-    - ~/.local
+    # - ~/.local
     - target
   pre:
     # install rust/cargo
