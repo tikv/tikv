@@ -18,7 +18,7 @@ use mio::{Token, EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpStream;
 use protobuf::Message as PbMessage;
 
-use kvproto::msgpb::Message;
+use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use super::{Result, ConnData};
 use super::server::Server;
@@ -126,7 +126,7 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        let mut data = match try!(self.read_one_message()) {
+        let data = match try!(self.read_one_message()) {
             Some(data) => data,
             None => return Ok(()),
         };
@@ -134,14 +134,13 @@ impl Conn {
             self.conn_type = ConnType::Snapshot;
 
             let mut snap_data = RaftSnapshotData::new();
-            try!(snap_data.merge_from_bytes(
-                data.msg.get_raft().get_message().get_snapshot().get_data()));
+            try!(snap_data.merge_from_bytes(data.msg.get_message().get_snapshot().get_data()));
             self.expect_size = snap_data.get_file_size() as usize;
             let expect_cap = cmp::min(SNAPSHOT_PAYLOAD_BUF, self.expect_size);
             // no need to shrink, the connection will be closed soon.
             self.recv_buffer.as_mut().unwrap().ensure(expect_cap);
 
-            let register_task = SnapTask::Register(self.token, data.msg.take_raft());
+            let register_task = SnapTask::Register(self.token, data.msg);
             box_try!(self.snap_scheduler.schedule(register_task));
 
             return self.read_snapshot(event_loop);
@@ -214,7 +213,7 @@ impl Conn {
             // we need to read more data for payload
             return Ok(None);
         }
-        let mut msg = Message::new();
+        let mut msg = RaftMessage::new();
         try!(rpc::decode_body(&mut recv_buffer.take(self.expect_size as u64), &mut msg));
         let msg_id = self.last_msg_id.unwrap();
         self.last_msg_id = None;
