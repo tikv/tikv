@@ -40,6 +40,7 @@ use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
 use raftstore::store::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
+const DEFAULT_APPLY_WB_SIZE: usize = 128 * 1024;
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -145,7 +146,7 @@ struct ApplyContext {
 impl ApplyContext {
     fn new() -> ApplyContext {
         ApplyContext {
-            wb: Some(WriteBatch::new()),
+            wb: Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE)),
             cbs: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
@@ -373,7 +374,7 @@ impl ApplyDelegate {
                 for (cb, resp) in apply_ctx.cbs.drain(..) {
                     cb(resp);
                 }
-                apply_ctx.wb = Some(WriteBatch::new());
+                apply_ctx.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
                 apply_ctx.mark_last_bytes_and_keys();
             }
 

@@ -56,6 +56,7 @@ use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+const DEFAULT_APPEND_WB_SIZE: usize = 128 * 1024;
 
 struct ReadIndexRequest {
     uuid: Uuid,
@@ -147,7 +148,7 @@ pub struct ReadyContext<'a, T: 'a> {
 impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
-            wb: WriteBatch::new(),
+            wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             metrics: metrics,
             trans: t,
             ready_res: Vec::with_capacity(cap),
