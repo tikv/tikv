@@ -20,6 +20,7 @@ pub use self::region_snapshot::{RegionSnapshot, RegionIterator};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 
 use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
+use kvproto::metapb::Region;
 use protobuf::RepeatedField;
 use raftstore::store::PeerStorage;
 
@@ -33,20 +34,23 @@ pub trait Coprocessor {
     fn stop(&mut self) -> ();
 }
 
-/// Context of request.
-pub struct ObserverContext {
-    /// A snapshot of requested region.
-    pub snap: RegionSnapshot,
+/// Context of observer.
+pub struct ObserverContext<'a> {
+    ps: &'a PeerStorage,
     /// Whether to bypass following observer hook.
     pub bypass: bool,
 }
 
-impl ObserverContext {
+impl<'a> ObserverContext<'a> {
     pub fn new(peer: &PeerStorage) -> ObserverContext {
         ObserverContext {
-            snap: RegionSnapshot::new(peer),
+            ps: peer,
             bypass: false,
         }
+    }
+
+    pub fn region(&self) -> &Region {
+        &self.ps.region
     }
 }
 
