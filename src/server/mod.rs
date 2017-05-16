@@ -18,11 +18,11 @@ use std::io::Write;
 
 use mio::Token;
 
-use kvproto::msgpb::{self, MessageType};
 use util::codec::rpc;
 use kvproto::eraftpb::MessageType as RaftMessageType;
+use kvproto::raft_serverpb::RaftMessage;
+use kvproto::coprocessor::Response;
 mod conn;
-mod kv;
 mod metrics;
 
 pub mod config;
@@ -41,15 +41,15 @@ pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreR
 pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver};
 
-pub type OnResponse = Box<FnBox(msgpb::Message) + Send>;
+pub type OnResponse = Box<FnBox(Response) + Send>;
 
 pub struct ConnData {
     msg_id: u64,
-    msg: msgpb::Message,
+    msg: RaftMessage,
 }
 
 impl ConnData {
-    pub fn new(msg_id: u64, msg: msgpb::Message) -> ConnData {
+    pub fn new(msg_id: u64, msg: RaftMessage) -> ConnData {
         ConnData {
             msg_id: msg_id,
             msg: msg,
@@ -57,11 +57,7 @@ impl ConnData {
     }
 
     pub fn is_snapshot(&self) -> bool {
-        if !self.msg.has_raft() {
-            return false;
-        }
-
-        self.msg.get_raft().get_message().get_msg_type() == RaftMessageType::MsgSnapshot
+        self.msg.get_message().get_msg_type() == RaftMessageType::MsgSnapshot
     }
 
     pub fn encode_to<T: Write>(&self, w: &mut T) -> Result<()> {
@@ -72,36 +68,15 @@ impl ConnData {
 
 impl Display for ConnData {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self.msg.get_msg_type() {
-            MessageType::Cmd => write!(f, "[{}] raft command request", self.msg_id),
-            MessageType::CmdResp => write!(f, "[{}] raft command response", self.msg_id),
-            MessageType::Raft => {
-                let from_peer = self.msg.get_raft().get_from_peer();
-                let to_peer = self.msg.get_raft().get_to_peer();
-                let msg_type = self.msg.get_raft().get_message().get_msg_type();
-                write!(f,
-                       "[{}] raft {:?} from {:?} to {:?}",
-                       self.msg_id,
-                       msg_type,
-                       from_peer.get_id(),
-                       to_peer.get_id())
-            }
-            MessageType::KvReq => {
-                write!(f,
-                       "[{}] kv command request {:?}",
-                       self.msg_id,
-                       self.msg.get_kv_req().get_field_type())
-            }
-            MessageType::KvResp => {
-                write!(f,
-                       "[{}] kv command resposne {:?}",
-                       self.msg_id,
-                       self.msg.get_kv_resp().get_field_type())
-            }
-            MessageType::CopReq => write!(f, "[{}] coprocessor request", self.msg_id),
-            MessageType::CopResp => write!(f, "[{}] coprocessor response", self.msg_id),
-            MessageType::None => write!(f, "[{}] invalid message", self.msg_id),
-        }
+        let from_peer = self.msg.get_from_peer();
+        let to_peer = self.msg.get_to_peer();
+        let msg_type = self.msg.get_message().get_msg_type();
+        write!(f,
+               "[{}] raft {:?} from {:?} to {:?}",
+               self.msg_id,
+               msg_type,
+               from_peer.get_id(),
+               to_peer.get_id())
     }
 }
 
@@ -115,8 +90,6 @@ impl Debug for ConnData {
 pub enum Msg {
     // Quit event loop.
     Quit,
-    // Write data to connection.
-    WriteData { token: Token, data: ConnData },
     // Send data to remote store.
     SendStore { store_id: u64, data: ConnData },
     // Resolve store address result.

@@ -17,7 +17,6 @@ use std::sync::Arc;
 use raftstore::store::{Msg as StoreMsg, Transport, Callback};
 use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use super::{Msg, ConnData};
 use util::transport::SendCh;
@@ -133,13 +132,9 @@ impl Transport for ServerTransport {
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
 
-        let mut req = Message::new();
-        req.set_msg_type(MessageType::Raft);
-        req.set_raft(msg);
-
         try!(self.ch.try_send(Msg::SendStore {
             store_id: to_store_id,
-            data: ConnData::new(self.alloc_msg_id(), req),
+            data: ConnData::new(self.alloc_msg_id(), msg),
         }));
         Ok(())
     }
