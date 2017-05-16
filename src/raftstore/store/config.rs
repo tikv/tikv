@@ -141,7 +141,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            sync_log: true,
+            sync_log: false,
             capacity: STORE_CAPACITY,
             raft_base_tick_interval: RAFT_BASE_TICK_INTERVAL,
             raft_heartbeat_ticks: RAFT_HEARTBEAT_TICKS,
