@@ -54,7 +54,7 @@ impl<'a> MvccReader<'a> {
         }
     }
 
-    pub fn reset_with_upper_bound(&mut self, upper_bound: Option<Vec<u8>>) {
+    pub fn reset(&mut self, upper_bound: Option<Vec<u8>>) {
         self.upper_bound = upper_bound;
         self.data_cursor = None;
         self.lock_cursor = None;

@@ -16,10 +16,10 @@ use kvproto::coprocessor::KeyRange;
 use storage::{Key, Value, Snapshot, ScanMode, Statistics};
 use storage::mvcc::MvccReader;
 use util::escape;
-// `Scanner` is a helper struct to wrap all common scan operates
+// `Scanner` is a helper struct to wrap all common scan operations
 // for `TableScanExecutor` and `IndexScanExecutor`
 pub struct Scanner<'a> {
-    store: MvccReader<'a>,
+    reader: MvccReader<'a>,
     seek_key: Option<Vec<u8>>,
     desc: bool,
     start_ts: u64,
@@ -40,7 +40,7 @@ impl<'a> Scanner<'a> {
         let mut reader = MvccReader::new(snapshot, statistics, Some(scan_mode), true, None);
         reader.set_key_only(key_only);
         Scanner {
-            store: reader,
+            reader: reader,
             seek_key: None,
             desc: desc,
             start_ts: start_ts,
@@ -56,9 +56,9 @@ impl<'a> Scanner<'a> {
             return Ok(None);
         }
         let kv = if self.desc {
-            try!(self.store.reverse_seek(Key::from_raw(&seek_key), self.start_ts))
+            try!(self.reader.reverse_seek(Key::from_raw(&seek_key), self.start_ts))
         } else {
-            try!(self.store.seek(Key::from_raw(&seek_key), self.start_ts))
+            try!(self.reader.seek(Key::from_raw(&seek_key), self.start_ts))
         };
 
         let (key, value) = match kv {
@@ -77,7 +77,7 @@ impl<'a> Scanner<'a> {
     }
 
     pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
-        let data = try!(self.store
+        let data = try!(self.reader
             .get(&Key::from_raw(key), self.start_ts));
         Ok(data)
     }
@@ -89,12 +89,12 @@ impl<'a> Scanner<'a> {
 
     pub fn init_with_range(&mut self, range: &KeyRange) {
         if self.desc {
-            self.store.reset_with_upper_bound(None);
+            self.reader.reset(None);
             self.seek_key = Some(range.get_end().to_vec());
             return;
         }
         let upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
-        self.store.reset_with_upper_bound(upper_bound);
+        self.reader.reset(upper_bound);
         self.seek_key = Some(range.get_start().to_vec());
     }
 }
