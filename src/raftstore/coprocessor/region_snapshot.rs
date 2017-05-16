@@ -20,28 +20,6 @@ use raftstore::store::{keys, util, PeerStorage};
 use raftstore::Result;
 
 
-pub struct LazyRegionSnapshot<'a> {
-    ps: &'a PeerStorage,
-    snap: Option<RegionSnapshot>,
-}
-
-impl<'a> LazyRegionSnapshot<'a> {
-    pub fn new(ps: &'a PeerStorage) -> LazyRegionSnapshot {
-        LazyRegionSnapshot {
-            ps: ps,
-            snap: None,
-        }
-    }
-
-    pub fn snap(&mut self) -> &RegionSnapshot {
-        if self.snap.is_none() {
-            self.snap = Some(RegionSnapshot::new(self.ps));
-        }
-
-        self.snap.as_ref().unwrap()
-    }
-}
-
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
