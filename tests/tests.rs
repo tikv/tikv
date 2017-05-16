@@ -53,7 +53,8 @@ mod raftstore;
 mod coprocessor;
 mod storage;
 mod util;
-mod pd;
+// Enable it once grpc-rs Server is ready.
+// mod pd;
 
 use std::env;
 

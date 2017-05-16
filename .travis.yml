@@ -1,3 +1,4 @@
+dist: trusty
 sudo: false
 language: rust
 cache:
@@ -29,7 +30,7 @@ install:
   - export LIBRARY_PATH=${LIBRARY_PATH}:$LOCAL_DIR/lib
   - export DYLD_LIBRARY_PATH=${DY_LIBRARY_PATH}:$LOCAL_DIR/lib
   - export CXXFLAGS=-I$LOCAL_DIR/include
-  - make -f travis-build/Makefile prepare_${TRAVIS_OS_NAME}
+  - travis_wait make -f travis-build/Makefile prepare_${TRAVIS_OS_NAME}
 
 script:
   - make -f travis-build/Makefile test_${TRAVIS_OS_NAME}
