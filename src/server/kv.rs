@@ -17,8 +17,9 @@ use protobuf::RepeatedField;
 
 use kvproto::kvrpcpb::{CmdGetResponse, CmdScanResponse, CmdPrewriteResponse, CmdCommitResponse,
                        CmdBatchRollbackResponse, CmdCleanupResponse, CmdBatchGetResponse,
-                       CmdScanLockResponse, CmdResolveLockResponse, CmdGCResponse, Request,
-                       Response, MessageType, KvPair as RpcKvPair, KeyError, LockInfo, Op};
+                       CmdScanLockResponse, CmdResolveLockResponse, CmdGCResponse,
+                       CmdImportResponse, Request, Response, MessageType, KvPair as RpcKvPair,
+                       KeyError, LockInfo, Op};
 use kvproto::kvrpcpb::{CmdRawGetResponse, CmdRawPutResponse, CmdRawDeleteResponse};
 use kvproto::msgpb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -199,6 +200,28 @@ impl StoreHandler {
         self.store.async_gc(msg.take_context(), req.get_safe_point(), cb).map_err(Error::Storage)
     }
 
+    fn on_import(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
+        if !msg.has_cmd_import_req() {
+            return Err(box_err!("msg doesn't contain a CmdImportRequest"));
+        }
+        let mut req = msg.take_cmd_import_req();
+        let mutations = req.take_mutations()
+            .into_iter()
+            .map(|mut x| {
+                match x.get_op() {
+                    Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
+                    Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
+                    Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                }
+            })
+            .collect();
+        let cb = self.make_cb(StoreHandler::cmd_import_done, on_resp);
+        self.store
+            .async_import(msg.take_context(), mutations, req.get_commit_version(), cb)
+            .map_err(Error::Storage)
+    }
+
+
     fn on_raw_get(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
         if !msg.has_cmd_raw_get_req() {
             return Err(box_err!("msg doesn't contain a CmdRawGetRequest"));
@@ -336,6 +359,15 @@ impl StoreHandler {
         resp.set_cmd_gc_resp(gc);
     }
 
+    fn cmd_import_done(r: StorageResult<()>, resp: &mut Response) {
+        resp.set_field_type(MessageType::CmdImport);
+        let mut import_resp = CmdImportResponse::new();
+        if let Err(e) = r {
+            import_resp.set_error(format!("{}", e));
+        }
+        resp.set_cmd_import_resp(import_resp);
+    }
+
     fn cmd_raw_get_done(r: StorageResult<Option<Vec<u8>>>, resp: &mut Response) {
         resp.set_field_type(MessageType::CmdRawGet);
         let mut raw_get = CmdRawGetResponse::new();
@@ -377,6 +409,7 @@ impl StoreHandler {
             MessageType::CmdScanLock => self.on_scan_lock(req, on_resp),
             MessageType::CmdResolveLock => self.on_resolve_lock(req, on_resp),
             MessageType::CmdGC => self.on_gc(req, on_resp),
+            MessageType::CmdImport => self.on_import(req, on_resp),
 
             MessageType::CmdRawGet => self.on_raw_get(req, on_resp),
             MessageType::CmdRawPut => self.on_raw_put(req, on_resp),
@@ -736,5 +769,21 @@ mod tests {
         Err(engine::Error::Request(err))
             .map_err(storage::txn::Error::from)
             .map_err(storage::Error::from)
+    }
+
+    #[test]
+    fn test_import_done_ok() {
+        let resp = build_resp(Ok(()), StoreHandler::cmd_import_done);
+        assert_eq!(MessageType::CmdImport, resp.get_field_type());
+        let cmd = resp.get_cmd_import_resp();
+        assert!(!cmd.has_error());
+    }
+
+    #[test]
+    fn test_import_done_err() {
+        let resp = build_resp(Err(box_err!("import error")), StoreHandler::cmd_import_done);
+        assert_eq!(MessageType::CmdImport, resp.get_field_type());
+        let cmd = resp.get_cmd_import_resp();
+        assert!(cmd.has_error());
     }
 }

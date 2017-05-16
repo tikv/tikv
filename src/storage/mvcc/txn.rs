@@ -290,6 +290,31 @@ impl<'a> MvccTxn<'a> {
         }
         Ok(())
     }
+
+    pub fn import(&mut self, mutation: Mutation, commit_ts: u64) -> Result<()> {
+        let key = mutation.key();
+        let short_value = if let Mutation::Put((_, ref value)) = mutation {
+            if is_short_value(value) {
+                Some(value.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Mutation::Put((_, ref value)) = mutation {
+            if !is_short_value(value) {
+                let ts = self.start_ts;
+                self.put_value(key, ts, value.clone());
+            }
+        }
+        let write = Write::new(WriteType::from_mutation(&mutation),
+                               self.start_ts,
+                               short_value);
+        self.put_write(key, commit_ts, write.to_bytes());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -576,6 +601,17 @@ mod tests {
         test_gc_imp(b"k2", &v1, &v2, &v3, &v4);
     }
 
+    #[test]
+    fn test_import() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        must_import_put(engine.as_ref(), b"k", b"v", 1);
+        must_get(engine.as_ref(), b"k", 2, b"v");
+        must_import_delete(engine.as_ref(), b"k", 3);
+        must_get_none(engine.as_ref(), b"k", 4);
+        must_import_lock(engine.as_ref(), b"k", 5);
+        must_get_none(engine.as_ref(), b"k", 6);
+    }
+
     fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8], k3: &[u8]) {
         let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
 
@@ -777,6 +813,33 @@ mod tests {
         let mut statistics = Statistics::default();
         let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
         txn.prewrite(Mutation::Lock(make_key(key)), pk, &Options::default()).unwrap();
+        engine.write(&ctx, txn.modifies()).unwrap();
+    }
+
+    fn must_import_put(engine: &Engine, key: &[u8], value: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut statistics = Statistics::default();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
+        txn.import(Mutation::Put((make_key(key), value.to_vec())), ts).unwrap();
+        engine.write(&ctx, txn.modifies()).unwrap();
+    }
+
+    fn must_import_delete(engine: &Engine, key: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut statistics = Statistics::default();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
+        txn.import(Mutation::Delete(make_key(key)), ts).unwrap();
+        engine.write(&ctx, txn.modifies()).unwrap();
+    }
+
+    fn must_import_lock(engine: &Engine, key: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut statistics = Statistics::default();
+        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
+        txn.import(Mutation::Lock(make_key(key)), ts).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
     }
 

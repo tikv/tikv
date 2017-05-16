@@ -189,6 +189,14 @@ impl AssertionStorage {
         self.store.commit(self.ctx.clone(), vec![make_key(key)], start_ts, commit_ts).unwrap();
     }
 
+    pub fn import_ok(&self, key: &[u8], value: &[u8], commit_ts: u64) {
+        self.store
+            .import(self.ctx.clone(),
+                    vec![Mutation::Put((make_key(key), value.to_vec()))],
+                    commit_ts)
+            .unwrap();
+    }
+
     pub fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
         self.store
             .prewrite(self.ctx.clone(),

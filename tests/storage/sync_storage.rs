@@ -124,6 +124,15 @@ impl SyncStorage {
         wait_op!(|cb| self.store.async_gc(ctx, safe_point, cb).unwrap()).unwrap()
     }
 
+    pub fn import(&self, ctx: Context, mutations: Vec<Mutation>, commit_ts: u64) -> Result<()> {
+        wait_op!(|cb| {
+                self.store
+                    .async_import(ctx, mutations, commit_ts, cb)
+                    .unwrap()
+            })
+            .unwrap()
+    }
+
     pub fn raw_get(&self, ctx: Context, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         wait_op!(|cb| self.store.async_raw_get(ctx, key, cb).unwrap()).unwrap()
     }

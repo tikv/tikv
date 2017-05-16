@@ -13,7 +13,7 @@
 
 use byteorder::ReadBytesExt;
 use util::codec::number::{NumberEncoder, NumberDecoder, MAX_VAR_U64_LEN};
-use storage::{SHORT_VALUE_PREFIX, SHORT_VALUE_MAX_LEN};
+use storage::{SHORT_VALUE_PREFIX, SHORT_VALUE_MAX_LEN, Mutation};
 use super::lock::LockType;
 use super::{Error, Result};
 use super::super::types::Value;
@@ -37,6 +37,14 @@ impl WriteType {
             LockType::Put => WriteType::Put,
             LockType::Delete => WriteType::Delete,
             LockType::Lock => WriteType::Lock,
+        }
+    }
+
+    pub fn from_mutation(mutation: &Mutation) -> WriteType {
+        match *mutation {
+            Mutation::Put(_) => WriteType::Put,
+            Mutation::Delete(_) => WriteType::Delete,
+            Mutation::Lock(_) => WriteType::Lock,
         }
     }
 
@@ -118,6 +126,7 @@ impl Write {
 mod tests {
     use super::super::LockType;
     use super::*;
+    use storage::{Mutation, make_key};
 
     #[test]
     fn test_write_type() {
@@ -172,5 +181,27 @@ mod tests {
         let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
         let v = lock.to_bytes();
         assert!(Write::parse(&v[..1]).is_err());
+    }
+
+    #[test]
+    fn test_from_mutation() {
+        let key = make_key(b"key");
+        let mutations = vec![Mutation::Put((key.clone(), b"value".to_vec())),
+                             Mutation::Delete(key.clone()),
+                             Mutation::Lock(key.clone())];
+        for m in mutations {
+            let write_type = WriteType::from_mutation(&m);
+            match m {
+                Mutation::Put(_) => {
+                    assert_eq!(WriteType::Put, write_type);
+                }
+                Mutation::Delete(_) => {
+                    assert_eq!(WriteType::Delete, write_type);
+                }
+                Mutation::Lock(_) => {
+                    assert_eq!(WriteType::Lock, write_type);
+                }
+            }
+        }
     }
 }

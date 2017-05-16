@@ -570,6 +570,17 @@ fn process_write_impl(cid: u64,
                 (pr, txn.modifies())
             }
         }
+        Command::Import { ref mutations, commit_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, commit_ts, None);
+            for m in mutations {
+                match txn.import(m.clone(), commit_ts) {
+                    Ok(_) => {}
+                    Err(e) => return Err(Error::from(e)),
+                }
+            }
+            let pr = ProcessResult::Res;
+            (pr, txn.modifies())
+        }
         _ => panic!("unsupported write command"),
     };
 
@@ -884,6 +895,10 @@ pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
             latches.gen_lock(&keys)
         }
+        Command::Import { ref mutations, .. } => {
+            let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
+            latches.gen_lock(&keys)
+        }
         Command::Commit { ref keys, .. } |
         Command::Rollback { ref keys, .. } |
         Command::ResolveLock { ref keys, .. } => latches.gen_lock(keys),
@@ -964,6 +979,11 @@ mod tests {
                                   commit_ts: Some(20),
                                   scan_key: None,
                                   keys: vec![make_key(b"k")],
+                              },
+                              Command::Import {
+                                  ctx: Context::new(),
+                                  mutations: vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+                                  commit_ts: 10,
                               }];
 
         let mut latches = Latches::new(1024);

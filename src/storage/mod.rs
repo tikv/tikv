@@ -113,6 +113,11 @@ pub enum Command {
         lock_ts: u64,
         commit_ts: u64,
     },
+    Import {
+        ctx: Context,
+        mutations: Vec<Mutation>,
+        commit_ts: u64,
+    },
     Cleanup {
         ctx: Context,
         key: Key,
@@ -203,6 +208,13 @@ impl Display for Command {
                        safe_point,
                        ctx)
             }
+            Command::Import { ref ctx, ref mutations, commit_ts, .. } => {
+                write!(f,
+                       "kv::command::import mutations({}) @ {} | {:?}",
+                       mutations.len(),
+                       commit_ts,
+                       ctx)
+            }
             Command::RawGet { ref ctx, ref key } => {
                 write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
             }
@@ -244,6 +256,7 @@ impl Command {
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => CMD_TAG_GC,
+            Command::Import { .. } => "import",
             Command::RawGet { .. } => "raw_get",
         }
     }
@@ -260,6 +273,7 @@ impl Command {
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
+            Command::Import { commit_ts, .. } => commit_ts,
             Command::RawGet { .. } => 0,
         }
     }
@@ -276,6 +290,7 @@ impl Command {
             Command::ScanLock { ref ctx, .. } |
             Command::ResolveLock { ref ctx, .. } |
             Command::Gc { ref ctx, .. } |
+            Command::Import { ref ctx, .. } |
             Command::RawGet { ref ctx, .. } => ctx,
         }
     }
@@ -292,6 +307,7 @@ impl Command {
             Command::ScanLock { ref mut ctx, .. } |
             Command::ResolveLock { ref mut ctx, .. } |
             Command::Gc { ref mut ctx, .. } |
+            Command::Import { ref mut ctx, .. } |
             Command::RawGet { ref mut ctx, .. } => ctx,
         }
     }
@@ -575,6 +591,23 @@ impl Storage {
             safe_point: safe_point,
             scan_key: None,
             keys: vec![],
+        };
+        let tag = cmd.tag();
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        Ok(())
+    }
+
+    pub fn async_import(&self,
+                        ctx: Context,
+                        mutations: Vec<Mutation>,
+                        commit_ts: u64,
+                        callback: Callback<()>)
+                        -> Result<()> {
+        let cmd = Command::Import {
+            ctx: ctx,
+            mutations: mutations,
+            commit_ts: commit_ts,
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
@@ -1024,6 +1057,31 @@ mod tests {
                        expect_get_none(tx.clone()))
             .unwrap();
         rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_import() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        let data = vec![(make_key(b"y"), b"101".to_vec()), (make_key(b"x"), b"100".to_vec())];
+        let mutations = data.clone()
+            .into_iter()
+            .map(|(key, value)| Mutation::Put((key.clone(), value.clone())))
+            .collect();
+        storage.async_import(Context::new(), mutations, 100, expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        for (key, value) in data {
+            storage.async_get(Context::new(),
+                           key.clone(),
+                           120,
+                           expect_get_val(tx.clone(), value.clone()))
+                .unwrap();
+            rx.recv().unwrap();
+        }
         storage.stop().unwrap();
     }
 }
