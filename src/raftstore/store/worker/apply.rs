@@ -40,7 +40,7 @@ use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
 use raftstore::store::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
-const DEFAULT_APPLY_WB_SIZE: usize = 128 * 1024;
+const DEFAULT_APPLY_WB_SIZE: usize = 32 * 1024;
 
 pub struct PendingCmd {
     pub uuid: Uuid,
