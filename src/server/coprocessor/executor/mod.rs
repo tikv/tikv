@@ -14,6 +14,10 @@
 use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
 
+
+mod scanner;
+pub mod table_scan;
+
 #[allow(dead_code)] //TODO:remove it
 pub struct Row {
     pub handle: i64,
