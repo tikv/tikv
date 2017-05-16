@@ -53,7 +53,7 @@ trait TableEncoder: NumberEncoder {
 
 impl<T: Write> TableEncoder for T {}
 
-fn flatten(data: Datum) -> Result<Datum> {
+pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
         Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64())),
