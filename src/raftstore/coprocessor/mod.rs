@@ -37,8 +37,6 @@ pub trait Coprocessor {
 /// Context of observer.
 pub struct ObserverContext<'a> {
     ps: &'a PeerStorage,
-    /// A snapshot of requested region.
-    snap: Option<RegionSnapshot>,
     /// Whether to bypass following observer hook.
     pub bypass: bool,
 }
@@ -47,21 +45,12 @@ impl<'a> ObserverContext<'a> {
     pub fn new(peer: &PeerStorage) -> ObserverContext {
         ObserverContext {
             ps: peer,
-            snap: None,
             bypass: false,
         }
     }
 
     pub fn region(&self) -> &Region {
         &self.ps.region
-    }
-
-    pub fn snap(&mut self) -> &RegionSnapshot {
-        if self.snap.is_none() {
-            self.snap = Some(RegionSnapshot::new(self.ps));
-        }
-
-        self.snap.as_ref().unwrap()
     }
 }
 
