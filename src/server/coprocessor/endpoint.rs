@@ -459,12 +459,12 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 }
 
 #[inline]
-fn inflate_with_col<'a, T>(eval: &mut Evaluator,
-                           ctx: &EvalContext,
-                           values: &RowColsDict,
-                           cols: T,
-                           h: i64)
-                           -> Result<()>
+pub fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+                               ctx: &EvalContext,
+                               values: &RowColsDict,
+                               cols: T,
+                               h: i64)
+                               -> Result<()>
     where T: IntoIterator<Item = &'a ColumnInfo>
 {
     for col in cols {
@@ -921,10 +921,10 @@ impl SelectContextCore {
     }
 }
 
-fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
-                       col_meta: &[ColumnInfo],
-                       expr: &Expr)
-                       -> Result<()> {
+pub fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
+                           col_meta: &[ColumnInfo],
+                           expr: &Expr)
+                           -> Result<()> {
     if expr.get_tp() == ExprType::ColumnRef {
         let i = box_try!(expr.get_val().decode_i64());
         if let Entry::Vacant(e) = cols.entry(i) {
