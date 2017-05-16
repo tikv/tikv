@@ -88,7 +88,9 @@ impl<'a> MvccTxn<'a> {
                     ttl: u64,
                     value: Value) {
         let lock = Lock::new(lock_type, primary, self.start_ts, ttl, None);
+        self.write_size += CF_LOCK.len() + key.encoded().len() + lock.to_bytes().len();
         let key = key.append_ts(self.start_ts);
+        self.write_size += key.encoded().len() + value.len();
         self.writes.push(Modify::Prewrite(key, value, lock));
     }
 

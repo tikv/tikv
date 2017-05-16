@@ -127,9 +127,10 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
             }
             Modify::Prewrite(k, v, l) => {
                 let l = l.to_bytes();
-                trace!("EngineRocksdb: put_cf {}, {}, {}", CF_LOCK, k, escape(&l));
+                let lk = k.truncate_ts().unwrap();
+                trace!("EngineRocksdb: put_cf {}, {}, {}", CF_LOCK, lk, escape(&l));
                 let handle = try!(rocksdb::get_cf_handle(db, CF_LOCK));
-                try!(wb.put_cf(handle, k.encoded(), &l));
+                try!(wb.put_cf(handle, lk.encoded(), &l));
                 trace!("EngineRocksdb: put {},{}", k, escape(&v));
                 wb.put(k.encoded(), &v)
             }
