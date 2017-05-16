@@ -567,7 +567,7 @@ fn init_with_data(tbl: &ProductTable,
     store.commit();
 
     let mut end_point = Worker::new("test select worker");
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8);
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8, 2, 2);
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)
