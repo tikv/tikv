@@ -21,6 +21,7 @@ use time::{self, Timespec};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
+use std::u64;
 
 use prometheus;
 use rand::{self, ThreadRng};
@@ -43,24 +44,41 @@ pub mod file;
 pub mod file_log;
 pub mod clocktime;
 pub mod metrics;
+pub mod threadpool;
 pub mod collections;
+
 #[cfg(target_os="linux")]
 mod thread_metrics;
 
-pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
-    if entries.is_empty() {
-        return;
+pub const NO_LIMIT: u64 = u64::MAX;
+
+pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
+    where T: Message + Clone,
+          I: IntoIterator<Item = &'a T>
+{
+    let mut iter = entries.into_iter();
+    // If max is NO_LIMIT, we can return directly.
+    if max == NO_LIMIT {
+        return iter.count();
     }
 
-    let mut size = Message::compute_size(&entries[0]) as u64;
-    let mut limit = 1usize;
-    while limit < entries.len() {
-        size += Message::compute_size(&entries[limit]) as u64;
+    let mut size = match iter.next() {
+        None => return 0,
+        Some(e) => Message::compute_size(e) as u64,
+    };
+    let mut limit = 1;
+    for e in iter {
+        size += Message::compute_size(e) as u64;
         if size > max {
             break;
         }
         limit += 1;
     }
+    limit
+}
+
+pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
+    let limit = get_limit_at_size(entries.as_slice(), max);
     entries.truncate(limit);
 }
 
@@ -460,9 +478,20 @@ impl<T> RingQueue<T> {
         self.buf.iter()
     }
 
-    pub fn swap_remove_front(&mut self, pos: usize) -> Option<T> {
-        self.buf.swap_remove_front(pos)
+    pub fn swap_remove_front<F>(&mut self, f: F) -> Option<T>
+        where F: FnMut(&T) -> bool
+    {
+        if let Some(pos) = self.buf.iter().position(f) {
+            self.buf.swap_remove_front(pos)
+        } else {
+            None
+        }
     }
+}
+
+// `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
+pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
+    a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
 }
 
 #[cfg(test)]
@@ -473,6 +502,8 @@ mod tests {
     use std::{f64, cmp};
     use std::sync::atomic::{AtomicBool, Ordering};
     use time;
+    use kvproto::eraftpb::Entry;
+    use protobuf::Message;
     use super::*;
 
     #[test]
@@ -507,17 +538,18 @@ mod tests {
             queue.push(num);
             assert_eq!(queue.len(), cmp::min(num + 1, 10));
         }
-        assert_eq!(None, queue.swap_remove_front(10));
+        assert_eq!(None, queue.swap_remove_front(|i| *i == 20));
         for i in 0..6 {
-            assert_eq!(Some(12 + i), queue.swap_remove_front(2));
+            assert_eq!(Some(12 + i), queue.swap_remove_front(|e| *e == 12 + i));
             assert_eq!(queue.len(), 9 - i);
         }
+
         let left: Vec<_> = queue.iter().cloned().collect();
         assert_eq!(vec![10, 11, 18, 19], left);
         for _ in 0..4 {
-            queue.swap_remove_front(0).unwrap();
+            queue.swap_remove_front(|_| true).unwrap();
         }
-        assert_eq!(None, queue.swap_remove_front(0));
+        assert_eq!(None, queue.swap_remove_front(|_| true));
     }
 
     #[test]
@@ -576,5 +608,46 @@ mod tests {
         fn foo(a: &Option<usize>) -> Option<usize> {
             a.clone()
         }
+    }
+
+    #[test]
+    fn test_limit_size() {
+        let mut e = Entry::new();
+        e.set_data(b"0123456789".to_vec());
+        let size = e.compute_size() as u64;
+
+        let tbls = vec![
+            (vec![], NO_LIMIT, 0),
+            (vec![], size, 0),
+            (vec![e.clone(); 10], 0, 1),
+            (vec![e.clone(); 10], NO_LIMIT, 10),
+            (vec![e.clone(); 10], size, 1),
+            (vec![e.clone(); 10], size + 1, 1),
+            (vec![e.clone(); 10], 2 * size , 2),
+            (vec![e.clone(); 10], 10 * size - 1, 9),
+            (vec![e.clone(); 10], 10 * size, 10),
+            (vec![e.clone(); 10], 10 * size + 1, 10),
+        ];
+
+        for (mut entries, max, len) in tbls {
+            limit_size(&mut entries, max);
+            assert_eq!(entries.len(), len);
+        }
+    }
+
+    #[test]
+    fn test_cfs_diff() {
+        let a = vec!["1", "2", "3"];
+        let a_diff_a = cfs_diff(&a, &a);
+        assert!(a_diff_a.is_empty());
+        let b = vec!["4"];
+        assert_eq!(a, cfs_diff(&a, &b));
+        let c = vec!["4", "5", "3", "6"];
+        assert_eq!(vec!["1", "2"], cfs_diff(&a, &c));
+        assert_eq!(vec!["4", "5", "6"], cfs_diff(&c, &a));
+        let d = vec!["1", "2", "3", "4"];
+        let a_diff_d = cfs_diff(&a, &d);
+        assert!(a_diff_d.is_empty());
+        assert_eq!(vec!["4"], cfs_diff(&d, &a));
     }
 }

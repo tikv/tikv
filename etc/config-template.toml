@@ -1,5 +1,5 @@
 # TiKV config template
-#  Human-readable big numbers: 
+#  Human-readable big numbers:
 #   File size(based on byte): KB, MB, GB, TB, PB (or lowercase)
 #    e.g.: 1_048_576 = "1MB"
 #   Time(based on ms): ms, s, m, h
@@ -11,7 +11,7 @@ addr = "127.0.0.1:20160"
 # set advertise listening address for client communication, if not set, use addr instead.
 #advertise-addr = ""
 # set the path to rocksdb directory.
-store = "/tmp/tikv/store"
+data-dir = "/tmp/tikv/store"
 # set attributes about this server, e.g. "zone=us-west-1,disk=ssd".
 labels = ""
 # log level: trace, debug, info, warn, error, off.
@@ -26,11 +26,19 @@ recv-buffer-size = "128KB"
 # size of thread pool for endpoint task, should less than total cpu cores.
 # end-point-concurrency = 8
 
+# concurrency for each transaction when endpoint is busy, should be in [1,end-point-concurrency].
+# The recommanded value is a quater of end-point-concurrency.
+# end-point-txn-concurrency-on-busy = 2
+
+# limit for small transaction's count of tasks. A transaction would be considered as small 
+# transaction when its total count of tasks is less than or equal to end-point-small-txn-tasks-limit.
+# end-point-small-txn-tasks-limit = 2
+
 # set store capacity, if no set, use disk capacity.
 # capacity = 0
 
 # set backup path, if not set, use "backup" under store path.
-# backup = "/tmp/tikv/store/backup"
+# backup-dir = "/tmp/tikv/store/backup"
 
 [metric]
 # the Prometheus client push interval. Setting the value to 0s stops Prometheus client from pushing.
@@ -47,18 +55,18 @@ notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
 messages-per-tick = 4096
 
-# Region heartbeat tick interval for reporting to pd. 
+# Region heartbeat tick interval for reporting to pd.
 pd-heartbeat-tick-interval = "60s"
 # Store heartbeat tick interval for reporting to pd.
 pd-store-heartbeat-tick-interval = "10s"
 
-# When the region's size exceeds region-max-size, we will split the region 
-# into two which the left region's size will be region-split-size or a little 
-# bit smaller. 
+# When the region's size exceeds region-max-size, we will split the region
+# into two which the left region's size will be region-split-size or a little
+# bit smaller.
 region-max-size = "80MB"
 region-split-size = "64MB"
-# When region size changes exceeds region-split-check-diff, we should check 
-# whether the region should be split or not. 
+# When region size changes exceeds region-split-check-diff, we should check
+# whether the region should be split or not.
 region-split-check-diff = "8MB"
 # Interval to check region whether need to be split or not.
 split-region-check-tick-interval = "5s"
@@ -95,13 +103,13 @@ max-peer-down-duration = "5m"
 # consistency-check-interval = 0
 
 [pd]
-# pd endpoints 
+# pd endpoints
 endpoints = ""
 
 [rocksdb]
 # RocksDB info log directory, if set, RocksDB will save the log in `info-log-dir/LOG`.
 # info-log-dir = ""
-# Maximal size of the info log, if new info log will be created if size is large than it. 
+# Maximal size of the info log, if new info log will be created if size is large than it.
 # info-log-max-size = 0
 # Time for the info log file to roll (in seconds).
 # info-log-roll-time = "0s"
@@ -112,6 +120,14 @@ max-background-compactions = 6
 
 # Maximum number of concurrent background flush jobs
 max-background-flushes = 2
+
+# Suggested number of concurrent background compaction jobs.
+# base-background-compactions = 1
+
+# This value represents the maximum number of threads that will concurrently perform a
+# compaction job by breaking it into multiple, smaller ones that are run simultaneously.
+# Default: 1 (i.e. no subcompactions)
+# max-sub-compactions = 1
 
 # Number of open files that can be used by the DB.  You may need to
 # increase this if your database has a large working set. Value -1 means
@@ -165,6 +181,9 @@ wal-recovery-mode = 2
 # rocksdb max total wal size
 # max-total-wal-size = "4GB"
 
+# rocksdb writable file max buffer size
+# writable-file-max-buffer-size = "1MB"
+
 # Rocksdb Statistics provides cumulative stats over time.
 # Turn statistics on will introduce about 5%-10% overhead for RocksDB,
 # but it is worthy to know the internal status of RocksDB.
@@ -191,6 +210,7 @@ stats-dump-period-sec = 600
 #   bzip2:  kBZip2Compression
 #   lz4:    kLZ4Compression
 #   lz4hc:  kLZ4HCCompression
+#   zstd:   kZSTD
 
 # per level compression
 compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"

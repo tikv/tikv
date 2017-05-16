@@ -7,9 +7,9 @@ use tikv::storage::{Mutation, Key, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::util::worker::Worker;
 use kvproto::coprocessor::{Request, KeyRange};
-use tipb::select::{ByItem, SelectRequest, SelectResponse, Chunk};
+use tipb::select::{SelectRequest, SelectResponse, Chunk};
 use tipb::schema::{self, ColumnInfo};
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::{Expr, ExprType, ByItem};
 use storage::sync_storage::SyncStorage;
 use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
 
@@ -567,7 +567,7 @@ fn init_with_data(tbl: &ProductTable,
     store.commit();
 
     let mut end_point = Worker::new("test select worker");
-    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8);
+    let runner = EndPointHost::new(store.get_engine(), end_point.scheduler(), 8, 2, 2);
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)

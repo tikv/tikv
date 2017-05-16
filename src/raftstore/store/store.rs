@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::boxed::Box;
-use std::collections::Bound::{Excluded, Unbounded};
+use std::collections::Bound::{Included, Excluded, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
@@ -471,6 +471,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_timer();
         for peer in &mut self.region_peers.values_mut() {
+            if peer.pending_remove {
+                continue;
+            }
             // When having pending snapshot, if election timeout is met, it can't pass
             // the pending conf change check because first index has been updated to
             // a value that is larger than last index.
@@ -527,13 +530,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn poll_apply(&mut self) {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
-                Ok(ApplyTaskRes::Apply(res)) => {
-                    if let Some(p) = self.region_peers.get_mut(&res.region_id) {
-                        debug!("{} async apply finish: {:?}", p.tag, res);
-                        p.post_apply(&res, &mut self.pending_raft_groups);
+                Ok(ApplyTaskRes::Applys(multi_res)) => {
+                    for res in multi_res {
+                        if let Some(p) = self.region_peers.get_mut(&res.region_id) {
+                            debug!("{} async apply finish: {:?}", p.tag, res);
+                            p.post_apply(&res, &mut self.pending_raft_groups);
+                        }
+                        self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
+                        self.on_ready_result(res.region_id, res.exec_res);
                     }
-                    self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
-                    self.on_ready_result(res.region_id, res.exec_res);
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
@@ -567,6 +572,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                           p.peer_id());
                     return Ok(false);
                 }
+                p.pending_remove = true;
                 stale_peer = Some(p.peer.clone());
                 async_remove = p.get_store().is_initialized();
             } else if p.peer_id() > target_peer_id {
@@ -800,7 +806,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut need_remove = false;
         let mut async_remove = true;
-        if let Some(peer) = self.region_peers.get(&region_id) {
+        if let Some(peer) = self.region_peers.get_mut(&region_id) {
             // TODO: need checking peer id changed?
             let from_epoch = msg.get_region_epoch();
             if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
@@ -809,6 +815,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                       region_id,
                       msg.get_to_peer());
                 need_remove = true;
+                peer.pending_remove = true;
                 async_remove = peer.get_store().is_initialized();
             }
         }
@@ -876,6 +883,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
+        self.raft_metrics.ready.pending_region += pending_count as u64;
+
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
@@ -885,6 +894,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             (ctx.wb, ctx.ready_res)
         };
+
+        self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
 
         if !wb.is_empty() {
             self.engine.write(wb).unwrap_or_else(|e| {
@@ -920,15 +931,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   self.raft_metrics.ready.message - previous_ready_metrics.message,
                   self.raft_metrics.ready.snapshot - previous_ready_metrics.snapshot);
 
+        let mut apply_tasks = Vec::with_capacity(ready_results.len());
         for (region_id, ready, res) in ready_results {
             self.region_peers
                 .get_mut(&region_id)
                 .unwrap()
-                .handle_raft_ready_apply(ready);
+                .handle_raft_ready_apply(ready, &mut apply_tasks);
             if let Some(apply_result) = res {
                 self.on_ready_apply_snapshot(apply_result);
             }
         }
+        self.apply_worker.schedule(ApplyTask::applies(apply_tasks)).unwrap();
 
         let dur = t.elapsed();
         if !self.is_busy {
@@ -1050,18 +1063,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_split_region(&mut self,
                              region_id: u64,
                              left: metapb::Region,
-                             right: metapb::Region) {
-        self.region_peers.get_mut(&region_id).unwrap().mut_store().region = left.clone();
-        for peer in right.get_peers() {
+                             right: metapb::Region,
+                             right_derive: bool) {
+        let (origin_region, new_region) = if right_derive {
+            (right.clone(), left.clone())
+        } else {
+            (left.clone(), right.clone())
+        };
+
+        self.region_peers.get_mut(&region_id).unwrap().mut_store().region = origin_region.clone();
+        for peer in new_region.get_peers() {
             // Add this peer to cache.
             self.peer_cache.borrow_mut().insert(peer.get_id(), peer.clone());
         }
-        let new_region_id = right.get_id();
+        let new_region_id = new_region.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
-            // Add new peers to cache.
-            for meta in right.get_peers() {
-                self.peer_cache.borrow_mut().insert(meta.get_id(), meta.to_owned());
-            }
             // If the store received a raft msg with the new region raft group
             // before splitting, it will creates a uninitialized peer.
             // We can remove this uninitialized peer directly.
@@ -1072,26 +1088,31 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut campaigned = false;
         let peer;
-        match Peer::create(self, &right) {
+        match Peer::create(self, &new_region) {
             Err(e) => {
                 // peer information is already written into db, can't recover.
                 // there is probably a bug.
-                panic!("create new split region {:?} err {:?}", right, e);
+                panic!("create new split region {:?} err {:?}", new_region, e);
             }
             Ok(mut new_peer) => {
                 peer = new_peer.peer.clone();
-                if let Some(left) = self.region_peers.get(&region_id) {
+                if let Some(origin_peer) = self.region_peers.get(&region_id) {
                     // New peer derive write flow from parent region,
                     // this will be used by balance write flow.
-                    new_peer.last_written_bytes = left.last_written_bytes;
-                    new_peer.written_bytes = left.written_bytes;
-                    new_peer.written_keys = left.written_keys;
+                    new_peer.last_written_bytes = origin_peer.last_written_bytes;
+                    new_peer.written_bytes = origin_peer.written_bytes;
+                    new_peer.written_keys = origin_peer.written_keys;
 
-                    campaigned = new_peer.maybe_campaign(left, &mut self.pending_raft_groups);
+                    campaigned =
+                        new_peer.maybe_campaign(origin_peer, &mut self.pending_raft_groups);
 
-                    if left.is_leader() {
+                    if origin_peer.is_leader() {
                         // Notify pd immediately to let it update the region meta.
-                        self.report_split_pd(left, &new_peer);
+                        if right_derive {
+                            self.report_split_pd(&new_peer, origin_peer);
+                        } else {
+                            self.report_split_pd(origin_peer, &new_peer);
+                        }
                     }
                 }
 
@@ -1103,22 +1124,27 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     panic!("region should not exist, {:?}", left);
                 }
                 if self.region_ranges
-                    .insert(enc_end_key(&right), new_region_id)
+                    .insert(enc_end_key(&right), right.get_id())
                     .is_none() {
                     panic!("region should exist, {:?}", right);
                 }
-                new_peer.size_diff_hint = self.cfg.region_check_size_diff;
+
+                // To prevent from big region, the right region need run split
+                // check again after split.
+                if right_derive {
+                    self.region_peers.get_mut(&region_id).unwrap().size_diff_hint = self.cfg
+                        .region_check_size_diff;
+                } else {
+                    new_peer.size_diff_hint = self.cfg.region_check_size_diff;
+                }
                 self.apply_worker.schedule(ApplyTask::register(&new_peer)).unwrap();
                 self.region_peers.insert(new_region_id, new_peer);
             }
         }
 
         if !campaigned {
-            if let Some(pos) = self.pending_votes
-                .iter()
-                .rev()
-                .position(|m| m.get_to_peer() == &peer) {
-                let msg = self.pending_votes.swap_remove_front(pos).unwrap();
+            if let Some(msg) = self.pending_votes
+                .swap_remove_front(|m| m.get_to_peer() == &peer) {
                 let _ = self.on_raft_message(msg);
             }
         }
@@ -1131,8 +1157,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("notify pd with split left {:?}, right {:?}",
               left_region,
               right_region);
-        left.heartbeat_pd(&self.pd_worker);
         right.heartbeat_pd(&self.pd_worker);
+        left.heartbeat_pd(&self.pd_worker);
 
         // Now pd only uses ReportSplit for history operation show,
         // so we send it independently here.
@@ -1179,8 +1205,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::CompactLog { first_index, state } => {
                     self.on_ready_compact_log(region_id, first_index, state)
                 }
-                ExecResult::SplitRegion { left, right } => {
-                    self.on_ready_split_region(region_id, left, right)
+                ExecResult::SplitRegion { left, right, right_derive } => {
+                    self.on_ready_split_region(region_id, left, right, right_derive)
                 }
                 ExecResult::ComputeHash { region, index, snap } => {
                     self.on_ready_compute_hash(region, index, snap)
@@ -1277,19 +1303,27 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let res = peer::check_epoch(peer.region(), msg);
         if let Err(Error::StaleEpoch(msg, mut new_regions)) = res {
-            // Attach the next region which might be split from the current region. But it doesn't
-            // matter if the next region is not split from the current region. If the region meta
+            // Attach the region which might be split from the current region. But it doesn't
+            // matter if the region is not split from the current region. If the region meta
             // received by the TiKV driver is newer than the meta cached in the driver, the meta is
             // updated.
-            if let Some((_, &next_region_id)) = self.region_ranges
-                .range((Excluded(enc_end_key(peer.region())), Unbounded::<Key>))
-                .next() {
-                let next_region = self.region_peers[&next_region_id].region();
-                new_regions.push(next_region.to_owned());
+            let sibling_region_id = self.find_sibling_region(peer.region());
+            if let Some(sibling_region_id) = sibling_region_id {
+                let sibling_region = self.region_peers[&sibling_region_id].region();
+                new_regions.push(sibling_region.to_owned());
             }
             return Err(Error::StaleEpoch(msg, new_regions));
         }
         res
+    }
+
+    pub fn find_sibling_region(&self, region: &metapb::Region) -> Option<u64> {
+        let start = if self.cfg.right_derive_when_split {
+            Included(enc_start_key(region))
+        } else {
+            Excluded(enc_end_key(region))
+        };
+        self.region_ranges.range((start, Unbounded::<Key>)).next().map(|(_, &region_id)| region_id)
     }
 
     fn register_raft_gc_log_tick(&self, event_loop: &mut EventLoop<Self>) {
@@ -1508,6 +1542,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             region: region.clone(),
             split_key: key.to_vec(),
             peer: peer.peer.clone(),
+            right_derive: self.cfg.right_derive_when_split,
         };
 
         if let Err(e) = self.pd_worker.schedule(task) {
