@@ -22,6 +22,7 @@ pub use self::dispatcher::{CoprocessorHost, Registry};
 use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
 use protobuf::RepeatedField;
 use raftstore::store::PeerStorage;
+use self::region_snapshot::LazyRegionSnapshot;
 
 pub use self::error::{Error, Result};
 
@@ -33,18 +34,18 @@ pub trait Coprocessor {
     fn stop(&mut self) -> ();
 }
 
-/// Context of request.
-pub struct ObserverContext {
+/// Context of observer.
+pub struct ObserverContext<'a> {
     /// A snapshot of requested region.
-    pub snap: RegionSnapshot,
+    pub snap: LazyRegionSnapshot<'a>,
     /// Whether to bypass following observer hook.
     pub bypass: bool,
 }
 
-impl ObserverContext {
+impl<'a> ObserverContext<'a> {
     pub fn new(peer: &PeerStorage) -> ObserverContext {
         ObserverContext {
-            snap: RegionSnapshot::new(peer),
+            snap: LazyRegionSnapshot::new(peer),
             bypass: false,
         }
     }

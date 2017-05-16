@@ -48,7 +48,7 @@ impl SplitObserver {
             key.truncate(table::PREFIX_LEN + table::ID_LEN);
         }
 
-        let region_start_key = ctx.snap.get_region().get_start_key();
+        let region_start_key = ctx.snap.snap().get_region().get_start_key();
 
         let key = encode_bytes(&key);
         if &*key <= region_start_key {
