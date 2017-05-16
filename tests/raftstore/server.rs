@@ -17,14 +17,14 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
-use std::io::ErrorKind;
 use std::boxed::FnBox;
+use std::net::TcpListener;
 
 use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
+use tikv::server::{ServerChannel, Server, ServerTransport, create_event_loop, Msg};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
@@ -32,13 +32,13 @@ use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
 use tikv::util::codec::rpc;
 use tikv::util::transport::SendCh;
+use tikv::util::core_runner::CoreRunner;
 use tikv::storage::{Engine, CfName, ALL_CFS};
 use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
-use super::util::sleep_ms;
 use super::transport_simulate::*;
 
 type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
@@ -46,6 +46,7 @@ type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
 pub struct ServerCluster {
     routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
     senders: HashMap<u64, SendCh<Msg>>,
+    cores: HashMap<u64, CoreRunner>,
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
     conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
@@ -63,6 +64,7 @@ impl ServerCluster {
         ServerCluster {
             routers: HashMap::new(),
             senders: HashMap::new(),
+            cores: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
             sim_trans: HashMap::new(),
@@ -113,6 +115,11 @@ impl Simulator for ServerCluster {
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
 
         let mut cfg = cfg;
+        cfg.addr = if let Some(addr) = self.addrs.get(&node_id) {
+            format!("{}", addr)
+        } else {
+            format!("127.0.0.1:{}", 31060 + node_id)
+        };
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
@@ -121,30 +128,6 @@ impl Simulator for ServerCluster {
             let p = self.snap_paths[&node_id].path().to_str().unwrap();
             (p.to_owned(), None)
         };
-
-        // Now we cache the store address, so here we should re-use last
-        // listening address for the same store. Maybe we should enable
-        // reuse_socket?
-        if let Some(addr) = self.addrs.get(&node_id) {
-            cfg.addr = format!("{}", addr)
-        }
-
-        let listener;
-        let mut try_cnt = 0;
-        loop {
-            match bind(&cfg.addr) {
-                Err(server::Error::Io(ref e)) if e.kind() == ErrorKind::AddrInUse &&
-                                                 try_cnt < 100 => sleep_ms(10),
-                Ok(l) => {
-                    listener = l;
-                    break;
-                }
-                Err(e) => panic!("unexpected error: {:?}", e),
-            }
-            try_cnt += 1;
-        }
-        let addr = listener.local_addr().unwrap();
-        cfg.addr = format!("{}", addr);
 
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop(&cfg).unwrap();
@@ -180,13 +163,15 @@ impl Simulator for ServerCluster {
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
+        let core = CoreRunner::new(thd_name!(format!("server-core-{}", node_id)));
+
         let server_chan = ServerChannel {
             raft_router: sim_router.clone(),
             snapshot_status_sender: node.get_snapshot_status_sender(),
         };
         let mut server = Server::new(&mut event_loop,
+                                     core.remote(),
                                      &cfg,
-                                     listener,
                                      store,
                                      server_chan,
                                      resolver,
@@ -194,6 +179,7 @@ impl Simulator for ServerCluster {
             .unwrap();
 
         let ch = server.get_sendch();
+        let addr = server.listening_addr();
 
         let t = Builder::new()
             .name(thd_name!(format!("server-{}", node_id)))
@@ -204,6 +190,7 @@ impl Simulator for ServerCluster {
 
         self.handles.insert(node_id, (node, t));
         self.senders.insert(node_id, ch);
+        self.cores.insert(node_id, core);
         self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
 
@@ -217,6 +204,7 @@ impl Simulator for ServerCluster {
     fn stop_node(&mut self, node_id: u64) {
         let (mut node, h) = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
+        let core = self.cores.remove(&node_id).unwrap();
         let addr = &self.addrs[&node_id];
         let _ = self.store_chs.remove(&node_id).unwrap();
         self.conns
@@ -227,6 +215,7 @@ impl Simulator for ServerCluster {
         ch.try_send(Msg::Quit).unwrap();
         node.stop().unwrap();
         h.join().unwrap();
+        core.stop();
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {
@@ -295,4 +284,9 @@ pub fn new_server_cluster_with_cfs(id: u64,
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
     Cluster::new(id, count, cfs, sim, pd_client)
+}
+
+fn alloc_local_addr() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap()
 }

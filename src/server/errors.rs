@@ -17,13 +17,17 @@ use std::result;
 use std::io::Error as IoError;
 use std::net::AddrParseError;
 
+use futures::Canceled;
 use protobuf::ProtobufError;
+use grpc::Error as GrpcError;
 
 use util::codec::Error as CodecError;
+use util::worker::Stopped;
 use raftstore::Error as RaftServerError;
 use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
+use super::snap::Task as SnapTask;
 
 quick_error!{
     #[derive(Debug)]
@@ -41,6 +45,11 @@ quick_error!{
             description(err.description())
         }
         Protobuf(err: ProtobufError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+       Grpc(err: GrpcError) {
             from()
             cause(err)
             description(err.description())
@@ -71,6 +80,17 @@ quick_error!{
             description(err.description())
         }
         Pd(err: PdError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        SnapWorkerStopped(err: Stopped<SnapTask>) {
+            from()
+        }
+        Sink {
+            description("failed to poll from mpsc receiver")
+        }
+        Canceled(err: Canceled) {
             from()
             cause(err)
             description(err.description())

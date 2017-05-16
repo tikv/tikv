@@ -21,6 +21,7 @@
 
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
+#[macro_use]
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
@@ -36,6 +37,8 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
+extern crate futures;
+extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
 
@@ -64,7 +67,7 @@ use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
-                   Config, bind, create_event_loop, create_raft_storage, Msg};
+                   Config, create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
@@ -72,6 +75,7 @@ use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::util::time_monitor::TimeMonitor;
+use tikv::util::core_runner::CoreRunner;
 
 const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
 const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
@@ -825,6 +829,7 @@ fn run_raft_server(pd_client: RpcClient,
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let core_runner = CoreRunner::new(thd_name!("tikv-core"));
 
     let store_path = &cfg.storage.path;
     let mut lock_path = Path::new(store_path).to_path_buf();
@@ -846,22 +851,20 @@ fn run_raft_server(pd_client: RpcClient,
         panic!("failed to start storage, error = {:?}", e);
     }
 
-    info!("Start listening on {}...", cfg.addr);
-    let listener = bind(&cfg.addr).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-
     let server_chan = ServerChannel {
         raft_router: raft_router,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
     let svr = Server::new(&mut event_loop,
+                          core_runner.remote(),
                           &cfg,
-                          listener,
                           store,
                           server_chan,
                           resolver,
                           snap_mgr)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     start_server(svr, event_loop, engine, backup_path);
+    core_runner.stop();
     node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 

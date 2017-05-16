@@ -26,7 +26,7 @@ use util::collections::HashMap;
 use util::worker::FutureRunnable;
 use super::{Error, Result};
 
-/// SendTask delivers a raft message to other store.
+/// `SendTask` delivers a raft message to other store.
 pub struct SendTask {
     pub addr: SocketAddr,
     pub msg: RaftMessage,
@@ -60,7 +60,7 @@ impl Conn {
     }
 }
 
-/// SendRunner is used for sending raft messages to other stores.
+/// `SendRunner` is used for sending raft messages to other stores.
 pub struct SendRunner {
     env: Arc<Environment>,
     conns: HashMap<SocketAddr, Conn>,
