@@ -15,9 +15,7 @@ use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
 use util::codec::table;
 use util::codec::bytes::{encode_bytes, BytesDecoder};
 
-use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, Request, AdminResponse, Response,
-                          AdminCmdType};
-use protobuf::RepeatedField;
+use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't separate
@@ -28,7 +26,7 @@ pub struct SplitObserver;
 type Result<T> = StdResult<T, String>;
 
 impl SplitObserver {
-    fn on_split(&mut self, ctx: &mut ObserverContext, split: &mut SplitRequest) -> Result<()> {
+    fn on_split(&self, ctx: &mut ObserverContext, split: &mut SplitRequest) -> Result<()> {
         if !split.has_split_key() {
             return Err("split key is expected!".to_owned());
         }
@@ -60,13 +58,10 @@ impl SplitObserver {
     }
 }
 
-impl Coprocessor for SplitObserver {
-    fn start(&mut self) {}
-    fn stop(&mut self) {}
-}
+impl Coprocessor for SplitObserver {}
 
 impl RegionObserver for SplitObserver {
-    fn pre_admin(&mut self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> CopResult<()> {
+    fn pre_admin(&self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> CopResult<()> {
         if req.get_cmd_type() != AdminCmdType::Split {
             return Ok(());
         }
@@ -81,32 +76,11 @@ impl RegionObserver for SplitObserver {
         }
         Ok(())
     }
-
-    fn post_admin(&mut self, _: &mut ObserverContext, _: &AdminRequest, _: &mut AdminResponse) {}
-
-    /// Hook to call before execute read/write request.
-    fn pre_query(&mut self,
-                 _: &mut ObserverContext,
-                 _: &mut RepeatedField<Request>)
-                 -> CopResult<()> {
-        Ok(())
-    }
-
-    /// Hook to call after read/write request being executed.
-    fn post_query(&mut self,
-                  _: &mut ObserverContext,
-                  _: &[Request],
-                  _: &mut RepeatedField<Response>)
-                  -> () {
-    }
 }
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
     use super::*;
-    use tempdir::TempDir;
-    use raftstore::store::PeerStorage;
     use raftstore::coprocessor::ObserverContext;
     use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
@@ -114,19 +88,7 @@ mod test {
     use util::codec::{datum, table, Datum};
     use util::codec::number::NumberEncoder;
     use util::codec::bytes::encode_bytes;
-    use util::worker;
-    use util::rocksdb;
     use byteorder::{BigEndian, WriteBytesExt};
-    use storage::ALL_CFS;
-
-    fn new_peer_storage(path: &TempDir) -> PeerStorage {
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
-        PeerStorage::new(engine,
-                         &Region::new(),
-                         worker::dummy_scheduler(),
-                         "".to_owned())
-            .unwrap()
-    }
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();
@@ -161,15 +123,12 @@ mod test {
     fn test_forget_encode() {
         let region_start_key = new_row_key(256, 1, 0, 0);
         let key = new_row_key(256, 2, 1, 0);
-        let path = TempDir::new("test-split").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
         let mut r = Region::new();
         r.set_id(10);
         r.set_start_key(region_start_key);
 
-        let ps = PeerStorage::new(engine, &r, worker::dummy_scheduler(), "".to_owned()).unwrap();
-        let mut ctx = ObserverContext::new(&ps);
-        let mut observer = SplitObserver;
+        let mut ctx = ObserverContext::new(&r);
+        let observer = SplitObserver;
 
         let mut req = new_split_request(&key);
         observer.pre_admin(&mut ctx, &mut req).unwrap();
@@ -180,12 +139,11 @@ mod test {
 
     #[test]
     fn test_split() {
-        let path = TempDir::new("test-raftstore").unwrap();
-        let storage = new_peer_storage(&path);
-        let mut ctx = ObserverContext::new(&storage);
+        let region = Region::new();
+        let mut ctx = ObserverContext::new(&region);
         let mut req = AdminRequest::new();
 
-        let mut observer = SplitObserver;
+        let observer = SplitObserver;
 
         let resp = observer.pre_admin(&mut ctx, &mut req);
         // since no split is defined, actual coprocessor won't be invoke.

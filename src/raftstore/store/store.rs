@@ -46,7 +46,8 @@ use util::transport::SendCh;
 use util::{rocksdb, RingQueue};
 use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
@@ -124,6 +125,8 @@ pub struct Store<T, C: 'static> {
     trans: T,
     pd_client: Arc<C>,
 
+    pub coprocessor_host: Arc<CoprocessorHost>,
+
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
     snap_mgr: SnapManager,
@@ -182,6 +185,10 @@ impl<T, C> Store<T, C> {
         let peer_cache = HashMap::default();
         let tag = format!("[store {}]", meta.get_id());
 
+        let mut coprocessor_host = CoprocessorHost::new();
+        // TODO load coprocessors from configuration
+        coprocessor_host.registry.register_observer(100, box SplitObserver);
+
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
@@ -203,6 +210,7 @@ impl<T, C> Store<T, C> {
             pending_snapshot_regions: vec![],
             trans: trans,
             pd_client: pd_client,
+            coprocessor_host: Arc::new(coprocessor_host),
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
@@ -456,6 +464,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 h.join().unwrap();
             }
         }
+
+        self.coprocessor_host.shutdown();
 
         info!("stop raftstore finished.");
     }
