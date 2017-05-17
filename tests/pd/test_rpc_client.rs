@@ -26,7 +26,7 @@ fn test_rpc_client() {
     };
 
     let client = RpcClient::new(&endpoints).unwrap();
-    assert!(client.cluster_id != 0);
+    assert_ne!(client.cluster_id, 0);
     assert_eq!(client.cluster_id, client.get_cluster_id().unwrap());
 
     let store_id = client.alloc_id().unwrap();
