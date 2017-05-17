@@ -1105,6 +1105,19 @@ mod v2 {
                         try!(self.init_for_building(snap));
                     }
                 }
+            } else if self.cf_files
+                .iter()
+                .any(|cf_file| cf_file.file.is_none() && cf_file.sst_writer.is_none()) {
+                // If the snapshot cf and meta files exist when construct this snapshot,
+                // the cf file plain format writer and cf file sst format writers and
+                // meta file writer will not be initialized.
+                // if this snapshot file is deleted by GC or cleanup after being sent,
+                // we need to do the initialization before writing its cf files and meta file.
+                info!("[region {}] file {} is deleted after construction, redo initialization \
+                       before writing cf files and meta file",
+                      region.get_id(),
+                      self.path());
+                try!(self.init_for_building(snap));
             }
 
             let mut snap_key_count = 0;
@@ -1365,7 +1378,9 @@ mod v2 {
                 return;
             }
             // cleanup if data corruption happens and any file goes missing
-            if !self.exists() {
+            if (!self.exists()) &&
+               (self.cf_files.iter().any(|cf_file| file_exists(&cf_file.path)) ||
+                file_exists(&self.meta_file.path)) {
                 self.delete();
                 return;
             }
@@ -1865,6 +1880,38 @@ mod v2 {
                                             snap_data.take_meta(),
                                             size_track.clone())
                 .is_err());
+        }
+
+        #[test]
+        fn test_snap_build_after_deletion() {
+            let region_id = 1;
+            let region = get_test_region(region_id, 1, 1);
+            let db_dir = TempDir::new("test-snapshot-build-after-deletion-db").unwrap();
+            let db = get_test_db(&db_dir).unwrap();
+            let snapshot = DbSnapshot::new(db);
+
+            let dir = TempDir::new("test-snapshot-build-after-deletion").unwrap();
+            let key = SnapKey::new(region_id, 1, 1);
+            let size_track = Arc::new(RwLock::new(0));
+            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+            assert!(!s1.exists());
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data.set_region(region.clone());
+            let mut stat = SnapshotStatistics::new();
+            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            assert!(s1.exists());
+
+            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
+            assert!(s2.exists());
+
+            s1.delete();
+            assert!(!s2.exists());
+            // Ensure `s2` builds successfully even it's deleted before.
+            assert!(s2.build(&snapshot, &region, &mut snap_data, &mut stat).is_ok());
+            assert!(s2.exists());
         }
     }
 }
