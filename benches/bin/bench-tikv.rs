@@ -17,7 +17,6 @@
 #![feature(test)]
 #![feature(fnbox)]
 #![feature(box_syntax)]
-#![feature(const_fn)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
