@@ -573,10 +573,7 @@ fn process_write_impl(cid: u64,
         Command::Import { ref mutations, commit_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, &mut statistics, commit_ts, None);
             for m in mutations {
-                match txn.import(m.clone(), commit_ts) {
-                    Ok(_) => {}
-                    Err(e) => return Err(Error::from(e)),
-                }
+                try!(txn.import(m.clone(), commit_ts));
             }
             let pr = ProcessResult::Res;
             (pr, txn.modifies())

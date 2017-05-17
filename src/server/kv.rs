@@ -208,10 +208,11 @@ impl StoreHandler {
         let mutations = req.take_mutations()
             .into_iter()
             .map(|mut x| {
-                match x.get_op() {
-                    Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
-                    Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
-                    Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                let op = x.get_op();
+                if op == Op::Put {
+                    Mutation::Put((Key::from_raw(x.get_key()), x.take_value()))
+                } else {
+                    panic!("CmdImportRequest does not support this Operation:{:?}", op);
                 }
             })
             .collect();
@@ -220,7 +221,6 @@ impl StoreHandler {
             .async_import(msg.take_context(), mutations, req.get_commit_version(), cb)
             .map_err(Error::Storage)
     }
-
 
     fn on_raw_get(&self, mut msg: Request, on_resp: OnResponse) -> Result<()> {
         if !msg.has_cmd_raw_get_req() {

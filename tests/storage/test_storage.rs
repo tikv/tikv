@@ -46,8 +46,8 @@ fn test_txn_store_get() {
 #[test]
 fn test_import() {
     let store = AssertionStorage::default();
-    store.import_ok(b"x", b"y", 5);
-    store.get_ok(b"x", 6, b"y");
+    store.import_ok(b"k", b"v", 5);
+    store.get_ok(b"k", 6, b"v");
 }
 
 #[test]
