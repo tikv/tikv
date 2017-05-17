@@ -869,7 +869,7 @@ mod v2 {
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
             let mut s = try!(Snap::new(dir, key, size_track, true, true));
-            try!(s.init_for_building(snap));
+            try!(s.init_for_building(snap, true));
             Ok(s)
         }
 
@@ -929,8 +929,11 @@ mod v2 {
             Ok(s)
         }
 
-        fn init_for_building(&mut self, snap: &DbSnapshot) -> RaftStoreResult<()> {
-            if self.exists() {
+        fn init_for_building(&mut self,
+                             snap: &DbSnapshot,
+                             check_existence: bool)
+                             -> RaftStoreResult<()> {
+            if check_existence && self.exists() {
                 return Ok(());
             }
             let env_opt = EnvOptions::new();
@@ -1102,7 +1105,7 @@ mod v2 {
                               self.path(),
                               e);
                         self.delete();
-                        try!(self.init_for_building(snap));
+                        try!(self.init_for_building(snap, false));
                     }
                 }
             } else if self.cf_files
@@ -1117,7 +1120,7 @@ mod v2 {
                        before writing cf files and meta file",
                       region.get_id(),
                       self.path());
-                try!(self.init_for_building(snap));
+                try!(self.init_for_building(snap, false));
             }
 
             let mut snap_key_count = 0;
