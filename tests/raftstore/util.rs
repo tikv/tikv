@@ -75,6 +75,7 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
 
 pub fn new_store_cfg() -> Config {
     Config {
+        sync_log: false,
         raft_base_tick_interval: 10,
         raft_heartbeat_ticks: 2,
         raft_election_timeout_ticks: 25,
