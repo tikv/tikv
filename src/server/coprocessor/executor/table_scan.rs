@@ -15,45 +15,46 @@ use server::coprocessor::endpoint::{prefix_next, is_point};
 use server::coprocessor::Result;
 use tipb::executor::TableScan;
 use kvproto::coprocessor::KeyRange;
-use storage::{SnapshotStore, Statistics};
 use util::codec::table;
 use util::collections::HashSet;
+use storage::{Snapshot, Statistics};
 use super::{Executor, Row};
-use super::base_scanner::BaseScanner;
+use super::scanner::Scanner;
 
-struct TableScanExec<'a> {
+struct TableScanExecutor<'a> {
     meta: TableScan,
     col_ids: HashSet<i64>,
     cursor: usize,
     key_ranges: Vec<KeyRange>,
-    scanner: BaseScanner<'a>,
+    scanner: Scanner<'a>,
 }
 
-impl<'a> TableScanExec<'a> {
+impl<'a> TableScanExecutor<'a> {
     #[allow(dead_code)] //TODO:remove it
     pub fn new(meta: TableScan,
                key_ranges: Vec<KeyRange>,
-               store: SnapshotStore<'a>,
-               statistics: &'a mut Statistics)
-               -> TableScanExec<'a> {
+               snapshot: &'a Snapshot,
+               statistics: &'a mut Statistics,
+               start_ts: u64)
+               -> TableScanExecutor<'a> {
         let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = BaseScanner::new(meta.get_desc(), false, store, statistics);
-        TableScanExec {
+        let scanner = Scanner::new(meta.get_desc(), false, snapshot, statistics, start_ts);
+        TableScanExecutor {
             meta: meta,
             col_ids: col_ids,
             scanner: scanner,
             key_ranges: key_ranges,
-            cursor: 0,
+            cursor: Default::default(),
         }
     }
 
     fn get_row_from_range(&mut self) -> Result<Option<Row>> {
         let range = &self.key_ranges[self.cursor];
-        let kv = try!(self.scanner.get_row_from_range(range));
+        let kv = try!(self.scanner.next_row(range));
         let (key, value) = match kv {
             Some((key, value)) => (key, value),
             None => return Ok(None),
@@ -71,17 +72,17 @@ impl<'a> TableScanExec<'a> {
 
     fn get_row_from_point(&mut self) -> Result<Option<Row>> {
         let key = self.key_ranges[self.cursor].get_start();
-        let value = try!(self.scanner.get_row_from_point(key));
+        let value = try!(self.scanner.get_row(key));
         if let Some(value) = value {
             let values = box_try!(table::cut_row(value, &self.col_ids));
-            let h = box_try!(table::decode_handle(self.key_ranges[self.cursor].get_start()));
+            let h = box_try!(table::decode_handle(key));
             return Ok(Some(Row::new(h, values)));
         }
         Ok(None)
     }
 }
 
-impl<'a> Executor for TableScanExec<'a> {
+impl<'a> Executor for TableScanExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
             if is_point(&self.key_ranges[self.cursor]) {
@@ -106,7 +107,7 @@ impl<'a> Executor for TableScanExec<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::super::base_scanner::test::{Data, TestStore, prepare_table_data, get_range};
+    use super::super::scanner::test::{Data, TestStore, prepare_table_data, get_range};
     use std::i64;
     use tipb::schema::ColumnInfo;
     use storage::Statistics;
@@ -127,7 +128,7 @@ mod test {
     impl Default for TableScanExecutorMeta {
         fn default() -> TableScanExecutorMeta {
             let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
-            let test_store = TestStore::new(&test_data.data, test_data.pk.clone());
+            let test_store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
             let mut table_scan = TableScan::new();
             // prepare cols
             let cols = test_data.get_prev_2_cols();
@@ -157,10 +158,14 @@ mod test {
         range.set_end(end);
         assert!(is_point(&range));
         meta.ranges = vec![range];
-        let mut table_scanner = TableScanExec::new(meta.table_scan,
-                                                   meta.ranges,
-                                                   meta.store.store(),
-                                                   &mut statistics);
+
+        let (snapshot, start_ts) = meta.store.get_snapshot();
+
+        let mut table_scanner = TableScanExecutor::new(meta.table_scan,
+                                                       meta.ranges,
+                                                       snapshot,
+                                                       &mut statistics,
+                                                       start_ts);
 
         let row = table_scanner.next().unwrap().unwrap();
         assert_eq!(row.handle, meta.data.pk_handle);
@@ -185,10 +190,12 @@ mod test {
         let r3 = get_range(TABLE_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
         meta.ranges = vec![r1, r2, r3];
 
-        let mut table_scanner = TableScanExec::new(meta.table_scan,
-                                                   meta.ranges,
-                                                   meta.store.store(),
-                                                   &mut statistics);
+        let (snapshot, start_ts) = meta.store.get_snapshot();
+        let mut table_scanner = TableScanExecutor::new(meta.table_scan,
+                                                       meta.ranges,
+                                                       snapshot,
+                                                       &mut statistics,
+                                                       start_ts);
 
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap();
@@ -207,18 +214,20 @@ mod test {
     #[test]
     fn test_reverse_scan() {
         let mut statistics = Statistics::default();
-        let mut meta = TableScanExecutorMeta::default();;
+        let mut meta = TableScanExecutorMeta::default();
         meta.table_scan.set_desc(true);
-        let mut table_scanner = TableScanExec::new(meta.table_scan,
-                                                   meta.ranges,
-                                                   meta.store.store(),
-                                                   &mut statistics);
+        let (snapshot, start_ts) = meta.store.get_snapshot();
+        let mut table_scanner = TableScanExecutor::new(meta.table_scan,
+                                                       meta.ranges,
+                                                       snapshot,
+                                                       &mut statistics,
+                                                       start_ts);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
             let row = table_scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
-            assert_eq!(row.data.len(), 2);
+            assert_eq!(row.data.len(), meta.cols.len());
             let encode_data = &meta.data.encode_data[handle];
             for col in &meta.cols {
                 let cid = col.get_column_id();

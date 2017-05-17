@@ -17,18 +17,18 @@ use server::coprocessor::Result;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::KeyRange;
-use storage::{SnapshotStore, Statistics};
+use storage::{Snapshot, Statistics};
 use util::codec::{table, datum, mysql};
 use byteorder::{BigEndian, ReadBytesExt};
 use super::{Executor, Row};
-use super::base_scanner::BaseScanner;
+use super::scanner::Scanner;
 
 struct IndexScanExec<'a> {
     meta: IndexScan,
     col_ids: Vec<i64>,
     cursor: usize,
     key_ranges: Vec<KeyRange>,
-    scanner: BaseScanner<'a>,
+    scanner: Scanner<'a>,
     pk_col: Option<ColumnInfo>,
 }
 
@@ -36,8 +36,9 @@ impl<'a> IndexScanExec<'a> {
     #[allow(dead_code)] //TODO:remove it
     pub fn new(meta: IndexScan,
                key_ranges: Vec<KeyRange>,
-               store: SnapshotStore<'a>,
-               statistics: &'a mut Statistics)
+               snapshot: &'a Snapshot,
+               statistics: &'a mut Statistics,
+               start_ts: u64)
                -> IndexScanExec<'a> {
         let mut pk_col = None;
         let col_ids = meta.get_columns()
@@ -52,13 +53,13 @@ impl<'a> IndexScanExec<'a> {
             })
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = BaseScanner::new(meta.get_desc(), false, store, statistics);
+        let scanner = Scanner::new(meta.get_desc(), false, snapshot, statistics, start_ts);
         IndexScanExec {
             meta: meta,
             col_ids: col_ids,
             scanner: scanner,
             key_ranges: key_ranges,
-            cursor: 0,
+            cursor: Default::default(),
             pk_col: pk_col,
         }
     }
@@ -68,7 +69,7 @@ impl<'a> IndexScanExec<'a> {
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
-        let kv = try!(self.scanner.get_row_from_range(range));
+        let kv = try!(self.scanner.next_row(range));
         let (key, value) = match kv {
             Some((key, value)) => (key, value),
             None => return Ok(None),
@@ -123,7 +124,7 @@ impl<'a> Executor for IndexScanExec<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::super::base_scanner::test::{Data, TestStore, prepare_index_data, get_idx_range};
+    use super::super::scanner::test::{Data, TestStore, prepare_index_data, get_idx_range};
     use std::i64;
     use tipb::schema::ColumnInfo;
     use storage::Statistics;
@@ -144,7 +145,7 @@ mod test {
     impl Default for IndexScanExecutorMeta {
         fn default() -> IndexScanExecutorMeta {
             let test_data = prepare_index_data(KEY_NUMBER, TABLE_ID, INDEX_ID);
-            let test_store = TestStore::new(&test_data.data, test_data.pk.clone());
+            let test_store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
             let mut scan = IndexScan::new();
             // prepare cols
             let cols = test_data.get_index_cols();
@@ -171,9 +172,9 @@ mod test {
         let r2 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64);
         let r3 = get_idx_range(TABLE_ID, INDEX_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
         meta.ranges = vec![r1, r2, r3];
-
+        let (snapshot, start_ts) = meta.store.get_snapshot();
         let mut scanner =
-            IndexScanExec::new(meta.scan, meta.ranges, meta.store.store(), &mut statistics);
+            IndexScanExec::new(meta.scan, meta.ranges, snapshot, &mut statistics, start_ts);
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();
@@ -194,8 +195,9 @@ mod test {
         let mut statistics = Statistics::default();
         let mut meta = IndexScanExecutorMeta::default();;
         meta.scan.set_desc(true);
+        let (snapshot, start_ts) = meta.store.get_snapshot();
         let mut scanner =
-            IndexScanExec::new(meta.scan, meta.ranges, meta.store.store(), &mut statistics);
+            IndexScanExec::new(meta.scan, meta.ranges, snapshot, &mut statistics, start_ts);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;

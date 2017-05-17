@@ -11,59 +11,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use server::coprocessor::Result;
+use storage::txn::Result;
 use kvproto::coprocessor::KeyRange;
-use storage::{Key, Value, SnapshotStore, Statistics, ScanMode};
+use storage::{Key, Value, Snapshot, ScanMode, Statistics};
+use storage::mvcc::MvccReader;
 use util::escape;
-
-// Scanner for TableScan and IndexScan
-pub struct BaseScanner<'a> {
-    store: SnapshotStore<'a>,
+// `Scanner` is a helper struct to wrap all common scan operations
+// for `TableScanExecutor` and `IndexScanExecutor`
+pub struct Scanner<'a> {
+    reader: MvccReader<'a>,
     seek_key: Option<Vec<u8>>,
-    scan_mode: ScanMode,
-    upper_bound: Option<Vec<u8>>,
-    statistics: &'a mut Statistics,
     desc: bool,
-    key_only: bool,
+    start_ts: u64,
 }
 
-
-impl<'a> BaseScanner<'a> {
+impl<'a> Scanner<'a> {
     pub fn new(desc: bool,
                key_only: bool,
-               store: SnapshotStore<'a>,
-               statistics: &'a mut Statistics)
-               -> BaseScanner<'a> {
-
+               snapshot: &'a Snapshot,
+               statistics: &'a mut Statistics,
+               start_ts: u64)
+               -> Scanner<'a> {
         let scan_mode = if desc {
             ScanMode::Backward
         } else {
             ScanMode::Forward
         };
-        BaseScanner {
-            store: store,
+        let mut reader = MvccReader::new(snapshot, statistics, Some(scan_mode), true, None);
+        reader.set_key_only(key_only);
+        Scanner {
+            reader: reader,
             seek_key: None,
-            scan_mode: scan_mode,
-            upper_bound: None,
-            statistics: statistics,
             desc: desc,
-            key_only: key_only,
+            start_ts: start_ts,
         }
     }
 
-    pub fn get_row_from_range(&mut self, range: &KeyRange) -> Result<Option<(Vec<u8>, Value)>> {
-        let seek_key = self.prepare_and_get_seek_key(range);
+    pub fn next_row(&mut self, range: &KeyRange) -> Result<Option<(Vec<u8>, Value)>> {
+        if self.seek_key.is_none() {
+            self.init_with_range(range);
+        }
+        let seek_key = self.seek_key.take().unwrap();
         if range.get_start() > range.get_end() {
             return Ok(None);
         }
-        let mut scanner = try!(self.store.scanner(self.scan_mode,
-                                                  self.key_only,
-                                                  self.upper_bound.clone(),
-                                                  self.statistics));
         let kv = if self.desc {
-            try!(scanner.reverse_seek(Key::from_raw(&seek_key)))
+            try!(self.reader.reverse_seek(Key::from_raw(&seek_key), self.start_ts))
         } else {
-            try!(scanner.seek(Key::from_raw(&seek_key)))
+            try!(self.reader.seek(Key::from_raw(&seek_key), self.start_ts))
         };
 
         let (key, value) = match kv {
@@ -81,9 +76,9 @@ impl<'a> BaseScanner<'a> {
         Ok(Some((key, value)))
     }
 
-    pub fn get_row_from_point(&mut self, key: &[u8]) -> Result<Option<Value>> {
-        let data = try!(self.store
-            .get(&Key::from_raw(key), &mut self.statistics));
+    pub fn get_row(&mut self, key: &[u8]) -> Result<Option<Value>> {
+        let data = try!(self.reader
+            .get(&Key::from_raw(key), self.start_ts));
         Ok(data)
     }
 
@@ -92,18 +87,15 @@ impl<'a> BaseScanner<'a> {
         self.seek_key = seek_key;
     }
 
-    fn prepare_and_get_seek_key(&mut self, range: &KeyRange) -> Vec<u8> {
-        if self.seek_key.is_some() {
-            let seek_key = self.seek_key.take().unwrap();
-            self.seek_key = None;
-            return seek_key;
-        }
-        self.upper_bound = None;
+    pub fn init_with_range(&mut self, range: &KeyRange) {
         if self.desc {
-            return range.get_end().to_vec();
+            self.reader.reset(None);
+            self.seek_key = Some(range.get_end().to_vec());
+            return;
         }
-        self.upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
-        range.get_start().to_vec()
+        let upper_bound = Some(Key::from_raw(range.get_end()).encoded().to_vec());
+        self.reader.reset(upper_bound);
+        self.seek_key = Some(range.get_start().to_vec());
     }
 }
 
@@ -118,12 +110,10 @@ pub mod test {
     use util::collections::HashMap;
     use tipb::schema::ColumnInfo;
     use kvproto::kvrpcpb::Context;
-    use storage::SnapshotStore;
     use storage::mvcc::MvccTxn;
-    use storage::{make_key, Mutation, ALL_CFS, Options, Statistics};
-    use storage::engine::{self, Engine, TEMP_DIR, Snapshot};
+    use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, Snapshot};
+    use storage::engine::{self, Engine, TEMP_DIR, Modify};
     use server::coprocessor::endpoint::prefix_next;
-
 
     fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
@@ -132,16 +122,8 @@ pub mod test {
         col_info
     }
 
-    fn flatten(data: Datum) -> Result<Datum> {
-        match data {
-            Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
-            Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64())),
-            _ => Ok(data),
-        }
-    }
-
     pub struct Data {
-        pub data: Vec<(Vec<u8>, Vec<u8>)>,
+        pub kv_data: Vec<(Vec<u8>, Vec<u8>)>,
         pub pk: Vec<u8>,
         pub pk_handle: i64,
         // encode_data[row_id][column_id]=>value
@@ -166,7 +148,7 @@ pub mod test {
                         new_col_info(2, types::VARCHAR),
                         new_col_info(3, types::NEW_DECIMAL)];
 
-        let mut data = Vec::new();
+        let mut kv_data = Vec::new();
         let mut pk = Vec::new();
         let mut pk_handle = 0 as i64;
         let mut encode_data = Vec::new();
@@ -181,7 +163,7 @@ pub mod test {
             let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
             let col_values: Vec<_> = row.iter()
                 .map(|(k, v)| {
-                    let f = flatten(v.clone()).unwrap();
+                    let f = table::flatten(v.clone()).unwrap();
                     let value = datum::encode_value(&[f]).unwrap();
                     encode_value.insert(*k, value);
                     v.clone()
@@ -197,17 +179,16 @@ pub mod test {
                 pk_handle = handle as i64;
             }
             encode_data.push(encode_value);
-            data.push((key, value));
+            kv_data.push((key, value));
         }
         Data {
-            data: data,
+            kv_data: kv_data,
             pk: pk,
             pk_handle: pk_handle,
             encode_data: encode_data,
             cols: cols,
         }
     }
-
 
     pub fn prepare_index_data(key_number: usize, table_id: i64, index_id: i64) -> Data {
         let cols = vec![new_col_info(1, types::LONG_LONG),
@@ -243,7 +224,7 @@ pub mod test {
             data.push((idx_key, vec![0]));
         }
         Data {
-            data: data,
+            kv_data: data,
             pk: pk,
             pk_handle: pk_handle,
             encode_data: encode_data,
@@ -262,7 +243,7 @@ pub mod test {
     }
 
     impl TestStore {
-        pub fn new(data: &[(Vec<u8>, Vec<u8>)], pk: Vec<u8>) -> TestStore {
+        pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)], pk: Vec<u8>) -> TestStore {
             let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
@@ -272,42 +253,43 @@ pub mod test {
                 ctx: ctx,
                 engine: engine,
             };
-            store.init_data(data);
+            store.init_data(kv_data);
             store
         }
 
-        fn init_data(&mut self, data: &[(Vec<u8>, Vec<u8>)]) {
+        fn init_data(&mut self, kv_data: &[(Vec<u8>, Vec<u8>)]) {
             let mut statistics = Statistics::default();
             // do prewrite.
-            {
+            let txn_motifies = {
                 let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
-                for &(ref key, ref value) in data {
+                for &(ref key, ref value) in kv_data {
                     txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
                                   &self.pk,
                                   &Options::default())
                         .unwrap();
                 }
-                self.engine.write(&self.ctx, txn.modifies()).unwrap();
-            }
-            self.refresh_snapshot();
+                txn.modifies()
+            };
+            self.write_modifies(txn_motifies);
             // do commit
-            {
+            let txn_modifies = {
                 let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
-                for &(ref key, _) in data {
+                for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
-                self.engine.write(&self.ctx, txn.modifies()).unwrap();
-            }
-            self.refresh_snapshot();
+                txn.modifies()
+            };
+            self.write_modifies(txn_modifies);
         }
 
         #[inline]
-        fn refresh_snapshot(&mut self) {
+        fn write_modifies(&mut self, txn: Vec<Modify>) {
+            self.engine.write(&self.ctx, txn).unwrap();
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }
 
-        pub fn store(&self) -> SnapshotStore {
-            SnapshotStore::new(self.snapshot.as_ref(), COMMIT_TS + 1)
+        pub fn get_snapshot(&mut self) -> (&Snapshot, u64) {
+            (self.snapshot.as_ref(), COMMIT_TS + 1)
         }
     }
 
@@ -335,6 +317,7 @@ pub mod test {
         key_range
     }
 
+
     #[test]
     fn test_point_get() {
         let pk = b"key1".to_vec();
@@ -343,11 +326,11 @@ pub mod test {
             (pk.clone(),pv.clone().to_vec()),
             (b"key2".to_vec(),b"value2".to_vec()),
         ];
-        let test_store = TestStore::new(&test_data, pk.clone());
         let mut statistics = Statistics::default();
-        let store = test_store.store();
-        let mut scanner = BaseScanner::new(false, false, store, &mut statistics);
-        let data = scanner.get_row_from_point(&pk).unwrap().unwrap();
+        let mut test_store = TestStore::new(&test_data, pk.clone());
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut scanner = Scanner::new(false, false, snapshot, &mut statistics, start_ts);
+        let data = scanner.get_row(&pk).unwrap().unwrap();
         assert_eq!(data, pv);
     }
 
@@ -360,21 +343,19 @@ pub mod test {
             (pk.clone(),pv.clone().to_vec()),
             (table::encode_row_key(table_id,b"key2"),b"value2".to_vec()),
         ];
-        let test_store = TestStore::new(&test_data, pk.clone());
         let mut statistics = Statistics::default();
-        let store = test_store.store();
+        let mut test_store = TestStore::new(&test_data, pk.clone());
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut scanner = Scanner::new(false, false, snapshot, &mut statistics, start_ts);
         let range = get_range(table_id, i64::MIN, i64::MAX);
-
-        let mut scanner = BaseScanner::new(false, false, store, &mut statistics);
-
         for &(ref k, ref v) in &test_data {
-            let (key, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
+            let (key, value) = scanner.next_row(&range).unwrap().unwrap();
             let seek_key = prefix_next(&key);
             scanner.set_seek_key(Some(seek_key));
             assert_eq!(*k, key);
             assert_eq!(*v, value);
         }
-        assert!(scanner.get_row_from_range(&range).unwrap().is_none());
+        assert!(scanner.next_row(&range).unwrap().is_none());
     }
 
     #[test]
@@ -382,22 +363,20 @@ pub mod test {
         let table_id = 1;
         let key_number = 10;
         let mut data = prepare_table_data(key_number, table_id);
-        let test_store = TestStore::new(&data.data, data.pk.clone());
         let mut statistics = Statistics::default();
-        let store = test_store.store();
+        let mut test_store = TestStore::new(&data.kv_data, data.pk.clone());
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut scanner = Scanner::new(true, false, snapshot, &mut statistics, start_ts);
         let range = get_range(table_id, i64::MIN, i64::MAX);
-
-        let mut scanner = BaseScanner::new(true, false, store, &mut statistics);
-
-        data.data.reverse();
-        for &(ref k, ref v) in &data.data {
-            let (key, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
+        data.kv_data.reverse();
+        for &(ref k, ref v) in &data.kv_data {
+            let (key, value) = scanner.next_row(&range).unwrap().unwrap();
             let seek_key = table::truncate_as_row_key(&key).unwrap().to_vec();
             scanner.set_seek_key(Some(seek_key));
             assert_eq!(*k, key);
             assert_eq!(*v, value);
         }
-        assert!(scanner.get_row_from_range(&range).unwrap().is_none());
+        assert!(scanner.next_row(&range).unwrap().is_none());
     }
 
     #[test]
@@ -409,43 +388,41 @@ pub mod test {
             (pk.clone(),pv.clone().to_vec()),
             (table::encode_row_key(table_id,b"key2"),b"value2".to_vec()),
         ];
-        let test_store = TestStore::new(&test_data, pk.clone());
         let mut statistics = Statistics::default();
-        let store = test_store.store();
-        let range = get_range(table_id, i64::MIN, i64::MAX);
-        let mut scanner = BaseScanner::new(false, true, store, &mut statistics);
+        let mut test_store = TestStore::new(&test_data, pk.clone());
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut scanner = Scanner::new(false, true, snapshot, &mut statistics, start_ts);
 
-        let (_, value) = scanner.get_row_from_range(&range).unwrap().unwrap();
+        let range = get_range(table_id, i64::MIN, i64::MAX);
+        let (_, value) = scanner.next_row(&range).unwrap().unwrap();
         assert!(value.is_empty());
     }
 
     #[test]
-    fn test_prepare_and_get_seek_key() {
+    fn test_init_with_range() {
         let table_id = 1;
         let pk = table::encode_row_key(table_id, b"key1");
         let pv = b"value1";
         let test_data = vec![
             (pk.clone(),pv.clone().to_vec()),
         ];
-        let test_store = TestStore::new(&test_data, pk.clone());
         let mut statistics = Statistics::default();
-        let store = test_store.store();
+        let mut test_store = TestStore::new(&test_data, pk.clone());
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut scanner = Scanner::new(true, false, snapshot, &mut statistics, start_ts);
         let range = get_range(table_id, i64::MIN, i64::MAX);
-        let mut scanner = BaseScanner::new(true, false, store, &mut statistics);
         // 1. seek_key is some
         scanner.set_seek_key(Some(pk.clone()));
-        let seek_key = scanner.prepare_and_get_seek_key(&range);
-        assert_eq!(seek_key, pk.clone());
+        assert_eq!(scanner.seek_key.take().unwrap(), pk.clone());
 
-        // 1. seek_key is none. 2. desc scan
-        let seek_key = scanner.prepare_and_get_seek_key(&range);
-        assert_eq!(seek_key, range.get_end());
-        assert!(scanner.upper_bound.is_none());
+        // 1. desc scan
+        scanner.desc = true;
+        scanner.init_with_range(&range);
+        assert_eq!(scanner.seek_key.take().unwrap(), range.get_end());
 
-        // 1.seek_key is none. 2.asc scan
+        // 1.asc scan
         scanner.desc = false;
-        let seek_key = scanner.prepare_and_get_seek_key(&range);
-        assert_eq!(seek_key, range.get_start());
-        assert!(scanner.upper_bound.is_some());
+        scanner.init_with_range(&range);
+        assert_eq!(scanner.seek_key.take().unwrap(), range.get_start());
     }
 }
