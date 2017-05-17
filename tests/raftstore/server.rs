@@ -32,7 +32,6 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
 use tikv::util::transport::SendCh;
-use tikv::util::core_runner::CoreRunner;
 use tikv::util::worker::FutureWorker;
 use tikv::storage::{Engine, CfName, ALL_CFS};
 use kvproto::raft_serverpb::{self, RaftMessage};
@@ -46,7 +45,6 @@ type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
 pub struct ServerCluster {
     routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
     senders: HashMap<u64, SendCh<Msg>>,
-    cores: HashMap<u64, CoreRunner>,
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
     sim_trans: HashMap<u64, SimulateServerTransport>,
@@ -65,7 +63,6 @@ impl ServerCluster {
         ServerCluster {
             routers: HashMap::new(),
             senders: HashMap::new(),
-            cores: HashMap::new(),
             handles: HashMap::new(),
             addrs: HashMap::new(),
             sim_trans: HashMap::new(),
@@ -160,14 +157,11 @@ impl Simulator for ServerCluster {
         store.start(&cfg.storage).unwrap();
         self.storages.insert(node_id, store.get_engine());
 
-        let core = CoreRunner::new(thd_name!(format!("server-core-{}", node_id)));
-
         let server_chan = ServerChannel {
             raft_router: sim_router.clone(),
             snapshot_status_sender: node.get_snapshot_status_sender(),
         };
         let mut server = Server::new(&mut event_loop,
-                                     core.remote(),
                                      &cfg,
                                      store,
                                      server_chan,
@@ -187,7 +181,6 @@ impl Simulator for ServerCluster {
 
         self.handles.insert(node_id, (node, t));
         self.senders.insert(node_id, ch);
-        self.cores.insert(node_id, core);
         self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
 
@@ -201,13 +194,11 @@ impl Simulator for ServerCluster {
     fn stop_node(&mut self, node_id: u64) {
         let (mut node, h) = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
-        let core = self.cores.remove(&node_id).unwrap();
         let _ = self.store_chs.remove(&node_id).unwrap();
 
         ch.try_send(Msg::Quit).unwrap();
         node.stop().unwrap();
         h.join().unwrap();
-        core.stop();
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {

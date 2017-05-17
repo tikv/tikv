@@ -14,10 +14,10 @@
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::boxed::Box;
-
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
-use tokio_core::reactor::Remote as RemoteCore;
+
+use futures_cpupool::Builder as CpuPoolBuilder;
 use mio::{Handler, EventLoop, EventLoopConfig};
 use grpc::{Server as GrpcServer, ServerBuilder, Environment};
 use kvproto::tikvpb_grpc::*;
@@ -84,7 +84,6 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     pub fn new(event_loop: &mut EventLoop<Self>,
-               core: RemoteCore,
                cfg: &Config,
                storage: Storage,
                ch: ServerChannel<T>,
@@ -95,8 +94,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
         let raft_msg_worker = FutureWorker::new("raft-msg-worker");
+        let cpu_pool = CpuPoolBuilder::new()
+            .pool_size(cfg.server_cpupool_size)
+            .name_prefix("server-cpupool")
+            .create();
 
-        let h = Service::new(core,
+        let h = Service::new(cpu_pool,
                              storage.clone(),
                              end_point_worker.scheduler(),
                              ch.raft_router.clone(),
@@ -375,7 +378,6 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
-    use util::core_runner::CoreRunner;
 
     struct MockResolver {
         addr: Arc<Mutex<Option<SocketAddr>>>,
@@ -427,7 +429,6 @@ mod tests {
         cfg.addr = "127.0.0.1:0".to_owned();
 
         let mut event_loop = create_event_loop(&cfg).unwrap();
-        let core = CoreRunner::new(thd_name!("test-tikv-core"));
         let mut storage = Storage::new(&cfg.storage).unwrap();
         storage.start(&cfg.storage).unwrap();
 
@@ -444,7 +445,6 @@ mod tests {
         let addr = Arc::new(Mutex::new(None));
         let mut server =
             Server::new(&mut event_loop,
-                        core.remote(),
                         &cfg,
                         storage,
                         ch,
@@ -475,6 +475,5 @@ mod tests {
 
         ch.try_send(Msg::Quit).unwrap();
         h.join().unwrap();
-        core.stop();
     }
 }

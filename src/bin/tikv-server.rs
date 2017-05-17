@@ -21,7 +21,6 @@
 
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
-#[macro_use]
 extern crate tikv;
 extern crate getopts;
 #[macro_use]
@@ -38,6 +37,7 @@ extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
 extern crate futures;
+extern crate futures_cpupool;
 extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
@@ -75,7 +75,6 @@ use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::util::time_monitor::TimeMonitor;
-use tikv::util::core_runner::CoreRunner;
 
 const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
 const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
@@ -829,7 +828,6 @@ fn run_raft_server(pd_client: RpcClient,
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let core_runner = CoreRunner::new(thd_name!("tikv-core"));
 
     let store_path = &cfg.storage.path;
     let mut lock_path = Path::new(store_path).to_path_buf();
@@ -856,7 +854,6 @@ fn run_raft_server(pd_client: RpcClient,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
     let svr = Server::new(&mut event_loop,
-                          core_runner.remote(),
                           &cfg,
                           store,
                           server_chan,
@@ -864,7 +861,6 @@ fn run_raft_server(pd_client: RpcClient,
                           snap_mgr)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     start_server(svr, event_loop, engine, backup_path);
-    core_runner.stop();
     node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 
