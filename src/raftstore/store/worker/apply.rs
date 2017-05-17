@@ -32,6 +32,7 @@ use util::{SlowTimer, rocksdb, escape};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{CF_LOCK, CF_RAFT};
 use raftstore::{Result, Error};
+use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Snapshot, Peekable, Mutable};
@@ -135,16 +136,18 @@ pub enum ExecResult {
     VerifyHash { index: u64, hash: Vec<u8> },
 }
 
-struct ApplyContext {
+struct ApplyContext<'a> {
+    pub host: &'a CoprocessorHost,
     pub wb: Option<WriteBatch>,
     pub cbs: Vec<(Callback, RaftCmdResponse)>,
     pub wb_last_bytes: u64,
     pub wb_last_keys: u64,
 }
 
-impl ApplyContext {
-    fn new() -> ApplyContext {
+impl<'a> ApplyContext<'a> {
+    fn new(host: &CoprocessorHost) -> ApplyContext {
         ApplyContext {
+            host: host,
             wb: Some(WriteBatch::new()),
             cbs: vec![],
             wb_last_bytes: 0,
@@ -174,7 +177,7 @@ impl ApplyContext {
     }
 }
 
-impl Drop for ApplyContext {
+impl<'a> Drop for ApplyContext<'a> {
     fn drop(&mut self) {
         if !self.cbs.is_empty() {
             panic!("callback of apply context is leak");
@@ -448,7 +451,7 @@ impl ApplyDelegate {
                         apply_ctx: &mut ApplyContext,
                         index: u64,
                         term: u64,
-                        cmd: RaftCmdRequest)
+                        mut cmd: RaftCmdRequest)
                         -> Option<ExecResult> {
         if index == 0 {
             panic!("{} processing raft command needs a none zero index",
@@ -457,6 +460,7 @@ impl ApplyDelegate {
 
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cmd_cb = self.find_cb(uuid, term, &cmd);
+        apply_ctx.host.pre_apply(&self.region, &mut cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
 
         debug!("{} applied command with uuid {:?} at log index {}",
@@ -1193,6 +1197,7 @@ pub enum TaskRes {
 // TODO: use threadpool to do task concurrently
 pub struct Runner {
     db: Arc<DB>,
+    host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
 }
@@ -1205,6 +1210,7 @@ impl Runner {
         }
         Runner {
             db: store.engine(),
+            host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
         }
@@ -1214,7 +1220,7 @@ impl Runner {
         let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
 
         let mut applys_res = Vec::with_capacity(applys.len());
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(self.host.as_ref());
         for apply in applys {
             if apply.entries.is_empty() {
                 continue;
@@ -1355,9 +1361,10 @@ mod tests {
         (path, db)
     }
 
-    fn new_runner(db: Arc<DB>, tx: Sender<TaskRes>) -> Runner {
+    fn new_runner(db: Arc<DB>, host: Arc<CoprocessorHost>, tx: Sender<TaskRes>) -> Runner {
         Runner {
             db: db,
+            host: host,
             delegates: HashMap::new(),
             notifier: tx,
         }
@@ -1402,7 +1409,8 @@ mod tests {
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
         let (_tmp, db) = create_tmp_engine("apply-basic");
-        let mut runner = new_runner(db.clone(), tx);
+        let host = Arc::new(CoprocessorHost::new());
+        let mut runner = new_runner(db.clone(), host, tx);
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -1614,7 +1622,8 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new();
+        let host = CoprocessorHost::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1634,7 +1643,7 @@ mod tests {
         let written_keys = delegate.metrics.written_keys;
         let size_diff_hint = delegate.metrics.size_diff_hint;
         let put_entry = EntryBuilder::new(2, 2).put_cf(CF_LOCK, b"k1", b"v1").epoch(1, 3).build();
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1655,7 +1664,7 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1672,7 +1681,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1697,7 +1706,7 @@ mod tests {
         let lock_written_bytes = delegate.metrics.lock_cf_written_bytes;
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1719,7 +1728,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1737,7 +1746,7 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
