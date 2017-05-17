@@ -17,6 +17,7 @@
 #![feature(test)]
 #![feature(fnbox)]
 #![feature(box_syntax)]
+#![feature(const_fn)]
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
@@ -39,6 +40,7 @@ extern crate kvproto;
 extern crate time;
 extern crate futures;
 extern crate tokio_core;
+extern crate grpc;
 
 #[allow(dead_code)]
 #[path="../../tests/util.rs"]

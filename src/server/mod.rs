@@ -41,6 +41,7 @@ pub use self::server::{ServerChannel, Server, create_event_loop};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver};
+pub use self::raft_send::{SendTask, SendRunner};
 
 pub type OnResponse = Box<FnBox(Response) + Send>;
 
