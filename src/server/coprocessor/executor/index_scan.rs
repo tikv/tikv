@@ -24,7 +24,7 @@ use super::{Executor, Row};
 use super::scanner::Scanner;
 
 struct IndexScanExec<'a> {
-    meta: IndexScan,
+    desc: bool,
     col_ids: Vec<i64>,
     cursor: usize,
     key_ranges: Vec<KeyRange>,
@@ -34,28 +34,24 @@ struct IndexScanExec<'a> {
 
 impl<'a> IndexScanExec<'a> {
     #[allow(dead_code)] //TODO:remove it
-    pub fn new(meta: IndexScan,
+    pub fn new(meta: &mut IndexScan,
                key_ranges: Vec<KeyRange>,
                snapshot: &'a Snapshot,
                statistics: &'a mut Statistics,
                start_ts: u64)
                -> IndexScanExec<'a> {
         let mut pk_col = None;
-        let col_ids = meta.get_columns()
-            .iter()
-            .filter(|c| {
-                if c.get_pk_handle() {
-                    pk_col = Some((*c).clone());
-                    false
-                } else {
-                    true
-                }
-            })
+        let desc = meta.get_desc();
+        let mut cols = meta.mut_columns();
+        if cols.last().map_or(false, |c| c.get_pk_handle()) {
+            pk_col = Some(cols.pop().unwrap());
+        }
+        let col_ids = cols.iter()
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = Scanner::new(meta.get_desc(), false, snapshot, statistics, start_ts);
+        let scanner = Scanner::new(desc, false, snapshot, statistics, start_ts);
         IndexScanExec {
-            meta: meta,
+            desc: desc,
             col_ids: col_ids,
             scanner: scanner,
             key_ranges: key_ranges,
@@ -75,7 +71,7 @@ impl<'a> IndexScanExec<'a> {
             None => return Ok(None),
         };
 
-        let seek_key = if self.meta.get_desc() {
+        let seek_key = if self.desc {
             key.clone()
         } else {
             prefix_next(&key)
@@ -173,8 +169,11 @@ mod test {
         let r3 = get_idx_range(TABLE_ID, INDEX_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
         meta.ranges = vec![r1, r2, r3];
         let (snapshot, start_ts) = meta.store.get_snapshot();
-        let mut scanner =
-            IndexScanExec::new(meta.scan, meta.ranges, snapshot, &mut statistics, start_ts);
+        let mut scanner = IndexScanExec::new(&mut meta.scan,
+                                             meta.ranges,
+                                             snapshot,
+                                             &mut statistics,
+                                             start_ts);
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();
@@ -196,8 +195,11 @@ mod test {
         let mut meta = IndexScanExecutorMeta::default();;
         meta.scan.set_desc(true);
         let (snapshot, start_ts) = meta.store.get_snapshot();
-        let mut scanner =
-            IndexScanExec::new(meta.scan, meta.ranges, snapshot, &mut statistics, start_ts);
+        let mut scanner = IndexScanExec::new(&mut meta.scan,
+                                             meta.ranges,
+                                             snapshot,
+                                             &mut statistics,
+                                             start_ts);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
