@@ -17,7 +17,7 @@ use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::collections::VecDeque;
 
-use rocksdb::{DB, WriteBatch, Writable};
+use rocksdb::{DB, WriteBatch, Writable, WriteOptions};
 use uuid::Uuid;
 use protobuf::RepeatedField;
 
@@ -29,8 +29,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
-use util::collections::{HashMap, HashMapEntry as MapEntry};
-use storage::{CF_LOCK, CF_RAFT};
+use util::collections::{HashMap, HashMapEntry as MapEntry, HashSet};
+use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
@@ -42,6 +42,8 @@ use raftstore::store::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+
+const CFS_NEED_FLUSH: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -243,8 +245,8 @@ pub struct ApplyDelegate {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
-    apply_state: RaftApplyState,
-    applied_index_term: u64,
+    pub apply_state: RaftApplyState,
+    pub applied_index_term: u64,
     term: u64,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
@@ -316,9 +318,9 @@ impl ApplyDelegate {
             }
         }
 
-        if !self.pending_remove {
-            self.write_apply_state(apply_ctx.wb_mut());
-        }
+        //        if !self.pending_remove {
+        //            self.write_apply_state(apply_ctx.wb_mut());
+        //        }
 
         self.update_metrics(apply_ctx);
         apply_ctx.mark_last_bytes_and_keys();
@@ -362,13 +364,13 @@ impl ApplyDelegate {
             let cmd = parse_data_at(data, index, &self.tag);
 
             if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
-                self.write_apply_state(apply_ctx.wb_mut());
+                // self.write_apply_state(apply_ctx.wb_mut());
 
                 self.update_metrics(apply_ctx);
 
                 // flush to engine
                 self.engine
-                    .write(apply_ctx.wb.take().unwrap())
+                    .write_without_wal(apply_ctx.wb.take().unwrap())
                     .unwrap_or_else(|e| {
                         panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                     });
@@ -1122,6 +1124,7 @@ pub enum Task {
     Registration(Registration),
     Propose(Propose),
     Destroy(Destroy),
+    FlushApplied(()),
 }
 
 impl Task {
@@ -1153,6 +1156,10 @@ impl Task {
     pub fn destroy(region_id: u64) -> Task {
         Task::Destroy(Destroy { region_id: region_id })
     }
+
+    pub fn flush_applied() -> Task {
+        Task::FlushApplied(())
+    }
 }
 
 impl Display for Task {
@@ -1164,6 +1171,7 @@ impl Display for Task {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Task::FlushApplied(()) => write!(f, "flush applies"),
         }
     }
 }
@@ -1193,6 +1201,7 @@ pub struct ApplyRes {
 pub enum TaskRes {
     Applys(Vec<ApplyRes>),
     Destroy(ApplyDelegate),
+    FlushApplied(Vec<(u64, RaftApplyState)>),
 }
 
 // TODO: use threadpool to do task concurrently
@@ -1201,6 +1210,9 @@ pub struct Runner {
     host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
+
+    // When receive AdvanceApplies command, flush applied index to db.
+    regions_need_flush_applied: HashSet<u64>,
 }
 
 impl Runner {
@@ -1214,6 +1226,7 @@ impl Runner {
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
+            regions_need_flush_applied: HashSet::default(),
         }
     }
 
@@ -1253,12 +1266,14 @@ impl Runner {
             }
             if e.get().pending_remove {
                 e.remove();
+            } else {
+                self.regions_need_flush_applied.insert(apply.region_id);
             }
         }
 
         // Write to engine
         self.db
-            .write(apply_ctx.wb.take().unwrap())
+            .write_without_wal(apply_ctx.wb.take().unwrap())
             .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
 
         // Call callbacks
@@ -1316,11 +1331,45 @@ impl Runner {
         if let Some(mut meta) = self.delegates.remove(&d.region_id) {
             info!("{} remove from apply delegates", meta.tag);
             meta.destroy();
+            self.regions_need_flush_applied.remove(&d.region_id);
             self.notifier.send(TaskRes::Destroy(meta)).unwrap();
         }
     }
 
+    fn handle_flush_applied(&mut self) {
+        let wb = WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE);
+        let mut res = Vec::with_capacity(self.regions_need_flush_applied.len());
+        for region_id in self.regions_need_flush_applied.drain() {
+            let delegate = self.delegates.get(&region_id).unwrap();
+            delegate.write_apply_state(&wb);
+            res.push((region_id, delegate.apply_state.clone()));
+        }
+
+        // Flush memtables of default/lock/write column families.
+        for cf in CFS_NEED_FLUSH {
+            let cf_handle = rocksdb::get_cf_handle(&self.db, cf).unwrap();
+            self.db.flush_cf(cf_handle, true).unwrap();
+        }
+
+        // Write apply state with WAL.
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(true);
+        self.db.write_opt(wb, &write_opts).unwrap_or_else(|e| {
+            panic!("failed to flush applied state, error: {:?}", e);
+        });
+
+        // Flush memtables of raft column families, and then RocksDB can gc old WAL.
+        let cf_handle = rocksdb::get_cf_handle(&self.db, CF_RAFT).unwrap();
+        self.db.flush_cf(cf_handle, true).unwrap();
+
+        // Send result to raftstore.
+        self.notifier.send(TaskRes::FlushApplied(res)).unwrap();
+    }
+
     fn handle_shutdown(&mut self) {
+        // Flush applied states to db before shutdown.
+        self.handle_flush_applied();
+
         for p in self.delegates.values_mut() {
             p.clear_pending_commands();
         }
@@ -1334,6 +1383,7 @@ impl Runnable<Task> for Runner {
             Task::Propose(p) => self.handle_propose(p),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
+            Task::FlushApplied(()) => self.handle_flush_applied(),
         }
     }
 
@@ -1368,6 +1418,7 @@ mod tests {
             host: host,
             delegates: HashMap::new(),
             notifier: tx,
+            regions_need_flush_applied: HashSet::default(),
         }
     }
 
