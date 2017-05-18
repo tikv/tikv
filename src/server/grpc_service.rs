@@ -552,6 +552,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         self.pool
             .spawn(stream.map_err(Error::from)
                 .for_each(move |msg| future::result(ch.send_raft_msg(msg)).map_err(Error::from))
+                .map_err(|e| error!("send raft msg to raft store fail: {}", e))
                 .then(|_| future::ok::<_, ()>(())))
             .forget();
     }
