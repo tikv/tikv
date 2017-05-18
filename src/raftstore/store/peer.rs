@@ -191,7 +191,7 @@ pub struct PeerStat {
 pub struct Peer {
     engine: Arc<DB>,
     cfg: Rc<Config>,
-    peer_cache: Vec<PeerCache>,
+    peer_cache: FlatMap<u64, metapb::Peer>,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -1390,37 +1390,16 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
 
 impl Peer {
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
-        for cached_peer in self.peer_cache.iter() {
-            if cached_peer.peer_id == peer.get_id() {
-                return;
-            }
-        }
-        self.peer_cache.push(PeerCache {
-            peer_id: peer.get_id(),
-            peer: peer,
-        });
+        self.peer_cache.insert(peer.get_id(), peer);
     }
 
     pub fn remove_peer_from_cache(&mut self, peer_id: u64) {
-        let mut found = false;
-        let mut index = 0;
-        for (i, cached_peer) in self.peer_cache.iter().enumerate() {
-            if cached_peer.peer_id == peer_id {
-                found = true;
-                index = i;
-                break;
-            }
-        }
-        if found {
-            self.peer_cache.remove(index);
-        }
+        self.peer_cache.remove(&peer_id);
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
-        for cached_peer in self.peer_cache.iter() {
-            if cached_peer.peer_id == peer_id {
-                return Some(cached_peer.peer.clone());
-            }
+        if let Some(peer) = self.peer_cache.get(&peer_id) {
+            return Some(peer.clone());
         }
         None
     }
