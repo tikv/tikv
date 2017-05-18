@@ -78,6 +78,7 @@ impl Display for Task {
 
 struct SnapChunk {
     snap: Arc<RwLock<Box<Snapshot>>>,
+    remain_bytes: usize,
 }
 
 const SNAP_CHUNK_LEN: usize = 1024 * 1024;
@@ -86,27 +87,17 @@ impl Iterator for SnapChunk {
     type Item = result::Result<Vec<u8>, io::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut buf = vec![0; SNAP_CHUNK_LEN];
-        let mut written = 0;
-        loop {
-            let len = match self.snap.wl().read(&mut buf[written..]) {
-                Ok(0) => {
-                    return if written > 0 {
-                        Some(Ok(buf.drain(..written).collect()))
-                    } else {
-                        None
-                    }
-                }
-                Ok(len) => len,
-                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    return Some(Err(e));
-                }
-            };
-            written += len;
-            if written >= SNAP_CHUNK_LEN {
-                return Some(Ok(buf));
+        let mut buf = match self.remain_bytes {
+            0 => return None,
+            n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],
+            n => vec![0; n],
+        };
+        match self.snap.wl().read_exact(buf.as_mut_slice()) {
+            Ok(_) => {
+                self.remain_bytes -= buf.len();
+                Some(Ok(buf))
             }
+            Err(e) => Some(Err(e)),
         }
     }
 }
@@ -138,7 +129,10 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let s = Arc::new(RwLock::new(s));
 
     let chunks = {
-        let snap_chunk = SnapChunk { snap: s.clone() };
+        let snap_chunk = SnapChunk {
+            snap: s.clone(),
+            remain_bytes: total_size as usize,
+        };
         let first: Once<Result<SnapshotChunk>> = iter::once({
             let mut chunk = SnapshotChunk::new();
             chunk.set_message(data.msg);
