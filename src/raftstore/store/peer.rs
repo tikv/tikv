@@ -33,7 +33,6 @@ use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
@@ -56,7 +55,7 @@ use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
-const DEFAULT_APPEND_WB_SIZE: usize = 32 * 1024;
+const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 struct ReadIndexRequest {
     uuid: Uuid,
@@ -193,7 +192,7 @@ pub struct Peer {
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
-    coprocessor_host: CoprocessorHost,
+    coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
@@ -311,7 +310,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: store.peer_cache(),
             peer_heartbeats: HashMap::default(),
-            coprocessor_host: CoprocessorHost::new(),
+            coprocessor_host: store.coprocessor_host.clone(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             apply_scheduler: store.apply_scheduler(),
@@ -334,8 +333,6 @@ impl Peer {
             written_keys: 0,
             last_written_bytes: 0,
         };
-
-        peer.load_all_coprocessors();
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
@@ -384,7 +381,6 @@ impl Peer {
             }
         }
 
-        self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 
         Ok(())
@@ -392,11 +388,6 @@ impl Peer {
 
     pub fn is_initialized(&self) -> bool {
         self.get_store().is_initialized()
-    }
-
-    pub fn load_all_coprocessors(&mut self) {
-        // TODO load coprocessors from configuration
-        self.coprocessor_host.registry.register_observer(100, box SplitObserver);
     }
 
     pub fn engine(&self) -> Arc<DB> {
@@ -1228,7 +1219,7 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut req));
+        try!(self.coprocessor_host.pre_propose(&self.region(), &mut req));
         let data = try!(req.write_to_bytes());
 
         // TODO: use local histogram metrics
