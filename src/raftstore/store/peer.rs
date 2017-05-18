@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::vec::Vec;
 use std::default::Default;
@@ -192,7 +191,7 @@ pub struct PeerStat {
 pub struct Peer {
     engine: Arc<DB>,
     cfg: Rc<Config>,
-    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
+    peer_cache: Vec<PeerCache>,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -314,7 +313,7 @@ impl Peer {
             raft_group: raft_group,
             proposals: Default::default(),
             pending_reads: Default::default(),
-            peer_cache: store.peer_cache(),
+            peer_cache: Default::default(),
             peer_heartbeats: HashMap::default(),
             coprocessor_host: store.coprocessor_host.clone(),
             size_diff_hint: 0,
@@ -1390,19 +1389,39 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
 }
 
 impl Peer {
-    pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
-        if let Some(peer) = self.peer_cache.borrow().get(&peer_id).cloned() {
-            return Some(peer);
-        }
-
-        // Try to find in region, if found, set in cache.
-        for peer in self.get_store().get_region().get_peers() {
-            if peer.get_id() == peer_id {
-                self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
-                return Some(peer.clone());
+    pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
+        for cached_peer in self.peer_cache.iter() {
+            if cached_peer.peer_id == peer.get_id() {
+                return;
             }
         }
+        self.peer_cache.push(PeerCache {
+            peer_id: peer.get_id(),
+            peer: peer,
+        });
+    }
 
+    pub fn remove_peer_from_cache(&mut self, peer_id: u64) {
+        let mut found = false;
+        let mut index = 0;
+        for (i, cached_peer) in self.peer_cache.iter().enumerate() {
+            if cached_peer.peer_id == peer_id {
+                found = true;
+                index = i;
+                break;
+            }
+        }
+        if found {
+            self.peer_cache.remove(index);
+        }
+    }
+
+    pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        for cached_peer in self.peer_cache.iter() {
+            if cached_peer.peer_id == peer_id {
+                return Some(cached_peer.peer.clone());
+            }
+        }
         None
     }
 
