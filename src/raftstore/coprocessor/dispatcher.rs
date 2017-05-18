@@ -161,7 +161,7 @@ mod test {
         }
 
 
-        fn pre_apply_query(&self, ctx: &mut ObserverContext, _: &mut RepeatedField<Request>) {
+        fn pre_apply_query(&self, ctx: &mut ObserverContext, _: &mut RaftCmdRequest) {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
