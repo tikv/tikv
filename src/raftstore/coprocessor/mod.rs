@@ -14,14 +14,14 @@
 mod region_snapshot;
 pub mod dispatcher;
 pub mod split_observer;
+pub mod prewrite_observer;
 mod error;
 
 pub use self::region_snapshot::{RegionSnapshot, RegionIterator};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 
-use kvproto::raft_cmdpb::{AdminRequest, Request};
+use kvproto::raft_cmdpb::{RaftCmdRequest, AdminRequest};
 use kvproto::metapb::Region;
-use protobuf::RepeatedField;
 
 pub use self::error::{Error, Result};
 
@@ -61,12 +61,12 @@ pub trait RegionObserver: Coprocessor {
     }
 
     /// Hook to call before execute read/write request.
-    fn pre_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) -> Result<()> {
+    fn pre_query(&self, _: &mut ObserverContext, _: &mut RaftCmdRequest) -> Result<()> {
         Ok(())
     }
 
     /// Hook to call before apply read/write request.
     ///
     /// Please note that inproper implementation can lead to data inconsistency.
-    fn pre_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) {}
+    fn pre_apply_query(&self, _: &mut ObserverContext, _: &mut RaftCmdRequest) {}
 }
