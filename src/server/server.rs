@@ -107,13 +107,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let env = Arc::new(Environment::new(cfg.grpc_concurrency));
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
-        let mut grpc_server = try!(ServerBuilder::new(env.clone())
+        let grpc_server = try!(ServerBuilder::new(env.clone())
             .register_service(create_tikv(h))
             .bind(ip, addr.port())
             .build());
-
-        // TODO: start grpc server in run(). Now we have to start here so the addr can be revealed.
-        grpc_server.start();
 
         let addr = {
             let (ref host, port) = grpc_server.bind_addrs()[0];
@@ -149,7 +146,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
-
+        self.grpc_server.start();
         info!("TiKV is ready to serve");
 
         try!(event_loop.run(self));
