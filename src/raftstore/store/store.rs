@@ -23,6 +23,7 @@ use std::thread;
 use std::u64;
 
 use rocksdb::DB;
+use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
@@ -860,6 +861,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
+        self.raft_metrics.ready.pending_region += pending_count as u64;
+
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
@@ -870,8 +873,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             (ctx.wb, ctx.ready_res)
         };
 
+        self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
+
         if !wb.is_empty() {
-            self.engine.write(wb).unwrap_or_else(|e| {
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(self.cfg.sync_log);
+            self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
                 panic!("{} failed to save append result: {:?}", self.tag, e);
             });
         }
