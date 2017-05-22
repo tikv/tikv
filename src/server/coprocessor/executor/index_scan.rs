@@ -138,6 +138,17 @@ mod test {
         cols: Vec<ColumnInfo>,
     }
 
+    impl IndexScanExecutorMeta {
+        fn include_pk_cols() -> IndexScanExecutorMeta {
+            let mut meta = IndexScanExecutorMeta::default();
+            let mut cols = meta.data.get_index_cols();
+            cols.push(meta.data.get_col_pk());
+            meta.scan.set_columns(RepeatedField::from_vec(cols.clone()));
+            meta.cols = cols;
+            meta
+        }
+    }
+
     impl Default for IndexScanExecutorMeta {
         fn default() -> IndexScanExecutorMeta {
             let test_data = prepare_index_data(KEY_NUMBER, TABLE_ID, INDEX_ID);
@@ -210,6 +221,37 @@ mod test {
             for col in &meta.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
+                assert_eq!(encode_data[&cid], v.to_vec());
+            }
+        }
+        assert!(scanner.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_include_pk() {
+        let mut statistics = Statistics::default();
+        let mut meta = IndexScanExecutorMeta::include_pk_cols();
+        let (snapshot, start_ts) = meta.store.get_snapshot();
+        let mut scanner = IndexScanExec::new(&mut meta.scan,
+                                             meta.ranges,
+                                             snapshot,
+                                             &mut statistics,
+                                             start_ts);
+
+        for handle in 0..KEY_NUMBER {
+            let row = scanner.next().unwrap().unwrap();
+            assert_eq!(row.handle, handle as i64);
+            assert_eq!(row.data.len(), meta.cols.len());
+            let encode_data = &meta.data.encode_data[handle];
+            let handle_datum = datum::Datum::I64(handle as i64);
+            let pk = datum::encode_value(&[handle_datum]).unwrap();
+            for col in &meta.cols {
+                let cid = col.get_column_id();
+                let v = row.data.get(cid).unwrap();
+                if col.get_pk_handle() {
+                    assert_eq!(pk, v.to_vec());
+                    continue;
+                }
                 assert_eq!(encode_data[&cid], v.to_vec());
             }
         }

@@ -141,6 +141,12 @@ pub mod test {
         pub fn get_index_cols(&self) -> Vec<ColumnInfo> {
             vec![self.cols[1].clone(), self.cols[2].clone()]
         }
+
+        pub fn get_col_pk(&self) -> ColumnInfo {
+            let mut pk_col = new_col_info(0, types::LONG);
+            pk_col.set_pk_handle(true);
+            pk_col
+        }
     }
 
     pub fn prepare_table_data(key_number: usize, table_id: i64) -> Data {

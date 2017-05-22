@@ -278,7 +278,8 @@ impl RowColsDict {
     pub fn append(&mut self, cid: i64, value: &mut Vec<u8>) {
         let offset = self.value.len();
         let length = value.len();
-        self.cols[&cid] = RowColMeta::new(offset, length);
+        self.value.append(value);
+        self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 }
 
