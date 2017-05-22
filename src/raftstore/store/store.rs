@@ -74,6 +74,9 @@ type Key = Vec<u8>;
 const MIO_TICK_RATIO: u64 = 10;
 const PENDING_VOTES_CAP: usize = 20;
 
+const SPLIT_OBSERVER_IDX: u32   = 100;
+const TNX_OBSERVER_IDX: u32     = 99;
+
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
     pub sender: Sender<Msg>,
@@ -189,8 +192,8 @@ impl<T, C> Store<T, C> {
 
         let mut coprocessor_host = CoprocessorHost::new();
         // TODO load coprocessors from configuration
-        coprocessor_host.registry.register_observer(100, box SplitObserver);
-        coprocessor_host.registry.register_observer(99, box TxnObserver);
+        coprocessor_host.registry.register_observer(SPLIT_OBSERVER_IDX, box SplitObserver);
+        coprocessor_host.registry.register_observer(TNX_OBSERVER_IDX, box TxnObserver);
 
         let mut s = Store {
             cfg: Rc::new(cfg),
