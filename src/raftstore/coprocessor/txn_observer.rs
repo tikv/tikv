@@ -164,25 +164,21 @@ mod tests {
     }
 
     #[bench]
-    fn bench_pre_apply_query_of_put(b: &mut Bencher) {
+    fn bench_gen_prewrite_reqs(b: &mut Bencher) {
         let value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
-        let mut put_reqs = gen_put_reqs(b"k1", &value, b"k1", 5);
-        let observer = TxnObserver;
-        let region = Region::new();
-        let mut ctx = ObserverContext::new(&region);
         b.iter(|| {
-            observer.pre_apply_query(&mut ctx, &mut put_reqs);
+            gen_prewrite_reqs(b"k1", &value, b"k1", 5);
         });
     }
 
     #[bench]
     fn bench_pre_apply_query_of_prewrite(b: &mut Bencher) {
         let value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
-        let mut prewrite_reqs = gen_prewrite_reqs(b"k1", &value, b"k1", 5);
         let observer = TxnObserver;
         let region = Region::new();
         let mut ctx = ObserverContext::new(&region);
         b.iter(|| {
+            let mut prewrite_reqs = gen_prewrite_reqs(b"k1", &value, b"k1", 5);
             observer.pre_apply_query(&mut ctx, &mut prewrite_reqs);
         });
     }
