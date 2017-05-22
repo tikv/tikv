@@ -326,11 +326,10 @@ pub fn try_connect_leader(previous: &GetMembersResponse)
                         resp = Some(r);
                         break 'outer;
                     } else {
-                        warn!("{} no longer belongs to cluster {}, it is in {}",
-                              ep,
-                              cluster_id,
-                              new_cluster_id);
-                        continue 'outer;
+                        panic!("{} no longer belongs to cluster {}, it is in {}",
+                               ep,
+                               cluster_id,
+                               new_cluster_id);
                     }
                 }
                 Err(e) => {
