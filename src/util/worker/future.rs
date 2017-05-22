@@ -167,14 +167,14 @@ mod test {
     use super::*;
 
     struct StepRunner {
+        timer: Timer,
         ch: Sender<u64>,
     }
 
     impl Runnable<u64> for StepRunner {
         fn run(&mut self, step: u64, handle: &Handle) {
             self.ch.send(step).unwrap();
-            let timer = Timer::default();
-            let f = timer.sleep(Duration::from_millis(step)).map_err(|_| ());
+            let f = self.timer.sleep(Duration::from_millis(step)).map_err(|_| ());
             handle.spawn(f);
         }
 
@@ -187,7 +187,11 @@ mod test {
     fn test_future_worker() {
         let mut worker = Worker::new("test-async-worker");
         let (tx, rx) = mpsc::channel();
-        worker.start(StepRunner { ch: tx }).unwrap();
+        worker.start(StepRunner {
+                timer: Timer::default(),
+                ch: tx,
+            })
+            .unwrap();
         assert!(!worker.is_busy());
         // The default tick size of tokio_timer is 100ms.
         let start = Instant::now();

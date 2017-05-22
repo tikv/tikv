@@ -33,7 +33,6 @@ use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
@@ -56,6 +55,7 @@ use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 struct ReadIndexRequest {
     uuid: Uuid,
@@ -147,7 +147,7 @@ pub struct ReadyContext<'a, T: 'a> {
 impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
-            wb: WriteBatch::new(),
+            wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             metrics: metrics,
             trans: t,
             ready_res: Vec::with_capacity(cap),
@@ -181,6 +181,14 @@ enum RequestPolicy {
     ProposeConfChange,
 }
 
+#[derive(Default, Clone)]
+pub struct PeerStat {
+    pub written_bytes: u64,
+    pub written_keys: u64,
+    pub last_written_bytes: u64,
+    pub last_written_keys: u64,
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     cfg: Rc<Config>,
@@ -192,7 +200,7 @@ pub struct Peer {
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
-    coprocessor_host: CoprocessorHost,
+    coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
@@ -235,9 +243,7 @@ pub struct Peer {
     //      locally.
     leader_lease_expired_time: Option<Either<Timespec, Timespec>>,
 
-    pub written_bytes: u64,
-    pub written_keys: u64,
-    pub last_written_bytes: u64,
+    pub peer_stat: PeerStat,
 }
 
 impl Peer {
@@ -310,7 +316,7 @@ impl Peer {
             pending_reads: Default::default(),
             peer_cache: store.peer_cache(),
             peer_heartbeats: HashMap::default(),
-            coprocessor_host: CoprocessorHost::new(),
+            coprocessor_host: store.coprocessor_host.clone(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             apply_scheduler: store.apply_scheduler(),
@@ -329,12 +335,8 @@ impl Peer {
             raft_entry_max_size: cfg.raft_entry_max_size,
             cfg: cfg,
             leader_lease_expired_time: None,
-            written_bytes: 0,
-            written_keys: 0,
-            last_written_bytes: 0,
+            peer_stat: PeerStat::default(),
         };
-
-        peer.load_all_coprocessors();
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
@@ -383,7 +385,6 @@ impl Peer {
             }
         }
 
-        self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 
         Ok(())
@@ -391,11 +392,6 @@ impl Peer {
 
     pub fn is_initialized(&self) -> bool {
         self.get_store().is_initialized()
-    }
-
-    pub fn load_all_coprocessors(&mut self) {
-        // TODO load coprocessors from configuration
-        self.coprocessor_host.registry.register_observer(100, box SplitObserver);
     }
 
     pub fn engine(&self) -> Arc<DB> {
@@ -813,8 +809,8 @@ impl Peer {
         self.raft_group.advance_apply(res.apply_state.get_applied_index());
         self.mut_store().apply_state = res.apply_state.clone();
         self.mut_store().applied_index_term = res.applied_index_term;
-        self.written_keys += res.metrics.written_keys;
-        self.written_bytes += res.metrics.written_bytes;
+        self.peer_stat.written_keys += res.metrics.written_keys;
+        self.peer_stat.written_bytes += res.metrics.written_bytes;
 
         if has_split {
             self.delete_keys_hint = res.metrics.delete_keys_hint;
@@ -1227,7 +1223,7 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut req));
+        try!(self.coprocessor_host.pre_propose(&self.region(), &mut req));
         let data = try!(req.write_to_bytes());
 
         // TODO: use local histogram metrics
@@ -1416,7 +1412,8 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.last_written_bytes,
+            written_bytes: self.peer_stat.last_written_bytes,
+            written_keys: self.peer_stat.last_written_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

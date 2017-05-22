@@ -19,9 +19,9 @@ mod error;
 pub use self::region_snapshot::{RegionSnapshot, RegionIterator};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 
-use kvproto::raft_cmdpb::{AdminRequest, Request, AdminResponse, Response};
+use kvproto::raft_cmdpb::{AdminRequest, Request};
+use kvproto::metapb::Region;
 use protobuf::RepeatedField;
-use raftstore::store::PeerStorage;
 
 pub use self::error::{Error, Result};
 
@@ -29,49 +29,44 @@ pub use self::error::{Error, Result};
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
 pub trait Coprocessor {
-    fn start(&mut self) -> ();
-    fn stop(&mut self) -> ();
+    fn start(&self) {}
+    fn stop(&self) {}
 }
 
-/// Context of request.
-pub struct ObserverContext {
-    /// A snapshot of requested region.
-    pub snap: RegionSnapshot,
+/// Context of observer.
+pub struct ObserverContext<'a> {
+    region: &'a Region,
     /// Whether to bypass following observer hook.
     pub bypass: bool,
 }
 
-impl ObserverContext {
-    pub fn new(peer: &PeerStorage) -> ObserverContext {
+impl<'a> ObserverContext<'a> {
+    pub fn new(region: &Region) -> ObserverContext {
         ObserverContext {
-            snap: RegionSnapshot::new(peer),
+            region: region,
             bypass: false,
         }
+    }
+
+    pub fn region(&self) -> &Region {
+        self.region
     }
 }
 
 /// Observer hook of region level.
 pub trait RegionObserver: Coprocessor {
     /// Hook to call before execute admin request.
-    fn pre_admin(&mut self, ctx: &mut ObserverContext, req: &mut AdminRequest) -> Result<()>;
+    fn pre_admin(&self, _: &mut ObserverContext, _: &mut AdminRequest) -> Result<()> {
+        Ok(())
+    }
 
     /// Hook to call before execute read/write request.
-    fn pre_query(&mut self,
-                 ctx: &mut ObserverContext,
-                 req: &mut RepeatedField<Request>)
-                 -> Result<()>;
+    fn pre_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) -> Result<()> {
+        Ok(())
+    }
 
-    /// Hook to call after admin request being executed.
-    fn post_admin(&mut self,
-                  ctx: &mut ObserverContext,
-                  req: &AdminRequest,
-                  resp: &mut AdminResponse)
-                  -> ();
-
-    /// Hook to call after read/write request being executed.
-    fn post_query(&mut self,
-                  ctx: &mut ObserverContext,
-                  req: &[Request],
-                  resp: &mut RepeatedField<Response>)
-                  -> ();
+    /// Hook to call before apply read/write request.
+    ///
+    /// Please note that inproper implementation can lead to data inconsistency.
+    fn pre_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) {}
 }
