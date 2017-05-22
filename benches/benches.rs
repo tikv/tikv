@@ -34,6 +34,7 @@ extern crate kvproto;
 mod channel;
 mod writebatch;
 mod serialization;
+mod memtable;
 
 #[allow(dead_code)]
 #[path="../tests/util.rs"]
