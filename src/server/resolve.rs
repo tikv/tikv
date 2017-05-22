@@ -157,7 +157,7 @@ mod tests {
 
     use kvproto::pdpb;
     use kvproto::metapb;
-    use pd::{PdClient, Result, PdFuture};
+    use pd::{PdClient, Result, PdFuture, RegionStat};
     use util;
     use util::collections::HashMap;
 
@@ -204,9 +204,7 @@ mod tests {
         fn region_heartbeat(&self,
                             _: metapb::Region,
                             _: metapb::Peer,
-                            _: Vec<pdpb::PeerStats>,
-                            _: Vec<metapb::Peer>,
-                            _: u64)
+                            _: RegionStat)
                             -> PdFuture<pdpb::RegionHeartbeatResponse> {
             unimplemented!();
         }

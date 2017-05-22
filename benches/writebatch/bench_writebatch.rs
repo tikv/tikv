@@ -91,3 +91,29 @@ fn bench_writebatch_512(b: &mut Bencher) {
 fn bench_writebatch_1024(b: &mut Bencher) {
     bench_writebatch_impl(b, 1024);
 }
+
+fn fill_writebatch(wb: &WriteBatch, target_size: usize) {
+    let (k, v) = (b"this is the key", b"this is the value");
+    loop {
+        wb.put(k, v).unwrap();
+        if wb.data_size() >= target_size {
+            break;
+        }
+    }
+}
+
+#[bench]
+fn bench_writebatch_without_capacity(b: &mut Bencher) {
+    b.iter(|| {
+        let wb = WriteBatch::new();
+        fill_writebatch(&wb, 4096);
+    });
+}
+
+#[bench]
+fn bench_writebatch_with_capacity(b: &mut Bencher) {
+    b.iter(|| {
+        let wb = WriteBatch::with_capacity(4096);
+        fill_writebatch(&wb, 4096);
+    });
+}
