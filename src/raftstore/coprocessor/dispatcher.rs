@@ -61,7 +61,7 @@ impl CoprocessorHost {
                                   req.mut_admin_request(),
                                   |o, ctx, q| o.pre_admin(ctx, q))
         } else {
-            self.execute_pre_hook(ctx, req, |o, ctx, q| o.pre_query(ctx, q))
+            self.execute_pre_hook(ctx, req.mut_requests(), |o, ctx, q| o.pre_query(ctx, q))
         }
     }
 
@@ -86,7 +86,7 @@ impl CoprocessorHost {
         let mut ctx = ObserverContext::new(region);
         if !req.has_admin_request() {
             for entry in &self.registry.observers {
-                entry.observer.pre_apply_query(&mut ctx, req);
+                entry.observer.pre_apply_query(&mut ctx, req.mut_requests());
                 if ctx.bypass {
                     break;
                 }
@@ -150,7 +150,7 @@ mod test {
 
         fn pre_query(&self,
                      ctx: &mut ObserverContext,
-                     _: &mut RaftCmdRequest)
+                     _: &mut RepeatedField<Request>)
                      -> Result<()> {
             self.called.fetch_add(2, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
@@ -161,7 +161,7 @@ mod test {
         }
 
 
-        fn pre_apply_query(&self, ctx: &mut ObserverContext, _: &mut RaftCmdRequest) {
+        fn pre_apply_query(&self, ctx: &mut ObserverContext, _: &mut RepeatedField<Request>) {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
