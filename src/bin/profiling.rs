@@ -107,11 +107,6 @@ mod imp {
 
 #[cfg(not(feature = "mem-profiling"))]
 mod imp {
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-    use std::time::Duration;
-    use std::thread::JoinHandle;
-
     pub fn toggle_prof() -> Result<bool, i32> {
         Ok(false)
     }

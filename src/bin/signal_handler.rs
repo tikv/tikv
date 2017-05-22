@@ -24,7 +24,7 @@ mod imp {
     use prometheus::{self, Encoder, TextEncoder};
 
     // Real-time signals
-    const TOGGLE_PROF_SIG: libc::c_int = 40;
+    const TOGGLE_PROF_SIG: libc::c_int = 41;
 
     use profiling;
 
