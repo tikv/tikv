@@ -46,12 +46,14 @@ pub struct Inner {
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
+    timer: Timer,
     inner: Arc<RwLock<Inner>>,
 }
 
 impl LeaderClient {
     pub fn new(client: PDAsyncClient, members: GetMembersResponse) -> LeaderClient {
         LeaderClient {
+            timer: Timer::default(),
             inner: Arc::new(RwLock::new(Inner {
                 client: client,
                 members: members,
@@ -68,8 +70,10 @@ impl LeaderClient {
         Request {
             reconnect_count: retry,
             request_sent: 0,
-            timer: Timer::default(),
-            client: LeaderClient { inner: self.inner.clone() },
+            client: LeaderClient {
+                timer: self.timer.clone(),
+                inner: self.inner.clone(),
+            },
             req: req,
             resp: None,
             func: f,
@@ -110,7 +114,6 @@ const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 pub struct Request<Req, Resp, F> {
     reconnect_count: usize,
     request_sent: usize,
-    timer: Timer,
 
     client: LeaderClient,
 
@@ -144,7 +147,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
                 ok(self).boxed()
             }
             Err(_) => {
-                self.timer
+                self.client
+                    .timer
                     .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
                     .then(|_| Err(self))
                     .boxed()
