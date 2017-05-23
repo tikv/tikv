@@ -25,7 +25,6 @@ impl Coprocessor for TxnObserver {}
 impl RegionObserver for TxnObserver {
     fn pre_apply_query(&self, _: &mut ObserverContext, reqs: &mut RepeatedField<Request>) {
         for i in 0..reqs.len() {
-            //let ref mut req = reqs[i];
             if reqs[i].get_cmd_type() != CmdType::Prewrite {
                 continue;
             }
@@ -67,7 +66,7 @@ mod tests {
     use kvproto::metapb::Region;
     use storage::mvcc::{LockType, Lock};
 
-    fn gen_reqs(modifies: Vec<Modify>) -> Vec<Request> {
+    fn gen_request(modifies: Vec<Modify>) -> Vec<Request> {
         let mut reqs = Vec::with_capacity(modifies.len());
         for m in modifies {
             let mut req = Request::new();
@@ -105,33 +104,33 @@ mod tests {
         reqs
     }
 
-    fn gen_put_reqs(key: &[u8], value: &[u8], pk: &[u8], ts: u64) -> RepeatedField<Request> {
+    fn gen_put_req(key: &[u8], value: &[u8], pk: &[u8], ts: u64) -> Vec<Request> {
         let mut modifies = Vec::new();
         let opt = Options::default();
         let key = make_key(key);
         let lock = Lock::new(LockType::Put, pk.to_vec(), ts, opt.lock_ttl, None);
         modifies.push(Modify::Put(CF_LOCK, key.clone(), lock.to_bytes()));
         modifies.push(Modify::Put(CF_DEFAULT, key.append_ts(ts), value.to_vec()));
-        RepeatedField::from_vec(gen_reqs(modifies))
+        gen_request(modifies)
     }
 
-    fn gen_prewrite_reqs(key: &[u8], value: &[u8], pk: &[u8], ts: u64) -> RepeatedField<Request> {
+    fn gen_prewrite_req(key: &[u8], value: &[u8], pk: &[u8], ts: u64) -> Vec<Request> {
         let mut modifies = Vec::new();
         let opt = Options::default();
         let key = make_key(key);
         let lock = Lock::new(LockType::Put, pk.to_vec(), ts, opt.lock_ttl, None);
         modifies.push(Modify::Prewrite(key.append_ts(ts), value.to_vec(), lock));
-        RepeatedField::from_vec(gen_reqs(modifies))
+        gen_request(modifies)
     }
 
     fn test_pre_apply_query_impl(key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
-        let put_reqs = gen_put_reqs(key, value, pk, ts);
-        let mut prewrite_reqs = gen_prewrite_reqs(key, value, pk, ts);
+        let put_req = RepeatedField::from_vec(gen_put_req(key, value, pk, ts));
+        let mut prewrite_req = RepeatedField::from_vec(gen_prewrite_req(key, value, pk, ts));
         let observer = TxnObserver;
         let region = Region::new();
         let mut ctx = ObserverContext::new(&region);
-        observer.pre_apply_query(&mut ctx, &mut prewrite_reqs);
-        assert_eq!(prewrite_reqs, put_reqs);
+        observer.pre_apply_query(&mut ctx, &mut prewrite_req);
+        assert_eq!(prewrite_req, put_req);
     }
 
     #[test]
@@ -151,22 +150,36 @@ mod tests {
         value
     }
 
+    fn gen_prewrite_reqs(cnt: u32, key: &[u8], value: &[u8], pk: &[u8], ts: u64) -> Vec<Request> {
+        let mut modifies = Vec::new();
+        let opt = Options::default();
+        let key = make_key(key);
+        let lock = Lock::new(LockType::Put, pk.to_vec(), ts, opt.lock_ttl, None);
+        for _ in 0..cnt {
+            modifies.push(Modify::Prewrite(key.append_ts(ts), value.to_vec(), lock.clone()));
+        }
+        gen_request(modifies)
+    }
+
     #[bench]
     fn bench_gen_prewrite_reqs(b: &mut Bencher) {
         let value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let (key, pk, ts) = (b"k1", b"k1", 5);
         b.iter(|| {
-            gen_prewrite_reqs(b"k1", &value, b"k1", 5);
+            RepeatedField::from_vec(gen_prewrite_reqs(4, key, &value, pk, ts));
         });
     }
 
     #[bench]
     fn bench_pre_apply_query_of_prewrite(b: &mut Bencher) {
         let value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
+        let (key, pk, ts) = (b"k1", b"k1", 5);
         let observer = TxnObserver;
         let region = Region::new();
         let mut ctx = ObserverContext::new(&region);
         b.iter(|| {
-            let mut prewrite_reqs = gen_prewrite_reqs(b"k1", &value, b"k1", 5);
+            let mut prewrite_reqs =
+                RepeatedField::from_vec(gen_prewrite_reqs(4, key, &value, pk, ts));
             observer.pre_apply_query(&mut ctx, &mut prewrite_reqs);
         });
     }
