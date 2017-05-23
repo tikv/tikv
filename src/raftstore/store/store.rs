@@ -88,6 +88,7 @@ pub struct StoreStat {
     pub region_keys_written: LocalHistogram,
     pub lock_cf_bytes_written: u64,
     pub engine_total_bytes_written: u64,
+    pub engine_total_keys_written: u64,
 }
 
 impl Default for StoreStat {
@@ -97,6 +98,7 @@ impl Default for StoreStat {
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
             engine_total_bytes_written: 0,
+            engine_total_keys_written: 0,
         }
     }
 }
@@ -1117,9 +1119,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if let Some(origin_peer) = self.region_peers.get(&region_id) {
                     // New peer derive write flow from parent region,
                     // this will be used by balance write flow.
-                    new_peer.last_written_bytes = origin_peer.last_written_bytes;
-                    new_peer.written_bytes = origin_peer.written_bytes;
-                    new_peer.written_keys = origin_peer.written_keys;
+                    new_peer.peer_stat = origin_peer.peer_stat.clone();
 
                     campaigned =
                         new_peer.maybe_campaign(origin_peer, &mut self.pending_raft_groups);
@@ -1365,17 +1365,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
-            peer.last_written_bytes = peer.written_bytes;
+            peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
+            peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
             if !peer.is_leader() {
-                peer.written_bytes = 0;
-                peer.written_keys = 0;
+                peer.peer_stat.written_bytes = 0;
+                peer.peer_stat.written_keys = 0;
                 continue;
             }
 
-            self.store_stat.region_bytes_written.observe(peer.written_bytes as f64);
-            self.store_stat.region_keys_written.observe(peer.written_keys as f64);
-            peer.written_bytes = 0;
-            peer.written_keys = 0;
+            self.store_stat.region_bytes_written.observe(peer.peer_stat.written_bytes as f64);
+            self.store_stat.region_keys_written.observe(peer.peer_stat.written_keys as f64);
+            peer.peer_stat.written_bytes = 0;
+            peer.peer_stat.written_keys = 0;
         }
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
@@ -1674,6 +1675,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
         self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
         stats.set_bytes_written(delta);
+
+        let engine_total_keys_written = self.engine
+            .get_statistics_ticker_count(TickerType::NumberKeysWritten);
+        let delta = engine_total_keys_written - self.store_stat.engine_total_keys_written;
+        self.store_stat.engine_total_keys_written = engine_total_keys_written;
+        stats.set_keys_written(delta);
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;
