@@ -13,14 +13,14 @@ matrix:
   include:
     - os: linux
       rust: nightly-2017-03-28
-      env: COMPILER=g++-4.8 RUSTFMT_VERSION=v0.6.0 CXX=g++-4.8
+      env: COMPILER=g++-4.8 RUSTFMT_VERSION=v0.6.0 CXX=g++-4.8 GOOS=linux
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
             packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
     - os: osx
       rust: nightly-2017-03-28
-      env: COMPILER=clang++ SKIP_FORMAT_CHECK=true CXX=clang++
+      env: COMPILER=clang++ SKIP_FORMAT_CHECK=true CXX=clang++ GOOS=darwin
 
 install:
   - export LOCAL_DIR=$HOME/.cache/
