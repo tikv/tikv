@@ -568,6 +568,7 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     default_values.whole_key_filtering = true;
     default_values.compression_per_level = String::from("no:no:no:no:no:no:no");
     default_values.level_zero_file_num_compaction_trigger = 1;
+    default_values.bloom_bits_per_key = 16;
 
     let mut opts = get_rocksdb_cf_option(config, "lockcf", default_values);
     // Currently if we want create bloom filter for memtable, we must set prefix extractor.
