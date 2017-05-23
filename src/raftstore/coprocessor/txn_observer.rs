@@ -171,7 +171,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_pre_apply_query_of_prewrite(b: &mut Bencher) {
+    fn bench_pre_apply_query(b: &mut Bencher) {
         let value = gen_value(b'v', SHORT_VALUE_MAX_LEN + 1);
         let (key, pk, ts) = (b"k1", b"k1", 5);
         let observer = TxnObserver;
