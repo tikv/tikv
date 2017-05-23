@@ -886,7 +886,10 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::Snap => self.handle_snap(ctx, req),
-                CmdType::Invalid | CmdType::Prewrite => {
+                CmdType::Prewrite => {
+                    Err(box_err!("prewrite cmd should be transformed in apply coprocessor"))
+                }
+                CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
             });

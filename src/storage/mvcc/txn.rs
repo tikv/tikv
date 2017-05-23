@@ -75,12 +75,6 @@ impl<'a> MvccTxn<'a> {
         self.writes.push(Modify::Delete(CF_LOCK, key));
     }
 
-    // fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
-    //     let key = key.append_ts(ts);
-    //     self.write_size += key.encoded().len() + value.len();
-    //     self.writes.push(Modify::Put(CF_DEFAULT, key, value));
-    // }
-
     fn put_prewrite(&mut self,
                     key: Key,
                     lock_type: LockType,

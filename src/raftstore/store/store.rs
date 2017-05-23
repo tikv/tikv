@@ -74,8 +74,8 @@ type Key = Vec<u8>;
 const MIO_TICK_RATIO: u64 = 10;
 const PENDING_VOTES_CAP: usize = 20;
 
-const SPLIT_OBSERVER_IDX: u32   = 100;
-const TNX_OBSERVER_IDX: u32     = 99;
+const SPLIT_OBSERVER_IDX: u32 = 100;
+const TNX_OBSERVER_IDX: u32 = 99;
 
 // A helper structure to bundle all channels for messages to `Store`.
 pub struct StoreChannel {
