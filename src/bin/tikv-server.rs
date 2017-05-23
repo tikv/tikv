@@ -565,7 +565,7 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     let mut default_values = CfOptValues::default();
     default_values.block_size = 16 * KB as i64;
     default_values.use_bloom_filter = true;
-    default_values.whole_key_filtering = false;
+    default_values.whole_key_filtering = true;
     default_values.compression_per_level = String::from("no:no:no:no:no:no:no");
     default_values.level_zero_file_num_compaction_trigger = 1;
 
