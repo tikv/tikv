@@ -24,47 +24,35 @@ impl Coprocessor for TxnObserver {}
 
 impl RegionObserver for TxnObserver {
     fn pre_apply_query(&self, _: &mut ObserverContext, reqs: &mut RepeatedField<Request>) {
-        let mut has_prewrite = false;
-        for req in reqs.iter() {
-            if req.get_cmd_type() == CmdType::Prewrite {
-                has_prewrite = true;
+        for i in 0..reqs.len() {
+            //let ref mut req = reqs[i];
+            if reqs[i].get_cmd_type() != CmdType::Prewrite {
+                continue;
             }
-        }
-        if !has_prewrite {
-            return;
-        }
+            let mut prewrite = reqs[i].take_prewrite();
+            let key = prewrite.take_key();
+            let lock_key = Key::from_encoded(key.clone())
+                .truncate_ts()
+                .unwrap()
+                .into_encoded();
 
-        let old_reqs = reqs.clone();
-        reqs.clear();
-        for req in old_reqs.iter() {
-            if req.get_cmd_type() == CmdType::Prewrite {
-                let prewrite = req.get_prewrite();
-                let key = prewrite.get_key().to_vec();
-                let lock_key = Key::from_encoded(key.clone())
-                    .truncate_ts()
-                    .unwrap()
-                    .encoded()
-                    .to_owned();
+            let mut put = PutRequest::new();
+            put.set_cf(CF_LOCK.to_owned());
+            put.set_key(lock_key);
+            put.set_value(prewrite.take_lock());
 
-                let mut put = PutRequest::new();
-                put.set_cf(CF_LOCK.to_owned());
-                put.set_key(lock_key);
-                put.set_value(prewrite.get_lock().to_vec());
-                let mut new_req = Request::new();
-                new_req.set_cmd_type(CmdType::Put);
-                new_req.set_put(put);
-                reqs.push(new_req.to_owned());
+            let mut new_req = Request::new();
+            new_req.set_cmd_type(CmdType::Put);
+            new_req.set_put(put);
+            reqs[i] = new_req;
 
-                let mut put = PutRequest::new();
-                put.set_key(key);
-                put.set_value(prewrite.get_value().to_vec());
-                let mut new_req = Request::new();
-                new_req.set_cmd_type(CmdType::Put);
-                new_req.set_put(put);
-                reqs.push(new_req.to_owned());
-            } else {
-                reqs.push(req.to_owned());
-            }
+            let mut put = PutRequest::new();
+            put.set_key(key);
+            put.set_value(prewrite.take_value());
+            let mut new_req = Request::new();
+            new_req.set_cmd_type(CmdType::Put);
+            new_req.set_put(put);
+            reqs.push(new_req);
         }
     }
 }
