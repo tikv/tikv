@@ -50,7 +50,7 @@ quick_error!{
             cause(err)
             description(err.description())
         }
-       Grpc(err: GrpcError) {
+        Grpc(err: GrpcError) {
             from()
             cause(err)
             description(err.description())
