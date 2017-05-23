@@ -14,28 +14,28 @@
 
 #[cfg(unix)]
 mod imp {
-    use std::time::Duration;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
 
     use rocksdb::DB;
+    use libc;
 
     use tikv::server::Msg;
     use tikv::util::transport::SendCh;
     use prometheus::{self, Encoder, TextEncoder};
+
+    // Real-time signals
+    const TOGGLE_PROF_SIG: libc::c_int = 41;
 
     use profiling;
 
     const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
-    const PROFILE_SLEEP_SEC: u64 = 30;
-
+    // TODO: remove backup_path from configuration
     pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
-        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
-        let profiling_memory = Arc::new(AtomicBool::new(false));
+        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2, TOGGLE_PROF_SIG]);
         for sig in trap {
             match sig {
                 SIGTERM | SIGINT => {
@@ -69,10 +69,11 @@ mod imp {
                         info!("{}", v)
                     }
                 }
-                SIGUSR2 => {
-                    profiling::profile_memory(None,
-                                              &profiling_memory,
-                                              Duration::from_secs(PROFILE_SLEEP_SEC));
+                SIGUSR2 => profiling::dump_prof(None),
+                TOGGLE_PROF_SIG => {
+                    if let Err(e) = profiling::toggle_prof() {
+                        error!("failed to toggle memory profiling: {}", e);
+                    }
                 }
                 // TODO: handle more signal
                 _ => unreachable!(),
