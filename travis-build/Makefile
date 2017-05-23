@@ -41,7 +41,7 @@ ${LOCAL_DIR}/bin/kcov:
 ${LOCAL_DIR}/bin/pd-server:
 	mkdir -p /tmp/goroot && \
 	cd /tmp/goroot && \
-	curl -L https://storage.googleapis.com/golang/go1.7.${GO_ARCH}-amd64.tar.gz -o go.tar.gz && \
+	curl -L https://storage.googleapis.com/golang/go1.7.${GOOS}-amd64.tar.gz -o go.tar.gz && \
 	tar xf go.tar.gz && \
 	export GOPATH=/tmp/gopath && \
 	export GOROOT=/tmp/goroot/go && \
