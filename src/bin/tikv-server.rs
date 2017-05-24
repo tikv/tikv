@@ -53,7 +53,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use clap::{Arg, App, ArgMatches};
-use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions, DBIndexType};
+use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
@@ -386,7 +386,6 @@ struct CfOptValues {
     pub whole_key_filtering: bool,
     pub bloom_bits_per_key: i64,
     pub block_based_filter: bool,
-    pub index_type: DBIndexType,
     pub compression_per_level: String,
     pub write_buffer_size: i64,
     pub max_write_buffer_number: i64,
@@ -408,7 +407,6 @@ impl Default for CfOptValues {
             whole_key_filtering: true,
             bloom_bits_per_key: 10,
             block_based_filter: false,
-            index_type: DBIndexType::DBBinarySearch,
             compression_per_level: String::from("lz4:lz4:lz4:lz4:lz4:lz4:lz4"),
             write_buffer_size: 128 * MB as i64,
             max_write_buffer_number: 5,
@@ -453,8 +451,6 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                                                       .as_str(),
                                                   Some(default_values.block_based_filter));
         block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
-
-        block_base_opts.set_index_type(default_values.index_type);
 
         block_base_opts.set_whole_key_filtering(default_values.whole_key_filtering);
     }
@@ -570,7 +566,6 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     default_values.block_size = 16 * KB as i64;
     default_values.use_bloom_filter = true;
     default_values.whole_key_filtering = true;
-    default_values.index_type = DBIndexType::DBHashSearch;
     default_values.compression_per_level = String::from("no:no:no:no:no:no:no");
     default_values.level_zero_file_num_compaction_trigger = 1;
 
