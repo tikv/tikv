@@ -26,7 +26,7 @@ use util::collections::HashMap;
 use util::worker::FutureRunnable;
 use super::{Error, Result};
 
-/// SendTask delivers a raft message to other store.
+/// `SendTask` delivers a raft message to other store.
 pub struct SendTask {
     pub addr: SocketAddr,
     pub msg: RaftMessage,
@@ -45,6 +45,8 @@ struct Conn {
 
 impl Conn {
     fn new(env: Arc<Environment>, addr: SocketAddr, handle: &Handle) -> Conn {
+        info!("server: new connection with tikv endpoint: {}", addr);
+
         let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
@@ -52,7 +54,7 @@ impl Conn {
             .sink_map_err(Error::from)
             .send_all(rx.map_err(|_| Error::Sink))
             .map(|_| ())
-            .map_err(move |e| error!("send raftmessage to {} failed: {:?}", addr, e)));
+            .map_err(move |e| warn!("send raftmessage to {} failed: {:?}", addr, e)));
         Conn {
             _client: client,
             stream: tx,
@@ -60,7 +62,7 @@ impl Conn {
     }
 }
 
-/// SendRunner is used for sending raft messages to other stores.
+/// `SendRunner` is used for sending raft messages to other stores.
 pub struct SendRunner {
     env: Arc<Environment>,
     conns: HashMap<SocketAddr, Conn>,
@@ -92,7 +94,9 @@ impl FutureRunnable<SendTask> for SendRunner {
     fn run(&mut self, t: SendTask, handle: &Handle) {
         let addr = t.addr;
         if let Err(e) = self.send(t, handle) {
-            error!("send raft message error: {:?}", e);
+            warn!("server: drop conn with tikv endpoint {} error: {:?}",
+                  addr,
+                  e);
             self.conns.remove(&addr);
         }
     }

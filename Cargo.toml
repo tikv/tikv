@@ -62,6 +62,7 @@ sys-info = "0.4.1"
 ordermap = "0.2"
 mio = "0.5"
 futures = "0.1"
+futures-cpupool = "0.1.5"
 tokio-core = "0.1"
 tokio-timer = "0.1"
 

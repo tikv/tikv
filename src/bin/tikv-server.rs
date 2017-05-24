@@ -36,6 +36,9 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
+extern crate futures;
+extern crate futures_cpupool;
+extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
 
@@ -64,7 +67,7 @@ use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
-                   Config, bind, create_event_loop, create_raft_storage, Msg};
+                   Config, create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
@@ -846,16 +849,12 @@ fn run_raft_server(pd_client: RpcClient,
         panic!("failed to start storage, error = {:?}", e);
     }
 
-    info!("Start listening on {}...", cfg.addr);
-    let listener = bind(&cfg.addr).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-
     let server_chan = ServerChannel {
         raft_router: raft_router,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
     let svr = Server::new(&mut event_loop,
                           &cfg,
-                          listener,
                           store,
                           server_chan,
                           resolver,

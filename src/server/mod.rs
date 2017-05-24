@@ -22,8 +22,9 @@ use util::codec::rpc;
 use kvproto::eraftpb::MessageType as RaftMessageType;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::coprocessor::Response;
-mod conn;
 mod metrics;
+mod grpc_service;
+mod raft_send;
 
 pub mod config;
 pub mod errors;
@@ -36,10 +37,11 @@ pub mod snap;
 
 pub use self::config::{Config, DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID};
 pub use self::errors::{Result, Error};
-pub use self::server::{ServerChannel, Server, create_event_loop, bind};
+pub use self::server::{ServerChannel, Server, create_event_loop};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver};
+pub use self::raft_send::{SendTask, SendRunner};
 
 pub type OnResponse = Box<FnBox(Response) + Send>;
 
