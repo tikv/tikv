@@ -319,25 +319,36 @@ impl PeerStorage {
         let mut next_index = low;
         let mut exceeded_max_size = false;
 
-        let start_key = keys::raft_log_key(self.get_region_id(), low);
-
-        if low + 1 == high {
+        if low + 8 >= high {
             // If election happens in inactive regions, they will just try
             // to fetch one empty log.
             let handle = self.engine.cf_handle(CF_RAFT).unwrap();
-            match box_try!(self.engine.get_cf(handle, &start_key)) {
-                None => return Err(RaftError::Store(StorageError::Unavailable)),
-                Some(v) => {
-                    let mut entry = Entry::new();
-                    box_try!(entry.merge_from_bytes(&v));
-                    assert_eq!(entry.get_index(), low);
-                    return Ok(vec![entry]);
+            let mut keys = Vec::with_capacity((high - low) as usize);
+            for i in low..high {
+                keys.push(keys::raft_log_key(self.get_region_id(), i));
+            }
+            let value_vec = box_try!(self.engine.multi_get_cf(handle, &keys));
+            for value in value_vec {
+                match value {
+                    None => return Err(RaftError::Store(StorageError::Unavailable)),
+                    Some(v) => {
+                        let mut entry = Entry::new();
+                        box_try!(entry.merge_from_bytes(&v));
+                        assert_eq!(entry.get_index(), next_index);
+                        next_index += 1;
+                        total_size += v.len() as u64;
+                        if !ents.is_empty() && total_size > max_size {
+                            break;
+                        }
+                        ents.push(entry);
+                    }
                 }
             }
+            return Ok(ents);
         }
 
+        let start_key = keys::raft_log_key(self.get_region_id(), low);
         let end_key = keys::raft_log_key(self.get_region_id(), high);
-
         try!(self.engine.scan_cf(CF_RAFT,
                                  &start_key,
                                  &end_key,
@@ -350,20 +361,18 @@ impl PeerStorage {
             if entry.get_index() != next_index {
                 return Ok(false);
             }
-
             next_index += 1;
 
             total_size += value.len() as u64;
             exceeded_max_size = total_size > max_size;
-
             if !exceeded_max_size || ents.is_empty() {
                 ents.push(entry);
             }
-
             Ok(!exceeded_max_size)
         }));
 
-        // If we get the correct number of entries the total size exceeds max_size, returns.
+        // If we get the correct number of entries, returns,
+        // or the total size almost exceeds max_size, returns.
         if ents.len() == (high - low) as usize || exceeded_max_size {
             return Ok(ents);
         }
