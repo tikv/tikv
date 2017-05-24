@@ -38,21 +38,6 @@ mod imp {
         }
     }
 
-    /// Toggle the prof.active option, return the final value.
-    pub fn toggle_prof() -> Result<bool, i32> {
-        let mut enabled = false;
-        unsafe {
-            try!(jemallocator::mallctl_fetch(PROFILE_ACTIVE, &mut enabled)
-                .and_then(|_| jemallocator::mallctl_set(PROFILE_ACTIVE, !enabled)));
-        }
-        if enabled {
-            info!("memory profiling is disabled");
-        } else {
-            info!("memory profiling is enabled");
-        }
-        Ok(!enabled)
-    }
-
     /// Dump the profile to the `path`.
     ///
     /// If `path` is `None`, will dump it in the working directory with a auto-generated name.
@@ -91,12 +76,10 @@ mod imp {
             let dir = TempDir::new("test_profiling").unwrap();
             let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            assert_eq!(super::toggle_prof(), Ok(true));
             super::dump_prof(Some(&path));
 
             let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            assert_eq!(super::toggle_prof(), Ok(false));
             super::dump_prof(Some(&path));
 
             let files = fs::read_dir(dir.path()).unwrap().count();
@@ -107,10 +90,6 @@ mod imp {
 
 #[cfg(not(feature = "mem-profiling"))]
 mod imp {
-    pub fn toggle_prof() -> Result<bool, i32> {
-        Ok(false)
-    }
-
     pub fn dump_prof(_: Option<&str>) {}
 }
 
