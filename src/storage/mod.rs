@@ -241,7 +241,10 @@ impl Command {
 
     pub fn priority(&self) -> CmdPri {
         match *self {
-            Command::Commit { .. } => CmdPri::High,
+            Command::Commit { .. } |
+            Command::Rollback { .. } |
+            Command::Cleanup { .. } |
+            Command::ResolveLock { .. } => CmdPri::High,
             _ => CmdPri::Normal,
         }
     }
