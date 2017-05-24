@@ -25,6 +25,8 @@ const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_END_POINT_CONCURRENCY: usize = 8;
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_SERVER_CPUPOOL_SIZE: usize = 4;
+const DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO: f64 = 0.25;
+const DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT: usize = 2;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 const DEFAULT_SEND_BUFFER_SIZE: usize = 128 * 1024;
 const DEFAULT_RECV_BUFFER_SIZE: usize = 128 * 1024;
@@ -51,11 +53,13 @@ pub struct Config {
     pub end_point_concurrency: usize,
     pub grpc_concurrency: usize,
     pub server_cpupool_size: usize,
+    pub end_point_txn_concurrency_on_busy: usize,
+    pub end_point_small_txn_tasks_limit: usize,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config {
+        let mut cfg = Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
@@ -67,9 +71,13 @@ impl Default for Config {
             end_point_concurrency: DEFAULT_END_POINT_CONCURRENCY,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             server_cpupool_size: DEFAULT_SERVER_CPUPOOL_SIZE,
+            end_point_txn_concurrency_on_busy: usize::default(),
+            end_point_small_txn_tasks_limit: DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT,
             storage: StorageConfig::default(),
             raft_store: RaftStoreConfig::default(),
-        }
+        };
+        cfg.auto_adjust_end_point_txn_concurrency();
+        cfg
     }
 }
 
@@ -80,8 +88,35 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         try!(self.raft_store.validate());
+        if self.end_point_concurrency == 0 {
+            return Err(box_err!("server.server.end-point-concurrency: {} is invalid, \
+                                 shouldn't be 0",
+                                self.end_point_concurrency));
+        }
+
+        if self.end_point_txn_concurrency_on_busy > self.end_point_concurrency ||
+           self.end_point_txn_concurrency_on_busy == 0 {
+            return Err(box_err!("server.end-point-txn-concurrency-on-busy: {} is invalid, \
+                                 should be in [1,{}]",
+                                self.end_point_txn_concurrency_on_busy,
+                                self.end_point_concurrency));
+        }
+
+        if self.end_point_small_txn_tasks_limit == 0 {
+            return Err(box_err!("server.end-point-small-txn-tasks-limit: \
+                                    shouldn't be 0"));
+        }
 
         Ok(())
+    }
+
+    pub fn auto_adjust_end_point_txn_concurrency(&mut self) {
+        self.end_point_txn_concurrency_on_busy =
+            ((self.end_point_concurrency as f64) *
+             DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
+        if self.end_point_txn_concurrency_on_busy == 0 {
+            self.end_point_txn_concurrency_on_busy = 1;
+        }
     }
 }
 
@@ -96,5 +131,47 @@ mod tests {
 
         cfg.raft_store.raft_heartbeat_ticks = 0;
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_end_point_txn_concurrency() {
+        let mut cfg = Config::new();
+        let expect = ((cfg.end_point_concurrency as f64) *
+                      DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
+        cfg.end_point_concurrency = 18;
+        cfg.auto_adjust_end_point_txn_concurrency();
+        let expect = ((cfg.end_point_concurrency as f64) *
+                      DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO) as usize;
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, expect);
+
+        cfg.end_point_concurrency = 2;
+        cfg.auto_adjust_end_point_txn_concurrency();
+        assert_eq!(cfg.end_point_txn_concurrency_on_busy, 1);
+    }
+
+    #[test]
+    fn test_validate_endpoint_cfg() {
+        let mut cfg = Config::new();
+        assert!(cfg.validate().is_ok());
+
+        // invalid end-point-concurrency
+        cfg.end_point_concurrency = 0;
+        assert!(cfg.validate().is_err());
+        cfg.end_point_concurrency = DEFAULT_END_POINT_CONCURRENCY;
+
+        // invalid end-point-txn-concurrency-on-busy
+        cfg.end_point_txn_concurrency_on_busy = cfg.end_point_concurrency + 1;
+        assert!(cfg.validate().is_err());
+        cfg.end_point_txn_concurrency_on_busy = 0;
+        assert!(cfg.validate().is_err());
+        cfg.auto_adjust_end_point_txn_concurrency();
+
+        // invalid end-point-small-txn-tasks-limit
+        cfg.end_point_small_txn_tasks_limit = 0;
+        assert!(cfg.validate().is_err());
+        cfg.end_point_small_txn_tasks_limit = DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT;
+
+        assert!(cfg.validate().is_ok());
     }
 }

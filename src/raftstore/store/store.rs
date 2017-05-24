@@ -23,6 +23,7 @@ use std::thread;
 use std::u64;
 
 use rocksdb::{DB, DBStatisticsTickerType as TickerType};
+use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
@@ -46,7 +47,8 @@ use util::transport::SendCh;
 use util::{rocksdb, RingQueue};
 use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-
+use raftstore::coprocessor::CoprocessorHost;
+use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
@@ -82,6 +84,7 @@ pub struct StoreStat {
     pub region_keys_written: LocalHistogram,
     pub lock_cf_bytes_written: u64,
     pub engine_total_bytes_written: u64,
+    pub engine_total_keys_written: u64,
 }
 
 impl Default for StoreStat {
@@ -91,6 +94,7 @@ impl Default for StoreStat {
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
             lock_cf_bytes_written: 0,
             engine_total_bytes_written: 0,
+            engine_total_keys_written: 0,
         }
     }
 }
@@ -123,6 +127,8 @@ pub struct Store<T, C: 'static> {
 
     trans: T,
     pd_client: Arc<C>,
+
+    pub coprocessor_host: Arc<CoprocessorHost>,
 
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
 
@@ -182,6 +188,10 @@ impl<T, C> Store<T, C> {
         let peer_cache = HashMap::default();
         let tag = format!("[store {}]", meta.get_id());
 
+        let mut coprocessor_host = CoprocessorHost::new();
+        // TODO load coprocessors from configuration
+        coprocessor_host.registry.register_observer(100, box SplitObserver);
+
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
@@ -203,6 +213,7 @@ impl<T, C> Store<T, C> {
             pending_snapshot_regions: vec![],
             trans: trans,
             pd_client: pd_client,
+            coprocessor_host: Arc::new(coprocessor_host),
             peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
@@ -457,6 +468,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
 
+        self.coprocessor_host.shutdown();
+
         info!("stop raftstore finished.");
     }
 
@@ -471,6 +484,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_base_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let timer = self.raft_metrics.process_tick.start_timer();
         for peer in &mut self.region_peers.values_mut() {
+            if peer.pending_remove {
+                continue;
+            }
             // When having pending snapshot, if election timeout is met, it can't pass
             // the pending conf change check because first index has been updated to
             // a value that is larger than last index.
@@ -569,6 +585,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                           p.peer_id());
                     return Ok(false);
                 }
+                p.pending_remove = true;
                 stale_peer = Some(p.peer.clone());
                 async_remove = p.get_store().is_initialized();
             } else if p.peer_id() > target_peer_id {
@@ -802,7 +819,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut need_remove = false;
         let mut async_remove = true;
-        if let Some(peer) = self.region_peers.get(&region_id) {
+        if let Some(peer) = self.region_peers.get_mut(&region_id) {
             // TODO: need checking peer id changed?
             let from_epoch = msg.get_region_epoch();
             if util::is_epoch_stale(peer.get_store().region.get_region_epoch(), from_epoch) {
@@ -811,6 +828,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                       region_id,
                       msg.get_to_peer());
                 need_remove = true;
+                peer.pending_remove = true;
                 async_remove = peer.get_store().is_initialized();
             }
         }
@@ -878,6 +896,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let previous_ready_metrics = self.raft_metrics.ready.clone();
         let previous_sent_snapshot_count = self.raft_metrics.message.snapshot;
 
+        self.raft_metrics.ready.pending_region += pending_count as u64;
+
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
@@ -888,8 +908,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             (ctx.wb, ctx.ready_res)
         };
 
+        self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
+
         if !wb.is_empty() {
-            self.engine.write(wb).unwrap_or_else(|e| {
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(self.cfg.sync_log);
+            self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
                 panic!("{} failed to save append result: {:?}", self.tag, e);
             });
         }
@@ -1090,9 +1114,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 if let Some(origin_peer) = self.region_peers.get(&region_id) {
                     // New peer derive write flow from parent region,
                     // this will be used by balance write flow.
-                    new_peer.last_written_bytes = origin_peer.last_written_bytes;
-                    new_peer.written_bytes = origin_peer.written_bytes;
-                    new_peer.written_keys = origin_peer.written_keys;
+                    new_peer.peer_stat = origin_peer.peer_stat.clone();
 
                     campaigned =
                         new_peer.maybe_campaign(origin_peer, &mut self.pending_raft_groups);
@@ -1338,17 +1360,18 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_report_region_flow(&mut self, event_loop: &mut EventLoop<Self>) {
         for peer in self.region_peers.values_mut() {
-            peer.last_written_bytes = peer.written_bytes;
+            peer.peer_stat.last_written_bytes = peer.peer_stat.written_bytes;
+            peer.peer_stat.last_written_keys = peer.peer_stat.written_keys;
             if !peer.is_leader() {
-                peer.written_bytes = 0;
-                peer.written_keys = 0;
+                peer.peer_stat.written_bytes = 0;
+                peer.peer_stat.written_keys = 0;
                 continue;
             }
 
-            self.store_stat.region_bytes_written.observe(peer.written_bytes as f64);
-            self.store_stat.region_keys_written.observe(peer.written_keys as f64);
-            peer.written_bytes = 0;
-            peer.written_keys = 0;
+            self.store_stat.region_bytes_written.observe(peer.peer_stat.written_bytes as f64);
+            self.store_stat.region_keys_written.observe(peer.peer_stat.written_keys as f64);
+            peer.peer_stat.written_bytes = 0;
+            peer.peer_stat.written_keys = 0;
         }
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
@@ -1647,6 +1670,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
         self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
         stats.set_bytes_written(delta);
+
+        let engine_total_keys_written = self.engine
+            .get_statistics_ticker_count(TickerType::NumberKeysWritten);
+        let delta = engine_total_keys_written - self.store_stat.engine_total_keys_written;
+        self.store_stat.engine_total_keys_written = engine_total_keys_written;
+        stats.set_keys_written(delta);
 
         stats.set_is_busy(self.is_busy);
         self.is_busy = false;

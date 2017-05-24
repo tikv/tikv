@@ -58,6 +58,7 @@ pub struct ServerChannel<T: RaftStoreRouter + 'static> {
 }
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
+    cfg: Config,
     // Channel for sending eventloop messages.
     sendch: SendCh<Msg>,
     // Grpc server.
@@ -74,7 +75,6 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     storage: Storage,
     // For handling coprocessor requests.
     end_point_worker: Worker<EndPointTask>,
-    end_point_concurrency: usize,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
@@ -118,6 +118,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         };
 
         let svr = Server {
+            cfg: cfg.to_owned(),
             sendch: sendch,
             env: env,
             grpc_server: grpc_server,
@@ -128,7 +129,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             ch: ch,
             storage: storage,
             end_point_worker: end_point_worker,
-            end_point_concurrency: cfg.end_point_concurrency,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
             raft_msg_worker: raft_msg_worker,
@@ -140,7 +140,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
         let end_point = EndPointHost::new(self.storage.get_engine(),
                                           self.end_point_worker.scheduler(),
-                                          self.end_point_concurrency);
+                                          self.cfg.end_point_concurrency,
+                                          self.cfg.end_point_txn_concurrency_on_busy,
+                                          self.cfg.end_point_small_txn_tasks_limit);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         box_try!(self.raft_msg_worker.start(SendRunner::new(self.env.clone())));
         let ch = self.get_sendch();

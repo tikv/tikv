@@ -45,6 +45,7 @@ pub struct Inner {
 
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
+    timer: Timer,
     inner: Arc<RwLock<Inner>>,
 }
 
@@ -54,6 +55,7 @@ impl LeaderClient {
                members: GetMembersResponse)
                -> LeaderClient {
         LeaderClient {
+            timer: Timer::default(),
             inner: Arc::new(RwLock::new(Inner {
                 env: env,
                 client: client,
@@ -71,8 +73,10 @@ impl LeaderClient {
         Request {
             reconnect_count: retry,
             request_sent: 0,
-            timer: Timer::default(),
-            client: LeaderClient { inner: self.inner.clone() },
+            client: LeaderClient {
+                timer: self.timer.clone(),
+                inner: self.inner.clone(),
+            },
             req: req,
             resp: None,
             func: f,
@@ -113,7 +117,6 @@ const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 pub struct Request<Req, Resp, F> {
     reconnect_count: usize,
     request_sent: usize,
-    timer: Timer,
 
     client: LeaderClient,
 
@@ -147,7 +150,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
                 ok(self).boxed()
             }
             Err(_) => {
-                self.timer
+                self.client
+                    .timer
                     .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
                     .then(|_| Err(self))
                     .boxed()
@@ -306,13 +310,22 @@ pub fn try_connect_leader(env: Arc<Environment>,
     let mut indexes: Vec<usize> = (0..members.len()).collect();
     rand::thread_rng().shuffle(&mut indexes);
 
+    let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
     'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
             match connect(env.clone(), ep.as_str()) {
                 Ok((_, r)) => {
-                    resp = Some(r);
-                    break 'outer;
+                    let new_cluster_id = r.get_header().get_cluster_id();
+                    if new_cluster_id == cluster_id {
+                        resp = Some(r);
+                        break 'outer;
+                    } else {
+                        panic!("{} no longer belongs to cluster {}, it is in {}",
+                               ep,
+                               cluster_id,
+                               new_cluster_id);
+                    }
                 }
                 Err(e) => {
                     error!("failed to connect to {}, {:?}", ep, e);

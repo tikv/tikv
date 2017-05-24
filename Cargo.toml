@@ -55,7 +55,6 @@ lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2"
 url = "1.2"
-getopts = "0.2"
 regex = "0.1"
 fnv = "1.0"
 sys-info = "0.4.1"
@@ -82,7 +81,7 @@ git = "https://github.com/pingcap/tipb.git"
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
-features = ["nightly", "push"]
+features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
 git = "https://github.com/pingcap/grpc-rs.git"
