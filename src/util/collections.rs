@@ -15,4 +15,5 @@ pub use fnv::FnvHashSet as HashSet;
 pub use fnv::FnvBuildHasher as BuildHasherDefault;
 pub use ordermap::OrderMap as HashMap;
 pub use ordermap::Entry as HashMapEntry;
-pub use ordermap::Values as HashMapValues;
+pub use flat_map::FlatMap as FlatMap;
+pub use flat_map::flat_map::Values as FlatMapValues;

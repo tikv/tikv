@@ -40,7 +40,7 @@ use raftstore::store::worker::apply::ExecResult;
 use util::worker::{FutureWorker as Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either, strftimespec};
-use util::collections::{HashMap, HashSet, HashMapValues as Values};
+use util::collections::{HashMap, HashSet, FlatMapValues as Values};
 
 use pd::INVALID_ID;
 
