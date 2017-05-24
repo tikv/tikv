@@ -82,6 +82,13 @@ pub enum StorageCb {
     Locks(Callback<Vec<LockInfo>>),
 }
 
+#[derive(PartialEq, Clone, Copy)]
+pub enum CmdPri {
+    Low,
+    Normal,
+    High,
+}
+
 pub enum Command {
     Get {
         ctx: Context,
@@ -229,6 +236,13 @@ impl Command {
             Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
+        }
+    }
+
+    pub fn priority(&self) -> CmdPri {
+        match *self {
+            Command::Commit { .. } => CmdPri::High,
+            _ => CmdPri::Normal,
         }
     }
 

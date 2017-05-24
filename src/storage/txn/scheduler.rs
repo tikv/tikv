@@ -40,7 +40,7 @@ use prometheus::HistogramTimer;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
-              Error as StorageError, ScanMode, Statistics};
+              Error as StorageError, ScanMode, Statistics, CmdPri};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
@@ -683,13 +683,17 @@ impl Scheduler {
         self.lock_and_get_snapshot(cid);
     }
 
-    fn too_busy(&self) -> bool {
+    fn too_busy(&self, cmd: &Command) -> bool {
+        if cmd.readonly() || cmd.priority() == CmdPri::High {
+            return false;
+        }
+
         self.running_write_count >= self.sched_too_busy_threshold
     }
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
-        if !cmd.readonly() && self.too_busy() {
+        if self.too_busy(&cmd) {
             SCHED_TOO_BUSY_COUNTER_VEC.with_label_values(&[cmd.tag()]).inc();
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
