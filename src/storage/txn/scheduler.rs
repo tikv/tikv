@@ -40,7 +40,7 @@ use prometheus::HistogramTimer;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
-              Error as StorageError, ScanMode, Statistics, CmdPri};
+              Error as StorageError, ScanMode, Statistics};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
@@ -684,7 +684,7 @@ impl Scheduler {
     }
 
     fn too_busy(&self, cmd: &Command) -> bool {
-        if cmd.readonly() || cmd.priority() == CmdPri::High {
+        if !cmd.need_flow_control() {
             return false;
         }
 

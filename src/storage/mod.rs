@@ -82,13 +82,6 @@ pub enum StorageCb {
     Locks(Callback<Vec<LockInfo>>),
 }
 
-#[derive(PartialEq, Clone, Copy)]
-pub enum CmdPri {
-    Low,
-    Normal,
-    High,
-}
-
 pub enum Command {
     Get {
         ctx: Context,
@@ -239,13 +232,10 @@ impl Command {
         }
     }
 
-    pub fn priority(&self) -> CmdPri {
+    pub fn need_flow_control(&self) -> bool {
         match *self {
-            Command::Commit { .. } |
-            Command::Rollback { .. } |
-            Command::Cleanup { .. } |
-            Command::ResolveLock { .. } => CmdPri::High,
-            _ => CmdPri::Normal,
+            Command::Prewrite { .. } => true,
+            _ => false,
         }
     }
 
