@@ -322,13 +322,14 @@ impl PeerStorage {
         if low + 8 >= high {
             // If election happens in inactive regions, they will just try
             // to fetch one empty log.
-            let handle = self.engine.cf_handle(CF_RAFT).unwrap();
-            let mut keys = Vec::with_capacity((high - low) as usize);
+            let cnt = (high - low) as usize;
+            let cfs = vec![self.engine.cf_handle(CF_RAFT).unwrap(); cnt];
+            let mut keys = Vec::with_capacity(cnt);
             for i in low..high {
                 keys.push(keys::raft_log_key(self.get_region_id(), i));
             }
             let keys: Vec<&[u8]> = keys.iter().map(|k| k.as_slice()).collect();
-            let value_vec = box_try!(self.engine.multi_get_cf(handle, &keys));
+            let value_vec = box_try!(self.engine.multi_get_cf(&cfs, &keys));
             for value in value_vec {
                 match value {
                     None => return Err(RaftError::Store(StorageError::Unavailable)),
