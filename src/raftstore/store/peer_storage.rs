@@ -327,6 +327,7 @@ impl PeerStorage {
             for i in low..high {
                 keys.push(keys::raft_log_key(self.get_region_id(), i));
             }
+            let keys: Vec<&[u8]> = keys.iter().map(|k| k.as_slice()).collect();
             let value_vec = box_try!(self.engine.multi_get_cf(handle, &keys));
             for value in value_vec {
                 match value {
