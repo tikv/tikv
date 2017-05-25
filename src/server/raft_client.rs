@@ -11,32 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
 use std::sync::Arc;
 use std::net::SocketAddr;
 
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::{Future, Sink, Stream};
-use tokio_core::reactor::Handle;
 use grpc::{Environment, ChannelBuilder};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
 use util::collections::HashMap;
-use util::worker::FutureRunnable;
 use super::{Error, Result};
-
-/// `SendTask` delivers a raft message to other store.
-pub struct SendTask {
-    pub addr: SocketAddr,
-    pub msg: RaftMessage,
-}
-
-impl fmt::Display for SendTask {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "send raft message to {:?}", self.addr)
-    }
-}
 
 struct Conn {
     _client: TikvClient,
@@ -44,14 +29,14 @@ struct Conn {
 }
 
 impl Conn {
-    fn new(env: Arc<Environment>, addr: SocketAddr, handle: &Handle) -> Conn {
+    fn new(env: Arc<Environment>, addr: SocketAddr) -> Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (sink, _) = client.raft();
-        handle.spawn(sink.sink_map_err(Error::from)
+        client.spawn(sink.sink_map_err(Error::from)
             .send_all(rx.map_err(|_| Error::Sink))
             .map(|_| ())
             .map_err(move |e| warn!("send raftmessage to {} failed: {:?}", addr, e)));
@@ -62,42 +47,30 @@ impl Conn {
     }
 }
 
-/// `SendRunner` is used for sending raft messages to other stores.
-pub struct SendRunner {
+/// `RaftClient` is used for sending raft messages to other stores.
+pub struct RaftClient {
     env: Arc<Environment>,
     conns: HashMap<SocketAddr, Conn>,
 }
 
-impl SendRunner {
-    pub fn new(env: Arc<Environment>) -> SendRunner {
-        SendRunner {
+impl RaftClient {
+    pub fn new(env: Arc<Environment>) -> RaftClient {
+        RaftClient {
             env: env,
             conns: HashMap::default(),
         }
     }
 
-    fn get_conn(&mut self, addr: SocketAddr, handle: &Handle) -> &Conn {
+    fn get_conn(&mut self, addr: SocketAddr) -> &Conn {
         let env = self.env.clone();
         self.conns
             .entry(addr)
-            .or_insert_with(|| Conn::new(env, addr, handle))
+            .or_insert_with(|| Conn::new(env, addr))
     }
 
-    fn send(&mut self, t: SendTask, handle: &Handle) -> Result<()> {
-        let conn = self.get_conn(t.addr, handle);
-        box_try!(UnboundedSender::send(&conn.stream, t.msg));
+    pub fn send(&mut self, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
+        let conn = self.get_conn(addr);
+        box_try!(UnboundedSender::send(&conn.stream, msg));
         Ok(())
-    }
-}
-
-impl FutureRunnable<SendTask> for SendRunner {
-    fn run(&mut self, t: SendTask, handle: &Handle) {
-        let addr = t.addr;
-        if let Err(e) = self.send(t, handle) {
-            warn!("server: drop conn with tikv endpoint {} error: {:?}",
-                  addr,
-                  e);
-            self.conns.remove(&addr);
-        }
     }
 }

@@ -26,13 +26,12 @@ use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
 use tikv::server::{ServerChannel, Server, ServerTransport, create_event_loop, Msg};
-use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, SendRunner, SendTask};
+use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, RaftClient};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
 use tikv::util::transport::SendCh;
-use tikv::util::worker::FutureWorker;
 use tikv::storage::{Engine, CfName, ALL_CFS};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -52,14 +51,11 @@ pub struct ServerCluster {
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_msg_worker: FutureWorker<SendTask>,
+    raft_client: RaftClient,
 }
 
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
-        let mut raft_msg_worker = FutureWorker::new("raft-msg-worker");
-        raft_msg_worker.start(SendRunner::new(Arc::new(Environment::new(1)))).unwrap();
-
         ServerCluster {
             routers: HashMap::new(),
             senders: HashMap::new(),
@@ -70,14 +66,8 @@ impl ServerCluster {
             store_chs: HashMap::new(),
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
-            raft_msg_worker: raft_msg_worker,
+            raft_client: RaftClient::new(Arc::new(Environment::new(1))),
         }
-    }
-}
-
-impl Drop for ServerCluster {
-    fn drop(&mut self) {
-        self.raft_msg_worker.stop();
     }
 }
 
@@ -222,16 +212,10 @@ impl Simulator for ServerCluster {
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
-    fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
+    fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
         let addr = self.addrs[&store_id];
-        self.raft_msg_worker
-            .schedule(SendTask {
-                addr: addr,
-                msg: raft_msg,
-            })
-            .unwrap();
-
+        self.raft_client.send(addr, raft_msg).unwrap();
         Ok(())
     }
 
