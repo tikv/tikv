@@ -319,9 +319,21 @@ impl PeerStorage {
         let mut next_index = low;
         let mut exceeded_max_size = false;
 
-        if low + 8 >= high {
+        if low + 1 == high {
             // If election happens in inactive regions, they will just try
             // to fetch one empty log.
+            let start_key = keys::raft_log_key(self.get_region_id(), low);
+            let handle = self.engine.cf_handle(CF_RAFT).unwrap();
+            match box_try!(self.engine.get_cf(handle, &start_key)) {
+                None => return Err(RaftError::Store(StorageError::Unavailable)),
+                Some(v) => {
+                    let mut entry = Entry::new();
+                    box_try!(entry.merge_from_bytes(&v));
+                    assert_eq!(entry.get_index(), low);
+                    return Ok(vec![entry]);
+                }
+            }
+        } else if low + 8 >= high {
             let cnt = (high - low) as usize;
             let cfs = vec![self.engine.cf_handle(CF_RAFT).unwrap(); cnt];
             let mut keys = Vec::with_capacity(cnt);
