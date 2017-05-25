@@ -102,8 +102,6 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         addr: "127.0.0.1:0".to_owned(),
         raft_store: store_cfg,
         storage: StorageConfig::default(),
-        send_buffer_size: 64 * 1024,
-        recv_buffer_size: 64 * 1024,
         ..ServerConfig::default()
     }
 }

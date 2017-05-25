@@ -20,9 +20,10 @@ log-level = "info"
 notify-capacity = 40960
 # maximum number of messages can be processed in one tick.
 messages-per-tick = 4096
-# socket send/recv buffer size.
-send-buffer-size = "128KB"
-recv-buffer-size = "128KB"
+
+# size of thread pool for grpc server.
+# grpc-concurrency = 2
+
 # size of thread pool for endpoint task, should less than total cpu cores.
 # end-point-concurrency = 8
 

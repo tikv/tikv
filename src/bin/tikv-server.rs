@@ -586,6 +586,7 @@ fn build_cfg(matches: &ArgMatches,
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
     cfg_usize(&mut cfg.notify_capacity, config, "server.notify-capacity");
+    cfg_usize(&mut cfg.grpc_concurrency, config, "server.grpc-concurrency");
     if !cfg_usize(&mut cfg.end_point_concurrency,
                   config,
                   "server.end-point-concurrency") {
@@ -619,9 +620,6 @@ fn build_cfg(matches: &ArgMatches,
     cfg.advertise_addr = get_flag_string(matches, "advertise-addr")
         .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.to_owned())));
     check_advertise_address(&cfg.advertise_addr);
-
-    cfg_usize(&mut cfg.send_buffer_size, config, "server.send-buffer-size");
-    cfg_usize(&mut cfg.recv_buffer_size, config, "server.recv-buffer-size");
 
     cfg.raft_store.sync_log = get_toml_boolean(config, "raftstore.sync-log", Some(true));
     cfg_usize(&mut cfg.raft_store.notify_capacity,
