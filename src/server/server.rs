@@ -17,7 +17,6 @@ use std::boxed::Box;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 
-use futures_cpupool::Builder as CpuPoolBuilder;
 use mio::{Handler, EventLoop, EventLoopConfig};
 use grpc::{Server as GrpcServer, ServerBuilder, Environment};
 use kvproto::tikvpb_grpc::*;
@@ -94,13 +93,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
         let raft_msg_worker = FutureWorker::new("raft-msg-worker");
-        let cpu_pool = CpuPoolBuilder::new()
-            .pool_size(cfg.server_cpupool_size)
-            .name_prefix("server-cpupool")
-            .create();
 
-        let h = Service::new(cpu_pool,
-                             storage.clone(),
+        let h = Service::new(storage.clone(),
                              end_point_worker.scheduler(),
                              ch.raft_router.clone(),
                              snap_worker.scheduler());
