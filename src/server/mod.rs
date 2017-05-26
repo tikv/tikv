@@ -24,7 +24,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::coprocessor::Response;
 mod metrics;
 mod grpc_service;
-mod raft_send;
+mod raft_client;
 
 pub mod config;
 pub mod errors;
@@ -41,7 +41,7 @@ pub use self::server::{ServerChannel, Server, create_event_loop};
 pub use self::transport::{ServerTransport, ServerRaftStoreRouter, MockRaftStoreRouter};
 pub use self::node::{Node, create_raft_storage};
 pub use self::resolve::{StoreAddrResolver, PdStoreAddrResolver};
-pub use self::raft_send::{SendTask, SendRunner};
+pub use self::raft_client::RaftClient;
 
 pub type OnResponse = Box<FnBox(Response) + Send>;
 

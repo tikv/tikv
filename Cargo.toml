@@ -85,7 +85,6 @@ features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
 git = "https://github.com/pingcap/grpc-rs.git"
-branch = "busyjay/dev"
 features = ["static-link"]
 
 [dependencies.jemallocator]

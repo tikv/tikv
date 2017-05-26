@@ -20,7 +20,6 @@ use mio::Token;
 use grpc::{RpcContext, UnarySink, ClientStreamingSink, RequestStream, RpcStatus, RpcStatusCode};
 use futures::{future, Future, Stream};
 use futures::sync::oneshot;
-use futures_cpupool::CpuPool;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
 use kvproto::raft_serverpb::*;
@@ -42,7 +41,6 @@ use super::Error;
 
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
-    pool: CpuPool,
     // For handling KV requests.
     storage: Storage,
     // For handling coprocessor requests.
@@ -55,14 +53,12 @@ pub struct Service<T: RaftStoreRouter + 'static> {
 }
 
 impl<T: RaftStoreRouter + 'static> Service<T> {
-    pub fn new(pool: CpuPool,
-               storage: Storage,
+    pub fn new(storage: Storage,
                end_point_scheduler: Scheduler<EndPointTask>,
                ch: T,
                snap_scheduler: Scheduler<SnapTask>)
                -> Service<T> {
         Service {
-            pool: pool,
             storage: storage,
             end_point_scheduler: end_point_scheduler,
             ch: ch,
@@ -71,9 +67,13 @@ impl<T: RaftStoreRouter + 'static> Service<T> {
         }
     }
 
-    fn send_fail_status<M>(&self, sink: UnarySink<M>, err: Error, code: RpcStatusCode) {
+    fn send_fail_status<M>(&self,
+                           ctx: RpcContext,
+                           sink: UnarySink<M>,
+                           err: Error,
+                           code: RpcStatusCode) {
         let status = RpcStatus::new(code, Some(format!("{}", err)));
-        self.pool.spawn(sink.fail(status)).forget();
+        ctx.spawn(sink.fail(status).map_err(|_| ()));
     }
 }
 
@@ -86,7 +86,7 @@ fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, oneshot:
 }
 
 impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
-    fn kv_get(&self, _: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
+    fn kv_get(&self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_get"]).start_timer();
 
         let (cb, future) = make_callback();
@@ -95,7 +95,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                                          req.get_version(),
                                          cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -117,10 +117,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_get failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
-    fn kv_scan(&self, _: RpcContext, mut req: ScanRequest, sink: UnarySink<ScanResponse>) {
+    fn kv_scan(&self, ctx: RpcContext, mut req: ScanRequest, sink: UnarySink<ScanResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_scan"]).start_timer();
 
         let storage = self.storage.clone();
@@ -135,7 +135,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                                      options,
                                      cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -153,11 +153,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_scan failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
     fn kv_prewrite(&self,
-                   _: RpcContext,
+                   ctx: RpcContext,
                    mut req: PrewriteRequest,
                    sink: UnarySink<PrewriteResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_prewrite"]).start_timer();
@@ -184,7 +184,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                                               options,
                                               cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -202,10 +202,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_prewrite failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
-    fn kv_commit(&self, _: RpcContext, mut req: CommitRequest, sink: UnarySink<CommitResponse>) {
+    fn kv_commit(&self, ctx: RpcContext, mut req: CommitRequest, sink: UnarySink<CommitResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_commit"]).start_timer();
 
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -217,7 +217,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                                             req.get_commit_version(),
                                             cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -235,11 +235,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_commit failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
     fn kv_cleanup(&self,
-                  _: RpcContext,
+                  ctx: RpcContext,
                   mut req: CleanupRequest,
                   sink: UnarySink<CleanupResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_cleanup"]).start_timer();
@@ -250,7 +250,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                                              req.get_start_version(),
                                              cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -272,11 +272,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_cleanup failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
     fn kv_batch_get(&self,
-                    _: RpcContext,
+                    ctx: RpcContext,
                     mut req: BatchGetRequest,
                     sink: UnarySink<BatchGetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_batch_get"]).start_timer();
@@ -286,7 +286,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let (cb, future) = make_callback();
         let res = self.storage.async_batch_get(req.take_context(), keys, req.get_version(), cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -304,11 +304,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_batch_get failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
     fn kv_batch_rollback(&self,
-                         _: RpcContext,
+                         ctx: RpcContext,
                          mut req: BatchRollbackRequest,
                          sink: UnarySink<BatchRollbackResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_batch_rollback"]).start_timer();
@@ -319,7 +319,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let res = self.storage
             .async_rollback(req.take_context(), keys, req.get_start_version(), cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -337,11 +337,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_batch_rollback failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
     fn kv_scan_lock(&self,
-                    _: RpcContext,
+                    ctx: RpcContext,
                     mut req: ScanLockRequest,
                     sink: UnarySink<ScanLockResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_scan_lock"]).start_timer();
@@ -349,7 +349,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let (cb, future) = make_callback();
         let res = self.storage.async_scan_lock(req.take_context(), req.get_max_version(), cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -370,11 +370,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_scan_lock failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
     fn kv_resolve_lock(&self,
-                       _: RpcContext,
+                       ctx: RpcContext,
                        mut req: ResolveLockRequest,
                        sink: UnarySink<ResolveLockResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_resolve_lock"]).start_timer();
@@ -388,7 +388,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let res = self.storage
             .async_resolve_lock(req.take_context(), req.get_start_version(), commit_ts, cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -406,16 +406,16 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_resolve_lock failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
-    fn kv_gc(&self, _: RpcContext, mut req: GCRequest, sink: UnarySink<GCResponse>) {
+    fn kv_gc(&self, ctx: RpcContext, mut req: GCRequest, sink: UnarySink<GCResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["kv_gc"]).start_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage.async_gc(req.take_context(), req.get_safe_point(), cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -433,16 +433,16 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("kv_gc failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
-    fn raw_get(&self, _: RpcContext, mut req: RawGetRequest, sink: UnarySink<RawGetResponse>) {
+    fn raw_get(&self, ctx: RpcContext, mut req: RawGetRequest, sink: UnarySink<RawGetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_get"]).start_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage.async_raw_get(req.take_context(), req.take_key(), cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -464,17 +464,17 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("raw_get failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
-    fn raw_put(&self, _: RpcContext, mut req: RawPutRequest, sink: UnarySink<RawPutResponse>) {
+    fn raw_put(&self, ctx: RpcContext, mut req: RawPutRequest, sink: UnarySink<RawPutResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_put"]).start_timer();
 
         let (cb, future) = make_callback();
         let res = self.storage
             .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -492,11 +492,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("raw_put failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
     fn raw_delete(&self,
-                  _: RpcContext,
+                  ctx: RpcContext,
                   mut req: RawDeleteRequest,
                   sink: UnarySink<RawDeleteResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["raw_delete"]).start_timer();
@@ -504,7 +504,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let (cb, future) = make_callback();
         let res = self.storage.async_raw_delete(req.take_context(), req.take_key(), cb);
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -522,17 +522,17 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("raw_delete failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
-    fn coprocessor(&self, _: RpcContext, req: Request, sink: UnarySink<Response>) {
+    fn coprocessor(&self, ctx: RpcContext, req: Request, sink: UnarySink<Response>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&["coprocessor"]).start_timer();
 
         let (cb, future) = make_callback();
         let res = self.end_point_scheduler
             .schedule(EndPointTask::Request(RequestTask::new(req, cb)));
         if let Err(e) = res {
-            self.send_fail_status(sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
         }
 
@@ -541,58 +541,54 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .map(|_| timer.observe_duration())
             .map_err(|e| error!("coprocessor failed: {:?}", e));
 
-        self.pool.spawn(future).forget();
+        ctx.spawn(future);
     }
 
     fn raft(&self,
-            _: RpcContext,
+            ctx: RpcContext,
             stream: RequestStream<RaftMessage>,
             _: ClientStreamingSink<Done>) {
         let ch = self.ch.clone();
-        self.pool
-            .spawn(stream.map_err(Error::from)
-                .for_each(move |msg| future::result(ch.send_raft_msg(msg)).map_err(Error::from))
-                .map_err(|e| error!("send raft msg to raft store fail: {}", e))
-                .then(|_| future::ok::<_, ()>(())))
-            .forget();
+        ctx.spawn(stream.map_err(Error::from)
+            .for_each(move |msg| future::result(ch.send_raft_msg(msg)).map_err(Error::from))
+            .map_err(|e| error!("send raft msg to raft store fail: {}", e))
+            .then(|_| future::ok::<_, ()>(())));
     }
 
     fn snapshot(&self,
-                _: RpcContext,
+                ctx: RpcContext,
                 stream: RequestStream<SnapshotChunk>,
                 sink: ClientStreamingSink<Done>) {
         let token = Token(self.token.fetch_add(1, Ordering::SeqCst));
         let sched = self.snap_scheduler.clone();
         let sched2 = sched.clone();
-        self.pool
-            .spawn(stream.map_err(Error::from)
-                .for_each(move |mut chunk| {
-                    let res = if chunk.has_message() {
-                        sched.schedule(SnapTask::Register(token, chunk.take_message()))
-                            .map_err(Error::from)
-                    } else if !chunk.get_data().is_empty() {
-                        // TODO: Remove PipeBuffer or take good use of it.
-                        let mut b = PipeBuffer::new(chunk.get_data().len());
-                        b.write_all(chunk.get_data()).unwrap();
-                        sched.schedule(SnapTask::Write(token, b)).map_err(Error::from)
-                    } else {
-                        Err(box_err!("empty chunk"))
-                    };
-                    future::result(res)
-                })
-                .then(move |res| {
-                    let res = match res {
-                        Ok(_) => sched2.schedule(SnapTask::Close(token)),
-                        Err(e) => {
-                            error!("receive snapshot err: {}", e);
-                            sched2.schedule(SnapTask::Discard(token))
-                        }
-                    };
-                    future::result(res.map_err(Error::from))
-                })
-                .and_then(|_| sink.success(Done::new()).map_err(Error::from))
-                .then(|_| future::ok::<_, ()>(())))
-            .forget();
+        ctx.spawn(stream.map_err(Error::from)
+            .for_each(move |mut chunk| {
+                let res = if chunk.has_message() {
+                    sched.schedule(SnapTask::Register(token, chunk.take_message()))
+                        .map_err(Error::from)
+                } else if !chunk.get_data().is_empty() {
+                    // TODO: Remove PipeBuffer or take good use of it.
+                    let mut b = PipeBuffer::new(chunk.get_data().len());
+                    b.write_all(chunk.get_data()).unwrap();
+                    sched.schedule(SnapTask::Write(token, b)).map_err(Error::from)
+                } else {
+                    Err(box_err!("empty chunk"))
+                };
+                future::result(res)
+            })
+            .then(move |res| {
+                let res = match res {
+                    Ok(_) => sched2.schedule(SnapTask::Close(token)),
+                    Err(e) => {
+                        error!("receive snapshot err: {}", e);
+                        sched2.schedule(SnapTask::Discard(token))
+                    }
+                };
+                future::result(res.map_err(Error::from))
+            })
+            .and_then(|_| sink.success(Done::new()).map_err(Error::from))
+            .then(|_| future::ok::<_, ()>(())));
     }
 }
 

@@ -23,13 +23,10 @@ pub const DEFAULT_LISTENING_ADDR: &'static str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &'static str = "";
 const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_END_POINT_CONCURRENCY: usize = 8;
-const DEFAULT_GRPC_CONCURRENCY: usize = 4;
-const DEFAULT_SERVER_CPUPOOL_SIZE: usize = 4;
+const DEFAULT_GRPC_CONCURRENCY: usize = 2;
 const DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO: f64 = 0.25;
 const DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT: usize = 2;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
-const DEFAULT_SEND_BUFFER_SIZE: usize = 128 * 1024;
-const DEFAULT_RECV_BUFFER_SIZE: usize = 128 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -46,13 +43,10 @@ pub struct Config {
     pub advertise_addr: String,
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
-    pub send_buffer_size: usize,
-    pub recv_buffer_size: usize,
+    pub grpc_concurrency: usize,
     pub storage: StorageConfig,
     pub raft_store: RaftStoreConfig,
     pub end_point_concurrency: usize,
-    pub grpc_concurrency: usize,
-    pub server_cpupool_size: usize,
     pub end_point_txn_concurrency_on_busy: usize,
     pub end_point_small_txn_tasks_limit: usize,
 }
@@ -66,11 +60,8 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             notify_capacity: DEFAULT_NOTIFY_CAPACITY,
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
-            send_buffer_size: DEFAULT_SEND_BUFFER_SIZE,
-            recv_buffer_size: DEFAULT_RECV_BUFFER_SIZE,
-            end_point_concurrency: DEFAULT_END_POINT_CONCURRENCY,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
-            server_cpupool_size: DEFAULT_SERVER_CPUPOOL_SIZE,
+            end_point_concurrency: DEFAULT_END_POINT_CONCURRENCY,
             end_point_txn_concurrency_on_busy: usize::default(),
             end_point_small_txn_tasks_limit: DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT,
             storage: StorageConfig::default(),

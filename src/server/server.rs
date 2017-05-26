@@ -17,11 +17,10 @@ use std::boxed::Box;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 
-use futures_cpupool::Builder as CpuPoolBuilder;
 use mio::{Handler, EventLoop, EventLoopConfig};
 use grpc::{Server as GrpcServer, ServerBuilder, Environment};
 use kvproto::tikvpb_grpc::*;
-use util::worker::{Stopped, Worker, FutureWorker};
+use util::worker::{Stopped, Worker};
 use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
@@ -35,7 +34,7 @@ use super::grpc_service::Service;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
-use super::raft_send::{SendTask, SendRunner};
+use super::raft_client::RaftClient;
 use super::metrics::*;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
@@ -62,7 +61,6 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     // Channel for sending eventloop messages.
     sendch: SendCh<Msg>,
     // Grpc server.
-    env: Arc<Environment>,
     grpc_server: GrpcServer,
     local_addr: SocketAddr,
     // Addrs map for communicating with other raft stores.
@@ -79,7 +77,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
     // For sending raft messages to other stores.
-    raft_msg_worker: FutureWorker<SendTask>,
+    raft_client: RaftClient,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -93,14 +91,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let sendch = SendCh::new(event_loop.channel(), "raft-server");
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
-        let raft_msg_worker = FutureWorker::new("raft-msg-worker");
-        let cpu_pool = CpuPoolBuilder::new()
-            .pool_size(cfg.server_cpupool_size)
-            .name_prefix("server-cpupool")
-            .create();
 
-        let h = Service::new(cpu_pool,
-                             storage.clone(),
+        let h = Service::new(storage.clone(),
                              end_point_worker.scheduler(),
                              ch.raft_router.clone(),
                              snap_worker.scheduler());
@@ -120,7 +112,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let svr = Server {
             cfg: cfg.to_owned(),
             sendch: sendch,
-            env: env,
             grpc_server: grpc_server,
             local_addr: addr,
             store_addrs: HashMap::default(),
@@ -131,7 +122,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
-            raft_msg_worker: raft_msg_worker,
+            raft_client: RaftClient::new(env),
         };
 
         Ok(svr)
@@ -144,7 +135,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                           self.cfg.end_point_txn_concurrency_on_busy,
                                           self.cfg.end_point_small_txn_tasks_limit);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
-        box_try!(self.raft_msg_worker.start(SendRunner::new(self.env.clone())));
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
@@ -167,10 +157,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn write_data(&mut self, addr: SocketAddr, data: ConnData) {
-        if let Err(e) = self.raft_msg_worker.schedule(SendTask {
-            addr: addr,
-            msg: data.msg,
-        }) {
+        if let Err(e) = self.raft_client.send(addr, data.msg) {
             error!("send raft msg err {:?}", e);
         }
     }
@@ -322,7 +309,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             if let Err(e) = self.storage.stop() {
                 error!("failed to stop store: {:?}", e);
             }
-            self.raft_msg_worker.stop();
             self.grpc_server.shutdown();
         }
     }
