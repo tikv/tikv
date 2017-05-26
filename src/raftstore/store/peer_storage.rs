@@ -319,37 +319,18 @@ impl PeerStorage {
         let mut next_index = low;
         let mut exceeded_max_size = false;
 
-        if low + 1 == high {
+        if low + 8 >= high {
             // If election happens in inactive regions, they will just try
             // to fetch one empty log.
-            let start_key = keys::raft_log_key(self.get_region_id(), low);
             let handle = self.engine.cf_handle(CF_RAFT).unwrap();
-            match box_try!(self.engine.get_cf(handle, &start_key)) {
-                None => return Err(RaftError::Store(StorageError::Unavailable)),
-                Some(v) => {
-                    let mut entry = Entry::new();
-                    box_try!(entry.merge_from_bytes(&v));
-                    assert_eq!(entry.get_index(), low);
-                    return Ok(vec![entry]);
-                }
-            }
-        } else if low + 8 >= high {
-            let cnt = (high - low) as usize;
-            let cfs = vec![self.engine.cf_handle(CF_RAFT).unwrap(); cnt];
-            let mut keys = Vec::with_capacity(cnt);
             for i in low..high {
-                keys.push(keys::raft_log_key(self.get_region_id(), i));
-            }
-            let keys: Vec<&[u8]> = keys.iter().map(|k| k.as_slice()).collect();
-            let value_vec = box_try!(self.engine.multi_get_cf(&cfs, &keys));
-            for value in value_vec {
-                match value {
+                let key = keys::raft_log_key(self.get_region_id(), i);
+                match box_try!(self.engine.get_cf(handle, &key)) {
                     None => return Err(RaftError::Store(StorageError::Unavailable)),
                     Some(v) => {
                         let mut entry = Entry::new();
                         box_try!(entry.merge_from_bytes(&v));
-                        assert_eq!(entry.get_index(), next_index);
-                        next_index += 1;
+                        assert_eq!(entry.get_index(), i);
                         total_size += v.len() as u64;
                         if !ents.is_empty() && total_size > max_size {
                             break;
@@ -360,7 +341,7 @@ impl PeerStorage {
             }
             return Ok(ents);
         }
-
+        
         let start_key = keys::raft_log_key(self.get_region_id(), low);
         let end_key = keys::raft_log_key(self.get_region_id(), high);
         try!(self.engine.scan_cf(CF_RAFT,
