@@ -31,7 +31,7 @@ use raft::raft::{Raft, SoftState, StateRole};
 use raft::storage::Storage;
 use raft::progress::Progress;
 
-use super::HashMap;
+use super::FlatMap;
 
 #[derive(Default)]
 pub struct Status {
@@ -39,7 +39,7 @@ pub struct Status {
     pub hs: HardState,
     pub ss: SoftState,
     pub applied: u64,
-    pub progress: HashMap<u64, Progress>,
+    pub progress: FlatMap<u64, Progress>,
 }
 
 impl Status {

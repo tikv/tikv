@@ -17,14 +17,10 @@ mod imp {
     use std::sync::Arc;
 
     use rocksdb::DB;
-    use libc;
 
     use tikv::server::Msg;
     use tikv::util::transport::SendCh;
     use prometheus::{self, Encoder, TextEncoder};
-
-    // Real-time signals
-    const TOGGLE_PROF_SIG: libc::c_int = 41;
 
     use profiling;
 
@@ -35,7 +31,7 @@ mod imp {
     pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
-        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2, TOGGLE_PROF_SIG]);
+        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {
                 SIGTERM | SIGINT => {
@@ -70,11 +66,6 @@ mod imp {
                     }
                 }
                 SIGUSR2 => profiling::dump_prof(None),
-                TOGGLE_PROF_SIG => {
-                    if let Err(e) = profiling::toggle_prof() {
-                        error!("failed to toggle memory profiling: {}", e);
-                    }
-                }
                 // TODO: handle more signal
                 _ => unreachable!(),
             }
