@@ -105,7 +105,11 @@ impl Iterator for SnapChunk {
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
-fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
+fn send_snap(env: Arc<Environment>,
+             mgr: SnapManager,
+             addr: SocketAddr,
+             data: ConnData)
+             -> Result<()> {
     assert!(data.is_snapshot());
     let timer = Instant::now();
 
@@ -149,7 +153,6 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
         first.chain(rests)
     };
 
-    let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
     let client = TikvClient::new(channel);
     let (sink, receiver) = client.snapshot();
@@ -172,6 +175,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
+    env: Arc<Environment>,
     snap_mgr: SnapManager,
     files: HashMap<Token, (Box<Snapshot>, RaftMessage)>,
     pool: ThreadPool,
@@ -180,8 +184,9 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
+    pub fn new(env: Arc<Environment>, snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
         Runner {
+            env: env,
             snap_mgr: snap_mgr,
             files: map![],
             pool: ThreadPool::new_with_name(thd_name!("snap sender"), DEFAULT_SENDER_POOL_SIZE),
@@ -294,9 +299,10 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
             }
             Task::SendTo { addr, data, cb } => {
                 SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
+                let env = self.env.clone();
                 let mgr = self.snap_mgr.clone();
                 self.pool.execute(move || {
-                    let res = send_snap(mgr, addr, data);
+                    let res = send_snap(env, mgr, addr, data);
                     if res.is_err() {
                         error!("failed to send snap to {}: {:?}", addr, res);
                     }

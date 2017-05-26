@@ -57,6 +57,7 @@ pub struct ServerChannel<T: RaftStoreRouter + 'static> {
 }
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
+    env: Arc<Environment>,
     cfg: Config,
     // Channel for sending eventloop messages.
     sendch: SendCh<Msg>,
@@ -110,6 +111,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         };
 
         let svr = Server {
+            env: env.clone(),
             cfg: cfg.to_owned(),
             sendch: sendch,
             grpc_server: grpc_server,
@@ -136,7 +138,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                                           self.cfg.end_point_small_txn_tasks_limit);
         box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         let ch = self.get_sendch();
-        let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
+        let snap_runner = SnapHandler::new(self.env.clone(),
+                                           self.snap_mgr.clone(),
+                                           self.ch.raft_router.clone(),
+                                           ch);
         box_try!(self.snap_worker.start(snap_runner));
         self.grpc_server.start();
         info!("TiKV is ready to serve");
