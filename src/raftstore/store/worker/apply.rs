@@ -886,7 +886,7 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::Snap => self.handle_snap(ctx, req),
-                CmdType::Prewrite => unreachable!(),
+                CmdType::Prewrite | CmdType::Commit => unreachable!(),
                 CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted")),
             });
 

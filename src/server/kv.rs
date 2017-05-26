@@ -377,7 +377,7 @@ impl StoreHandler {
             MessageType::CmdScanLock => self.on_scan_lock(req, on_resp),
             MessageType::CmdResolveLock => self.on_resolve_lock(req, on_resp),
             MessageType::CmdGC => self.on_gc(req, on_resp),
-
+            MessageType::CmdImport => unreachable!(),
             MessageType::CmdRawGet => self.on_raw_get(req, on_resp),
             MessageType::CmdRawPut => self.on_raw_put(req, on_resp),
             MessageType::CmdRawDelete => self.on_raw_delete(req, on_resp),

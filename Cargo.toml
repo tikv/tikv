@@ -72,7 +72,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-rev = "7a49754"
+rev = "lishihai/add-commit-request"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
