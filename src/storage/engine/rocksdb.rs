@@ -15,7 +15,7 @@ use std::fmt::{self, Formatter, Debug, Display};
 use std::sync::{Arc, Mutex};
 use rocksdb::{DB, Writable, SeekKey, WriteBatch, DBIterator};
 use kvproto::kvrpcpb::Context;
-use storage::{Key, Value, CfName, CF_LOCK, CF_DEFAULT};
+use storage::{Key, Value, CfName, CF_LOCK, CF_DEFAULT, CF_WRITE};
 use raftstore::store::engine::{SyncSnapshot as RocksSnapshot, Peekable, Iterable, IterOption};
 use util::escape;
 use util::rocksdb;
@@ -133,6 +133,16 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                 try!(wb.put_cf(handle, lk.encoded(), &l));
                 trace!("EngineRocksdb: put {},{}", k, escape(&v));
                 wb.put(k.encoded(), &v)
+            }
+            Modify::Commit(k, v) => {
+                trace!("EngineRocksdb: put_cf {}, {}, {}", CF_WRITE, k, escape(&v));
+                let handle = try!(rocksdb::get_cf_handle(db, CF_WRITE));
+                try!(wb.put_cf(handle, k.encoded(), &v));
+
+                trace!("EngineRocksdb: del_cf {},{}", k, escape(&v));
+                let handle = try!(rocksdb::get_cf_handle(db, CF_LOCK));
+                let lk = k.truncate_ts().unwrap();
+                wb.delete_cf(handle, lk.encoded()) 
             }
         };
         if let Err(msg) = res {

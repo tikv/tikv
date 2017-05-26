@@ -12,9 +12,9 @@
 // limitations under the License.
 
 use super::{Coprocessor, RegionObserver, ObserverContext};
-use kvproto::raft_cmdpb::{CmdType, Request, PutRequest};
+use kvproto::raft_cmdpb::{CmdType, Request, PutRequest, DeleteRequest};
 use storage::types::Key;
-use storage::CF_LOCK;
+use storage::{CF_LOCK, CF_WRITE};
 
 use protobuf::RepeatedField;
 
@@ -25,33 +25,59 @@ impl Coprocessor for TxnObserver {}
 impl RegionObserver for TxnObserver {
     fn pre_apply_query(&self, _: &mut ObserverContext, reqs: &mut RepeatedField<Request>) {
         for i in 0..reqs.len() {
-            if reqs[i].get_cmd_type() != CmdType::Prewrite {
-                continue;
+            match reqs[i].get_cmd_type() {
+                CmdType::Prewrite => {
+                    let mut prewrite = reqs[i].take_prewrite();
+                    let key = prewrite.take_key();
+                    let lock_key = Key::from_encoded(key.clone())
+                        .truncate_ts()
+                        .unwrap()
+                        .into_encoded();
+
+                    let mut put = PutRequest::new();
+                    put.set_cf(CF_LOCK.to_owned());
+                    put.set_key(lock_key);
+                    put.set_value(prewrite.take_lock());
+                    let mut new_req = Request::new();
+                    new_req.set_cmd_type(CmdType::Put);
+                    new_req.set_put(put);
+                    reqs[i] = new_req;
+
+                    let mut put = PutRequest::new();
+                    put.set_key(key);
+                    put.set_value(prewrite.take_value());
+                    let mut new_req = Request::new();
+                    new_req.set_cmd_type(CmdType::Put);
+                    new_req.set_put(put);
+                    reqs.push(new_req);
+                }
+                CmdType::Commit => {
+                    let mut commit = reqs[i].take_commit();
+                    let key = commit.take_key();
+                    let lock_key = Key::from_encoded(key.clone())
+                        .truncate_ts()
+                        .unwrap()
+                        .into_encoded();
+
+                    let mut put = PutRequest::new();
+                    put.set_cf(CF_WRITE.to_owned());
+                    put.set_key(key);
+                    put.set_value(commit.take_value());
+                    let mut new_req = Request::new();
+                    new_req.set_cmd_type(CmdType::Put);
+                    new_req.set_put(put);
+                    reqs[i] = new_req;
+
+                    let mut del = DeleteRequest::new();
+                    del.set_cf(CF_LOCK.to_owned());
+                    del.set_key(lock_key);
+                    let mut new_req = Request::new();
+                    new_req.set_cmd_type(CmdType::Delete);
+                    new_req.set_delete(del);
+                    reqs.push(new_req);
+                }
+                _ => {}
             }
-            let mut prewrite = reqs[i].take_prewrite();
-            let key = prewrite.take_key();
-            let lock_key = Key::from_encoded(key.clone())
-                .truncate_ts()
-                .unwrap()
-                .into_encoded();
-
-            let mut put = PutRequest::new();
-            put.set_cf(CF_LOCK.to_owned());
-            put.set_key(lock_key);
-            put.set_value(prewrite.take_lock());
-
-            let mut new_req = Request::new();
-            new_req.set_cmd_type(CmdType::Put);
-            new_req.set_put(put);
-            reqs[i] = new_req;
-
-            let mut put = PutRequest::new();
-            put.set_key(key);
-            put.set_value(prewrite.take_value());
-            let mut new_req = Request::new();
-            new_req.set_cmd_type(CmdType::Put);
-            new_req.set_put(put);
-            reqs.push(new_req);
         }
     }
 }

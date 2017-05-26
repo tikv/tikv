@@ -52,6 +52,7 @@ pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
     Prewrite(Key, Value, Lock),
+    Commit(Key, Value),
 }
 
 pub trait Engine: Send + Debug {

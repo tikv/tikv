@@ -100,6 +100,13 @@ impl<'a> MvccTxn<'a> {
         self.writes.push(Modify::Put(CF_WRITE, key, value));
     }
 
+    fn put_commit(&mut self, key: &Key, ts: u64, value: Value) {
+        self.write_size += CF_LOCK.len() + key.encoded().len();
+        let key = key.append_ts(ts);
+        self.write_size += CF_WRITE.len() + key.encoded().len() + value.len();
+        self.writes.push(Modify::Commit(key, value));
+    }
+
     fn delete_write(&mut self, key: &Key, ts: u64) {
         let key = key.append_ts(ts);
         self.write_size += CF_WRITE.len() + key.encoded().len();
@@ -198,8 +205,7 @@ impl<'a> MvccTxn<'a> {
         let write = Write::new(WriteType::from_lock_type(lock_type),
                                self.start_ts,
                                short_value);
-        self.put_write(key, commit_ts, write.to_bytes());
-        self.unlock_key(key.clone());
+        self.put_commit(key, commit_ts, write.to_bytes());
         Ok(())
     }
 

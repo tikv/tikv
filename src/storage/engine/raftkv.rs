@@ -18,7 +18,7 @@ use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
 use storage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
-                          CmdType, DeleteRequest, PutRequest, PrewriteRequest};
+                          CmdType, DeleteRequest, PutRequest, PrewriteRequest, CommitRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 
@@ -216,7 +216,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             match m {
                 Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::new();
-                    delete.set_key(k.encoded().to_owned());
+                    delete.set_key(k.into_encoded());
                     if cf != CF_DEFAULT {
                         delete.set_cf(cf.to_string());
                     }
@@ -225,7 +225,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 }
                 Modify::Put(cf, k, v) => {
                     let mut put = PutRequest::new();
-                    put.set_key(k.encoded().to_owned());
+                    put.set_key(k.into_encoded());
                     put.set_value(v);
                     if cf != CF_DEFAULT {
                         put.set_cf(cf.to_string());
@@ -235,11 +235,18 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                 }
                 Modify::Prewrite(k, v, l) => {
                     let mut prewrite = PrewriteRequest::new();
-                    prewrite.set_key(k.encoded().to_owned());
+                    prewrite.set_key(k.into_encoded());
                     prewrite.set_value(v);
                     prewrite.set_lock(l.to_bytes());
                     req.set_cmd_type(CmdType::Prewrite);
                     req.set_prewrite(prewrite);
+                }
+                Modify::Commit(k, v) => {
+                    let mut commit = CommitRequest::new();
+                    commit.set_key(k.into_encoded());
+                    commit.set_value(v);
+                    req.set_cmd_type(CmdType::Commit);
+                    req.set_commit(commit);
                 }
             }
             reqs.push(req);
