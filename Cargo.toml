@@ -72,6 +72,7 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
+rev = "7a49754"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -83,6 +84,7 @@ features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
 git = "https://github.com/stepancheg/grpc-rust.git"
+rev = "13bdc724e5d9467792b289df822c2479812a9808"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"

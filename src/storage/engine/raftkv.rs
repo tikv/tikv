@@ -18,7 +18,7 @@ use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
 use storage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
-                          CmdType, DeleteRequest, PutRequest};
+                          CmdType, DeleteRequest, PutRequest, PrewriteRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 
@@ -232,6 +232,14 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     }
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
+                }
+                Modify::Prewrite(k, v, l) => {
+                    let mut prewrite = PrewriteRequest::new();
+                    prewrite.set_key(k.encoded().to_owned());
+                    prewrite.set_value(v);
+                    prewrite.set_lock(l.to_bytes());
+                    req.set_cmd_type(CmdType::Prewrite);
+                    req.set_prewrite(prewrite);
                 }
             }
             reqs.push(req);

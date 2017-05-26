@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, CfName, CF_DEFAULT};
+use storage::mvcc::Lock;
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -50,6 +51,7 @@ impl CbContext {
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
+    Prewrite(Key, Value, Lock),
 }
 
 pub trait Engine: Send + Debug {

@@ -588,6 +588,19 @@ fn build_cfg(matches: &ArgMatches,
                   "server.end-point-concurrency") {
         cfg.end_point_concurrency = adjust_end_points_by_cpu_num(total_cpu_num);
     }
+
+    if !cfg_usize(&mut cfg.end_point_txn_concurrency_on_busy,
+                  config,
+                  "server.end-point-txn-concurrency-on-busy") {
+        cfg.auto_adjust_end_point_txn_concurrency();
+        info!("server.end-point-txn-concurrency-on-busy keep default value with value = {}",
+              cfg.end_point_txn_concurrency_on_busy);
+    }
+
+    cfg_usize(&mut cfg.end_point_small_txn_tasks_limit,
+              config,
+              "server.end-point-small-txn-tasks-limit");
+
     cfg_usize(&mut cfg.messages_per_tick,
               config,
               "server.messages-per-tick");
@@ -607,6 +620,7 @@ fn build_cfg(matches: &ArgMatches,
     cfg_usize(&mut cfg.send_buffer_size, config, "server.send-buffer-size");
     cfg_usize(&mut cfg.recv_buffer_size, config, "server.recv-buffer-size");
 
+    cfg.raft_store.sync_log = get_toml_boolean(config, "raftstore.sync-log", Some(true));
     cfg_usize(&mut cfg.raft_store.notify_capacity,
               config,
               "raftstore.notify-capacity");
