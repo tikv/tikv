@@ -69,7 +69,6 @@ signal = "0.2"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
-rev = "lishihai/add-mulit-get"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
