@@ -14,6 +14,7 @@
 mod region_snapshot;
 pub mod dispatcher;
 pub mod split_observer;
+pub mod txn_observer;
 mod error;
 
 pub use self::region_snapshot::{RegionSnapshot, RegionIterator};
