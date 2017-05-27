@@ -11,14 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
 use raftstore::store::{Msg as StoreMsg, Transport, Callback};
 use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use super::{Msg, ConnData};
+use super::Msg;
 use util::transport::SendCh;
 use super::metrics::*;
 
@@ -112,19 +109,11 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 #[derive(Clone)]
 pub struct ServerTransport {
     ch: SendCh<Msg>,
-    msg_id: Arc<AtomicUsize>,
 }
 
 impl ServerTransport {
     pub fn new(ch: SendCh<Msg>) -> ServerTransport {
-        ServerTransport {
-            ch: ch,
-            msg_id: Arc::new(AtomicUsize::new(1)),
-        }
-    }
-
-    fn alloc_msg_id(&self) -> u64 {
-        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
+        ServerTransport { ch: ch }
     }
 }
 
@@ -134,7 +123,7 @@ impl Transport for ServerTransport {
 
         try!(self.ch.try_send(Msg::SendStore {
             store_id: to_store_id,
-            data: ConnData::new(self.alloc_msg_id(), msg),
+            msg: msg,
         }));
         Ok(())
     }
