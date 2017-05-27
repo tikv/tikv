@@ -36,7 +36,7 @@ use util::transport::SendCh;
 use util::HandyRwLock;
 
 use super::metrics::*;
-use super::{Result, Error, ConnData, Msg};
+use super::{Result, Error, Msg};
 use super::transport::RaftStoreRouter;
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
@@ -57,7 +57,7 @@ pub enum Task {
     Discard(Token),
     SendTo {
         addr: SocketAddr,
-        data: ConnData,
+        msg: RaftMessage,
         cb: Callback,
     },
 }
@@ -69,8 +69,8 @@ impl Display for Task {
             Task::Write(token, _) => write!(f, "Write snap for {:?}", token),
             Task::Close(token) => write!(f, "Close file {:?}", token),
             Task::Discard(token) => write!(f, "Discard file {:?}", token),
-            Task::SendTo { ref addr, ref data, .. } => {
-                write!(f, "SendTo Snap[to: {}, snap: {:?}]", addr, data.msg)
+            Task::SendTo { ref addr, ref msg, .. } => {
+                write!(f, "SendTo Snap[to: {}, snap: {:?}]", addr, msg)
             }
         }
     }
@@ -105,14 +105,18 @@ impl Iterator for SnapChunk {
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
-fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
-    assert!(data.is_snapshot());
+fn send_snap(env: Arc<Environment>,
+             mgr: SnapManager,
+             addr: SocketAddr,
+             msg: RaftMessage)
+             -> Result<()> {
+    assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
 
     let send_timer = SEND_SNAP_HISTOGRAM.start_timer();
 
     let key = {
-        let snap = data.msg.get_message().get_snapshot();
+        let snap = msg.get_message().get_snapshot();
         try!(SnapKey::from_snap(&snap))
     };
     mgr.register(key.clone(), SnapEntry::Sending);
@@ -135,7 +139,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
         };
         let first: Once<Result<SnapshotChunk>> = iter::once({
             let mut chunk = SnapshotChunk::new();
-            chunk.set_message(data.msg);
+            chunk.set_message(msg);
             Ok(chunk)
         });
         let rests = snap_chunk.map(|item| {
@@ -149,7 +153,6 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
         first.chain(rests)
     };
 
-    let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&format!("{}", addr));
     let client = TikvClient::new(channel);
     let (sink, receiver) = client.snapshot();
@@ -172,6 +175,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
+    env: Arc<Environment>,
     snap_mgr: SnapManager,
     files: HashMap<Token, (Box<Snapshot>, RaftMessage)>,
     pool: ThreadPool,
@@ -180,8 +184,9 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
+    pub fn new(env: Arc<Environment>, snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
         Runner {
+            env: env,
             snap_mgr: snap_mgr,
             files: map![],
             pool: ThreadPool::new_with_name(thd_name!("snap sender"), DEFAULT_SENDER_POOL_SIZE),
@@ -292,11 +297,12 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
                 }
             }
-            Task::SendTo { addr, data, cb } => {
+            Task::SendTo { addr, msg, cb } => {
                 SNAP_TASK_COUNTER.with_label_values(&["send"]).inc();
+                let env = self.env.clone();
                 let mgr = self.snap_mgr.clone();
                 self.pool.execute(move || {
-                    let res = send_snap(mgr, addr, data);
+                    let res = send_snap(env, mgr, addr, msg);
                     if res.is_err() {
                         error!("failed to send snap to {}: {:?}", addr, res);
                     }
