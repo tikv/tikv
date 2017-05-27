@@ -12,17 +12,16 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, Receiver};
 use std::boxed::Box;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 
-use mio::{Handler, EventLoop, EventLoopConfig};
 use grpc::{Server as GrpcServer, ServerBuilder, Environment};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::*;
 use util::worker::{Stopped, Worker};
-use util::transport::SendCh;
+use util::transport::SyncSendCh;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use raft::SnapshotStatus;
@@ -40,17 +39,6 @@ use super::metrics::*;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
-pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
-    where T: RaftStoreRouter,
-          S: StoreAddrResolver
-{
-    let mut loop_config = EventLoopConfig::new();
-    loop_config.notify_capacity(config.notify_capacity);
-    loop_config.messages_per_tick(config.messages_per_tick);
-    let el = try!(EventLoop::configured(loop_config));
-    Ok(el)
-}
-
 // A helper structure to bundle all senders for messages to raftstore.
 pub struct ServerChannel<T: RaftStoreRouter + 'static> {
     pub raft_router: T,
@@ -58,10 +46,8 @@ pub struct ServerChannel<T: RaftStoreRouter + 'static> {
 }
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
-    env: Arc<Environment>,
-    cfg: Config,
-    // Channel for sending eventloop messages.
-    sendch: SendCh<Msg>,
+    msg_sendch: SyncSendCh<Msg>,
+    msg_receiver: Receiver<Msg>,
     // Grpc server.
     grpc_server: GrpcServer,
     local_addr: SocketAddr,
@@ -75,30 +61,42 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     storage: Storage,
     // For handling coprocessor requests.
     end_point_worker: Worker<EndPointTask>,
+    end_point: Option<EndPointHost>,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
+    snap_handler: Option<SnapHandler<T>>,
     // For sending raft messages to other stores.
     raft_client: RaftClient,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
-    pub fn new(event_loop: &mut EventLoop<Self>,
-               cfg: &Config,
+    pub fn new(cfg: &Config,
                storage: Storage,
                ch: ServerChannel<T>,
+               msg_sendch: SyncSendCh<Msg>,
+               msg_receiver: Receiver<Msg>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
-        let sendch = SendCh::new(event_loop.channel(), "raft-server");
+        let env = Arc::new(Environment::new(cfg.grpc_concurrency));
+
         let end_point_worker = Worker::new("end-point-worker");
+        let end_point = EndPointHost::new(storage.get_engine(),
+                                          end_point_worker.scheduler(),
+                                          cfg.end_point_concurrency,
+                                          cfg.end_point_txn_concurrency_on_busy,
+                                          cfg.end_point_small_txn_tasks_limit);
+
         let snap_worker = Worker::new("snap-handler");
+        let snap_handler = SnapHandler::new(env.clone(),
+                                            snap_mgr,
+                                            ch.raft_router.clone(),
+                                            msg_sendch.clone());
 
         let h = Service::new(storage.clone(),
                              end_point_worker.scheduler(),
                              ch.raft_router.clone(),
                              snap_worker.scheduler());
-        let env = Arc::new(Environment::new(cfg.grpc_concurrency));
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
         let grpc_server = try!(ServerBuilder::new(env.clone())
@@ -112,9 +110,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         };
 
         let svr = Server {
-            env: env.clone(),
-            cfg: cfg.to_owned(),
-            sendch: sendch,
+            msg_sendch: msg_sendch,
+            msg_receiver: msg_receiver,
             grpc_server: grpc_server,
             local_addr: addr,
             store_addrs: HashMap::default(),
@@ -123,36 +120,41 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             ch: ch,
             storage: storage,
             end_point_worker: end_point_worker,
-            snap_mgr: snap_mgr,
+            end_point: Some(end_point),
             snap_worker: snap_worker,
+            snap_handler: Some(snap_handler),
             raft_client: RaftClient::new(env),
         };
 
         Ok(svr)
     }
 
-    pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
-        let end_point = EndPointHost::new(self.storage.get_engine(),
-                                          self.end_point_worker.scheduler(),
-                                          self.cfg.end_point_concurrency,
-                                          self.cfg.end_point_txn_concurrency_on_busy,
-                                          self.cfg.end_point_small_txn_tasks_limit);
-        box_try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
-        let ch = self.get_sendch();
-        let snap_runner = SnapHandler::new(self.env.clone(),
-                                           self.snap_mgr.clone(),
-                                           self.ch.raft_router.clone(),
-                                           ch);
-        box_try!(self.snap_worker.start(snap_runner));
+    pub fn run(&mut self) -> Result<()> {
+        box_try!(self.end_point_worker
+            .start_batch(self.end_point.take().unwrap(), DEFAULT_COPROCESSOR_BATCH));
+        box_try!(self.snap_worker.start(self.snap_handler.take().unwrap()));
         self.grpc_server.start();
         info!("TiKV is ready to serve");
 
-        try!(event_loop.run(self));
-        Ok(())
-    }
+        loop {
+            match self.msg_receiver.recv().unwrap() {
+                Msg::Quit => break,
+                Msg::SendStore { store_id, msg } => self.send_store(store_id, msg),
+                Msg::ResolveResult { store_id, sock_addr, msg } => {
+                    self.on_resolve_result(store_id, sock_addr, msg)
+                }
+                Msg::CloseConn { .. } => {}
+            }
+        }
 
-    pub fn get_sendch(&self) -> SendCh<Msg> {
-        self.sendch.clone()
+        self.end_point_worker.stop();
+        self.snap_worker.stop();
+        if let Err(e) = self.storage.stop() {
+            error!("failed to stop store: {:?}", e);
+        }
+        self.grpc_server.shutdown();
+
+        Ok(())
     }
 
     // Return listening address, this may only be used for outer test
@@ -169,7 +171,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn resolve_store(&mut self, store_id: u64, msg: RaftMessage) {
-        let ch = self.sendch.clone();
+        let ch = self.msg_sendch.clone();
         let cb = box move |r| {
             if let Err(e) = ch.send(Msg::ResolveResult {
                 store_id: store_id,
@@ -287,42 +289,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
-    type Timeout = Msg;
-    type Message = Msg;
-
-    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: Msg) {
-        match msg {
-            Msg::Quit => event_loop.shutdown(),
-            Msg::SendStore { store_id, msg } => self.send_store(store_id, msg),
-            Msg::ResolveResult { store_id, sock_addr, msg } => {
-                self.on_resolve_result(store_id, sock_addr, msg)
-            }
-            Msg::CloseConn { .. } => {}
-        }
-    }
-
-    fn interrupted(&mut self, _: &mut EventLoop<Self>) {
-        // To be able to be attached by gdb, we should not shutdown.
-        // TODO: find a grace way to shutdown.
-        // event_loop.shutdown();
-    }
-
-    fn tick(&mut self, el: &mut EventLoop<Self>) {
-        // tick is called in the end of the loop, so if we notify to quit,
-        // we will quit the server here.
-        // TODO: handle quit server if event_loop is_running() returns false.
-        if !el.is_running() {
-            self.end_point_worker.stop();
-            self.snap_worker.stop();
-            if let Err(e) = self.storage.stop() {
-                error!("failed to stop store: {:?}", e);
-            }
-            self.grpc_server.shutdown();
-        }
-    }
-}
-
 struct SnapshotReporter {
     snapshot_status_sender: Sender<SnapshotStatusMsg>,
     region_id: u64,
@@ -422,7 +388,9 @@ mod tests {
         let mut cfg = Config::new();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let mut event_loop = create_event_loop(&cfg).unwrap();
+        let (msg_tx, msg_rx) = mpsc::sync_channel(64);
+        let msgch = SyncSendCh::new(msg_tx, "test-msgch");
+
         let mut storage = Storage::new(&cfg.storage).unwrap();
         storage.start(&cfg.storage).unwrap();
 
@@ -438,10 +406,11 @@ mod tests {
         };
         let addr = Arc::new(Mutex::new(None));
         let mut server =
-            Server::new(&mut event_loop,
-                        &cfg,
+            Server::new(&cfg,
                         storage,
                         ch,
+                        msgch.clone(),
+                        msg_rx,
                         MockResolver { addr: addr.clone() },
                         SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
                 .unwrap();
@@ -454,12 +423,11 @@ mod tests {
             assert_eq!(report_unreachable_count.load(Ordering::SeqCst), (i + 1) / 2);
         }
 
-        let ch = server.get_sendch();
         let h = thread::spawn(move || {
-            server.run(&mut event_loop).unwrap();
+            server.run().unwrap();
         });
 
-        ch.try_send(Msg::SendStore {
+        msgch.try_send(Msg::SendStore {
                 store_id: 1,
                 msg: RaftMessage::new(),
             })
@@ -467,7 +435,7 @@ mod tests {
 
         rx.recv().unwrap();
 
-        ch.try_send(Msg::Quit).unwrap();
+        msgch.try_send(Msg::Quit).unwrap();
         h.join().unwrap();
     }
 }
