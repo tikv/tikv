@@ -337,7 +337,7 @@ mod test {
             #[allow(unused_imports)]
             #[allow(float_cmp)]
             mod $enc {
-                use super::{I64_TESTS, U64_TESTS, F64_TESTS};
+                use super::{I64_TESTS, U64_TESTS, U32_TESTS,U16_TESTS,F64_TESTS};
                 use util::codec::number::*;
 
                 test_serialize!(serialize, $enc, $dec, $cases);
@@ -365,18 +365,18 @@ mod test {
                 |a, b| b.partial_cmp(a).unwrap(),
                 F64_TESTS);
 
-    test_codec!(encode_u16_with_little_endian,
-                decode_u16_with_little_endian,
-                |a, b| a.cmp(b),
-                U16_TESTS);
-    test_codec!(encode_u32_with_little_endian,
-                decode_u32_with_little_endian,
-                |a, b| a.cmp(b),
-                U32_TESTS);
-    test_codec!(encode_f64_with_little_endian,
-                decode_f64_with_little_endian,
-                |a, b| a.partial_cmp(b).unwrap(),
-                F64_TESTS);
+    test_serialize!(var_u16_codec,
+                    encode_u16_with_little_endian,
+                    decode_u16_with_little_endian,
+                    U16_TESTS);
+    test_serialize!(var_u32_codec,
+                    encode_u32_with_little_endian,
+                    decode_u32_with_little_endian,
+                    U32_TESTS);
+    test_serialize!(var_f64_codec,
+                    encode_f64_with_little_endian,
+                    decode_f64_with_little_endian,
+                    F64_TESTS);
 
     test_serialize!(var_i64_codec, encode_var_i64, decode_var_i64, I64_TESTS);
 
@@ -423,21 +423,6 @@ mod test {
     test_eof!(i64_eof, encode_i64, decode_i64, 1);
     test_eof!(u64_eof, encode_u64, decode_u64, 1);
     test_eof!(f64_eof, encode_f64, decode_f64, 1.0);
-    test_eof!(u16_eof,
-              encode_u16_with_little_endian,
-              decode_u16_with_little_endian,
-              1);
-    test_eof!(u32_eof,
-              encode_u32_with_little_endian,
-              decode_u32_with_little_endian,
-              1);
-    test_eof!(f64l_eof,
-              encode_f64_with_little_endian,
-              decode_f64_with_little_endian,
-              1.0);
-    test_eof!(i64_desc_eof, encode_i64_desc, decode_i64_desc, 1);
-    test_eof!(u64_desc_eof, encode_u64_desc, decode_u64_desc, 1);
-    test_eof!(f64_desc_eof, encode_f64_desc, decode_f64_desc, 1.0);
 
     #[test]
     fn test_var_eof() {
