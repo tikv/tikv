@@ -42,6 +42,9 @@ release:
 static_release:
 	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 ROCKSDB_SYS_SSE=1  make release
 
+static_unportable_release:
+	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_SSE=1  make release
+
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
 	export CI=true && \
