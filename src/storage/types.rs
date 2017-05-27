@@ -65,6 +65,10 @@ impl Key {
         &self.0
     }
 
+    pub fn into_encoded(self) -> Vec<u8> {
+        self.0
+    }
+
     /// Creates a new key by appending a `u64` timestamp to this key.
     pub fn append_ts(&self, ts: u64) -> Key {
         let mut encoded = self.0.clone();

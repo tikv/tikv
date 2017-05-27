@@ -75,10 +75,17 @@ impl<'a> MvccTxn<'a> {
         self.writes.push(Modify::Delete(CF_LOCK, key));
     }
 
-    fn put_value(&mut self, key: &Key, ts: u64, value: Value) {
-        let key = key.append_ts(ts);
+    fn put_prewrite(&mut self,
+                    key: Key,
+                    lock_type: LockType,
+                    primary: Vec<u8>,
+                    ttl: u64,
+                    value: Value) {
+        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, None);
+        self.write_size += CF_LOCK.len() + key.encoded().len() + lock.to_bytes().len();
+        let key = key.append_ts(self.start_ts);
         self.write_size += key.encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_DEFAULT, key, value));
+        self.writes.push(Modify::Prewrite(key, value, lock));
     }
 
     fn delete_value(&mut self, key: &Key, ts: u64) {
@@ -144,16 +151,21 @@ impl<'a> MvccTxn<'a> {
             None
         };
 
-        self.lock_key(key.clone(),
-                      LockType::from_mutation(&mutation),
-                      primary.to_vec(),
-                      options.lock_ttl,
-                      short_value);
-
-        if let Mutation::Put((_, ref value)) = mutation {
-            if !is_short_value(value) {
-                let ts = self.start_ts;
-                self.put_value(key, ts, value.clone());
+        let lock_type = LockType::from_mutation(&mutation);
+        match mutation {
+            Mutation::Put((ref key, ref value)) if !is_short_value(value) => {
+                self.put_prewrite(key.clone(),
+                                  lock_type,
+                                  primary.to_vec(),
+                                  options.lock_ttl,
+                                  value.clone())
+            }
+            _ => {
+                self.lock_key(key.clone(),
+                              lock_type,
+                              primary.to_vec(),
+                              options.lock_ttl,
+                              short_value)
             }
         }
         Ok(())

@@ -1001,7 +1001,7 @@ impl Peer {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap => is_read = true,
-                CmdType::Delete | CmdType::Put => is_write = true,
+                CmdType::Delete | CmdType::Put | CmdType::Prewrite => is_write = true,
                 CmdType::Invalid => {
                     return Err(box_err!("invalid cmd type, message {:?} maybe currupted",
                                         req.get_header().get_uuid()));
@@ -1506,7 +1506,7 @@ impl Peer {
             let mut resp = match cmd_type {
                 CmdType::Get => try!(apply::do_get(&self.tag, self.region(), &snap, req)),
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
-                CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
+                CmdType::Put | CmdType::Delete | CmdType::Prewrite | CmdType::Invalid => unreachable!(),
             };
 
             resp.set_cmd_type(cmd_type);
