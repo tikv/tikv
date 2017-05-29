@@ -95,7 +95,7 @@ impl fmt::Debug for Msg {
                        "ComputeHashResult [region_id: {}, index: {}, hash: {}]",
                        region_id,
                        index,
-                       escape(&hash))
+                       escape(hash))
             }
         }
     }

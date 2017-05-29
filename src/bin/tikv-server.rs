@@ -177,6 +177,7 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
     })
 }
 
+#[allow(absurd_extreme_comparisons)]
 fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) -> bool {
     match get_toml_int_opt(config, name) {
         Some(i) => {

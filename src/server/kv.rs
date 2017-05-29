@@ -61,7 +61,7 @@ impl StoreHandler {
         }
         let req = msg.take_cmd_scan_req();
         let start_key = req.get_start_key();
-        debug!("start_key [{}]", escape(&start_key));
+        debug!("start_key [{}]", escape(start_key));
         let cb = self.make_cb(StoreHandler::cmd_scan_done, on_resp);
         let mut options = Options::default();
         options.key_only = req.get_key_only();
