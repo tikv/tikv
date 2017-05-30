@@ -373,12 +373,19 @@ mod test {
                     encode_u32_with_little_endian,
                     decode_u32_with_little_endian,
                     U32_TESTS);
-    test_serialize!(var_f64_codec,
-                    encode_f64_with_little_endian,
-                    decode_f64_with_little_endian,
-                    F64_TESTS);
 
     test_serialize!(var_i64_codec, encode_var_i64, decode_var_i64, I64_TESTS);
+
+    #[test]
+    #[allow(float_cmp)]
+    fn test_var_f64_with_little_endian() {
+        for &v in F64_TESTS {
+            let mut buf = vec![];
+            buf.encode_f64_with_little_endian(v).unwrap();
+            let value = buf.as_slice().decode_f64_with_little_endian().unwrap();
+            assert_eq!(v, value);
+        }
+    }
 
     #[test]
     fn test_var_u64_codec() {

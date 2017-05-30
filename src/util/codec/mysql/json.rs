@@ -13,7 +13,7 @@
 
 use std::string::String;
 use super::Result;
-use std::str;
+use std::{str, f64};
 use serde_json::{self, Value};
 use std::collections::BTreeMap;
 use util::codec::number::{NumberDecoder, NumberEncoder};
@@ -103,13 +103,11 @@ const LENGTH_TYPE: usize = 1;
 const LENGTH_LITERAL: usize = 1;
 const LENGTH_U16: usize = 2;
 const LENGTH_U32: usize = 4;
-const LENGTH_U64: usize = 8;
-const LENGTH_F64: usize = 8;
 const LENGTH_KEY_ENTRY: usize = LENGTH_U32 + LENGTH_U16;
 const LENGTH_VALUE_ENTRY: usize = LENGTH_TYPE + LENGTH_U32;
 
 
-macro_rules! take_bytes {
+macro_rules! take_prefix {
    ($data:ident,$len:ident) => {{
         let mut buffer = vec![0;$len as usize];
         $data.read_exact(&mut buffer).unwrap();
@@ -118,7 +116,6 @@ macro_rules! take_bytes {
    }
 }
 
-// Serialize
 #[derive(Clone,PartialEq,Debug)]
 pub enum JSON {
     JLiteral(u8),
@@ -128,12 +125,13 @@ pub enum JSON {
     JDouble(f64),
 }
 
+#[allow(dead_code)]
 impl JSON {
     pub fn deserialize(mut data: &[u8]) -> Result<JSON> {
         if data.is_empty() {
             return Err(invalid_type!("The document is empty"));
         }
-        let code_type = take_bytes!(data, LENGTH_TYPE);
+        let code_type = take_prefix!(data, LENGTH_TYPE);
         JSON::decode(code_type[0], data)
     }
 
@@ -182,7 +180,8 @@ impl JSON {
             match *d {
                 JSON_LITERAL_NIL => return String::from("null"),
                 JSON_LITERAL_TRUE => return String::from("true"),
-                _ => return String::from("false"),
+                JSON_LITERAL_FALSE => return String::from("false"),
+                _ => return String::from("illegal"),
             };
         }
         serde_json::to_string(self).unwrap()
@@ -216,13 +215,21 @@ impl Serialize for JSON {
                 }
                 tup.end()
             }
-            JSON::JDouble(d) => serializer.serialize_f64(d),
+            JSON::JDouble(d) => {
+                let int_value = d as i64;
+                // TODO:4.0 may changed to 4
+                if (int_value as f64 - d).abs() < f64::EPSILON {
+                    serializer.serialize_i64(int_value)
+                } else {
+                    serializer.serialize_f64(d)
+                }
+            }
         }
     }
 }
 
 fn decode_literal(mut data: &[u8]) -> Result<JSON> {
-    let literal = take_bytes!(data, LENGTH_LITERAL);
+    let literal = take_prefix!(data, LENGTH_LITERAL);
     Ok(JSON::JLiteral(literal[0]))
 }
 
@@ -236,7 +243,6 @@ fn encode_str(data: String) -> Vec<u8> {
 fn decode_str(mut data: &[u8]) -> Result<JSON> {
     let length = try!(data.decode_var_u64());
     let encode_value = &data[0..(length as usize)];
-    data = &data[(length as usize)..];
     match str::from_utf8(encode_value) {
         Ok(v) => {
             let value = String::from(v);
@@ -286,7 +292,7 @@ fn encode_obj(data: BTreeMap<String, JSON>) -> Vec<u8> {
         key_offset += key_len;
     }
 
-    let mut value_offset = key_offset;
+    let value_offset = key_offset;
     let (mut value_entries, mut encode_values) = encode_vec_json(values, value_offset as u32);
     let size = key_offset + encode_values.len();
     let mut encode_data = vec![];
@@ -305,7 +311,7 @@ fn decode_obj(mut data: &[u8]) -> Result<JSON> {
     let total_size = data.decode_u32_with_little_endian().unwrap() as usize;
     // already removed count and size
     let left_size = total_size - LENGTH_U32 - LENGTH_U32;
-    let mut obj_binary = take_bytes!(data, left_size);
+    let obj_binary = take_prefix!(data, left_size);
     let mut obj_data = obj_binary.as_slice();
     let mut obj = BTreeMap::new();
     if element_count == 0 {
@@ -313,19 +319,19 @@ fn decode_obj(mut data: &[u8]) -> Result<JSON> {
     }
 
     let key_entries_len = LENGTH_KEY_ENTRY * element_count;
-    let mut key_entries_data = take_bytes!(obj_data, key_entries_len);
+    let key_entries_data = take_prefix!(obj_data, key_entries_len);
     // value-entry ::= type(byte) offset-or-inlined-value(uint32)
     let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
-    let mut value_entries_data = take_bytes!(obj_data, value_entries_len);
+    let value_entries_data = take_prefix!(obj_data, value_entries_len);
     let key_entries = decode_key_entries(&key_entries_data, element_count);
 
     let mut keys = Vec::with_capacity(element_count);
     for &(_, length) in &key_entries {
-        let mut key_data = take_bytes!(obj_data, length);
+        let key_data = take_prefix!(obj_data, length);
         let key = String::from_utf8(key_data).unwrap();
         keys.push(key);
     }
-    let mut values = try!(decode_vec_json(&value_entries_data, obj_data, element_count));
+    let values = try!(decode_vec_json(&value_entries_data, obj_data, element_count));
     for (key, value) in keys.iter().zip(values.iter()) {
         obj.insert(key.to_owned(), value.to_owned());
     }
@@ -366,10 +372,10 @@ fn decode_array(mut data: &[u8]) -> Result<JSON> {
     let total_size = data.decode_u32_with_little_endian().unwrap() as usize;
     // already removed count and size
     let left_size = total_size - LENGTH_U32 - LENGTH_U32;
-    let mut left_data = take_bytes!(data, left_size);
+    let left_data = take_prefix!(data, left_size);
     let mut left_data = left_data.as_slice();
     let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
-    let mut value_entries_data = take_bytes!(left_data, value_entries_len);
+    let value_entries_data = take_prefix!(left_data, value_entries_len);
     let array_data = try!(decode_vec_json(&value_entries_data, &left_data, element_count));
     Ok(JSON::JArray(array_data))
 }
@@ -410,11 +416,11 @@ fn decode_vec_json(mut value_entries_data: &[u8],
     let mut values = Vec::with_capacity(element_count);
     let mut last_offset = 0;
     for _ in 0..element_count {
-        let mut entry = take_bytes!(value_entries_data, LENGTH_VALUE_ENTRY);
+        let entry = take_prefix!(value_entries_data, LENGTH_VALUE_ENTRY);
         let mut entry = entry.as_slice();
         // let mut entry = take_left_bytes(value_entries_data, LENGTH_VALUE_ENTRY);
         // let code = take_left_bytes(entry, LENGTH_TYPE);
-        let code = take_bytes!(entry, LENGTH_TYPE);
+        let code = take_prefix!(entry, LENGTH_TYPE);
         let value = match code[0] {
             TYPE_CODE_LITERAL => try!(JSON::decode(code[0], entry)),
             _ => {
@@ -436,10 +442,10 @@ fn normalize(data: Value) -> JSON {
     match data {
         Value::Null => JSON::JLiteral(JSON_LITERAL_NIL),
         Value::Bool(data) => {
-            if data {
-                JSON::JLiteral(JSON_LITERAL_TRUE)
-            } else {
+            if !data {
                 JSON::JLiteral(JSON_LITERAL_FALSE)
+            } else {
+                JSON::JLiteral(JSON_LITERAL_TRUE)
             }
         }
         Value::Number(ref data) => JSON::JDouble(data.as_f64().unwrap()),
@@ -475,7 +481,7 @@ fn encode(json: JSON, data: &mut Vec<u8>) -> usize {
     len
 }
 
-
+#[allow(dead_code)]
 pub fn parse_from_string(s: &str) -> Result<JSON> {
     if s.is_empty() {
         return Err(invalid_type!("The document is empty"));
@@ -487,14 +493,13 @@ pub fn parse_from_string(s: &str) -> Result<JSON> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use serde_json;
 
     #[test]
     fn test_parse_from_string() {
-        let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "b": true, "c": null}"#;
+        let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4, null], "b": true, "c": null}"#;
         let j1 = parse_from_string(jstr1).unwrap();
         let jstr2 = j1.to_string();
-        let expect_str = r#"{"a":[1.0,"2",{"aa":"bb"},4.0,null],"b":true,"c":null}"#;
+        let expect_str = r#"{"a":[1,"2",{"aa":"bb"},4,null],"b":true,"c":null}"#;
         assert_eq!(jstr2, expect_str);
     }
 
