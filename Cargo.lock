@@ -415,7 +415,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "jemalloc-sys"
 version = "0.1.0"
-source = "git+https://github.com/busyjay/jemallocator.git?branch=dev#625d16faa69a164cf9c447a5593659ecf7d5bd10"
+source = "git+https://github.com/busyjay/jemallocator.git?branch=dev#bd0259ee6b63c8451817a4f49712a32688335c7c"
 dependencies = [
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -423,7 +423,7 @@ dependencies = [
 [[package]]
 name = "jemallocator"
 version = "0.1.0"
-source = "git+https://github.com/busyjay/jemallocator.git?branch=dev#625d16faa69a164cf9c447a5593659ecf7d5bd10"
+source = "git+https://github.com/busyjay/jemallocator.git?branch=dev#bd0259ee6b63c8451817a4f49712a32688335c7c"
 dependencies = [
  "jemalloc-sys 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
 ]
