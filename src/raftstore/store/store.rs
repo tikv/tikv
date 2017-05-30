@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::boxed::Box;
 use std::collections::Bound::{Included, Excluded, Unbounded};
@@ -130,8 +129,6 @@ pub struct Store<T, C: 'static> {
 
     pub coprocessor_host: Arc<CoprocessorHost>,
 
-    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
-
     snap_mgr: SnapManager,
 
     raft_metrics: RaftMetrics,
@@ -185,7 +182,6 @@ impl<T, C> Store<T, C> {
         try!(cfg.validate());
 
         let sendch = SendCh::new(ch.sender, "raftstore");
-        let peer_cache = HashMap::default();
         let tag = format!("[store {}]", meta.get_id());
 
         let mut coprocessor_host = CoprocessorHost::new();
@@ -214,7 +210,6 @@ impl<T, C> Store<T, C> {
             trans: trans,
             pd_client: pd_client,
             coprocessor_host: Arc::new(coprocessor_host),
-            peer_cache: Rc::new(RefCell::new(peer_cache)),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
@@ -344,10 +339,6 @@ impl<T, C> Store<T, C> {
         self.cfg.clone()
     }
 
-    pub fn peer_cache(&self) -> Rc<RefCell<HashMap<u64, metapb::Peer>>> {
-        self.peer_cache.clone()
-    }
-
     fn poll_snapshot_status(&mut self) {
         if self.sent_snapshot_count == 0 {
             return;
@@ -377,7 +368,7 @@ impl<T, C> Store<T, C> {
     fn report_snapshot_status(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         self.sent_snapshot_count -= 1;
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
-            let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
+            let to_peer = match peer.get_peer_from_cache(to_peer_id) {
                 Some(peer) => peer,
                 None => {
                     // If to_peer is gone, ignore this snapshot status
@@ -668,9 +659,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(());
         }
 
-        self.insert_peer_cache(msg.take_from_peer());
-
         let peer = self.region_peers.get_mut(&region_id).unwrap();
+        peer.insert_peer_cache(msg.take_from_peer());
         try!(peer.step(msg.take_message()));
 
         // Add into pending raft groups for later handling ready.
@@ -886,10 +876,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         Ok(true)
     }
 
-    fn insert_peer_cache(&mut self, peer: metapb::Peer) {
-        self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
-    }
-
     fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
@@ -1026,12 +1012,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     // Add this peer to cache.
                     let peer = cp.peer.clone();
                     p.peer_heartbeats.insert(peer.get_id(), Instant::now());
-                    self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
+                    p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {
                     // Remove this peer from cache.
                     p.peer_heartbeats.remove(&cp.peer.get_id());
-                    self.peer_cache.borrow_mut().remove(&cp.peer.get_id());
+                    p.remove_peer_from_cache(cp.peer.get_id());
                 }
             }
 
@@ -1087,10 +1073,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         self.region_peers.get_mut(&region_id).unwrap().mut_store().region = origin_region.clone();
-        for peer in new_region.get_peers() {
-            // Add this peer to cache.
-            self.peer_cache.borrow_mut().insert(peer.get_id(), peer.clone());
-        }
         let new_region_id = new_region.get_id();
         if let Some(peer) = self.region_peers.get(&new_region_id) {
             // If the store received a raft msg with the new region raft group
@@ -1110,6 +1092,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 panic!("create new split region {:?} err {:?}", new_region, e);
             }
             Ok(mut new_peer) => {
+                for peer in new_region.get_peers() {
+                    // Add this peer to cache.
+                    new_peer.insert_peer_cache(peer.clone());
+                }
                 peer = new_peer.peer.clone();
                 if let Some(origin_peer) = self.region_peers.get(&region_id) {
                     // New peer derive write flow from parent region,

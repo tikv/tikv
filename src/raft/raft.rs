@@ -39,7 +39,7 @@ use raft::errors::{Result, Error, StorageError};
 use raft::raft_log::{self, RaftLog};
 use raft::read_only::{ReadOnlyOption, ReadState, ReadOnly};
 
-use super::HashMap;
+use super::FlatMap;
 
 // CAMPAIGN_PRE_ELECTION represents the first phase of a normal election when
 // Config.pre_vote is true.
@@ -174,11 +174,11 @@ pub struct Raft<T: Storage> {
 
     pub max_inflight: usize,
     pub max_msg_size: u64,
-    pub prs: HashMap<u64, Progress>,
+    pub prs: FlatMap<u64, Progress>,
 
     pub state: StateRole,
 
-    pub votes: HashMap<u64, bool>,
+    pub votes: FlatMap<u64, bool>,
 
     pub msgs: Vec<Message>,
 
@@ -277,7 +277,7 @@ impl<T: Storage> Raft<T> {
             raft_log: raft_log,
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
-            prs: HashMap::with_capacity(peers.len()),
+            prs: FlatMap::with_capacity(peers.len()),
             state: StateRole::Follower,
             check_quorum: c.check_quorum,
             pre_vote: c.pre_vote,
@@ -592,7 +592,7 @@ impl<T: Storage> Raft<T> {
 
         self.abort_leader_transfer();
 
-        self.votes = HashMap::default();
+        self.votes = FlatMap::default();
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
         let self_id = self.id;
         for (id, p) in &mut self.prs {
@@ -1570,7 +1570,7 @@ impl<T: Storage> Raft<T> {
               self.raft_log.last_term(),
               meta.get_index(),
               meta.get_term());
-        self.prs = HashMap::with_capacity(meta.get_conf_state().get_nodes().len());
+        self.prs = FlatMap::with_capacity(meta.get_conf_state().get_nodes().len());
         for &n in meta.get_conf_state().get_nodes() {
             let next_idx = self.raft_log.last_index() + 1;
             let matched = if n == self.id { next_idx - 1 } else { 0 };
