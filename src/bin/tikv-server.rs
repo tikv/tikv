@@ -23,9 +23,6 @@
 extern crate clap;
 #[cfg(feature = "mem-profiling")]
 extern crate jemallocator;
-#[cfg(feature = "mem-profiling")]
-#[macro_use]
-extern crate lazy_static;
 extern crate tikv;
 #[macro_use]
 extern crate log;

@@ -11,14 +11,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+use std::{ptr, slice};
+
+use libc::{self, c_void, c_char};
+
+extern "C" {
+    #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]
+    fn malloc_stats_print(write_cb: extern "C" fn(*mut c_void, *const c_char), cbopaque: *mut c_void, opts: *const c_char);
+}
+
+extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
+    unsafe {
+        let buf = &mut *{printer as *mut Vec<u8>};
+        let len = libc::strlen(msg);
+        let bytes = slice::from_raw_parts(msg as *const u8, len);
+        buf.extend_from_slice(bytes);
+    }
+}
+
+pub fn print_prof() {
+    let mut buf = Vec::new();
+    unsafe { malloc_stats_print(write_cb, &mut buf as *mut Vec<u8> as *mut c_void, ptr::null()) }
+    info!("{}", String::from_utf8_lossy(&buf));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_stats_print() {
+        // just print the data, ensure it doesn't core.
+        super::print_prof()
+    }
+}
+
 #[cfg(feature = "mem-profiling")]
 mod imp {
     use std::ffi::CString;
-    use std::sync::Mutex;
-    use std::{ptr, env, slice};
+    use std::{ptr, env};
 
     use jemallocator;
-    use libc::{self, c_char};
+    use libc::c_char;
 
     // c string should end with a '\0'.
     const PROFILE_ACTIVE: &'static [u8] = b"prof.active\0";
@@ -64,27 +97,6 @@ mod imp {
         }
     }
 
-    lazy_static! {
-        static ref STATS_COLLECTOR: Mutex<Vec<u8>> = {
-            Mutex::new(Vec::new())
-        };
-    }
-
-    fn write_cb(msg: *const c_char) {
-        unsafe {
-            let len = libc::strlen(msg);
-            let bytes = slice::from_raw_parts(msg as *const u8, len);
-            STATS_COLLECTOR.lock().unwrap().extend_from_slice(bytes)
-        }
-    }
-
-    pub fn print_prof() {
-        jemallocator::malloc_stats_print(write_cb);
-        let mut collector = STATS_COLLECTOR.lock().unwrap();
-        info!("{}", String::from_utf8_lossy(collector.as_slice()));
-        collector.clear();
-    }
-
     #[cfg(test)]
     mod test {
         use std::fs;
@@ -107,20 +119,12 @@ mod imp {
             let files = fs::read_dir(dir.path()).unwrap().count();
             assert_eq!(files, 2);
         }
-
-        #[test]
-        fn test_stats_print() {
-            // just print the data, ensure it doesn't core.
-            super::print_prof()
-        }
     }
 }
 
 #[cfg(not(feature = "mem-profiling"))]
 mod imp {
     pub fn dump_prof(_: Option<&str>) {}
-
-    pub fn print_prof() {}
 }
 
 pub use self::imp::*;
