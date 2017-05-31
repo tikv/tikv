@@ -52,12 +52,12 @@ use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::io::Read;
 use std::time::Duration;
 
 use clap::{Arg, App, ArgMatches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
-use mio::EventLoop;
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
@@ -66,9 +66,9 @@ use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
-use tikv::util::transport::SendCh;
+use tikv::util::transport::SyncSendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
-                   Config, create_event_loop, create_raft_storage, Msg};
+                   Config, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
@@ -716,7 +716,7 @@ fn build_cfg(matches: &ArgMatches,
 }
 
 fn build_raftkv(config: &toml::Value,
-                ch: SendCh<Msg>,
+                ch: SyncSendCh<Msg>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config,
                 total_mem: u64)
@@ -816,17 +816,16 @@ fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<Strin
 }
 
 fn start_server<T, S>(mut server: Server<T, S>,
-                      mut el: EventLoop<Server<T, S>>,
+                      ch: SyncSendCh<Msg>,
                       engine: Arc<DB>,
                       backup_path: &str)
     where T: RaftStoreRouter,
           S: StoreAddrResolver + Send + 'static
 {
-    let ch = server.get_sendch();
     let h = thread::Builder::new()
         .name("tikv-eventloop".to_owned())
         .spawn(move || {
-            server.run(&mut el).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+            server.run().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
         })
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     signal_handler::handle_signal(ch, engine, backup_path);
@@ -838,9 +837,8 @@ fn run_raft_server(pd_client: RpcClient,
                    backup_path: &str,
                    config: &toml::Value,
                    total_mem: u64) {
-    let mut event_loop = create_event_loop(&cfg)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let ch = SendCh::new(event_loop.channel(), "raft-server");
+    let (tx, rx) = mpsc::sync_channel(cfg.notify_capacity);
+    let ch = SyncSendCh::new(tx, "raft-server");
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
@@ -869,14 +867,9 @@ fn run_raft_server(pd_client: RpcClient,
         raft_router: raft_router,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
-    let svr = Server::new(&mut event_loop,
-                          &cfg,
-                          store,
-                          server_chan,
-                          resolver,
-                          snap_mgr)
+    let svr = Server::new(&cfg, store, server_chan, ch.clone(), rx, resolver, snap_mgr)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    start_server(svr, event_loop, engine, backup_path);
+    start_server(svr, ch, engine, backup_path);
     node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 

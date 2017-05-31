@@ -16,7 +16,7 @@ use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use super::Msg;
-use util::transport::SendCh;
+use util::transport::{SendCh, SyncSendCh};
 use super::metrics::*;
 
 pub trait RaftStoreRouter: Send + Clone {
@@ -108,11 +108,11 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
 #[derive(Clone)]
 pub struct ServerTransport {
-    ch: SendCh<Msg>,
+    ch: SyncSendCh<Msg>,
 }
 
 impl ServerTransport {
-    pub fn new(ch: SendCh<Msg>) -> ServerTransport {
+    pub fn new(ch: SyncSendCh<Msg>) -> ServerTransport {
         ServerTransport { ch: ch }
     }
 }

@@ -32,7 +32,7 @@ use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
 use util::buf::PipeBuffer;
 use util::collections::{HashMap, HashMapEntry as Entry};
-use util::transport::SendCh;
+use util::transport::SyncSendCh;
 use util::HandyRwLock;
 
 use super::metrics::*;
@@ -179,12 +179,16 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
     files: HashMap<Token, (Box<Snapshot>, RaftMessage)>,
     pool: ThreadPool,
-    ch: SendCh<Msg>,
+    ch: SyncSendCh<Msg>,
     raft_router: R,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(env: Arc<Environment>, snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
+    pub fn new(env: Arc<Environment>,
+               snap_mgr: SnapManager,
+               r: R,
+               ch: SyncSendCh<Msg>)
+               -> Runner<R> {
         Runner {
             env: env,
             snap_mgr: snap_mgr,

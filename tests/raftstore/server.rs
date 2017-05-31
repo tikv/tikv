@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::thread::{self, Builder};
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 use std::boxed::FnBox;
 use std::net::TcpListener;
@@ -25,13 +25,13 @@ use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{ServerChannel, Server, ServerTransport, create_event_loop, Msg};
+use tikv::server::{ServerChannel, Server, ServerTransport, Msg};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, RaftClient};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
-use tikv::util::transport::SendCh;
+use tikv::util::transport::{SendCh, SyncSendCh};
 use tikv::storage::{Engine, CfName, ALL_CFS};
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
@@ -43,7 +43,7 @@ type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
 
 pub struct ServerCluster {
     routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
-    senders: HashMap<u64, SendCh<Msg>>,
+    senders: HashMap<u64, SyncSendCh<Msg>>,
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
     sim_trans: HashMap<u64, SimulateServerTransport>,
@@ -114,8 +114,8 @@ impl Simulator for ServerCluster {
         drop(listener);
 
         // TODO: simplify creating raft server later.
-        let mut event_loop = create_event_loop(&cfg).unwrap();
-        let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
+        let (tx, rx) = mpsc::sync_channel(cfg.notify_capacity);
+        let sendch = SyncSendCh::new(tx, "cluster-simulator");
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
         let trans = ServerTransport::new(sendch.clone());
 
@@ -151,26 +151,26 @@ impl Simulator for ServerCluster {
             raft_router: sim_router.clone(),
             snapshot_status_sender: node.get_snapshot_status_sender(),
         };
-        let mut server = Server::new(&mut event_loop,
-                                     &cfg,
+        let mut server = Server::new(&cfg,
                                      store,
                                      server_chan,
+                                     sendch.clone(),
+                                     rx,
                                      resolver,
                                      snap_mgr)
             .unwrap();
 
-        let ch = server.get_sendch();
         let addr = server.listening_addr();
 
         let t = Builder::new()
             .name(thd_name!(format!("server-{}", node_id)))
             .spawn(move || {
-                server.run(&mut event_loop).unwrap();
+                server.run().unwrap();
             })
             .unwrap();
 
         self.handles.insert(node_id, (node, t));
-        self.senders.insert(node_id, ch);
+        self.senders.insert(node_id, sendch);
         self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
 

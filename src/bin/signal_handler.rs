@@ -19,7 +19,7 @@ mod imp {
     use rocksdb::DB;
 
     use tikv::server::Msg;
-    use tikv::util::transport::SendCh;
+    use tikv::util::transport::SyncSendCh;
     use prometheus::{self, Encoder, TextEncoder};
 
     use profiling;
@@ -28,7 +28,7 @@ mod imp {
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
     // TODO: remove backup_path from configuration
-    pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
+    pub fn handle_signal(ch: SyncSendCh<Msg>, engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
