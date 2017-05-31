@@ -120,7 +120,11 @@ impl<'a> Executor for IndexScanExec<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::super::scanner::test::{Data, TestStore, prepare_index_data, get_idx_range};
+    use super::super::scanner::test::{Data, TestStore, new_col_info};
+    use util::codec::mysql::types;
+    use util::codec::datum::{self, Datum};
+    use util::codec::number::NumberEncoder;
+    use util::collections::HashMap;
     use std::i64;
     use tipb::schema::ColumnInfo;
     use storage::Statistics;
@@ -130,7 +134,61 @@ mod test {
     const INDEX_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
 
-    struct IndexScanExecutorMeta {
+    #[inline]
+    pub fn get_idx_range(table_id: i64, idx_id: i64, start: i64, end: i64) -> KeyRange {
+        let mut start_buf = Vec::with_capacity(8);
+        start_buf.encode_i64(start).unwrap();
+        let mut end_buf = Vec::with_capacity(8);
+        end_buf.encode_i64(end).unwrap();
+        let mut key_range = KeyRange::new();
+        key_range.set_start(table::encode_index_seek_key(table_id, idx_id, &start_buf));
+        key_range.set_end(table::encode_index_seek_key(table_id, idx_id, &end_buf));
+        key_range
+    }
+
+    pub fn prepare_index_data(key_number: usize, table_id: i64, index_id: i64) -> Data {
+        let cols = vec![new_col_info(1, types::LONG_LONG),
+                        new_col_info(2, types::VARCHAR),
+                        new_col_info(3, types::NEW_DECIMAL)];
+
+        let mut data = Vec::new();
+        let mut pk = Vec::new();
+        let mut pk_handle = 0 as i64;
+        let mut encode_data = Vec::new();
+
+        for handle in 0..key_number {
+            let indice = map![
+                2 => Datum::Bytes(b"abc".to_vec()),
+                3 => Datum::Dec(10.into())
+            ];
+            let mut encode_value = HashMap::default();
+            let mut v: Vec<_> = indice.iter()
+                .map(|(k, value)| {
+                    encode_value.insert(*k, datum::encode_key(&[value.clone()]).unwrap());
+                    value.clone()
+                })
+                .collect();
+            let h = Datum::I64(handle as i64);
+            v.push(h);
+            let encoded = datum::encode_key(&v).unwrap();
+            let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
+            if pk.is_empty() {
+                pk = idx_key.clone();
+                pk_handle = handle as i64;
+            }
+            encode_data.push(encode_value);
+            data.push((idx_key, vec![0]));
+        }
+        Data {
+            kv_data: data,
+            pk: pk,
+            pk_handle: pk_handle,
+            encode_data: encode_data,
+            cols: cols,
+        }
+    }
+
+    struct IndexTestWrapper {
         data: Data,
         store: TestStore,
         scan: IndexScan,
@@ -138,9 +196,9 @@ mod test {
         cols: Vec<ColumnInfo>,
     }
 
-    impl IndexScanExecutorMeta {
-        fn include_pk_cols() -> IndexScanExecutorMeta {
-            let mut meta = IndexScanExecutorMeta::default();
+    impl IndexTestWrapper {
+        fn include_pk_cols() -> IndexTestWrapper {
+            let mut meta = IndexTestWrapper::default();
             let mut cols = meta.data.get_index_cols();
             cols.push(meta.data.get_col_pk());
             meta.scan.set_columns(RepeatedField::from_vec(cols.clone()));
@@ -149,8 +207,8 @@ mod test {
         }
     }
 
-    impl Default for IndexScanExecutorMeta {
-        fn default() -> IndexScanExecutorMeta {
+    impl Default for IndexTestWrapper {
+        fn default() -> IndexTestWrapper {
             let test_data = prepare_index_data(KEY_NUMBER, TABLE_ID, INDEX_ID);
             let test_store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
             let mut scan = IndexScan::new();
@@ -161,7 +219,7 @@ mod test {
             // prepare range
             let range = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, i64::MAX);
             let key_ranges = vec![range];
-            IndexScanExecutorMeta {
+            IndexTestWrapper {
                 data: test_data,
                 store: test_store,
                 scan: scan,
@@ -174,7 +232,7 @@ mod test {
     #[test]
     fn test_multiple_ranges() {
         let mut statistics = Statistics::default();
-        let mut meta = IndexScanExecutorMeta::default();
+        let mut meta = IndexTestWrapper::default();
         let r1 = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, 0);
         let r2 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64);
         let r3 = get_idx_range(TABLE_ID, INDEX_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
@@ -203,7 +261,7 @@ mod test {
     #[test]
     fn test_reverse_scan() {
         let mut statistics = Statistics::default();
-        let mut meta = IndexScanExecutorMeta::default();;
+        let mut meta = IndexTestWrapper::default();;
         meta.scan.set_desc(true);
         let (snapshot, start_ts) = meta.store.get_snapshot();
         let mut scanner = IndexScanExec::new(&mut meta.scan,
@@ -230,7 +288,7 @@ mod test {
     #[test]
     fn test_include_pk() {
         let mut statistics = Statistics::default();
-        let mut meta = IndexScanExecutorMeta::include_pk_cols();
+        let mut meta = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = meta.store.get_snapshot();
         let mut scanner = IndexScanExec::new(&mut meta.scan,
                                              meta.ranges,

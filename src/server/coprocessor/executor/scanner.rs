@@ -115,7 +115,7 @@ pub mod test {
     use storage::engine::{self, Engine, TEMP_DIR, Modify};
     use server::coprocessor::endpoint::prefix_next;
 
-    fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
+    pub fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
         col_info.set_tp(tp as i32);
         col_info.set_column_id(cid);
@@ -196,48 +196,6 @@ pub mod test {
         }
     }
 
-    pub fn prepare_index_data(key_number: usize, table_id: i64, index_id: i64) -> Data {
-        let cols = vec![new_col_info(1, types::LONG_LONG),
-                        new_col_info(2, types::VARCHAR),
-                        new_col_info(3, types::NEW_DECIMAL)];
-
-        let mut data = Vec::new();
-        let mut pk = Vec::new();
-        let mut pk_handle = 0 as i64;
-        let mut encode_data = Vec::new();
-
-        for handle in 0..key_number {
-            let indice = map![
-                2 => Datum::Bytes(b"abc".to_vec()),
-                3 => Datum::Dec(10.into())
-            ];
-            let mut encode_value = HashMap::default();
-            let mut v: Vec<_> = indice.iter()
-                .map(|(k, value)| {
-                    encode_value.insert(*k, datum::encode_key(&[value.clone()]).unwrap());
-                    value.clone()
-                })
-                .collect();
-            let h = Datum::I64(handle as i64);
-            v.push(h);
-            let encoded = datum::encode_key(&v).unwrap();
-            let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
-            if pk.is_empty() {
-                pk = idx_key.clone();
-                pk_handle = handle as i64;
-            }
-            encode_data.push(encode_value);
-            data.push((idx_key, vec![0]));
-        }
-        Data {
-            kv_data: data,
-            pk: pk,
-            pk_handle: pk_handle,
-            encode_data: encode_data,
-            cols: cols,
-        }
-    }
-
     const START_TS: u64 = 10;
     const COMMIT_TS: u64 = 20;
 
@@ -311,19 +269,6 @@ pub mod test {
         key_range
     }
 
-    #[inline]
-    pub fn get_idx_range(table_id: i64, idx_id: i64, start: i64, end: i64) -> KeyRange {
-        let mut start_buf = Vec::with_capacity(8);
-        start_buf.encode_i64(start).unwrap();
-        let mut end_buf = Vec::with_capacity(8);
-        end_buf.encode_i64(end).unwrap();
-        let mut key_range = KeyRange::new();
-        key_range.set_start(table::encode_index_seek_key(table_id, idx_id, &start_buf));
-        key_range.set_end(table::encode_index_seek_key(table_id, idx_id, &end_buf));
-        key_range
-    }
-
-
     #[test]
     fn test_point_get() {
         let pk = b"key1".to_vec();
@@ -392,7 +337,7 @@ pub mod test {
         let pv = b"value1";
         let test_data = vec![
             (pk.clone(), pv.to_vec()),
-            (table::encode_row_key(table_id,b"key2"),b"value2".to_vec()),
+            (table::encode_row_key(table_id,b"key2"), b"value2".to_vec()),
         ];
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data, pk.clone());
