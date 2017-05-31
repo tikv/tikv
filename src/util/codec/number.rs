@@ -122,6 +122,10 @@ pub trait NumberEncoder: Write {
     fn encode_f64_with_little_endian(&mut self, v: f64) -> Result<()> {
         self.write_f64::<LittleEndian>(v).map_err(From::from)
     }
+
+    fn encode_i64_with_little_endian(&mut self, v: i64) -> Result<()> {
+        self.write_i64::<LittleEndian>(v).map_err(From::from)
+    }
 }
 
 impl<T: Write> NumberEncoder for T {}
@@ -195,6 +199,10 @@ pub trait NumberDecoder: Read {
 
     fn decode_f64_with_little_endian(&mut self) -> Result<f64> {
         self.read_f64::<LittleEndian>().map_err(From::from)
+    }
+
+    fn decode_i64_with_little_endian(&mut self) -> Result<i64> {
+        self.read_i64::<LittleEndian>().map_err(From::from)
     }
 }
 
@@ -364,6 +372,11 @@ mod test {
                 decode_f64_desc,
                 |a, b| b.partial_cmp(a).unwrap(),
                 F64_TESTS);
+
+    test_serialize!(var_i64_little_endian_codec,
+                    encode_i64_with_little_endian,
+                    decode_i64_with_little_endian,
+                    I64_TESTS);
 
     test_serialize!(var_u16_codec,
                     encode_u16_with_little_endian,

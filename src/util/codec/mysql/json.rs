@@ -92,6 +92,7 @@ use std::io::Read;
 const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
 const TYPE_CODE_LITERAL: u8 = 0x04;
+const TYPE_CODE_I64: u8 = 0x09;
 const TYPE_CODE_DOUBLE: u8 = 0x0b;
 const TYPE_CODE_STRING: u8 = 0x0c;
 
@@ -123,6 +124,7 @@ pub enum JSON {
     JObject(BTreeMap<String, JSON>),
     JArray(Vec<JSON>),
     JDouble(f64),
+    JI64(i64),
 }
 
 #[allow(dead_code)]
@@ -148,6 +150,7 @@ impl JSON {
             JSON::JObject(d) => encode_obj(d),
             JSON::JArray(d) => encode_array(d),
             JSON::JDouble(d) => encode_double(d),
+            JSON::JI64(d) => encode_i64(d),
         };
         let len = encode_data.len();
         data.append(&mut encode_data);
@@ -161,6 +164,7 @@ impl JSON {
             TYPE_CODE_OBJECT => decode_obj(data),
             TYPE_CODE_ARRAY => decode_array(data),
             TYPE_CODE_DOUBLE => decode_double(data),
+            TYPE_CODE_I64 => decode_i64(data),
             _ => Err(invalid_type!("unsupported type {:?}", code_type)),
         }
     }
@@ -172,6 +176,7 @@ impl JSON {
             JSON::JObject(_) => TYPE_CODE_OBJECT,
             JSON::JArray(_) => TYPE_CODE_ARRAY,
             JSON::JDouble(_) => TYPE_CODE_DOUBLE,
+            JSON::JI64(_) => TYPE_CODE_I64,
         }
     }
 
@@ -215,15 +220,8 @@ impl Serialize for JSON {
                 }
                 tup.end()
             }
-            JSON::JDouble(d) => {
-                let int_value = d as i64;
-                // TODO:4.0 may changed to 4
-                if (int_value as f64 - d).abs() < f64::EPSILON {
-                    serializer.serialize_i64(int_value)
-                } else {
-                    serializer.serialize_f64(d)
-                }
-            }
+            JSON::JDouble(d) => serializer.serialize_f64(d),
+            JSON::JI64(d) => serializer.serialize_i64(d),
         }
     }
 }
@@ -261,6 +259,17 @@ fn encode_double(data: f64) -> Vec<u8> {
 fn decode_double(mut data: &[u8]) -> Result<JSON> {
     let value = try!(data.decode_f64_with_little_endian());
     Ok(JSON::JDouble(value))
+}
+
+fn encode_i64(data: i64) -> Vec<u8> {
+    let mut encode_data = vec![];
+    encode_data.encode_i64_with_little_endian(data).unwrap();
+    encode_data
+}
+
+fn decode_i64(mut data: &[u8]) -> Result<JSON> {
+    let value = try!(data.decode_i64_with_little_endian());
+    Ok(JSON::JI64(value))
 }
 
 fn encode_obj(data: BTreeMap<String, JSON>) -> Vec<u8> {
@@ -448,7 +457,13 @@ fn normalize(data: Value) -> JSON {
                 JSON::JLiteral(JSON_LITERAL_TRUE)
             }
         }
-        Value::Number(ref data) => JSON::JDouble(data.as_f64().unwrap()),
+        Value::Number(ref data) => {
+            if data.is_f64() {
+                JSON::JDouble(data.as_f64().unwrap())
+            } else {
+                JSON::JI64(data.as_i64().unwrap())
+            }
+        }
         Value::String(data) => JSON::JString(data),
         Value::Array(data) => {
             let mut array = Vec::with_capacity(data.len());
@@ -475,6 +490,7 @@ fn encode(json: JSON, data: &mut Vec<u8>) -> usize {
         JSON::JObject(d) => encode_obj(d),
         JSON::JArray(d) => encode_array(d),
         JSON::JDouble(d) => encode_double(d),
+        JSON::JI64(d) => encode_i64(d),
     };
     let len = encode_data.len();
     data.append(&mut encode_data);
