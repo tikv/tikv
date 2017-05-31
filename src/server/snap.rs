@@ -117,7 +117,7 @@ fn send_snap(env: Arc<Environment>,
 
     let key = {
         let snap = msg.get_message().get_snapshot();
-        try!(SnapKey::from_snap(&snap))
+        try!(SnapKey::from_snap(snap))
     };
     mgr.register(key.clone(), SnapEntry::Sending);
     let s = box_try!(mgr.get_snapshot_for_sending(&key));

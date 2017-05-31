@@ -351,7 +351,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engine in self.engines.values() {
-            try!(write_prepare_bootstrap(&engine, &region));
+            try!(write_prepare_bootstrap(engine, &region));
         }
 
         self.bootstrap_cluster(region);
