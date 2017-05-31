@@ -31,12 +31,14 @@ mod imp {
 
     extern "C" {
         #[cfg_attr(target_os = "macos", link_name = "je_malloc_stats_print")]
-        fn malloc_stats_print(write_cb: extern "C" fn(*mut c_void, *const c_char), cbopaque: *mut c_void, opts: *const c_char);
+        fn malloc_stats_print(write_cb: extern "C" fn(*mut c_void, *const c_char),
+                              cbopaque: *mut c_void,
+                              opts: *const c_char);
     }
 
     extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
         unsafe {
-            let buf = &mut *{printer as *mut Vec<u8>};
+            let buf = &mut *(printer as *mut Vec<u8>);
             let len = libc::strlen(msg);
             let bytes = slice::from_raw_parts(msg as *const u8, len);
             buf.extend_from_slice(bytes);
@@ -45,7 +47,11 @@ mod imp {
 
     fn print_malloc_stats() {
         let mut buf = Vec::new();
-        unsafe { malloc_stats_print(write_cb, &mut buf as *mut Vec<u8> as *mut c_void, ptr::null()) }
+        unsafe {
+            malloc_stats_print(write_cb,
+                               &mut buf as *mut Vec<u8> as *mut c_void,
+                               ptr::null())
+        }
         info!("{}", String::from_utf8_lossy(&buf));
     }
 
