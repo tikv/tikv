@@ -273,7 +273,7 @@ fn check_system_config(config: &toml::Value) {
 
     if !cfg!(windows) && env::var("TZ").is_err() {
         env::set_var("TZ", "/etc/localtime");
-        error!("environment variable `TZ` is missing, use `/etc/localtime`");
+        warn!("environment variable `TZ` is missing, use `/etc/localtime`");
     }
 }
 
