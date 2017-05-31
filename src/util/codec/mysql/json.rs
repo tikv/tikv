@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::string::String;
 use super::Result;
 use std::{str, f64};
-use serde_json::{self, Value};
 use std::collections::BTreeMap;
+use std::result::Result as SResult;
+use serde_json::{self, Value};
+use std::io::Read;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 use serde::ser::{Serialize, Serializer, SerializeTuple, SerializeMap};
-use std::result::Result as SResult;
-use std::io::Read;
 
 // The binary jSON format from MySQL 5.7 is as follows:
 //
@@ -107,9 +106,8 @@ const LENGTH_U32: usize = 4;
 const LENGTH_KEY_ENTRY: usize = LENGTH_U32 + LENGTH_U16;
 const LENGTH_VALUE_ENTRY: usize = LENGTH_TYPE + LENGTH_U32;
 
-
 macro_rules! take_prefix {
-   ($data:ident,$len:ident) => {{
+   ($data:ident,$len:expr) => {{
         let mut buffer = vec![0;$len as usize];
         $data.read_exact(&mut buffer).unwrap();
         buffer
@@ -137,24 +135,33 @@ impl JSON {
         JSON::decode(code_type[0], data)
     }
 
+    pub fn parse_from_string(s: &str) -> Result<JSON> {
+        if s.is_empty() {
+            return Err(invalid_type!("The document is empty"));
+        }
+        match serde_json::from_str(s) {
+            Ok(value) => Ok(normalize(value)),
+            Err(e) => Err(invalid_type!("Illegal json text:{:?}", e)),
+        }
+    }
+
     pub fn serialize(self) -> Vec<u8> {
         let mut data = vec![self.get_type_code()];
         self.encode(&mut data);
         data
     }
 
-    fn encode(self, data: &mut Vec<u8>) -> usize {
-        let mut encode_data = match self {
-            JSON::JLiteral(d) => vec![d],
-            JSON::JString(d) => encode_str(d),
-            JSON::JObject(d) => encode_obj(d),
-            JSON::JArray(d) => encode_array(d),
-            JSON::JDouble(d) => encode_double(d),
-            JSON::JI64(d) => encode_i64(d),
+    fn encode(self, buf: &mut Vec<u8>) -> usize {
+        let start_len = buf.len();
+        match self {
+            JSON::JLiteral(d) => encode_literal(d, buf),
+            JSON::JString(d) => encode_str(d, buf),
+            JSON::JObject(d) => encode_obj(d, buf),
+            JSON::JArray(d) => encode_array(d, buf),
+            JSON::JDouble(d) => encode_double(d, buf),
+            JSON::JI64(d) => encode_i64(d, buf),
         };
-        let len = encode_data.len();
-        data.append(&mut encode_data);
-        len
+        buf.len() - start_len
     }
 
     fn decode(code_type: u8, data: &[u8]) -> Result<JSON> {
@@ -185,8 +192,7 @@ impl JSON {
             match *d {
                 JSON_LITERAL_NIL => return String::from("null"),
                 JSON_LITERAL_TRUE => return String::from("true"),
-                JSON_LITERAL_FALSE => return String::from("false"),
-                _ => return String::from("illegal"),
+                _ => return String::from("false"),
             };
         }
         serde_json::to_string(self).unwrap()
@@ -226,16 +232,18 @@ impl Serialize for JSON {
     }
 }
 
+fn encode_literal(data: u8, buf: &mut Vec<u8>) {
+    buf.push(data);
+}
+
 fn decode_literal(mut data: &[u8]) -> Result<JSON> {
     let literal = take_prefix!(data, LENGTH_LITERAL);
     Ok(JSON::JLiteral(literal[0]))
 }
 
-fn encode_str(data: String) -> Vec<u8> {
-    let mut buf = vec![];
+fn encode_str(data: String, buf: &mut Vec<u8>) {
     buf.encode_var_u64(data.len() as u64).unwrap();
     buf.append(&mut data.into_bytes());
-    buf
 }
 
 fn decode_str(mut data: &[u8]) -> Result<JSON> {
@@ -250,10 +258,8 @@ fn decode_str(mut data: &[u8]) -> Result<JSON> {
     }
 }
 
-fn encode_double(data: f64) -> Vec<u8> {
-    let mut encode_data = vec![];
-    encode_data.encode_f64_with_little_endian(data).unwrap();
-    encode_data
+fn encode_double(data: f64, buf: &mut Vec<u8>) {
+    buf.encode_f64_with_little_endian(data).unwrap();
 }
 
 fn decode_double(mut data: &[u8]) -> Result<JSON> {
@@ -261,10 +267,8 @@ fn decode_double(mut data: &[u8]) -> Result<JSON> {
     Ok(JSON::JDouble(value))
 }
 
-fn encode_i64(data: i64) -> Vec<u8> {
-    let mut encode_data = vec![];
-    encode_data.encode_i64_with_little_endian(data).unwrap();
-    encode_data
+fn encode_i64(data: i64, buf: &mut Vec<u8>) {
+    buf.encode_i64_with_little_endian(data).unwrap();
 }
 
 fn decode_i64(mut data: &[u8]) -> Result<JSON> {
@@ -272,7 +276,7 @@ fn decode_i64(mut data: &[u8]) -> Result<JSON> {
     Ok(JSON::JI64(value))
 }
 
-fn encode_obj(data: BTreeMap<String, JSON>) -> Vec<u8> {
+fn encode_obj(data: BTreeMap<String, JSON>, buf: &mut Vec<u8>) {
     // object: element-count size key-entry* value-entry* key* value*
     // element-count ::= uint32 number of members in object or number of elements in array
     let element_count = data.len();
@@ -304,14 +308,12 @@ fn encode_obj(data: BTreeMap<String, JSON>) -> Vec<u8> {
     let value_offset = key_offset;
     let (mut value_entries, mut encode_values) = encode_vec_json(values, value_offset as u32);
     let size = key_offset + encode_values.len();
-    let mut encode_data = vec![];
-    encode_data.encode_u32_with_little_endian(element_count as u32).unwrap();
-    encode_data.encode_u32_with_little_endian(size as u32).unwrap();
-    encode_data.append(key_entries.as_mut());
-    encode_data.append(value_entries.as_mut());
-    encode_data.append(encode_keys.as_mut());
-    encode_data.append(encode_values.as_mut());
-    encode_data
+    buf.encode_u32_with_little_endian(element_count as u32).unwrap();
+    buf.encode_u32_with_little_endian(size as u32).unwrap();
+    buf.append(key_entries.as_mut());
+    buf.append(value_entries.as_mut());
+    buf.append(encode_keys.as_mut());
+    buf.append(encode_values.as_mut());
 }
 
 fn decode_obj(mut data: &[u8]) -> Result<JSON> {
@@ -358,7 +360,7 @@ fn decode_key_entries(mut data: &[u8], element_count: usize) -> Vec<(u32, u16)> 
     entries
 }
 
-fn encode_array(data: Vec<JSON>) -> Vec<u8> {
+fn encode_array(data: Vec<JSON>, buf: &mut Vec<u8>) {
     // array ::= element-count size value-entry* value*
     let element_count = data.len();
     let count_len = LENGTH_U32;
@@ -367,12 +369,10 @@ fn encode_array(data: Vec<JSON>) -> Vec<u8> {
     let value_offset = count_len + size_len + value_entries_len;
     let (mut value_entries, mut encode_values) = encode_vec_json(data, value_offset as u32);
     let total_size = value_offset + encode_values.len();
-    let mut encode_data = vec![];
-    encode_data.encode_u32_with_little_endian(element_count as u32).unwrap();
-    encode_data.encode_u32_with_little_endian(total_size as u32).unwrap();
-    encode_data.append(value_entries.as_mut());
-    encode_data.append(encode_values.as_mut());
-    encode_data
+    buf.encode_u32_with_little_endian(element_count as u32).unwrap();
+    buf.encode_u32_with_little_endian(total_size as u32).unwrap();
+    buf.append(value_entries.as_mut());
+    buf.append(encode_values.as_mut());
 }
 
 fn decode_array(mut data: &[u8]) -> Result<JSON> {
@@ -410,7 +410,7 @@ fn encode_vec_json(data: Vec<JSON>, offset: u32) -> (Vec<u8>, Vec<u8>) {
             }
             _ => {
                 value_entries.encode_u32_with_little_endian(value_offset).unwrap();
-                let cur_value_len = encode(value, encode_values.as_mut()) as u32;
+                let cur_value_len = value.encode(encode_values.as_mut()) as u32;
                 value_offset += cur_value_len;
             }
         }
@@ -483,48 +483,16 @@ fn normalize(data: Value) -> JSON {
     }
 }
 
-fn encode(json: JSON, data: &mut Vec<u8>) -> usize {
-    let mut encode_data = match json {
-        JSON::JLiteral(d) => vec![d],
-        JSON::JString(d) => encode_str(d),
-        JSON::JObject(d) => encode_obj(d),
-        JSON::JArray(d) => encode_array(d),
-        JSON::JDouble(d) => encode_double(d),
-        JSON::JI64(d) => encode_i64(d),
-    };
-    let len = encode_data.len();
-    data.append(&mut encode_data);
-    len
-}
-
-#[allow(dead_code)]
-pub fn parse_from_string(s: &str) -> Result<JSON> {
-    if s.is_empty() {
-        return Err(invalid_type!("The document is empty"));
-    }
-    let value: Value = serde_json::from_str(s).unwrap();
-    Ok(normalize(value))
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
-    fn test_parse_from_string() {
-        let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4, null], "b": true, "c": null}"#;
-        let j1 = parse_from_string(jstr1).unwrap();
-        let jstr2 = j1.to_string();
-        let expect_str = r#"{"a":[1,"2",{"aa":"bb"},4,null],"b":true,"c":null}"#;
-        assert_eq!(jstr2, expect_str);
-    }
-
-    #[test]
-    fn test_json() {
+    fn test_json_serialize() {
         let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0], "b": true}"#;
-        let j1 = parse_from_string(jstr1).unwrap();
+        let j1 = JSON::parse_from_string(jstr1).unwrap();
         let jstr2 = r#"[{"a": 1, "b": true}, 3, 3.5, "hello, world", null, true]"#;
-        let j2 = parse_from_string(jstr2).unwrap();
+        let j2 = JSON::parse_from_string(jstr2).unwrap();
 
         let json_nil = JSON::JLiteral(0x00);
         let json_bool = JSON::JLiteral(0x01);
@@ -538,6 +506,40 @@ mod test {
             let input_str = case.to_string();
             let output_str = output.to_string();
             assert_eq!(input_str, output_str);
+        }
+    }
+
+
+    #[test]
+    fn test_parse_from_string_for_object() {
+        let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "c": null,"b": true}"#;
+        let j1 = JSON::parse_from_string(jstr1).unwrap();
+        let jstr2 = j1.to_string();
+        let expect_str = r#"{"a":[1,"2",{"aa":"bb"},4.0,null],"b":true,"c":null}"#;
+        assert_eq!(jstr2, expect_str);
+    }
+
+    #[test]
+    fn test_parse_from_string() {
+        let legal_cases = vec!{
+            (r#"{"key":"value"}"#,TYPE_CODE_OBJECT),
+            (r#"["d1","d2"]"#,TYPE_CODE_ARRAY),
+            (r#"3"#,TYPE_CODE_I64),
+            (r#"3.0"#,TYPE_CODE_DOUBLE),
+            (r#"null"#,TYPE_CODE_LITERAL),
+            (r#"true"#,TYPE_CODE_LITERAL),
+            (r#"false"#,TYPE_CODE_LITERAL),
+        };
+
+        for (json_str, code) in legal_cases {
+            let json = JSON::parse_from_string(json_str).unwrap();
+            assert_eq!(json.get_type_code(), code);
+        }
+
+        let illegal_cases = vec!["[pxx,apaa]", "hpeheh", ""];
+        for json_str in illegal_cases {
+            let resp = JSON::parse_from_string(json_str);
+            assert!(resp.is_err());
         }
     }
 }
