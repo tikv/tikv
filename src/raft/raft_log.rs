@@ -925,7 +925,7 @@ mod test {
             let mut raft_log = new_raft_log(store);
             raft_log.append(&previous_ents);
             raft_log.committed = commit;
-            let res = recover_safe!(|| raft_log.maybe_append(index, log_term, committed, &ents));
+            let res = recover_safe!(|| raft_log.maybe_append(index, log_term, committed, ents));
             if res.is_err() ^ wpanic {
                 panic!("#{}: panic = {}, want {}", i, res.is_err(), wpanic);
             }
@@ -998,8 +998,8 @@ mod test {
             let committed = raft_log.committed;
             raft_log.applied_to(committed);
 
-            for j in 0..compact.len() {
-                let res = recover_safe!(|| raft_log.store.wl().compact(compact[j]));
+            for (j, idx) in compact.into_iter().enumerate() {
+                let res = recover_safe!(|| raft_log.store.wl().compact(*idx));
                 if res.is_err() {
                     if wallow {
                         panic!("#{}: has_panic = true, want false: {:?}", i, res);
