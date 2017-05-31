@@ -517,7 +517,8 @@ impl Datum {
     // `checked_rem` computes the result of a mod b.
     pub fn checked_rem(self, _: &EvalContext, d: Datum) -> Result<Datum> {
         match d {
-            Datum::I64(0) | Datum::U64(0) | Datum::F64(0f64) => return Ok(Datum::Null),
+            Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
+            Datum::F64(f) if f == 0f64 => return Ok(Datum::Null),
             _ => {}
         }
         match (self, d) {

@@ -1001,7 +1001,7 @@ fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
 pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Result<Response> {
     // TODO: the get_get looks wried, maybe we should figure out a better name later.
     let key = req.get_get().get_key();
-    try!(check_data_key(key, &region));
+    try!(check_data_key(key, region));
 
     let mut resp = Response::new();
     let res = if req.get_get().has_cf() {

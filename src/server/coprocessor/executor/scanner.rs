@@ -265,8 +265,8 @@ pub mod test {
         let pk = b"key1".to_vec();
         let pv = b"value1";
         let test_data = vec![
-            (pk.clone(),pv.clone().to_vec()),
-            (b"key2".to_vec(),b"value2".to_vec()),
+            (pk.clone(), pv.to_vec()),
+            (b"key2".to_vec(), b"value2".to_vec()),
         ];
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data, pk.clone());
@@ -282,8 +282,8 @@ pub mod test {
         let pk = table::encode_row_key(table_id, b"key1");
         let pv = b"value1";
         let test_data = vec![
-            (pk.clone(),pv.clone().to_vec()),
-            (table::encode_row_key(table_id,b"key2"),b"value2".to_vec()),
+            (pk.clone(), pv.to_vec()),
+            (table::encode_row_key(table_id, b"key2"), b"value2".to_vec()),
         ];
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data, pk.clone());
@@ -327,7 +327,7 @@ pub mod test {
         let pk = table::encode_row_key(table_id, b"key1");
         let pv = b"value1";
         let test_data = vec![
-            (pk.clone(),pv.clone().to_vec()),
+            (pk.clone(), pv.to_vec()),
             (table::encode_row_key(table_id,b"key2"),b"value2".to_vec()),
         ];
         let mut statistics = Statistics::default();
@@ -346,7 +346,7 @@ pub mod test {
         let pk = table::encode_row_key(table_id, b"key1");
         let pv = b"value1";
         let test_data = vec![
-            (pk.clone(),pv.clone().to_vec()),
+            (pk.clone(), pv.to_vec()),
         ];
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data, pk.clone());

@@ -26,15 +26,15 @@ quick_error! {
         RocksDB
         ReadableNumber
         Limit(msg: String) {
-            description(&msg)
+            description(msg)
             display("{}", msg)
         }
         Address(msg: String) {
-            description(&msg)
+            description(msg)
             display("{}", msg)
         }
         StoreLabels(msg: String) {
-            description(&msg)
+            description(msg)
             display("{}", msg)
         }
     }
