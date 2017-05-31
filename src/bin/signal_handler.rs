@@ -64,6 +64,7 @@ mod imp {
                     if let Some(v) = engine.get_statistics() {
                         info!("{}", v)
                     }
+                    profiling::print_prof();
                 }
                 SIGUSR2 => profiling::dump_prof(None),
                 // TODO: handle more signal
