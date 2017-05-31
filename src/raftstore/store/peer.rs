@@ -40,7 +40,7 @@ use raftstore::store::worker::apply::ExecResult;
 use util::worker::{FutureWorker as Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either, strftimespec};
-use util::collections::{HashMap, HashSet, HashMapValues as Values};
+use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
 
 use pd::INVALID_ID;
 
@@ -192,14 +192,14 @@ pub struct PeerStat {
 pub struct Peer {
     engine: Arc<DB>,
     cfg: Rc<Config>,
-    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
+    peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
     proposals: ProposalQueue,
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
-    pub peer_heartbeats: HashMap<u64, Instant>,
+    pub peer_heartbeats: FlatMap<u64, Instant>,
     coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
@@ -286,6 +286,7 @@ impl Peer {
 
         let store_id = store.store_id();
         let sched = store.snap_scheduler();
+        let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
         let ps = try!(PeerStorage::new(store.engine(), &region, sched, tag.clone()));
@@ -314,8 +315,8 @@ impl Peer {
             raft_group: raft_group,
             proposals: Default::default(),
             pending_reads: Default::default(),
-            peer_cache: store.peer_cache(),
-            peer_heartbeats: HashMap::default(),
+            peer_cache: RefCell::new(peer_cache),
+            peer_heartbeats: FlatMap::default(),
             coprocessor_host: store.coprocessor_host.clone(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
@@ -1390,9 +1391,17 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
 }
 
 impl Peer {
+    pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
+        self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
+    }
+
+    pub fn remove_peer_from_cache(&mut self, peer_id: u64) {
+        self.peer_cache.borrow_mut().remove(&peer_id);
+    }
+
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
-        if let Some(peer) = self.peer_cache.borrow().get(&peer_id).cloned() {
-            return Some(peer);
+        if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
+            return Some(peer.clone());
         }
 
         // Try to find in region, if found, set in cache.

@@ -37,7 +37,7 @@ use rand;
 
 use tikv::raft::*;
 use tikv::raft::storage::MemStorage;
-use tikv::util::collections::HashMap as RaftHashMap;
+use tikv::util::collections::FlatMap as RaftFlatMap;
 
 pub fn ltoa(raft_log: &RaftLog<MemStorage>) -> String {
     let mut s = format!("committed: {}\n", raft_log.committed);
@@ -180,7 +180,7 @@ impl Interface {
     fn initial(&mut self, id: u64, ids: &[u64]) {
         if self.raft.is_some() {
             self.id = id;
-            self.prs = RaftHashMap::with_capacity(ids.len());
+            self.prs = RaftFlatMap::with_capacity(ids.len());
             for id in ids {
                 self.prs.insert(*id, Progress { ..Default::default() });
             }
