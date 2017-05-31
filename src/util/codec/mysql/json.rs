@@ -385,7 +385,7 @@ fn decode_array(mut data: &[u8]) -> Result<JSON> {
     let mut left_data = left_data.as_slice();
     let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
     let value_entries_data = take_prefix!(left_data, value_entries_len);
-    let array_data = try!(decode_vec_json(&value_entries_data, &left_data, element_count));
+    let array_data = try!(decode_vec_json(&value_entries_data, left_data, element_count));
     Ok(JSON::JArray(array_data))
 }
 

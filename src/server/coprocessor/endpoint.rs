@@ -483,7 +483,7 @@ fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                         return Err(box_err!("column {} of {} is missing", col_id, h));
                     }
                     None => Datum::Null,
-                    Some(bs) => box_try!(bs.clone().decode_col_value(ctx, col)),
+                    Some(mut bs) => box_try!(bs.decode_col_value(ctx, col)),
                 };
                 e.insert(value);
             }
