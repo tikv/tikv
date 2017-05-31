@@ -86,7 +86,7 @@ mod imp {
                     if let Some(v) = engine.get_statistics() {
                         info!("{}", v)
                     }
-                    print_prof();
+                    print_malloc_stats();
                 }
                 SIGUSR2 => profiling::dump_prof(None),
                 // TODO: handle more signal
@@ -100,7 +100,7 @@ mod imp {
         #[test]
         fn test_stats_print() {
             // just print the data, ensure it doesn't core.
-            super::print_prof()
+            super::print_malloc_stats()
         }
     }
 }
