@@ -151,18 +151,18 @@ mod test {
                         new_col_info(2, types::VARCHAR),
                         new_col_info(3, types::NEW_DECIMAL)];
 
-        let mut data = Vec::new();
-        let mut encode_data = Vec::new();
+        let mut kv_data = Vec::new();
+        let mut expect_data = Vec::new();
 
         for handle in 0..key_number {
             let indice = map![
                 2 => Datum::Bytes(b"abc".to_vec()),
-                3 => Datum::Dec(10.into())
+                3 => Datum::Dec(handle.into())
             ];
-            let mut encode_value = HashMap::default();
+            let mut expect_row = HashMap::default();
             let mut v: Vec<_> = indice.iter()
-                .map(|(k, value)| {
-                    encode_value.insert(*k, datum::encode_key(&[value.clone()]).unwrap());
+                .map(|(cid, value)| {
+                    expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
                     value.clone()
                 })
                 .collect();
@@ -170,12 +170,12 @@ mod test {
             v.push(h);
             let encoded = datum::encode_key(&v).unwrap();
             let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
-            encode_data.push(encode_value);
-            data.push((idx_key, vec![0]));
+            expect_data.push(expect_row);
+            kv_data.push((idx_key, vec![0]));
         }
         Data {
-            kv_data: data,
-            encode_data: encode_data,
+            kv_data: kv_data,
+            rows_data: expect_data,
             cols: cols,
         }
     }
@@ -225,10 +225,16 @@ mod test {
     fn test_multiple_ranges() {
         let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::default();
-        let r1 = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, 0);
-        let r2 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64);
-        let r3 = get_idx_range(TABLE_ID, INDEX_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
-        wrapper.ranges = vec![r1, r2, r3];
+        let (ref start_key, _) = wrapper.data.kv_data[0];
+        let (ref split_key, _) = wrapper.data.kv_data[KEY_NUMBER / 3];
+        let (ref end_key, _) = wrapper.data.kv_data[KEY_NUMBER / 2];
+        let mut r1 = KeyRange::new();
+        r1.set_start(start_key.clone());
+        r1.set_end(split_key.clone());
+        let mut r2 = KeyRange::new();
+        r2.set_start(split_key.clone());
+        r2.set_end(end_key.clone());
+        wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let mut scanner = IndexScanExec::new(&mut wrapper.scan,
                                              wrapper.ranges,
@@ -236,15 +242,15 @@ mod test {
                                              &mut statistics,
                                              start_ts);
 
-        for handle in 0..KEY_NUMBER {
+        for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
-            let encode_data = &wrapper.data.encode_data[handle];
+            let expect_row = &wrapper.data.rows_data[handle];
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid], v.to_vec());
+                assert_eq!(expect_row[&cid], v.to_vec());
             }
         }
         assert!(scanner.next().unwrap().is_none());
@@ -267,11 +273,11 @@ mod test {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
-            let encode_data = &wrapper.data.encode_data[handle];
+            let expect_row = &wrapper.data.rows_data[handle];
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid], v.to_vec());
+                assert_eq!(expect_row[&cid], v.to_vec());
             }
         }
         assert!(scanner.next().unwrap().is_none());
@@ -292,7 +298,7 @@ mod test {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
-            let encode_data = &wrapper.data.encode_data[handle];
+            let expect_data = &wrapper.data.rows_data[handle];
             let handle_datum = datum::Datum::I64(handle as i64);
             let pk = datum::encode_value(&[handle_datum]).unwrap();
             for col in &wrapper.cols {
@@ -302,7 +308,7 @@ mod test {
                     assert_eq!(pk, v.to_vec());
                     continue;
                 }
-                assert_eq!(encode_data[&cid], v.to_vec());
+                assert_eq!(expect_data[&cid], v.to_vec());
             }
         }
         assert!(scanner.next().unwrap().is_none());

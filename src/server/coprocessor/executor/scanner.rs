@@ -124,8 +124,8 @@ pub mod test {
 
     pub struct Data {
         pub kv_data: Vec<(Vec<u8>, Vec<u8>)>,
-        // encode_data[row_id][column_id]=>value
-        pub encode_data: Vec<HashMap<i64, Vec<u8>>>,
+        // rows_data[row_id][column_id]=>value
+        pub rows_data: Vec<HashMap<i64, Vec<u8>>>,
         pub cols: Vec<ColumnInfo>,
     }
 
@@ -153,7 +153,7 @@ pub mod test {
                         new_col_info(3, types::NEW_DECIMAL)];
 
         let mut kv_data = Vec::new();
-        let mut encode_data = Vec::new();
+        let mut expect_rows = Vec::new();
 
         for handle in 0..key_number {
             let row = map![
@@ -161,13 +161,13 @@ pub mod test {
                 2 => Datum::Bytes(b"abc".to_vec()),
                 3 => Datum::Dec(10.into())
             ];
-            let mut encode_value = HashMap::default();
+            let mut expect_row = HashMap::default();
             let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
             let col_values: Vec<_> = row.iter()
-                .map(|(k, v)| {
+                .map(|(cid, v)| {
                     let f = table::flatten(v.clone()).unwrap();
                     let value = datum::encode_value(&[f]).unwrap();
-                    encode_value.insert(*k, value);
+                    expect_row.insert(*cid, value);
                     v.clone()
                 })
                 .collect();
@@ -176,12 +176,12 @@ pub mod test {
             let mut buf = vec![];
             buf.encode_i64(handle as i64).unwrap();
             let key = table::encode_row_key(table_id, &buf);
-            encode_data.push(encode_value);
+            expect_rows.push(expect_row);
             kv_data.push((key, value));
         }
         Data {
             kv_data: kv_data,
-            encode_data: encode_data,
+            rows_data: expect_rows,
             cols: cols,
         }
     }

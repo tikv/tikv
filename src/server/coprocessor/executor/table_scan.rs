@@ -173,11 +173,11 @@ mod test {
         assert_eq!(row.handle, handle as i64);
         assert_eq!(row.data.len(), wrapper.cols.len());
 
-        let encode_data = &wrapper.data.encode_data[handle];
+        let expect_row = &wrapper.data.rows_data[handle];
         for col in &wrapper.cols {
             let cid = col.get_column_id();
             let v = row.data.get(cid).unwrap();
-            assert_eq!(encode_data[&cid], v.to_vec());
+            assert_eq!(expect_row[&cid], v.to_vec());
         }
         assert!(table_scanner.next().unwrap().is_none());
     }
@@ -203,11 +203,11 @@ mod test {
             let row = table_scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
-            let encode_data = &wrapper.data.encode_data[handle];
+            let expect_row = &wrapper.data.rows_data[handle];
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid], v.to_vec());
+                assert_eq!(expect_row[&cid], v.to_vec());
             }
         }
         assert!(table_scanner.next().unwrap().is_none());
@@ -230,11 +230,11 @@ mod test {
             let row = table_scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
-            let encode_data = &wrapper.data.encode_data[handle];
+            let expect_row = &wrapper.data.rows_data[handle];
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid], v.to_vec());
+                assert_eq!(expect_row[&cid], v.to_vec());
             }
         }
         assert!(table_scanner.next().unwrap().is_none());
