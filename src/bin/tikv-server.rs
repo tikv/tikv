@@ -51,6 +51,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
+use std::env;
 
 use clap::{Arg, App, ArgMatches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -269,6 +270,11 @@ fn check_system_config(config: &toml::Value) {
 
     for e in util::config::check_kernel() {
         warn!("{:?}", e);
+    }
+
+    if !cfg!(windows) && env::var("TZ").is_err() {
+        env::set_var("TZ", "/etc/localtime");
+        warn!("environment variable `TZ` is missing, use `/etc/localtime`");
     }
 }
 
