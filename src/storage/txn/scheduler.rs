@@ -548,7 +548,7 @@ fn process_write_impl(cid: u64,
         }
         Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, 0, Some(ScanMode::Mixed));
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, 0, Some(ScanMode::Forward));
             for k in keys {
                 try!(txn.gc(k, safe_point));
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
