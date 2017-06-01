@@ -152,8 +152,6 @@ mod test {
                         new_col_info(3, types::NEW_DECIMAL)];
 
         let mut data = Vec::new();
-        let mut pk = Vec::new();
-        let mut pk_handle = 0 as i64;
         let mut encode_data = Vec::new();
 
         for handle in 0..key_number {
@@ -172,17 +170,11 @@ mod test {
             v.push(h);
             let encoded = datum::encode_key(&v).unwrap();
             let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
-            if pk.is_empty() {
-                pk = idx_key.clone();
-                pk_handle = handle as i64;
-            }
             encode_data.push(encode_value);
             data.push((idx_key, vec![0]));
         }
         Data {
             kv_data: data,
-            pk: pk,
-            pk_handle: pk_handle,
             encode_data: encode_data,
             cols: cols,
         }
@@ -198,19 +190,19 @@ mod test {
 
     impl IndexTestWrapper {
         fn include_pk_cols() -> IndexTestWrapper {
-            let mut meta = IndexTestWrapper::default();
-            let mut cols = meta.data.get_index_cols();
-            cols.push(meta.data.get_col_pk());
-            meta.scan.set_columns(RepeatedField::from_vec(cols.clone()));
-            meta.cols = cols;
-            meta
+            let mut wrapper = IndexTestWrapper::default();
+            let mut cols = wrapper.data.get_index_cols();
+            cols.push(wrapper.data.get_col_pk());
+            wrapper.scan.set_columns(RepeatedField::from_vec(cols.clone()));
+            wrapper.cols = cols;
+            wrapper
         }
     }
 
     impl Default for IndexTestWrapper {
         fn default() -> IndexTestWrapper {
             let test_data = prepare_index_data(KEY_NUMBER, TABLE_ID, INDEX_ID);
-            let test_store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
+            let test_store = TestStore::new(&test_data.kv_data);
             let mut scan = IndexScan::new();
             // prepare cols
             let cols = test_data.get_index_cols();
@@ -232,14 +224,14 @@ mod test {
     #[test]
     fn test_multiple_ranges() {
         let mut statistics = Statistics::default();
-        let mut meta = IndexTestWrapper::default();
+        let mut wrapper = IndexTestWrapper::default();
         let r1 = get_idx_range(TABLE_ID, INDEX_ID, i64::MIN, 0);
         let r2 = get_idx_range(TABLE_ID, INDEX_ID, 0, (KEY_NUMBER / 2) as i64);
         let r3 = get_idx_range(TABLE_ID, INDEX_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
-        meta.ranges = vec![r1, r2, r3];
-        let (snapshot, start_ts) = meta.store.get_snapshot();
-        let mut scanner = IndexScanExec::new(&mut meta.scan,
-                                             meta.ranges,
+        wrapper.ranges = vec![r1, r2, r3];
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let mut scanner = IndexScanExec::new(&mut wrapper.scan,
+                                             wrapper.ranges,
                                              snapshot,
                                              &mut statistics,
                                              start_ts);
@@ -247,9 +239,9 @@ mod test {
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
-            assert_eq!(row.data.len(), meta.cols.len());
-            let encode_data = &meta.data.encode_data[handle];
-            for col in &meta.cols {
+            assert_eq!(row.data.len(), wrapper.cols.len());
+            let encode_data = &wrapper.data.encode_data[handle];
+            for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
                 assert_eq!(encode_data[&cid], v.to_vec());
@@ -261,11 +253,11 @@ mod test {
     #[test]
     fn test_reverse_scan() {
         let mut statistics = Statistics::default();
-        let mut meta = IndexTestWrapper::default();;
-        meta.scan.set_desc(true);
-        let (snapshot, start_ts) = meta.store.get_snapshot();
-        let mut scanner = IndexScanExec::new(&mut meta.scan,
-                                             meta.ranges,
+        let mut wrapper = IndexTestWrapper::default();;
+        wrapper.scan.set_desc(true);
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let mut scanner = IndexScanExec::new(&mut wrapper.scan,
+                                             wrapper.ranges,
                                              snapshot,
                                              &mut statistics,
                                              start_ts);
@@ -275,8 +267,8 @@ mod test {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
-            let encode_data = &meta.data.encode_data[handle];
-            for col in &meta.cols {
+            let encode_data = &wrapper.data.encode_data[handle];
+            for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
                 assert_eq!(encode_data[&cid], v.to_vec());
@@ -288,10 +280,10 @@ mod test {
     #[test]
     fn test_include_pk() {
         let mut statistics = Statistics::default();
-        let mut meta = IndexTestWrapper::include_pk_cols();
-        let (snapshot, start_ts) = meta.store.get_snapshot();
-        let mut scanner = IndexScanExec::new(&mut meta.scan,
-                                             meta.ranges,
+        let mut wrapper = IndexTestWrapper::include_pk_cols();
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let mut scanner = IndexScanExec::new(&mut wrapper.scan,
+                                             wrapper.ranges,
                                              snapshot,
                                              &mut statistics,
                                              start_ts);
@@ -299,11 +291,11 @@ mod test {
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
-            assert_eq!(row.data.len(), meta.cols.len());
-            let encode_data = &meta.data.encode_data[handle];
+            assert_eq!(row.data.len(), wrapper.cols.len());
+            let encode_data = &wrapper.data.encode_data[handle];
             let handle_datum = datum::Datum::I64(handle as i64);
             let pk = datum::encode_value(&[handle_datum]).unwrap();
-            for col in &meta.cols {
+            for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
                 if col.get_pk_handle() {

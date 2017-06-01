@@ -128,7 +128,7 @@ mod test {
     impl Default for TableScanExecutorMeta {
         fn default() -> TableScanExecutorMeta {
             let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
-            let test_store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
+            let test_store = TestStore::new(&test_data.kv_data);
             let mut table_scan = TableScan::new();
             // prepare cols
             let cols = test_data.get_prev_2_cols();
@@ -151,10 +151,12 @@ mod test {
     fn test_point_get() {
         let mut statistics = Statistics::default();
         let mut meta = TableScanExecutorMeta::default();
+        let handle = 0;
+        let (ref key, _) = meta.data.kv_data[handle];
         // prepare range
         let mut range = KeyRange::new();
-        range.set_start(meta.data.pk.clone());
-        let end = prefix_next(&meta.data.pk.clone());
+        range.set_start(key.clone());
+        let end = prefix_next(&key.clone());
         range.set_end(end);
         assert!(is_point(&range));
         meta.ranges = vec![range];
@@ -168,10 +170,10 @@ mod test {
                                                        start_ts);
 
         let row = table_scanner.next().unwrap().unwrap();
-        assert_eq!(row.handle, meta.data.pk_handle);
+        assert_eq!(row.handle, handle as i64);
         assert_eq!(row.data.len(), meta.cols.len());
 
-        let encode_data = &meta.data.encode_data[0];
+        let encode_data = &meta.data.encode_data[handle];
         for col in &meta.cols {
             let cid = col.get_column_id();
             let v = row.data.get(cid).unwrap();
