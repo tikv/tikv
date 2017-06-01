@@ -493,7 +493,7 @@ mod tests {
             let lock = &kv.value;
             let key = kv.key.raw().unwrap();
             assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
-                    &test_data.2[..] == &lock.primary[..] &&
+                    test_data.2 == lock.primary.as_slice() &&
                     test_data.3 == lock.ts);
         }
         assert_iter(&gen_mvcc_iter(&db, "kv", false, CF_LOCK), test_data_lock[0]);

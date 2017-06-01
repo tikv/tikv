@@ -198,7 +198,7 @@ fn test_raw_node_propose_and_conf_change() {
 
     let entries = s.entries(last_index - 1, last_index + 1, NO_LIMIT).unwrap();
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].get_data(), "somedata".as_bytes());
+    assert_eq!(entries[0].get_data(), b"somedata");
     assert_eq!(entries[1].get_entry_type(), EntryType::EntryConfChange);
     assert_eq!(entries[1].get_data(), &*ccdata);
 }

@@ -68,7 +68,7 @@ impl Display for Task {
                 write!(f,
                        "ask split region {} with key {}",
                        region.get_id(),
-                       escape(&split_key))
+                       escape(split_key))
             }
             Task::Heartbeat { ref region, ref peer, .. } => {
                 write!(f,
