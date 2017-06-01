@@ -375,6 +375,11 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
                                                      Some(1024 * 1024));
     opts.set_writable_file_max_buffer_size(writable_file_max_buffer_size as i32);
 
+    let use_direct_io_for_flush_and_compaction = get_toml_boolean(config,
+                                                              "rocksdb.use-direct-io-for-flush-and-compaction",
+                                                              Some(false));
+    opts.set_use_direct_io_for_flush_and_compaction(use_direct_io_for_flush_and_compaction);
+
     opts
 }
 

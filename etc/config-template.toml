@@ -202,6 +202,12 @@ stats-dump-period-sec = 600
 # least 2MB;
 # compaction-readahead-size = 0
 
+# This is the maximum buffer size that is used by WritableFileWrite
+# writable-file-max-buffer-size = "1MB" 
+
+# Use O_DIRECT for both reads and writes in background flush and compactions
+# use-direct-io-for-flush-and-compaction = false
+
 # Limit the disk IO of compaction and flush.
 # rate-bytes-per-sec = 0
 
