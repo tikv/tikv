@@ -82,6 +82,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
+    #[allow(too_many_arguments)]
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
                env: Arc<Environment>,
@@ -165,8 +166,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         self.local_addr
     }
 
-    fn write_data(&mut self, addr: SocketAddr, msg: RaftMessage) {
-        if let Err(e) = self.raft_client.wl().send(addr, msg) {
+    fn write_data(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) {
+        if msg.get_message().has_snapshot() {
+            return self.send_snapshot_sock(addr, msg);
+        }
+
+        if let Err(e) = self.raft_client.wl().send(store_id, addr, msg) {
             error!("send raft msg err {:?}", e);
         }
     }
@@ -201,15 +206,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn send_store(&mut self, store_id: u64, msg: RaftMessage) {
-        if msg.get_message().has_snapshot() {
-            RESOLVE_STORE_COUNTER.with_label_values(&["snap"]).inc();
-            return self.resolve_store(store_id, msg);
-        }
-
         // check the corresponding token for store.
         let addr = self.raft_client.rl().addrs.get(&store_id).map(|x| x.to_owned());
         if let Some(addr) = addr {
-            return self.write_data(addr, msg);
+            return self.write_data(store_id, addr, msg);
         }
 
         // No connection, try to resolve it.
@@ -224,7 +224,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
 
         debug!("begin to resolve store {} address", store_id);
-        RESOLVE_STORE_COUNTER.with_label_values(&["store"]).inc();
+        let label = if msg.get_message().has_snapshot() {
+            "snap"
+        } else {
+            "store"
+        };
+        RESOLVE_STORE_COUNTER.with_label_values(&[label]).inc();
+
         self.store_resolving.insert(store_id);
         self.resolve_store(store_id, msg);
     }
@@ -233,10 +239,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                          store_id: u64,
                          sock_addr: Result<SocketAddr>,
                          msg: RaftMessage) {
-        if !msg.get_message().has_snapshot() {
-            // clear resolving.
-            self.store_resolving.remove(&store_id);
-        }
+        // clear resolving.
+        self.store_resolving.remove(&store_id);
 
         if let Err(e) = sock_addr {
             RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
@@ -249,11 +253,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         info!("resolve store {} address ok, addr {}", store_id, sock_addr);
         self.raft_client.wl().addrs.insert(store_id, sock_addr);
 
-        if msg.get_message().has_snapshot() {
-            return self.send_snapshot_sock(sock_addr, msg);
-        }
-
-        self.write_data(sock_addr, msg)
+        self.write_data(store_id, sock_addr, msg)
     }
 
     fn new_snapshot_reporter(&self, msg: &RaftMessage) -> SnapshotReporter {
