@@ -588,6 +588,9 @@ fn build_cfg(matches: &ArgMatches,
     cfg.addr = addr.to_owned();
     cfg_usize(&mut cfg.notify_capacity, config, "server.notify-capacity");
     cfg_usize(&mut cfg.grpc_concurrency, config, "server.grpc-concurrency");
+    cfg_usize(&mut cfg.grpc_concurrent_stream,
+              config,
+              "server.grpc-concurrent-stream");
     if !cfg_usize(&mut cfg.end_point_concurrency,
                   config,
                   "server.end-point-concurrency") {

@@ -18,7 +18,7 @@ use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 
 use mio::{Handler, EventLoop, EventLoopConfig};
-use grpc::{Server as GrpcServer, ServerBuilder, Environment};
+use grpc::{Server as GrpcServer, ServerBuilder, Environment, ChannelBuilder};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::*;
 use util::worker::{Stopped, Worker};
@@ -101,9 +101,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let env = Arc::new(Environment::new(cfg.grpc_concurrency));
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
+        let channel_args = ChannelBuilder::new(env.clone())
+            .max_concurrent_stream(cfg.grpc_concurrent_stream)
+            .build_args();
         let grpc_server = try!(ServerBuilder::new(env.clone())
             .register_service(create_tikv(h))
             .bind(ip, addr.port())
+            .channel_args(channel_args)
             .build());
 
         let addr = {

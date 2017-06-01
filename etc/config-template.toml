@@ -23,6 +23,8 @@ messages-per-tick = 4096
 
 # size of thread pool for grpc server.
 # grpc-concurrency = 2
+# The number of max concurrent streams/requests on a client connection.
+# grpc-concurrent-stream = 1024
 
 # size of thread pool for endpoint task, should less than total cpu cores.
 # end-point-concurrency = 8

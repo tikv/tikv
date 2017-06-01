@@ -269,7 +269,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "grpc"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/grpc-rs.git#dde925ab690ff6f5767b417786b82822deebd39c"
+source = "git+https://github.com/pingcap/grpc-rs.git#bcf48a5efc8b6b6526f9a6a5c545caae90a3a992"
 dependencies = [
  "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git)",
@@ -280,7 +280,7 @@ dependencies = [
 [[package]]
 name = "grpc-sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/grpc-rs.git#dde925ab690ff6f5767b417786b82822deebd39c"
+source = "git+https://github.com/pingcap/grpc-rs.git#bcf48a5efc8b6b6526f9a6a5c545caae90a3a992"
 dependencies = [
  "cmake 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
