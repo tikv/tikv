@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::{SocketAddr, IpAddr};
@@ -26,7 +26,8 @@ use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use raft::SnapshotStatus;
-use util::collections::{HashMap, HashSet};
+use util::collections::HashSet;
+use util::HandyRwLock;
 
 use super::Msg;
 use super::{Result, Config};
@@ -65,8 +66,8 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     // Grpc server.
     grpc_server: GrpcServer,
     local_addr: SocketAddr,
-    // Addrs map for communicating with other raft stores.
-    store_addrs: HashMap<u64, SocketAddr>,
+    // For sending raft messages to other stores.
+    raft_client: Arc<RwLock<RaftClient>>,
     store_resolving: HashSet<u64>,
     resolver: S,
     // For dispatching raft messages.
@@ -78,13 +79,13 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
-    // For sending raft messages to other stores.
-    raft_client: RaftClient,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
+               env: Arc<Environment>,
+               raft_client: Arc<RwLock<RaftClient>>,
                storage: Storage,
                ch: ServerChannel<T>,
                resolver: S,
@@ -98,7 +99,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                              end_point_worker.scheduler(),
                              ch.raft_router.clone(),
                              snap_worker.scheduler());
-        let env = Arc::new(Environment::new(cfg.grpc_concurrency));
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
@@ -121,7 +121,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             sendch: sendch,
             grpc_server: grpc_server,
             local_addr: addr,
-            store_addrs: HashMap::default(),
             store_resolving: HashSet::default(),
             resolver: resolver,
             ch: ch,
@@ -129,7 +128,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
-            raft_client: RaftClient::new(env),
+            raft_client: raft_client,
         };
 
         Ok(svr)
@@ -167,7 +166,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn write_data(&mut self, addr: SocketAddr, msg: RaftMessage) {
-        if let Err(e) = self.raft_client.send(addr, msg) {
+        if let Err(e) = self.raft_client.wl().send(addr, msg) {
             error!("send raft msg err {:?}", e);
         }
     }
@@ -208,7 +207,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
 
         // check the corresponding token for store.
-        if let Some(addr) = self.store_addrs.get(&store_id).cloned() {
+        let addr = self.raft_client.rl().addrs.get(&store_id).map(|x| x.to_owned());
+        if let Some(addr) = addr {
             return self.write_data(addr, msg);
         }
 
@@ -247,7 +247,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         RESOLVE_STORE_COUNTER.with_label_values(&["success"]).inc();
         let sock_addr = sock_addr.unwrap();
         info!("resolve store {} address ok, addr {}", store_id, sock_addr);
-        self.store_addrs.insert(store_id, sock_addr);
+        self.raft_client.wl().addrs.insert(store_id, sock_addr);
 
         if msg.get_message().has_snapshot() {
             return self.send_snapshot_sock(sock_addr, msg);
@@ -433,8 +433,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let router = TestRaftStoreRouter::new(tx);
         let report_unreachable_count = router.report_unreachable_count.clone();
-
         let (snapshot_status_sender, _) = mpsc::channel();
+        let env = Arc::new(Environment::new(1));
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone())));
 
         let ch = ServerChannel {
             raft_router: router,
@@ -444,6 +445,8 @@ mod tests {
         let mut server =
             Server::new(&mut event_loop,
                         &cfg,
+                        env,
+                        raft_client,
                         storage,
                         ch,
                         MockResolver { addr: addr.clone() },

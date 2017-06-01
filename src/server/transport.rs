@@ -11,12 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::{Arc, RwLock};
 use raftstore::store::{Msg as StoreMsg, Transport, Callback};
 use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
+use server::raft_client::RaftClient;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use super::Msg;
 use util::transport::SendCh;
+use util::HandyRwLock;
 use super::metrics::*;
 
 pub trait RaftStoreRouter: Send + Clone {
@@ -109,18 +112,30 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 #[derive(Clone)]
 pub struct ServerTransport {
     ch: SendCh<Msg>,
+    raft_client: Arc<RwLock<RaftClient>>,
 }
 
 impl ServerTransport {
-    pub fn new(ch: SendCh<Msg>) -> ServerTransport {
-        ServerTransport { ch: ch }
+    pub fn new(ch: SendCh<Msg>, raft_client: Arc<RwLock<RaftClient>>) -> ServerTransport {
+        ServerTransport {
+            ch: ch,
+            raft_client: raft_client,
+        }
     }
 }
 
 impl Transport for ServerTransport {
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
-
+        if !msg.get_message().has_snapshot() {
+            let addr = self.raft_client.rl().addrs.get(&to_store_id).map(|x| x.to_owned());
+            if let Some(addr) = addr {
+                if let Err(e) = self.raft_client.wl().send(addr.to_owned(), msg) {
+                    error!("send raft msg err {:?}", e);
+                }
+                return Ok(());
+            }
+        }
         try!(self.ch.try_send(Msg::SendStore {
             store_id: to_store_id,
             msg: msg,

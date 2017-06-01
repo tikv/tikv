@@ -58,6 +58,7 @@ impl Conn {
 pub struct RaftClient {
     env: Arc<Environment>,
     conns: HashMap<SocketAddr, Conn>,
+    pub addrs: HashMap<u64, SocketAddr>,
 }
 
 impl RaftClient {
@@ -65,6 +66,7 @@ impl RaftClient {
         RaftClient {
             env: env,
             conns: HashMap::default(),
+            addrs: HashMap::default(),
         }
     }
 

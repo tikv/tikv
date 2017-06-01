@@ -117,7 +117,9 @@ impl Simulator for ServerCluster {
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let trans = ServerTransport::new(sendch.clone());
+        let env = Arc::new(Environment::new(cfg.grpc_concurrency));
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone())));
+        let trans = ServerTransport::new(sendch.clone(), raft_client.clone());
 
         let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
         let simulate_trans = SimulateTransport::new(trans.clone());
@@ -153,6 +155,8 @@ impl Simulator for ServerCluster {
         };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
+                                     env,
+                                     raft_client,
                                      store,
                                      server_chan,
                                      resolver,

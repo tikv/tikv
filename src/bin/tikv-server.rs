@@ -42,6 +42,7 @@ extern crate futures_cpupool;
 extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
+extern crate grpc;
 
 mod signal_handler;
 mod profiling;
@@ -51,7 +52,7 @@ use std::thread;
 use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::io::Read;
 use std::time::Duration;
 
@@ -60,6 +61,7 @@ use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
+use grpc::Environment;
 
 use tikv::storage::{Storage, TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
@@ -72,6 +74,7 @@ use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Se
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
+use tikv::server::RaftClient;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
@@ -720,11 +723,12 @@ fn build_cfg(matches: &ArgMatches,
 
 fn build_raftkv(config: &toml::Value,
                 ch: SendCh<Msg>,
+                raft_client: Arc<RwLock<RaftClient>>,
                 pd_client: Arc<RpcClient>,
                 cfg: &Config,
                 total_mem: u64)
                 -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
-    let trans = ServerTransport::new(ch);
+    let trans = ServerTransport::new(ch, raft_client);
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let db_opts = get_rocksdb_db_option(config);
     let cfs_opts =
@@ -857,8 +861,14 @@ fn run_raft_server(pd_client: RpcClient,
                store_path);
     }
 
-    let (mut node, mut store, raft_router, snap_mgr, engine) =
-        build_raftkv(config, ch.clone(), pd_client, &cfg, total_mem);
+    let env = Arc::new(Environment::new(cfg.grpc_concurrency));
+    let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone())));
+    let (mut node, mut store, raft_router, snap_mgr, engine) = build_raftkv(config,
+                                                                            ch.clone(),
+                                                                            raft_client.clone(),
+                                                                            pd_client,
+                                                                            &cfg,
+                                                                            total_mem);
     info!("tikv server config: {:?}", cfg);
 
     initial_metric(config, Some(node.id()));
@@ -874,6 +884,8 @@ fn run_raft_server(pd_client: RpcClient,
     };
     let svr = Server::new(&mut event_loop,
                           &cfg,
+                          env,
+                          raft_client,
                           store,
                           server_chan,
                           resolver,
