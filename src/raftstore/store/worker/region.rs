@@ -213,7 +213,6 @@ impl Runner {
         try!(s.apply(options));
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
-        s.delete();
         info!("[region {}] apply new data takes {:?}",
               region_id,
               timer.elapsed());

@@ -1691,7 +1691,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        let mut snap_keys = try!(self.snap_mgr.list_snap());
+        let mut snap_keys = try!(self.snap_mgr.list_idle_snap());
         if snap_keys.is_empty() {
             return Ok(());
         }

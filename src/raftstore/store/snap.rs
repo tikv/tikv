@@ -189,7 +189,8 @@ mod v1 {
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX,
-                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort};
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort,
+                SnapManager};
 
     pub const SNAPSHOT_VERSION: u64 = 1;
     pub const CRC32_BYTES_COUNT: usize = 4;
@@ -254,9 +255,12 @@ mod v1 {
     /// `save` method to make them persistent. When saving a crc32 checksum
     /// will be appended to the file end automatically.
     pub struct Snap {
+        mgr: SnapManager,
+        is_sending: bool,
+        key: SnapKey,
+        size_track: Arc<RwLock<u64>>,
         file: PathBuf,
         digest: Option<Digest>,
-        size_track: Arc<RwLock<u64>>,
         // File is the file obj represent the tmpfile, string is the actual path to
         // tmpfile.
         tmp_file: Option<(File, String)>,
@@ -265,17 +269,24 @@ mod v1 {
 
     impl Snap {
         pub fn new_for_writing<T: Into<PathBuf>>(dir: T,
-                                                 size_track: Arc<RwLock<u64>>,
+                                                 mgr: SnapManager,
                                                  is_sending: bool,
-                                                 key: &SnapKey)
+                                                 key: &SnapKey,
+                                                 size_track: Arc<RwLock<u64>>)
                                                  -> io::Result<Snap> {
             let mut path = dir.into();
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
+            // Add reference to this snapshot.
+            mgr.refer(is_sending, key);
+
             let mut f = Snap {
+                mgr: mgr,
+                is_sending: is_sending,
+                key: key.clone(),
+                size_track: size_track,
                 file: path,
                 digest: Some(Digest::new(crc32::IEEE)),
-                size_track: size_track,
                 tmp_file: None,
                 reader: None,
             };
@@ -284,17 +295,24 @@ mod v1 {
         }
 
         pub fn new_for_reading<T: Into<PathBuf>>(dir: T,
-                                                 size_track: Arc<RwLock<u64>>,
+                                                 mgr: SnapManager,
                                                  is_sending: bool,
-                                                 key: &SnapKey)
+                                                 key: &SnapKey,
+                                                 size_track: Arc<RwLock<u64>>)
                                                  -> io::Result<Snap> {
             let mut path = dir.into();
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
+            // Add reference to this snapshot.
+            mgr.refer(is_sending, key);
+
             let f = Snap {
+                mgr: mgr,
+                is_sending: is_sending,
+                key: key.clone(),
+                size_track: size_track,
                 file: path,
                 digest: None,
-                size_track: size_track,
                 tmp_file: None,
                 reader: None,
             };
@@ -510,6 +528,9 @@ mod v1 {
 
     impl Drop for Snap {
         fn drop(&mut self) {
+            // Remove reference to this snapshot.
+            self.mgr.derefer(self.is_sending, &self.key);
+
             if let Some((_, path)) = self.tmp_file.take() {
                 debug!("deleting {}", path);
                 if let Err(e) = fs::remove_file(&path) {
@@ -687,7 +708,8 @@ mod v2 {
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX,
-                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort};
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort,
+                SnapManager};
     use super::v1::{build_plain_cf_file, apply_plain_cf_file};
 
     pub const SNAPSHOT_VERSION: u64 = 2;
@@ -791,25 +813,29 @@ mod v2 {
     }
 
     pub struct Snap {
+        mgr: SnapManager,
+        is_sending: bool,
+        key: SnapKey,
+        size_track: Arc<RwLock<u64>>,
         display_path: String,
         cf_files: Vec<CfFile>,
         cf_index: usize,
         meta_file: MetaFile,
-        size_track: Arc<RwLock<u64>>,
     }
 
     impl Snap {
         fn new<T: Into<PathBuf>>(dir: T,
+                                 mgr: SnapManager,
                                  key: &SnapKey,
                                  size_track: Arc<RwLock<u64>>,
-                                 sending: bool,
+                                 is_sending: bool,
                                  to_build: bool)
                                  -> RaftStoreResult<Snap> {
             let dir_path = dir.into();
             if !dir_path.exists() {
                 try!(fs::create_dir_all(dir_path.as_path()));
             }
-            let snap_prefix = if sending {
+            let snap_prefix = if is_sending {
                 SNAP_GEN_PREFIX
             } else {
                 SNAP_REV_PREFIX
@@ -840,12 +866,18 @@ mod v2 {
                 ..Default::default()
             };
 
+            // Add reference to this snapshot.
+            mgr.refer(is_sending, key);
+
             let mut s = Snap {
+                mgr: mgr,
+                is_sending: is_sending,
+                key: key.clone(),
+                size_track: size_track,
                 display_path: display_path,
                 cf_files: cf_files,
                 cf_index: 0,
                 meta_file: meta_file,
-                size_track: size_track,
             };
 
             // load snapshot meta if meta_file exists
@@ -864,20 +896,22 @@ mod v2 {
         }
 
         pub fn new_for_building<T: Into<PathBuf>>(dir: T,
+                                                  mgr: SnapManager,
                                                   key: &SnapKey,
-                                                  snap: &DbSnapshot,
-                                                  size_track: Arc<RwLock<u64>>)
+                                                  size_track: Arc<RwLock<u64>>,
+                                                  snap: &DbSnapshot)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, true, true));
+            let mut s = try!(Snap::new(dir, mgr, key, size_track, true, true));
             try!(s.init_for_building(snap));
             Ok(s)
         }
 
         pub fn new_for_sending<T: Into<PathBuf>>(dir: T,
+                                                 mgr: SnapManager,
                                                  key: &SnapKey,
                                                  size_track: Arc<RwLock<u64>>)
                                                  -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, true, false));
+            let mut s = try!(Snap::new(dir, mgr, key, size_track, true, false));
 
             if !s.exists() {
                 // Skip the initialization below if it doesn't exists.
@@ -894,11 +928,12 @@ mod v2 {
         }
 
         pub fn new_for_receiving<T: Into<PathBuf>>(dir: T,
+                                                   mgr: SnapManager,
                                                    key: &SnapKey,
-                                                   snapshot_meta: SnapshotMeta,
-                                                   size_track: Arc<RwLock<u64>>)
+                                                   size_track: Arc<RwLock<u64>>,
+                                                   snapshot_meta: SnapshotMeta)
                                                    -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, false, false));
+            let mut s = try!(Snap::new(dir, mgr, key, size_track, false, false));
             try!(s.set_snapshot_meta(snapshot_meta));
 
             if s.exists() {
@@ -922,10 +957,11 @@ mod v2 {
         }
 
         pub fn new_for_applying<T: Into<PathBuf>>(dir: T,
+                                                  mgr: SnapManager,
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let s = try!(Snap::new(dir, key, size_track, false, false));
+            let s = try!(Snap::new(dir, mgr, key, size_track, false, false));
             Ok(s)
         }
 
@@ -1358,6 +1394,9 @@ mod v2 {
 
     impl Drop for Snap {
         fn drop(&mut self) {
+            // Remove reference to this snapshot.
+            self.mgr.derefer(self.is_sending, &self.key);
+
             // cleanup if some of the cf files and meta file is partly written
             if self.cf_files.iter().any(|cf_file| file_exists(&cf_file.tmp_path)) ||
                file_exists(&self.meta_file.tmp_path) {
@@ -1883,9 +1922,16 @@ pub struct SnapStats {
     pub receiving_count: usize,
 }
 
+#[derive(PartialEq, Eq, Hash, Debug)]
+struct ReferenceKey {
+    pub snap_key: SnapKey,
+    pub is_sending: bool,
+}
+
 struct SnapManagerCore {
     base: String,
     registry: HashMap<SnapKey, Vec<SnapEntry>>,
+    reference: HashMap<ReferenceKey, u32>,
     use_sst_file_snapshot: bool,
     // put snap_size under core so we don't need to worry about deadlock.
     snap_size: Arc<RwLock<u64>>,
@@ -1916,6 +1962,7 @@ impl SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
                 base: path.into(),
                 registry: map![],
+                reference: map![],
                 use_sst_file_snapshot: use_sst_file_snapshot,
                 snap_size: Arc::new(RwLock::new(0)),
             })),
@@ -1951,7 +1998,8 @@ impl SnapManager {
         Ok(())
     }
 
-    pub fn list_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
+    // Return all snapshots which is idle not being used.
+    pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         let core = self.core.rl();
         let path = Path::new(&core.base);
         let read_dir = try!(fs::read_dir(path));
@@ -1985,7 +2033,15 @@ impl SnapManager {
                     error!("failed to parse snapkey from {}", name);
                     return None;
                 }
-                Some((SnapKey::new(numbers[0], numbers[1], numbers[2]), is_sending))
+                let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
+                let reference_key = ReferenceKey {
+                    snap_key: snap_key.clone(),
+                    is_sending: is_sending,
+                };
+                if core.reference.contains_key(&reference_key) {
+                    return None;
+                }
+                Some((snap_key, is_sending))
             })
             .collect())
     }
@@ -2001,22 +2057,35 @@ impl SnapManager {
                                      -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
         if core.use_sst_file_snapshot {
-            let f = try!(v2::Snap::new_for_building(&core.base, key, snap, core.snap_size.clone()));
+            let f = try!(v2::Snap::new_for_building(&core.base,
+                                                    self.clone(),
+                                                    key,
+                                                    core.snap_size.clone(),
+                                                    snap));
             Ok(Box::new(f))
         } else {
-            let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), true, key));
+            let f = try!(v1::Snap::new_for_writing(&core.base,
+                                                   self.clone(),
+                                                   true,
+                                                   key,
+                                                   core.snap_size.clone()));
             Ok(Box::new(f))
         }
     }
 
     pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
-        if let Ok(s) = v1::Snap::new_for_reading(&core.base, core.snap_size.clone(), true, key) {
+        if let Ok(s) = v1::Snap::new_for_reading(&core.base,
+                                                 self.clone(),
+                                                 true,
+                                                 key,
+                                                 core.snap_size.clone()) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
         }
-        let s = try!(v2::Snap::new_for_sending(&core.base, key, core.snap_size.clone()));
+        let s =
+            try!(v2::Snap::new_for_sending(&core.base, self.clone(), key, core.snap_size.clone()));
         Ok(Box::new(s))
     }
 
@@ -2029,24 +2098,36 @@ impl SnapManager {
         try!(snapshot_data.merge_from_bytes(data));
         if snapshot_data.get_version() == v2::SNAPSHOT_VERSION {
             let f = try!(v2::Snap::new_for_receiving(&core.base,
+                                                     self.clone(),
                                                      key,
-                                                     snapshot_data.take_meta(),
-                                                     core.snap_size.clone()));
+                                                     core.snap_size.clone(),
+                                                     snapshot_data.take_meta()));
             Ok(Box::new(f))
         } else {
-            let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), false, key));
+            let f = try!(v1::Snap::new_for_writing(&core.base,
+                                                   self.clone(),
+                                                   false,
+                                                   key,
+                                                   core.snap_size.clone()));
             Ok(Box::new(f))
         }
     }
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
-        if let Ok(s) = v2::Snap::new_for_applying(&core.base, key, core.snap_size.clone()) {
+        if let Ok(s) = v2::Snap::new_for_applying(&core.base,
+                                                  self.clone(),
+                                                  key,
+                                                  core.snap_size.clone()) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
         }
-        let s = try!(v1::Snap::new_for_reading(&core.base, core.snap_size.clone(), false, key));
+        let s = try!(v1::Snap::new_for_reading(&core.base,
+                                               self.clone(),
+                                               false,
+                                               key,
+                                               core.snap_size.clone()));
         Ok(Box::new(s))
     }
 
@@ -2058,6 +2139,45 @@ impl SnapManager {
         let core = self.core.rl();
         let size = *core.snap_size.rl();
         size
+    }
+
+    pub fn refer(&self, is_sending: bool, key: &SnapKey) {
+        let mut core = self.core.wl();
+        let reference_key = ReferenceKey {
+            snap_key: key.clone(),
+            is_sending: is_sending,
+        };
+        match core.reference.entry(reference_key) {
+            Entry::Occupied(mut e) => {
+                *e.get_mut() += 1;
+            }
+            Entry::Vacant(e) => {
+                e.insert(1);
+            }
+        }
+    }
+
+    pub fn derefer(&self, is_sending: bool, key: &SnapKey) {
+        let mut core = self.core.wl();
+        let reference_key = ReferenceKey {
+            snap_key: key.clone(),
+            is_sending: is_sending,
+        };
+        match core.reference.entry(reference_key) {
+            Entry::Occupied(mut e) => {
+                *e.get_mut() -= 1;
+                if *e.get() == 0 {
+                    // Remove the reference info if the reference count drops to zero.
+                    e.remove_entry();
+                }
+            }
+            Entry::Vacant(_) => {
+                error!("failed to derefer a snapshot which is not refered, key: {:?}, \
+                        is_sending: {}",
+                       key,
+                       is_sending);
+            }
+        }
     }
 
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {
