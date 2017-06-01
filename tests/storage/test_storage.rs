@@ -291,7 +291,7 @@ fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
 
     let store = AssertionStorage::default();
     for k in &keys {
-        store.prewrite_ok(vec![Mutation::Put((make_key(&k.as_bytes()), b"v".to_vec()))],
+        store.prewrite_ok(vec![Mutation::Put((make_key(k.as_bytes()), b"v".to_vec()))],
                           b"k1",
                           5);
     }

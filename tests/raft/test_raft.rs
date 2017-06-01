@@ -2738,7 +2738,7 @@ fn test_commit_after_remove_node() {
     let ents = next_ents(&mut r, &s);
     assert_eq!(ents.len(), 1);
     assert_eq!(ents[0].get_entry_type(), EntryType::EntryNormal);
-    assert_eq!(ents[0].get_data(), "hello".as_bytes());
+    assert_eq!(ents[0].get_data(), b"hello");
 }
 
 // test_leader_transfer_to_uptodate_node verifies transferring should succeed

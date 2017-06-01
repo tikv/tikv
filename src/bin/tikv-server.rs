@@ -51,6 +51,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
+use std::env;
 
 use clap::{Arg, App, ArgMatches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -177,6 +178,7 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
     })
 }
 
+#[allow(absurd_extreme_comparisons)]
 fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) -> bool {
     match get_toml_int_opt(config, name) {
         Some(i) => {
@@ -268,6 +270,11 @@ fn check_system_config(config: &toml::Value) {
 
     for e in util::config::check_kernel() {
         warn!("{:?}", e);
+    }
+
+    if !cfg!(windows) && env::var("TZ").is_err() {
+        env::set_var("TZ", "/etc/localtime");
+        warn!("environment variable `TZ` is missing, use `/etc/localtime`");
     }
 }
 
@@ -367,7 +374,7 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     }
 
     let max_sub_compactions = get_toml_int(config, "rocksdb.max-sub-compactions", Some(1));
-    opts.set_max_subcompactions(max_sub_compactions as usize);
+    opts.set_max_subcompactions(max_sub_compactions as u32);
 
     let writable_file_max_buffer_size = get_toml_int(config,
                                                      "rocksdb.writable-file-max-buffer-size",
