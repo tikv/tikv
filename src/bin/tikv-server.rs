@@ -51,6 +51,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::Read;
 use std::time::Duration;
+use std::env;
 
 use clap::{Arg, App, ArgMatches};
 use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
@@ -270,6 +271,11 @@ fn check_system_config(config: &toml::Value) {
     for e in util::config::check_kernel() {
         warn!("{:?}", e);
     }
+
+    if !cfg!(windows) && env::var("TZ").is_err() {
+        env::set_var("TZ", "/etc/localtime");
+        warn!("environment variable `TZ` is missing, use `/etc/localtime`");
+    }
 }
 
 fn check_advertise_address(addr: &str) {
@@ -419,7 +425,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
 
     let cpl = get_toml_string(config,
                               (prefix.clone() + "compression-per-level").as_str(),
-                              Some("lz4:lz4:lz4:lz4:lz4:lz4:lz4".to_owned()));
+                              Some("no:no:lz4:lz4:lz4:zstd:zstd".to_owned()));
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.compression_per_level(&per_level_compression);
@@ -444,7 +450,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let max_bytes_for_level_base = get_toml_int(config,
                                                 (prefix.clone() + "max-bytes-for-level-base")
                                                     .as_str(),
-                                                Some(128 * 1024 * 1024));
+                                                Some(512 * 1024 * 1024));
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
 
     let target_file_size_base = get_toml_int(config,
