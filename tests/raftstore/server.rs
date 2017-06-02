@@ -110,14 +110,10 @@ impl Simulator for ServerCluster {
             raft_router: sim_router.clone(),
             snapshot_status_sender: snap_status_sender,
         };
-        let env = Arc::new(Environment::new(cfg.grpc_concurrency));
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone())));
         let mut server_event_loop = create_event_loop(&cfg).unwrap();
         let sendch = SendCh::new(server_event_loop.channel(), "cluster-simulator");
         let mut server = Server::new(&mut server_event_loop,
                                      &cfg,
-                                     env,
-                                     raft_client.clone(),
                                      store.clone(),
                                      server_chan,
                                      resolver,
@@ -125,7 +121,7 @@ impl Simulator for ServerCluster {
             .unwrap();
         let addr = server.listening_addr();
         cfg.addr = format!("{}", addr);
-        let trans = ServerTransport::new(sendch.clone(), raft_client.clone());
+        let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
 
         // Create node.

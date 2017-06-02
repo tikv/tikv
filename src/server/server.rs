@@ -33,7 +33,7 @@ use super::Msg;
 use super::{Result, Config};
 use super::coprocessor::{EndPointHost, EndPointTask};
 use super::grpc_service::Service;
-use super::transport::RaftStoreRouter;
+use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use super::raft_client::RaftClient;
@@ -85,13 +85,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     #[allow(too_many_arguments)]
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
-               env: Arc<Environment>,
-               raft_client: Arc<RwLock<RaftClient>>,
                storage: Storage,
                ch: ServerChannel<T>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
+        let env = Arc::new(Environment::new(cfg.grpc_concurrency));
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone())));
         let sendch = SendCh::new(event_loop.channel(), "raft-server");
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
@@ -133,6 +133,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         };
 
         Ok(svr)
+    }
+
+    pub fn transport(&self) -> ServerTransport {
+        ServerTransport::new(self.sendch.clone(), self.raft_client.clone())
     }
 
     pub fn run(&mut self, event_loop: &mut EventLoop<Self>) -> Result<()> {
@@ -445,8 +449,6 @@ mod tests {
         let mut server =
             Server::new(&mut event_loop,
                         &cfg,
-                        env,
-                        raft_client,
                         storage,
                         ch,
                         MockResolver { addr: addr.clone() },

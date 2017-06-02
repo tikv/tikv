@@ -52,7 +52,7 @@ use std::thread;
 use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, mpsc};
 use std::io::Read;
 use std::time::Duration;
 
@@ -61,7 +61,6 @@ use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
 use mio::EventLoop;
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
-use grpc::Environment;
 
 use tikv::storage::{TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
@@ -71,10 +70,9 @@ use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
                    Config, create_event_loop, create_raft_storage};
-use tikv::server::{ServerTransport, ServerRaftStoreRouter};
+use tikv::server::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
-use tikv::server::RaftClient;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
@@ -849,21 +847,16 @@ fn run_raft_server(pd_client: RpcClient,
         raft_router: raft_router.clone(),
         snapshot_status_sender: snap_status_sender,
     };
-    let env = Arc::new(Environment::new(cfg.grpc_concurrency));
-    let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone())));
     let mut server_event_loop = create_event_loop(&cfg)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let ch = SendCh::new(server_event_loop.channel(), "server");
     let server = Server::new(&mut server_event_loop,
                              &cfg,
-                             env,
-                             raft_client.clone(),
                              storage.clone(),
                              server_chan,
                              resolver,
                              snap_mgr.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let trans = ServerTransport::new(ch, raft_client);
+    let trans = server.transport();
 
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
