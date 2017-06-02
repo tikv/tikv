@@ -2633,8 +2633,7 @@ fn test_remove_node() {
 
     // remove all nodes from cluster
     r.remove_node(1);
-    let expect: Vec<u64> = vec![];
-    assert_eq!(r.nodes(), expect);
+    assert!(r.nodes().is_empty());
 }
 
 #[test]
