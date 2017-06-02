@@ -48,7 +48,6 @@ mod signal_handler;
 mod profiling;
 
 use std::process;
-use std::thread;
 use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
@@ -57,8 +56,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use clap::{Arg, App, ArgMatches};
-use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
-use mio::EventLoop;
+use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
@@ -68,11 +66,10 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
-use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
-                   Config, create_event_loop, create_raft_storage};
-use tikv::server::ServerRaftStoreRouter;
-use tikv::server::transport::RaftStoreRouter;
-use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
+use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
+                   create_raft_storage};
+use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::PdStoreAddrResolver;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
@@ -771,24 +768,6 @@ fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<Strin
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
 }
 
-fn start_server<T, S>(mut server: Server<T, S>,
-                      mut el: EventLoop<Server<T, S>>,
-                      engine: Arc<DB>,
-                      backup_path: &str)
-    where T: RaftStoreRouter,
-          S: StoreAddrResolver + Send + 'static
-{
-    let ch = server.get_sendch();
-    let h = thread::Builder::new()
-        .name("tikv-eventloop".to_owned())
-        .spawn(move || {
-            server.run(&mut el).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-        })
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    signal_handler::handle_signal(ch, engine, backup_path);
-    h.join().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-}
-
 fn run_raft_server(pd_client: RpcClient,
                    cfg: Config,
                    backup_path: &str,
@@ -843,18 +822,12 @@ fn run_raft_server(pd_client: RpcClient,
     let snap_mgr = SnapManager::new(snap_path,
                                     Some(store_sendch),
                                     cfg.raft_store.use_sst_file_snapshot);
-    let server_chan = ServerChannel {
-        raft_router: raft_router.clone(),
-        snapshot_status_sender: snap_status_sender,
-    };
-    let mut server_event_loop = create_event_loop(&cfg)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let server = Server::new(&mut server_event_loop,
-                             &cfg,
-                             storage.clone(),
-                             server_chan,
-                             resolver,
-                             snap_mgr.clone())
+    let mut server = Server::new(&cfg,
+                                 storage.clone(),
+                                 raft_router,
+                                 snap_status_sender,
+                                 resolver,
+                                 snap_mgr.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let trans = server.transport();
 
@@ -875,7 +848,11 @@ fn run_raft_server(pd_client: RpcClient,
     }
 
     // Run server.
-    start_server(server, server_event_loop, engine, backup_path);
+    server.start(&cfg).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    signal_handler::handle_signal(engine, backup_path);
+
+    // Stop.
+    server.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 

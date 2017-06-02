@@ -32,11 +32,10 @@ use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
 use util::buf::PipeBuffer;
 use util::collections::{HashMap, HashMapEntry as Entry};
-use util::transport::SendCh;
 use util::HandyRwLock;
 
 use super::metrics::*;
-use super::{Result, Error, Msg};
+use super::{Result, Error};
 use super::transport::RaftStoreRouter;
 
 pub type Callback = Box<FnBox(Result<()>) + Send>;
@@ -179,25 +178,17 @@ pub struct Runner<R: RaftStoreRouter + 'static> {
     snap_mgr: SnapManager,
     files: HashMap<Token, (Box<Snapshot>, RaftMessage)>,
     pool: ThreadPool,
-    ch: SendCh<Msg>,
     raft_router: R,
 }
 
 impl<R: RaftStoreRouter + 'static> Runner<R> {
-    pub fn new(env: Arc<Environment>, snap_mgr: SnapManager, r: R, ch: SendCh<Msg>) -> Runner<R> {
+    pub fn new(env: Arc<Environment>, snap_mgr: SnapManager, r: R) -> Runner<R> {
         Runner {
             env: env,
             snap_mgr: snap_mgr,
             files: map![],
             pool: ThreadPool::new_with_name(thd_name!("snap sender"), DEFAULT_SENDER_POOL_SIZE),
             raft_router: r,
-            ch: ch,
-        }
-    }
-
-    pub fn close(&self, token: Token) {
-        if let Err(e) = self.ch.send(Msg::CloseConn { token: token }) {
-            error!("failed to close connection {:?}: {:?}", token, e);
         }
     }
 }
@@ -212,7 +203,6 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                     Ok(k) => k,
                     Err(e) => {
                         error!("failed to create snap key for token {:?}: {:?}", token, e);
-                        self.close(token);
                         return;
                     }
                 };
@@ -225,7 +215,6 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             if let Err(e) = self.raft_router.send_raft_msg(meta) {
                                 error!("send snapshot for key {} token {:?}: {:?}", key, token, e);
                             }
-                            self.close(token);
                             return;
                         }
                         debug!("begin to receive snap {:?}", meta);
@@ -236,14 +225,12 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         error!("failed to create snapshot file for token {:?}: {:?}",
                                token,
                                e);
-                        self.close(token);
                         return;
                     }
                 }
             }
             Task::Write(token, mut data) => {
                 SNAP_TASK_COUNTER.with_label_values(&["write"]).inc();
-                let mut should_close = false;
                 match self.files.entry(token) {
                     Entry::Occupied(mut e) => {
                         if let Err(err) = data.write_all_to(&mut e.get_mut().0) {
@@ -254,13 +241,9 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             let (_, msg) = e.remove();
                             let key = SnapKey::from_snap(msg.get_message().get_snapshot()).unwrap();
                             self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
-                            should_close = true;
                         }
                     }
                     Entry::Vacant(_) => error!("invalid snap token {:?}", token),
-                }
-                if should_close {
-                    self.close(token);
                 }
             }
             Task::Close(token) => {
@@ -271,14 +254,12 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         info!("saving snapshot to {}", snap.path());
                         defer!({
                             self.snap_mgr.deregister(&key, &SnapEntry::Receiving);
-                            self.close(token);
                         });
                         if let Err(e) = snap.save() {
                             error!("failed to save snapshot file {} for token {:?}: {:?}",
                                    snap.path(),
                                    token,
                                    e);
-                            self.close(token);
                             return;
                         }
                         if let Err(e) = self.raft_router.send_raft_msg(msg) {

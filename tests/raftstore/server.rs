@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::thread::{self, Builder};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
@@ -23,7 +22,7 @@ use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{ServerChannel, Server, ServerTransport, create_event_loop, Msg};
+use tikv::server::{Server, ServerTransport};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, RaftClient};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
@@ -37,12 +36,15 @@ use kvproto::raft_cmdpb::*;
 use super::pd::TestPdClient;
 use super::transport_simulate::*;
 
-type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
+type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
+type SimulateServerTransport = SimulateTransport<RaftMessage,
+                                                 ServerTransport<SimulateStoreTransport,
+                                                                 PdStoreAddrResolver>>;
 
 pub struct ServerCluster {
-    routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
-    senders: HashMap<u64, SendCh<Msg>>,
-    handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
+    routers: HashMap<u64, SimulateStoreTransport>,
+    servers: HashMap<u64, Server<SimulateStoreTransport, PdStoreAddrResolver>>,
+    nodes: HashMap<u64, Node<TestPdClient>>,
     addrs: HashMap<u64, SocketAddr>,
     sim_trans: HashMap<u64, SimulateServerTransport>,
     store_chs: HashMap<u64, SendCh<StoreMsg>>,
@@ -56,8 +58,8 @@ impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         ServerCluster {
             routers: HashMap::new(),
-            senders: HashMap::new(),
-            handles: HashMap::new(),
+            servers: HashMap::new(),
+            nodes: HashMap::new(),
             addrs: HashMap::new(),
             sim_trans: HashMap::new(),
             pd_client: pd_client,
@@ -72,8 +74,8 @@ impl ServerCluster {
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
     fn run_node(&mut self, node_id: u64, mut cfg: Config, engine: Arc<DB>) -> u64 {
-        assert!(node_id == 0 || !self.handles.contains_key(&node_id));
-        assert!(node_id == 0 || !self.senders.contains_key(&node_id));
+        assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
+        assert!(node_id == 0 || !self.servers.contains_key(&node_id));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
@@ -106,16 +108,10 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str,
                                         Some(store_sendch),
                                         cfg.raft_store.use_sst_file_snapshot);
-        let server_chan = ServerChannel {
-            raft_router: sim_router.clone(),
-            snapshot_status_sender: snap_status_sender,
-        };
-        let mut server_event_loop = create_event_loop(&cfg).unwrap();
-        let sendch = SendCh::new(server_event_loop.channel(), "cluster-simulator");
-        let mut server = Server::new(&mut server_event_loop,
-                                     &cfg,
+        let mut server = Server::new(&cfg,
                                      store.clone(),
-                                     server_chan,
+                                     sim_router.clone(),
+                                     snap_status_sender,
                                      resolver,
                                      snap_mgr.clone())
             .unwrap();
@@ -140,15 +136,10 @@ impl Simulator for ServerCluster {
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
 
-        let t = Builder::new()
-            .name(thd_name!(format!("server-{}", node_id)))
-            .spawn(move || {
-                server.run(&mut server_event_loop).unwrap();
-            })
-            .unwrap();
+        server.start(&cfg).unwrap();
 
-        self.handles.insert(node_id, (node, t));
-        self.senders.insert(node_id, sendch);
+        self.nodes.insert(node_id, node);
+        self.servers.insert(node_id, server);
         self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
 
@@ -160,17 +151,15 @@ impl Simulator for ServerCluster {
     }
 
     fn stop_node(&mut self, node_id: u64) {
-        let (mut node, h) = self.handles.remove(&node_id).unwrap();
-        let ch = self.senders.remove(&node_id).unwrap();
-        let _ = self.store_chs.remove(&node_id).unwrap();
-
-        ch.try_send(Msg::Quit).unwrap();
+        let mut server = self.servers.remove(&node_id).unwrap();
+        server.stop().unwrap();
+        let mut node = self.nodes.remove(&node_id).unwrap();
         node.stop().unwrap();
-        h.join().unwrap();
+        let _ = self.store_chs.remove(&node_id).unwrap();
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {
-        self.senders.keys().cloned().collect()
+        self.nodes.keys().cloned().collect()
     }
 
     fn call_command_on_node(&self,

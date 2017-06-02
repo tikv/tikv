@@ -15,20 +15,15 @@
 #[cfg(unix)]
 mod imp {
     use std::sync::Arc;
-
     use rocksdb::DB;
-
-    use tikv::server::Msg;
-    use tikv::util::transport::SendCh;
     use prometheus::{self, Encoder, TextEncoder};
-
     use profiling;
 
     const ROCKSDB_DB_STATS_KEY: &'static str = "rocksdb.dbstats";
     const ROCKSDB_CF_STATS_KEY: &'static str = "rocksdb.cfstats";
 
     // TODO: remove backup_path from configuration
-    pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
+    pub fn handle_signal(engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
         use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
@@ -36,7 +31,6 @@ mod imp {
             match sig {
                 SIGTERM | SIGINT => {
                     info!("receive signal {}, stopping server...", sig);
-                    ch.send(Msg::Quit).unwrap();
                     break;
                 }
                 SIGUSR1 => {
