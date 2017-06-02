@@ -17,7 +17,7 @@ use super::transport_simulate::SimulateTransport;
 use super::util::*;
 use tikv::storage::ALL_CFS;
 use tikv::util::rocksdb;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use super::pd::{TestPdClient, bootstrap_with_first_region};
 use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
 use tikv::server::Node;
@@ -55,6 +55,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(),
                                     Some(node.get_sendch()),
                                     cfg.raft_store.use_sst_file_snapshot);
+    let (_, snapshot_status_receiver) = mpsc::channel();
 
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
@@ -69,7 +70,12 @@ fn test_node_bootstrap_with_prepared_data() {
         .is_some());
 
     // try to restart this node, will clear the prepare data
-    node.start(event_loop, engine.clone(), simulate_trans, snap_mgr).unwrap();
+    node.start(event_loop,
+               engine.clone(),
+               simulate_trans,
+               snap_mgr,
+               snapshot_status_receiver)
+        .unwrap();
     assert!(engine.clone()
         .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         .unwrap()

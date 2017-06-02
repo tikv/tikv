@@ -14,11 +14,9 @@
 use std::collections::{HashMap, HashSet};
 use std::thread::{self, Builder};
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 use std::boxed::FnBox;
-use std::net::TcpListener;
-use std::io::ErrorKind;
 
 use grpc::Environment;
 use rocksdb::DB;
@@ -73,11 +71,9 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, cfg: Config, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self, node_id: u64, mut cfg: Config, engine: Arc<DB>) -> u64 {
         assert!(node_id == 0 || !self.handles.contains_key(&node_id));
         assert!(node_id == 0 || !self.senders.contains_key(&node_id));
-
-        let mut cfg = cfg;
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
@@ -88,93 +84,75 @@ impl Simulator for ServerCluster {
         };
 
         // Now we cache the store address, so here we should re-use last
-        // listening address for the same store. Maybe we should enable
-        // reuse_socket?
+        // listening address for the same store.
         if let Some(addr) = self.addrs.get(&node_id) {
             cfg.addr = format!("{}", addr)
         }
 
-        let listener;
-        let mut try_cnt = 0;
-        loop {
-            match TcpListener::bind(&cfg.addr) {
-                Err(ref e) if e.kind() == ErrorKind::AddrInUse && try_cnt < 100 => {
-                    thread::sleep(Duration::from_millis(10))
-                }
-                Ok(l) => {
-                    listener = l;
-                    break;
-                }
-                Err(e) => panic!("unexpected error: {:?}", e),
-            }
-            try_cnt += 1;
-        }
-        let addr = listener.local_addr().unwrap();
-        cfg.addr = format!("{}", addr);
-        drop(listener);
+        // Initialize raftstore channels.
+        let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
+        let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
+        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
+        let sim_router = SimulateTransport::new(raft_router);
+        let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
-        // TODO: simplify creating raft server later.
-        let mut event_loop = create_event_loop(&cfg).unwrap();
-        let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
+        // Create storage.
+        let mut store = create_raft_storage(sim_router.clone(), engine.clone(), &cfg).unwrap();
+        store.start(&cfg.storage).unwrap();
+        self.storages.insert(node_id, store.get_engine());
+
+        // Create pd client, snapshot manager, server.
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
+        let snap_mgr = SnapManager::new(tmp_str,
+                                        Some(store_sendch),
+                                        cfg.raft_store.use_sst_file_snapshot);
+        let server_chan = ServerChannel {
+            raft_router: sim_router.clone(),
+            snapshot_status_sender: snap_status_sender,
+        };
         let env = Arc::new(Environment::new(cfg.grpc_concurrency));
         let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone())));
-        let trans = ServerTransport::new(sendch.clone(), raft_client.clone());
-
-        let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
-        let simulate_trans = SimulateTransport::new(trans.clone());
-        let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
-        let snap_mgr = SnapManager::new(tmp_str,
-                                        Some(node.get_sendch()),
-                                        cfg.raft_store.use_sst_file_snapshot);
-
-        node.start(store_event_loop,
-                   engine.clone(),
-                   simulate_trans.clone(),
-                   snap_mgr.clone())
+        let mut server_event_loop = create_event_loop(&cfg).unwrap();
+        let sendch = SendCh::new(server_event_loop.channel(), "cluster-simulator");
+        let mut server = Server::new(&mut server_event_loop,
+                                     &cfg,
+                                     env,
+                                     raft_client.clone(),
+                                     store.clone(),
+                                     server_chan,
+                                     resolver,
+                                     snap_mgr.clone())
             .unwrap();
-        let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
-        let sim_router = SimulateTransport::new(router);
+        let addr = server.listening_addr();
+        cfg.addr = format!("{}", addr);
+        let trans = ServerTransport::new(sendch.clone(), raft_client.clone());
+        let simulate_trans = SimulateTransport::new(trans.clone());
 
+        // Create node.
+        let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
+        node.start(event_loop,
+                   engine,
+                   simulate_trans.clone(),
+                   snap_mgr.clone(),
+                   snap_status_receiver)
+            .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
             self.snap_paths.insert(node_id, tmp);
         }
-
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
-
-        let mut store = create_raft_storage(sim_router.clone(), engine, &cfg).unwrap();
-        store.start(&cfg.storage).unwrap();
-        self.storages.insert(node_id, store.get_engine());
-
-        let server_chan = ServerChannel {
-            raft_router: sim_router.clone(),
-            snapshot_status_sender: node.get_snapshot_status_sender(),
-        };
-        let mut server = Server::new(&mut event_loop,
-                                     &cfg,
-                                     env,
-                                     raft_client,
-                                     store,
-                                     server_chan,
-                                     resolver,
-                                     snap_mgr)
-            .unwrap();
-
-        let ch = server.get_sendch();
-        let addr = server.listening_addr();
 
         let t = Builder::new()
             .name(thd_name!(format!("server-{}", node_id)))
             .spawn(move || {
-                server.run(&mut event_loop).unwrap();
+                server.run(&mut server_event_loop).unwrap();
             })
             .unwrap();
 
         self.handles.insert(node_id, (node, t));
-        self.senders.insert(node_id, ch);
+        self.senders.insert(node_id, sendch);
         self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
 

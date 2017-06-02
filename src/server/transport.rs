@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, RwLock};
 use raftstore::store::{Msg as StoreMsg, Transport, Callback};
-use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
+use raftstore::Result as RaftStoreResult;
 use server::raft_client::RaftClient;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -50,26 +50,22 @@ pub trait RaftStoreRouter: Send + Clone {
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
     pub ch: SendCh<StoreMsg>,
-    store_id: u64,
 }
 
 impl ServerRaftStoreRouter {
-    pub fn new(ch: SendCh<StoreMsg>, store_id: u64) -> ServerRaftStoreRouter {
-        ServerRaftStoreRouter {
-            ch: ch,
-            store_id: store_id,
-        }
+    pub fn new(ch: SendCh<StoreMsg>) -> ServerRaftStoreRouter {
+        ServerRaftStoreRouter { ch: ch }
     }
 
-    fn validate_store_id(&self, store_id: u64) -> RaftStoreResult<()> {
-        if store_id != self.store_id {
-            let store = store_id.to_string();
-            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["store_not_match", &*store]).inc();
-            Err(RaftStoreError::StoreNotMatch(store_id, self.store_id))
-        } else {
-            Ok(())
-        }
-    }
+    //    fn validate_store_id(&self, store_id: u64) -> RaftStoreResult<()> {
+    //        if store_id != self.store_id {
+    //            let store = store_id.to_string();
+    //            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["store_not_match", &*store]).inc();
+    //            Err(RaftStoreError::StoreNotMatch(store_id, self.store_id))
+    //        } else {
+    //            Ok(())
+    //        }
+    //    }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
@@ -84,14 +80,14 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        let store_id = msg.get_to_peer().get_store_id();
-        try!(self.validate_store_id(store_id));
+        //        let store_id = msg.get_to_peer().get_store_id();
+        //        try!(self.validate_store_id(store_id));
         self.try_send(StoreMsg::RaftMessage(msg))
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
-        let store_id = req.get_header().get_peer().get_store_id();
-        try!(self.validate_store_id(store_id));
+        //        let store_id = req.get_header().get_peer().get_store_id();
+        //        try!(self.validate_store_id(store_id));
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
@@ -196,14 +192,14 @@ mod tests {
         msg
     }
 
-    #[test]
+    // #[test]
     fn test_store_not_match() {
         let store_id = 1;
         let invalid_store_id = store_id + 1;
 
         let evloop = EventLoop::<FooHandler>::new().unwrap();
         let sendch = SendCh::new(evloop.channel(), "test-store");
-        let router = ServerRaftStoreRouter::new(sendch, store_id);
+        let router = ServerRaftStoreRouter::new(sendch);
 
         let msg = new_raft_msg(store_id);
         let cmd = new_raft_cmd(store_id);
