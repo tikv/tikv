@@ -2495,4 +2495,32 @@ mod test {
 
         v2::test::assert_eq_db(db, dst_db.as_ref());
     }
+
+    #[test]
+    fn test_snap_reference() {
+        test_snap_reference_impl(false);
+        test_snap_reference_impl(true);
+    }
+
+    fn test_snap_reference_impl(use_sst_file_snapshot: bool) {
+        let temp_dir = TempDir::new("test-snap-reference").unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_owned();
+        let mgr = SnapManager::new(path.clone(), None, use_sst_file_snapshot);
+        mgr.init().unwrap();
+
+        let key1 = SnapKey::new(1, 1, 1);
+        let size_track = Arc::new(RwLock::new(0));
+        {
+            let mut s1 =
+                SnapV1::new_for_writing(&path, mgr.clone(), true, &key1, size_track.clone())
+                    .unwrap();
+            let test_data = b"test_data";
+            s1.write_all(test_data).unwrap();
+            s1.save_with_checksum().unwrap();
+            let idle_snap_keys = mgr.list_idle_snap().unwrap();
+            assert!(idle_snap_keys.is_empty());
+        }
+        let idle_snap_keys = mgr.list_idle_snap().unwrap();
+        assert_eq!(idle_snap_keys.len(), 1);
+    }
 }
