@@ -828,8 +828,7 @@ mod v2 {
                                  mgr: SnapManager,
                                  key: &SnapKey,
                                  size_track: Arc<RwLock<u64>>,
-                                 is_sending: bool,
-                                 to_build: bool)
+                                 is_sending: bool)
                                  -> RaftStoreResult<Snap> {
             let dir_path = dir.into();
             if !dir_path.exists() {
@@ -883,13 +882,10 @@ mod v2 {
             // load snapshot meta if meta_file exists
             if file_exists(&s.meta_file.path) {
                 if let Err(e) = s.load_snapshot_meta() {
-                    if !to_build {
-                        return Err(e);
-                    }
                     warn!("failed to load existent snapshot meta when try to build {}: {:?}",
                           s.path(),
                           e);
-                    s.delete();
+                    return Err(e);
                 }
             }
             Ok(s)
@@ -901,7 +897,7 @@ mod v2 {
                                                   size_track: Arc<RwLock<u64>>,
                                                   snap: &DbSnapshot)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, mgr, key, size_track, true, true));
+            let mut s = try!(Snap::new(dir, mgr, key, size_track, true));
             try!(s.init_for_building(snap));
             Ok(s)
         }
@@ -911,7 +907,7 @@ mod v2 {
                                                  key: &SnapKey,
                                                  size_track: Arc<RwLock<u64>>)
                                                  -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, mgr, key, size_track, true, false));
+            let mut s = try!(Snap::new(dir, mgr, key, size_track, true));
 
             if !s.exists() {
                 // Skip the initialization below if it doesn't exists.
@@ -933,7 +929,7 @@ mod v2 {
                                                    size_track: Arc<RwLock<u64>>,
                                                    snapshot_meta: SnapshotMeta)
                                                    -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, mgr, key, size_track, false, false));
+            let mut s = try!(Snap::new(dir, mgr, key, size_track, false));
             try!(s.set_snapshot_meta(snapshot_meta));
 
             if s.exists() {
@@ -961,7 +957,7 @@ mod v2 {
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let s = try!(Snap::new(dir, mgr, key, size_track, false, false));
+            let s = try!(Snap::new(dir, mgr, key, size_track, false));
             Ok(s)
         }
 
@@ -1130,17 +1126,14 @@ mod v2 {
                     stat: &mut SnapshotStatistics)
                     -> RaftStoreResult<()> {
             if self.exists() {
-                match self.validate() {
-                    Ok(()) => return Ok(()),
-                    Err(e) => {
-                        warn!("[region {}] file {} is invalid, will rebuild: {:?}",
-                              region.get_id(),
-                              self.path(),
-                              e);
-                        self.delete();
-                        try!(self.init_for_building(snap));
-                    }
+                let r = self.validate();
+                if let Err(ref e) = r {
+                    warn!("[region {}] file {} is invalid, will rebuild: {:?}",
+                          region.get_id(),
+                          self.path(),
+                          e);
                 }
+                return r;
             }
 
             let mut snap_key_count = 0;
