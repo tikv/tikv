@@ -223,7 +223,7 @@ stats-dump-period-sec = 600
 #   zstd:   kZSTD
 
 # per level compression
-compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
 
 # Approximate size of user data packed per block.  Note that the
 # block size specified here corresponds to uncompressed data.
@@ -237,6 +237,8 @@ compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
 
 # false means one sst file one bloom filter, true means evry block has a corresponding bloom filter
 # block-based-bloom-filter = false
+
+# level0-file-num-compaction-trigger = 4
 
 # Soft limit on number of level-0 files. We start slowing down writes at this point.
 # level0-slowdown-writes-trigger = 20
@@ -256,7 +258,7 @@ compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
 # min-write-buffer-number-to-merge = 1
 
 # Control maximum total data size for base level (level 1).
-max-bytes-for-level-base = "512MB"
+# max-bytes-for-level-base = "512MB"
 
 # Target file size for compaction.
 # target-file-size-base = "32MB"
@@ -270,34 +272,42 @@ max-bytes-for-level-base = "512MB"
 # during table initialization.
 # cache-index-and-filter-blocks = true
 
-# options for Column Family write
+# Options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
-compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
-block-size = "64KB"
-write-buffer-size = "128MB"
-max-write-buffer-number = 5
-min-write-buffer-number-to-merge = 1
-max-bytes-for-level-base = "512MB"
-target-file-size-base = "32MB"
+# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+# block-size = "64KB"
+# write-buffer-size = "128MB"
+# max-write-buffer-number = 5
+# min-write-buffer-number-to-merge = 1
+# max-bytes-for-level-base = "512MB"
+# target-file-size-base = "32MB"
 
 # in normal cases should tune to 10%-30% system's total memory.
 # block-cache-size = "256MB"
-
+# cache-index-and-filter-blocks = true
+# level0-file-num-compaction-trigger = 4
+# level0-slowdown-writes-trigger = 20
+# level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 
 # options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.
 [rocksdb.raftcf]
-compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
-block-size = "64KB"
-write-buffer-size = "128MB"
-max-write-buffer-number = 5
-min-write-buffer-number-to-merge = 1
-max-bytes-for-level-base = "512MB"
-target-file-size-base = "32MB"
+# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+# block-size = "64KB"
+# write-buffer-size = "128MB"
+# max-write-buffer-number = 5
+# min-write-buffer-number-to-merge = 1
+# max-bytes-for-level-base = "512MB"
+# target-file-size-base = "32MB"
+
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"
+# level0-file-num-compaction-trigger = 4
+# level0-slowdown-writes-trigger = 20
+# level0-stop-writes-trigger = 36
+# cache-index-and-filter-blocks = true
 
 [rocksdb.lockcf]
 # compression-per-level = "no:no:no:no:no:no:no"
@@ -308,6 +318,10 @@ target-file-size-base = "32MB"
 # max-bytes-for-level-base = "128MB"
 # target-file-size-base = "32MB"
 # block-cache-size = "256MB"
+# level0-file-num-compaction-trigger = 1
+# level0-slowdown-writes-trigger = 20
+# level0-stop-writes-trigger = 36
+# cache-index-and-filter-blocks = true
 
 [storage]
 # notify capacity of scheduler's channel
