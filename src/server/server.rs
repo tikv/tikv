@@ -144,7 +144,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
     use std::sync::{Arc, Mutex};
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
@@ -237,7 +236,7 @@ mod tests {
             }
             assert_eq!(report_unreachable_count.load(Ordering::SeqCst), (i + 1) / 2);
         }
-        trans.send(RaftMessage::new());
+        trans.send(RaftMessage::new()).unwrap();
         rx.recv().unwrap();
         server.stop().unwrap();
     }

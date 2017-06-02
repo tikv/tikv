@@ -636,6 +636,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
+        let store_id = msg.get_to_peer().get_store_id();
+        if store_id != self.store_id() {
+            return Err(Error::StoreNotMatch(store_id, self.store_id()));
+        }
+
         let region_id = msg.get_region_id();
         if !self.is_raft_msg_valid(&msg) {
             return Ok(());
