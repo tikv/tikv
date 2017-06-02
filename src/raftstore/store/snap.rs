@@ -617,7 +617,7 @@ mod v1 {
         use std::fs::OpenOptions;
         use tempdir::TempDir;
         use util::HandyRwLock;
-        use super::super::{SnapKey, Snapshot};
+        use super::super::{SnapKey, Snapshot, SnapManager};
         use super::Snap;
 
         #[test]
@@ -626,12 +626,15 @@ mod v1 {
             let str = dir.path().to_str().unwrap().to_owned() + "/snap1";
             let path = Path::new(&str);
             assert!(!path.exists());
+            let mgr = SnapManager::new(str.clone(), None, false);
             let key = SnapKey::new(1, 1, 1);
             let test_data = b"test_data";
             let exp_len = (test_data.len() + super::CRC32_BYTES_COUNT) as u64;
             let size_track = Arc::new(RwLock::new(0));
-            let mut f1 = Snap::new_for_writing(&path, size_track.clone(), true, &key).unwrap();
-            let mut f2 = Snap::new_for_writing(&path, size_track.clone(), false, &key).unwrap();
+            let mut f1 = Snap::new_for_writing(&path, mgr.clone(), true, &key, size_track.clone())
+                .unwrap();
+            let mut f2 = Snap::new_for_writing(&path, mgr.clone(), false, &key, size_track.clone())
+                .unwrap();
             assert!(!f1.exists());
             assert!(Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
             assert!(!f2.exists());
@@ -643,8 +646,11 @@ mod v1 {
             assert!(!f2.exists());
             assert!(Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
             let key2 = SnapKey::new(2, 1, 1);
-            let mut f3 = Snap::new_for_writing(&path, size_track.clone(), true, &key2).unwrap();
-            let mut f4 = Snap::new_for_writing(&path, size_track.clone(), false, &key2).unwrap();
+            let mut f3 = Snap::new_for_writing(&path, mgr.clone(), true, &key2, size_track.clone())
+                .unwrap();
+            let mut f4 =
+                Snap::new_for_writing(&path, mgr.clone(), false, &key2, size_track.clone())
+                    .unwrap();
             f3.write_all(test_data).unwrap();
             f4.write_all(test_data).unwrap();
             assert_eq!(*size_track.rl(), 0);
@@ -660,9 +666,11 @@ mod v1 {
             let path = TempDir::new("test-snap-mgr").unwrap();
             let path_str = path.path().to_str().unwrap();
 
+            let mgr = SnapManager::new(path_str, None, false);
             let key1 = SnapKey::new(1, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut f1 = Snap::new_for_writing(path_str, size_track.clone(), false, &key1).unwrap();
+            let mut f1 = Snap::new_for_writing(path_str, mgr, false, &key1, size_track.clone())
+                .unwrap();
             f1.write_all(b"testdata").unwrap();
             f1.save_with_checksum().unwrap();
             let mut reader = f1.get_validation_reader().unwrap();
@@ -1423,7 +1431,7 @@ mod v2 {
         use raftstore::store::keys;
         use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable, Iterable};
         use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-        use super::super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SnapKey, Snapshot};
+        use super::super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SnapKey, Snapshot, SnapManager};
         use super::{META_FILE_SUFFIX, Snap, SnapshotStatistics, ApplyOptions};
 
         const TEST_STORE_ID: u64 = 1;
@@ -1567,11 +1575,15 @@ mod v2 {
             let snapshot = DbSnapshot::new(db.clone());
 
             let src_dir = TempDir::new("test-snap-file-src").unwrap();
+            let mgr = SnapManager::new(src_dir.path().to_str().unwrap(), None, true);
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 =
-                Snap::new_for_building(src_dir.path(), &key, &snapshot, size_track.clone())
-                    .unwrap();
+            let mut s1 = Snap::new_for_building(src_dir.path(),
+                                                mgr.clone(),
+                                                &key,
+                                                size_track.clone(),
+                                                &snapshot)
+                .unwrap();
             // Ensure that this snapshot file doesn't exist before being built.
             assert!(!s1.exists());
             assert_eq!(*size_track.rl(), 0);
@@ -1591,7 +1603,9 @@ mod v2 {
             assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
             // Ensure this snapshot could be read for sending.
-            let mut s2 = Snap::new_for_sending(src_dir.path(), &key, size_track.clone()).unwrap();
+            let mut s2 =
+                Snap::new_for_sending(src_dir.path(), mgr.clone(), &key, size_track.clone())
+                    .unwrap();
             assert!(s2.exists());
 
             // TODO check meta data correct.
@@ -1600,9 +1614,10 @@ mod v2 {
             let dst_dir = TempDir::new("test-snap-file-dst").unwrap();
 
             let mut s3 = Snap::new_for_receiving(dst_dir.path(),
+                                                 mgr.clone(),
                                                  &key,
-                                                 snap_data.take_meta(),
-                                                 size_track.clone())
+                                                 size_track.clone(),
+                                                 snap_data.take_meta())
                 .unwrap();
             assert!(!s3.exists());
 
@@ -1623,7 +1638,9 @@ mod v2 {
             assert_eq!(*size_track.rl(), size);
 
             // Ensure a snapshot could be applied to DB.
-            let mut s4 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).unwrap();
+            let mut s4 =
+                Snap::new_for_applying(dst_dir.path(), mgr.clone(), &key, size_track.clone())
+                    .unwrap();
             assert!(s4.exists());
 
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
@@ -1668,9 +1685,14 @@ mod v2 {
             let snapshot = DbSnapshot::new(db.clone());
 
             let dir = TempDir::new("test-snap-validation").unwrap();
+            let mgr = SnapManager::new(dir.path().to_str().unwrap(), None, true);
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let mut s1 = Snap::new_for_building(dir.path(),
+                                                mgr.clone(),
+                                                &key,
+                                                size_track.clone(),
+                                                &snapshot)
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1680,8 +1702,9 @@ mod v2 {
             s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s1.exists());
 
-            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
-                .unwrap();
+            let mut s2 =
+                Snap::new_for_building(dir.path(), mgr, &key, size_track.clone(), &snapshot)
+                    .unwrap();
             assert!(s2.exists());
 
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
@@ -1774,14 +1797,17 @@ mod v2 {
 
         fn copy_snapshot(from_dir: &TempDir,
                          to_dir: &TempDir,
+                         mgr: SnapManager,
                          key: &SnapKey,
                          size_track: Arc<RwLock<u64>>,
                          snapshot_meta: SnapshotMeta) {
-            let mut from = Snap::new_for_sending(from_dir.path(), key, size_track.clone()).unwrap();
+            let mut from =
+                Snap::new_for_sending(from_dir.path(), mgr.clone(), key, size_track.clone())
+                    .unwrap();
             assert!(from.exists());
 
             let mut to =
-                Snap::new_for_receiving(to_dir.path(), key, snapshot_meta, size_track.clone())
+                Snap::new_for_receiving(to_dir.path(), mgr, key, size_track.clone(), snapshot_meta)
                     .unwrap();
 
             assert!(!to.exists());
@@ -1799,9 +1825,14 @@ mod v2 {
             let snapshot = DbSnapshot::new(db);
 
             let dir = TempDir::new("test-snap-corruption").unwrap();
+            let mgr = SnapManager::new(dir.path().to_str().to_owned().unwrap(), None, true);
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let mut s1 = Snap::new_for_building(dir.path(),
+                                                mgr.clone(),
+                                                &key,
+                                                size_track.clone(),
+                                                &snapshot)
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1813,9 +1844,14 @@ mod v2 {
 
             corrupt_snapshot_size_in(dir.path());
 
-            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_sending(dir.path(), mgr.clone(), &key, size_track.clone())
+                .is_err());
 
-            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let mut s2 = Snap::new_for_building(dir.path(),
+                                                mgr.clone(),
+                                                &key,
+                                                size_track.clone(),
+                                                &snapshot)
                 .unwrap();
             assert!(!s2.exists());
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
@@ -1824,6 +1860,7 @@ mod v2 {
             let dst_dir = TempDir::new("test-snap-corruption-dst").unwrap();
             copy_snapshot(&dir,
                           &dst_dir,
+                          mgr.clone(),
                           &key,
                           size_track.clone(),
                           snap_data.get_meta().clone());
@@ -1832,7 +1869,9 @@ mod v2 {
             assert_eq!(1, metas.len());
             let snap_meta = metas.pop().unwrap();
 
-            let mut s5 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).unwrap();
+            let mut s5 =
+                Snap::new_for_applying(dst_dir.path(), mgr.clone(), &key, size_track.clone())
+                    .unwrap();
             assert!(s5.exists());
 
             let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
@@ -1846,9 +1885,13 @@ mod v2 {
             assert!(s5.apply(options).is_err());
 
             corrupt_snapshot_size_in(dst_dir.path());
-            assert!(Snap::new_for_receiving(dst_dir.path(), &key, snap_meta, size_track.clone())
+            assert!(Snap::new_for_receiving(dst_dir.path(),
+                                            mgr.clone(),
+                                            &key,
+                                            size_track.clone(),
+                                            snap_meta)
                 .is_err());
-            assert!(Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_applying(dst_dir.path(), mgr, &key, size_track.clone()).is_err());
         }
 
         #[test]
@@ -1860,9 +1903,14 @@ mod v2 {
             let snapshot = DbSnapshot::new(db);
 
             let dir = TempDir::new("test-snap-corruption-meta").unwrap();
+            let mgr = SnapManager::new(dir.path().to_str().to_owned().unwrap(), None, true);
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let mut s1 = Snap::new_for_building(dir.path(),
+                                                mgr.clone(),
+                                                &key,
+                                                size_track.clone(),
+                                                &snapshot)
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1874,8 +1922,13 @@ mod v2 {
 
             assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone()).is_err());
-            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            assert!(Snap::new_for_sending(dir.path(), mgr.clone(), &key, size_track.clone())
+                .is_err());
+            let mut s2 = Snap::new_for_building(dir.path(),
+                                                mgr.clone(),
+                                                &key,
+                                                size_track.clone(),
+                                                &snapshot)
                 .unwrap();
 
             assert!(!s2.exists());
@@ -1885,17 +1938,20 @@ mod v2 {
             let dst_dir = TempDir::new("test-snap-corruption-meta-dst").unwrap();
             copy_snapshot(&dir,
                           &dst_dir,
+                          mgr.clone(),
                           &key,
                           size_track.clone(),
                           snap_data.get_meta().clone());
 
             assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-            assert!(Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_applying(dst_dir.path(), mgr.clone(), &key, size_track.clone())
+                .is_err());
             assert!(Snap::new_for_receiving(dst_dir.path(),
+                                            mgr,
                                             &key,
-                                            snap_data.take_meta(),
-                                            size_track.clone())
+                                            size_track.clone(),
+                                            snap_data.take_meta())
                 .is_err());
         }
     }
@@ -2289,18 +2345,21 @@ mod test {
 
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let mut s1 = SnapV1::new_for_writing(&path, size_track.clone(), true, &key1).unwrap();
+        let mut s1 = SnapV1::new_for_writing(&path, mgr.clone(), true, &key1, size_track.clone())
+            .unwrap();
         let test_data = b"test_data";
         let expected_size = (test_data.len() + CRC32_BYTES_COUNT) as u64;
         s1.write_all(test_data).unwrap();
         s1.save_with_checksum().unwrap();
-        let mut s2 = SnapV1::new_for_writing(&path, size_track.clone(), false, &key1).unwrap();
+        let mut s2 = SnapV1::new_for_writing(&path, mgr.clone(), false, &key1, size_track.clone())
+            .unwrap();
         s2.write_all(test_data).unwrap();
         s2.save_with_checksum().unwrap();
 
         let key2 = SnapKey::new(2, 1, 1);
-        let s3 = SnapV1::new_for_writing(&path, size_track.clone(), true, &key2).unwrap();
-        let s4 = SnapV1::new_for_writing(&path, size_track.clone(), false, &key2).unwrap();
+        let s3 = SnapV1::new_for_writing(&path, mgr.clone(), true, &key2, size_track.clone())
+            .unwrap();
+        let s4 = SnapV1::new_for_writing(&path, mgr, false, &key2, size_track.clone()).unwrap();
 
         assert!(s1.exists());
         assert!(s2.exists());
@@ -2336,18 +2395,21 @@ mod test {
         let snapshot = DbSnapshot::new(v2::test::get_test_db(&db_dir).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let mut s1 = SnapV2::new_for_building(&path, &key1, &snapshot, size_track.clone()).unwrap();
+        let mut s1 =
+            SnapV2::new_for_building(&path, mgr.clone(), &key1, size_track.clone(), &snapshot)
+                .unwrap();
         let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
-        let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone()).unwrap();
+        let mut s = SnapV2::new_for_sending(&path, mgr.clone(), &key1, size_track.clone()).unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = SnapV2::new_for_receiving(&path,
+                                               mgr.clone(),
                                                &key1,
-                                               snap_data.get_meta().clone(),
-                                               size_track.clone())
+                                               size_track.clone(),
+                                               snap_data.get_meta().clone())
             .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
         assert_eq!(n, expected_size);
@@ -2356,9 +2418,11 @@ mod test {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 = SnapV2::new_for_building(&path, &key2, &snapshot, size_track.clone()).unwrap();
-        let s4 = SnapV2::new_for_receiving(&path, &key2, snap_data.take_meta(), size_track.clone())
+        let s3 = SnapV2::new_for_building(&path, mgr.clone(), &key2, size_track.clone(), &snapshot)
             .unwrap();
+        let s4 =
+            SnapV2::new_for_receiving(&path, mgr, &key2, size_track.clone(), snap_data.take_meta())
+                .unwrap();
 
         assert!(s1.exists());
         assert!(s2.exists());
