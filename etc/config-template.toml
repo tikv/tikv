@@ -66,11 +66,12 @@ pd-store-heartbeat-tick-interval = "10s"
 # When the region's size exceeds region-max-size, we will split the region
 # into two which the left region's size will be region-split-size or a little
 # bit smaller.
-region-max-size = "80MB"
-region-split-size = "64MB"
+region-max-size = "144MB"
+region-split-size = "96MB"
 # When region size changes exceeds region-split-check-diff, we should check
 # whether the region should be split or not.
-region-split-check-diff = "8MB"
+region-split-check-diff = "12MB"
+
 # Interval to check region whether need to be split or not.
 split-region-check-tick-interval = "5s"
 
@@ -201,6 +202,12 @@ stats-dump-period-sec = 600
 # least 2MB;
 # compaction-readahead-size = 0
 
+# This is the maximum buffer size that is used by WritableFileWrite
+# writable-file-max-buffer-size = "1MB"
+
+# Use O_DIRECT for both reads and writes in background flush and compactions
+# use-direct-io-for-flush-and-compaction = false
+
 # Limit the disk IO of compaction and flush.
 # rate-bytes-per-sec = 0
 
@@ -216,7 +223,7 @@ stats-dump-period-sec = 600
 #   zstd:   kZSTD
 
 # per level compression
-# compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
+compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
 
 # Approximate size of user data packed per block.  Note that the
 # block size specified here corresponds to uncompressed data.
@@ -249,7 +256,7 @@ stats-dump-period-sec = 600
 # min-write-buffer-number-to-merge = 1
 
 # Control maximum total data size for base level (level 1).
-# max-bytes-for-level-base = "128MB"
+max-bytes-for-level-base = "512MB"
 
 # Target file size for compaction.
 # target-file-size-base = "32MB"
@@ -266,13 +273,13 @@ stats-dump-period-sec = 600
 # options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
-# compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
-# block-size = "64KB"
-# write-buffer-size = "128MB"
-# max-write-buffer-number = 5
-# min-write-buffer-number-to-merge = 1
-# max-bytes-for-level-base = "128MB"
-# target-file-size-base = "32MB"
+compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+block-size = "64KB"
+write-buffer-size = "128MB"
+max-write-buffer-number = 5
+min-write-buffer-number-to-merge = 1
+max-bytes-for-level-base = "512MB"
+target-file-size-base = "32MB"
 
 # in normal cases should tune to 10%-30% system's total memory.
 # block-cache-size = "256MB"
@@ -282,13 +289,13 @@ stats-dump-period-sec = 600
 # options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.
 [rocksdb.raftcf]
-# compression-per-level = "lz4:lz4:lz4:lz4:lz4:lz4:lz4"
-# block-size = "64KB"
-# write-buffer-size = "128MB"
-# max-write-buffer-number = 5
-# min-write-buffer-number-to-merge = 1
-# max-bytes-for-level-base = "128MB"
-# target-file-size-base = "32MB"
+compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+block-size = "64KB"
+write-buffer-size = "128MB"
+max-write-buffer-number = 5
+min-write-buffer-number-to-merge = 1
+max-bytes-for-level-base = "512MB"
+target-file-size-base = "32MB"
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"
 

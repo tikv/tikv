@@ -101,13 +101,13 @@ impl<'a> MvccReader<'a> {
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
-            match try!(cursor.get(&key, self.statistics)) {
+            match try!(cursor.get(key, self.statistics)) {
                 Some(v) => Some(try!(Lock::parse(v))),
                 None => None,
             }
         } else {
             self.statistics.get += 1;
-            match try!(self.snapshot.get_cf(CF_LOCK, &key)) {
+            match try!(self.snapshot.get_cf(CF_LOCK, key)) {
                 Some(v) => Some(try!(Lock::parse(&v))),
                 None => None,
             }

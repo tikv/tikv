@@ -110,7 +110,7 @@ impl<'a> MvccTxn<'a> {
                     -> Result<()> {
         let key = mutation.key();
         if !options.skip_constraint_check {
-            if let Some((commit, _)) = try!(self.reader.seek_write(&key, u64::max_value())) {
+            if let Some((commit, _)) = try!(self.reader.seek_write(key, u64::max_value())) {
                 // Abort on writes after our start timestamp ...
                 if commit >= self.start_ts {
                     return Err(Error::WriteConflict);
@@ -118,7 +118,7 @@ impl<'a> MvccTxn<'a> {
             }
         }
         // ... or locks at any timestamp.
-        if let Some(lock) = try!(self.reader.load_lock(&key)) {
+        if let Some(lock) = try!(self.reader.load_lock(key)) {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
                     key: try!(key.raw()),
