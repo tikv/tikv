@@ -1846,6 +1846,13 @@ mod v2 {
 
             assert!(Snap::new_for_sending(dir.path(), mgr.clone(), &key, size_track.clone())
                 .is_err());
+            assert!(Snap::new_for_building(dir.path(),
+                                           mgr.clone(),
+                                           &key,
+                                           size_track.clone(),
+                                           &snapshot)
+                .is_err());
+            s1.delete();
 
             let mut s2 = Snap::new_for_building(dir.path(),
                                                 mgr.clone(),
@@ -1924,13 +1931,20 @@ mod v2 {
 
             assert!(Snap::new_for_sending(dir.path(), mgr.clone(), &key, size_track.clone())
                 .is_err());
+            assert!(Snap::new_for_building(dir.path(),
+                                           mgr.clone(),
+                                           &key,
+                                           size_track.clone(),
+                                           &snapshot)
+                .is_err());
+            s1.delete();
+
             let mut s2 = Snap::new_for_building(dir.path(),
                                                 mgr.clone(),
                                                 &key,
                                                 size_track.clone(),
                                                 &snapshot)
                 .unwrap();
-
             assert!(!s2.exists());
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s2.exists());
@@ -2104,37 +2118,30 @@ impl SnapManager {
                                      key: &SnapKey,
                                      snap: &DbSnapshot)
                                      -> RaftStoreResult<Box<Snapshot>> {
-        let core = self.core.rl();
-        if core.use_sst_file_snapshot {
-            let f = try!(v2::Snap::new_for_building(&core.base,
-                                                    self.clone(),
-                                                    key,
-                                                    core.snap_size.clone(),
-                                                    snap));
+        let (use_sst_file_snapshot, dir, snap_size) = {
+            let core = self.core.rl();
+            (core.use_sst_file_snapshot, core.base.clone(), core.snap_size.clone())
+        };
+        if use_sst_file_snapshot {
+            let f = try!(v2::Snap::new_for_building(&dir, self.clone(), key, snap_size, snap));
             Ok(Box::new(f))
         } else {
-            let f = try!(v1::Snap::new_for_writing(&core.base,
-                                                   self.clone(),
-                                                   true,
-                                                   key,
-                                                   core.snap_size.clone()));
+            let f = try!(v1::Snap::new_for_writing(&dir, self.clone(), true, key, snap_size));
             Ok(Box::new(f))
         }
     }
 
     pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
-        let core = self.core.rl();
-        if let Ok(s) = v1::Snap::new_for_reading(&core.base,
-                                                 self.clone(),
-                                                 true,
-                                                 key,
-                                                 core.snap_size.clone()) {
+        let (dir, snap_size) = {
+            let core = self.core.rl();
+            (core.base.clone(), core.snap_size.clone())
+        };
+        if let Ok(s) = v1::Snap::new_for_reading(&dir, self.clone(), true, key, snap_size.clone()) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
         }
-        let s =
-            try!(v2::Snap::new_for_sending(&core.base, self.clone(), key, core.snap_size.clone()));
+        let s = try!(v2::Snap::new_for_sending(&dir, self.clone(), key, snap_size));
         Ok(Box::new(s))
     }
 
@@ -2142,41 +2149,36 @@ impl SnapManager {
                                       key: &SnapKey,
                                       data: &[u8])
                                       -> RaftStoreResult<Box<Snapshot>> {
-        let core = self.core.rl();
+        let (dir, snap_size) = {
+            let core = self.core.rl();
+            (core.base.clone(), core.snap_size.clone())
+        };
         let mut snapshot_data = RaftSnapshotData::new();
         try!(snapshot_data.merge_from_bytes(data));
         if snapshot_data.get_version() == v2::SNAPSHOT_VERSION {
-            let f = try!(v2::Snap::new_for_receiving(&core.base,
+            let f = try!(v2::Snap::new_for_receiving(&dir,
                                                      self.clone(),
                                                      key,
-                                                     core.snap_size.clone(),
+                                                     snap_size,
                                                      snapshot_data.take_meta()));
             Ok(Box::new(f))
         } else {
-            let f = try!(v1::Snap::new_for_writing(&core.base,
-                                                   self.clone(),
-                                                   false,
-                                                   key,
-                                                   core.snap_size.clone()));
+            let f = try!(v1::Snap::new_for_writing(&dir, self.clone(), false, key, snap_size));
             Ok(Box::new(f))
         }
     }
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
-        let core = self.core.rl();
-        if let Ok(s) = v2::Snap::new_for_applying(&core.base,
-                                                  self.clone(),
-                                                  key,
-                                                  core.snap_size.clone()) {
+        let (dir, snap_size) = {
+            let core = self.core.rl();
+            (core.base.clone(), core.snap_size.clone())
+        };
+        if let Ok(s) = v2::Snap::new_for_applying(&dir, self.clone(), key, snap_size.clone()) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
         }
-        let s = try!(v1::Snap::new_for_reading(&core.base,
-                                               self.clone(),
-                                               false,
-                                               key,
-                                               core.snap_size.clone()));
+        let s = try!(v1::Snap::new_for_reading(&dir, self.clone(), false, key, snap_size));
         Ok(Box::new(s))
     }
 
