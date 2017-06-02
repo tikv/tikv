@@ -211,7 +211,7 @@ pub struct Peer {
     pub tag: String,
 
     // Index of last scheduled committed raft log.
-    pub last_ready_idx: u64,
+    pub last_applying_idx: u64,
     pub last_compacted_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
@@ -326,7 +326,7 @@ impl Peer {
             marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
-            last_ready_idx: applied_index,
+            last_applying_idx: applied_index,
             last_compacted_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
@@ -620,7 +620,7 @@ impl Peer {
         // a stale heartbeat can make the leader think follower has already applied
         // the snapshot, and send remaining log entries, which may increase committed_index.
         // TODO: add more test
-        self.last_ready_idx == self.get_store().applied_index()
+        self.last_applying_idx == self.get_store().applied_index()
     }
 
     #[inline]
@@ -647,20 +647,20 @@ impl Peer {
         }
 
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
-            debug!("{} [apply_idx: {}, last_ready_idx: {}] is not ready to apply snapshot.",
+            debug!("{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
                    self.tag,
                    self.get_store().applied_index(),
-                   self.last_ready_idx);
+                   self.last_applying_idx);
             return;
         }
 
-        if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
+        if !self.raft_group.has_ready_since(Some(self.last_applying_idx)) {
             return;
         }
 
         debug!("{} handle raft ready", self.tag);
 
-        let mut ready = self.raft_group.ready_since(self.last_ready_idx);
+        let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
         self.on_role_changed(&ready, worker);
 
@@ -725,7 +725,7 @@ impl Peer {
         // in `ready.committed_entries` again, which will lead to inconsistency.
         if self.is_applying_snapshot() {
             // Snapshot's metadata has been applied.
-            self.last_ready_idx = self.get_store().truncated_index();
+            self.last_applying_idx = self.get_store().truncated_index();
         } else {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease.
@@ -745,7 +745,7 @@ impl Peer {
                 }
             }
             if !committed_entries.is_empty() {
-                self.last_ready_idx = committed_entries.last().unwrap().get_index();
+                self.last_applying_idx = committed_entries.last().unwrap().get_index();
                 apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
@@ -756,7 +756,7 @@ impl Peer {
         if self.is_applying_snapshot() {
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
-            self.raft_group.advance_apply(self.last_ready_idx);
+            self.raft_group.advance_apply(self.last_applying_idx);
         }
     }
 
