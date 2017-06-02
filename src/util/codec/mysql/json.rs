@@ -16,9 +16,9 @@ use std::{str, f64};
 use std::collections::BTreeMap;
 use std::result::Result as SResult;
 use serde_json::{self, Value};
+use std::io::Write;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 use serde::ser::{Serialize, Serializer, SerializeTuple, SerializeMap};
-use std::io::Write;
 
 const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
@@ -398,7 +398,8 @@ mod test {
 
     #[test]
     fn test_json_serialize() {
-        let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0], "b": true}"#;
+        let jstr1 =
+            r#"{"aaaaaaaaaaa": [1, "2", {"aa": "bb"}, 4.0], "bbbbbbbbbb": true, "ccccccccc": "d"}"#;
         let j1 = Json::parse_from_string(jstr1).unwrap();
         let jstr2 = r#"[{"a": 1, "b": true}, 3, 3.5, "hello, world", null, true]"#;
         let j2 = Json::parse_from_string(jstr2).unwrap();
