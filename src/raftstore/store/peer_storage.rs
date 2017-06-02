@@ -341,7 +341,7 @@ impl PeerStorage {
             }
             return Ok(ents);
         }
-        
+
         let start_key = keys::raft_log_key(self.get_region_id(), low);
         let end_key = keys::raft_log_key(self.get_region_id(), high);
         try!(self.engine.scan_cf(CF_RAFT,
