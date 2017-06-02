@@ -130,7 +130,7 @@ impl Transport for ServerTransport {
         if !msg.get_message().has_snapshot() {
             let addr = self.raft_client.rl().addrs.get(&to_store_id).map(|x| x.to_owned());
             if let Some(addr) = addr {
-                if let Err(e) = self.raft_client.wl().send(to_store_id, addr.to_owned(), msg) {
+                if let Err(e) = self.raft_client.wl().send(to_store_id, addr, msg) {
                     error!("send raft msg err {:?}", e);
                 }
                 return Ok(());
