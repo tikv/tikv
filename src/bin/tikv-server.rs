@@ -581,14 +581,7 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     default_values.compression_per_level = String::from("no:no:no:no:no:no:no");
     default_values.level_zero_file_num_compaction_trigger = 1;
 
-    let mut opts = get_rocksdb_cf_option(config, "lockcf", default_values);
-    // Currently if we want create bloom filter for memtable, we must set prefix extractor.
-    opts.set_prefix_extractor("NoopSliceTransform",
-                              Box::new(rocksdb_util::NoopSliceTransform))
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    // Create bloom filter for memtable.
-    opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
-    opts
+    get_rocksdb_cf_option(config, "lockcf", default_values)
 }
 
 fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
