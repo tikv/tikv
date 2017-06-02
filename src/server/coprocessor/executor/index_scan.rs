@@ -152,7 +152,7 @@ mod test {
                         new_col_info(3, types::NEW_DECIMAL)];
 
         let mut kv_data = Vec::new();
-        let mut expect_data = Vec::new();
+        let mut expect_rows = Vec::new();
 
         for handle in 0..key_number {
             let indice = map![
@@ -170,12 +170,12 @@ mod test {
             v.push(h);
             let encoded = datum::encode_key(&v).unwrap();
             let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
-            expect_data.push(expect_row);
+            expect_rows.push(expect_row);
             kv_data.push((idx_key, vec![0]));
         }
         Data {
             kv_data: kv_data,
-            rows_data: expect_data,
+            expect_rows: expect_rows,
             cols: cols,
         }
     }
@@ -246,7 +246,7 @@ mod test {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
-            let expect_row = &wrapper.data.rows_data[handle];
+            let expect_row = &wrapper.data.expect_rows[handle];
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
@@ -273,7 +273,7 @@ mod test {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
-            let expect_row = &wrapper.data.rows_data[handle];
+            let expect_row = &wrapper.data.expect_rows[handle];
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
@@ -298,7 +298,7 @@ mod test {
             let row = scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
-            let expect_data = &wrapper.data.rows_data[handle];
+            let expect_row = &wrapper.data.expect_rows[handle];
             let handle_datum = datum::Datum::I64(handle as i64);
             let pk = datum::encode_value(&[handle_datum]).unwrap();
             for col in &wrapper.cols {
@@ -308,7 +308,7 @@ mod test {
                     assert_eq!(pk, v.to_vec());
                     continue;
                 }
-                assert_eq!(expect_data[&cid], v.to_vec());
+                assert_eq!(expect_row[&cid], v.to_vec());
             }
         }
         assert!(scanner.next().unwrap().is_none());

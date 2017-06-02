@@ -124,8 +124,8 @@ pub mod test {
 
     pub struct Data {
         pub kv_data: Vec<(Vec<u8>, Vec<u8>)>,
-        // rows_data[row_id][column_id]=>value
-        pub rows_data: Vec<HashMap<i64, Vec<u8>>>,
+        // expect_rows[row_id][column_id]=>value
+        pub expect_rows: Vec<HashMap<i64, Vec<u8>>>,
         pub cols: Vec<ColumnInfo>,
     }
 
@@ -181,7 +181,7 @@ pub mod test {
         }
         Data {
             kv_data: kv_data,
-            rows_data: expect_rows,
+            expect_rows: expect_rows,
             cols: cols,
         }
     }

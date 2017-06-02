@@ -173,7 +173,7 @@ mod test {
         assert_eq!(row.handle, handle as i64);
         assert_eq!(row.data.len(), wrapper.cols.len());
 
-        let expect_row = &wrapper.data.rows_data[handle];
+        let expect_row = &wrapper.data.expect_rows[handle];
         for col in &wrapper.cols {
             let cid = col.get_column_id();
             let v = row.data.get(cid).unwrap();
@@ -203,7 +203,7 @@ mod test {
             let row = table_scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
-            let expect_row = &wrapper.data.rows_data[handle];
+            let expect_row = &wrapper.data.expect_rows[handle];
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
@@ -230,7 +230,7 @@ mod test {
             let row = table_scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
-            let expect_row = &wrapper.data.rows_data[handle];
+            let expect_row = &wrapper.data.expect_rows[handle];
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
