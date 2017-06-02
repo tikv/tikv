@@ -214,9 +214,9 @@ fn encode_obj(data: BTreeMap<String, Json>, buf: &mut Vec<u8>) {
     let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
     let mut keys = Vec::with_capacity(element_count);
     let mut values = Vec::with_capacity(element_count);
-    for (key, value) in &data {
-        keys.push(key.to_owned());
-        values.push(value.to_owned());
+    for (key, value) in data {
+        keys.push(key);
+        values.push(value);
     }
     let mut key_entries = vec![];
     let mut encode_keys = Vec::new();
