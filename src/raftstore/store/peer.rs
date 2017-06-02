@@ -210,6 +210,7 @@ pub struct Peer {
 
     pub tag: String,
 
+    // Index of last scheduled committed raft log.
     pub last_ready_idx: u64,
     pub last_compacted_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
@@ -613,9 +614,13 @@ impl Peer {
 
     #[inline]
     pub fn ready_to_handle_pending_snap(&self) -> bool {
-        // If committed_index isn't equal to applied_index, written apply state may be overwritten
+        // If apply worker is still working, written apply state may be overwritten
         // by apply worker. So we have to wait here.
-        self.get_store().committed_index() == self.get_store().applied_index()
+        // Please note that committed_index can't be used here. When applying a snapshot,
+        // a stale heartbeat can make the leader think follower has already applied
+        // the snapshot, and send remaining log entries, which may increase committed_index.
+        // TODO: add more test
+        self.last_ready_idx == self.get_store().applied_index()
     }
 
     #[inline]
@@ -642,10 +647,10 @@ impl Peer {
         }
 
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
-            debug!("{} apply index {} != committed index {}, skip applying snapshot.",
+            debug!("{} [apply_idx: {}, last_ready_idx: {}] is not ready to apply snapshot.",
                    self.tag,
                    self.get_store().applied_index(),
-                   self.get_store().committed_index());
+                   self.last_ready_idx);
             return;
         }
 
@@ -1091,8 +1096,7 @@ impl Peer {
 
         match change_type {
             ConfChangeType::AddNode => {
-                let progress = Progress { ..Default::default() };
-                status.progress.insert(peer.get_id(), progress);
+                status.progress.insert(peer.get_id(), Progress::default());
             }
             ConfChangeType::RemoveNode => {
                 if status.progress.remove(&peer.get_id()).is_none() {
