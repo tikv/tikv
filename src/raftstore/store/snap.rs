@@ -778,7 +778,7 @@ mod v2 {
     }
 
     fn check_file_checksum(path: &PathBuf, expected_checksum: u32) -> RaftStoreResult<()> {
-        let checksum = try!(calc_crc32(&path));
+        let checksum = try!(calc_crc32(path));
         if checksum != expected_checksum {
             return Err(box_err!("invalid checksum {} for snapshot cf file {}, expected {}",
                                 checksum,
@@ -984,7 +984,7 @@ mod v2 {
                     cf_file.file = Some(f);
                 } else {
                     // initialize sst file writer
-                    let handle = try!(snap.cf_handle(&cf_file.cf));
+                    let handle = try!(snap.cf_handle(cf_file.cf));
                     let io_options = snap.get_db().get_options_cf(handle);
                     let mut writer = SstFileWriter::new(&env_opt, &io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
@@ -1304,7 +1304,7 @@ mod v2 {
                 }
 
                 try!(check_abort(&options.abort));
-                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, &cf_file.cf));
+                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
                 if plain_file_used(cf_file.cf) {
                     let mut file = box_try!(File::open(&cf_file.path));
                     try!(apply_plain_cf_file(&mut file, &options, cf_handle));
