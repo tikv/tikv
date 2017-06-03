@@ -32,8 +32,8 @@ impl Display for Task {
         write!(f,
                "Compact CF[{}], range[{:?}, {:?}]",
                self.cf_name,
-               self.start_key.as_ref().map(|k| escape(&k)),
-               self.end_key.as_ref().map(|k| escape(&k)))
+               self.start_key.as_ref().map(|k| escape(k)),
+               self.end_key.as_ref().map(|k| escape(k)))
     }
 }
 

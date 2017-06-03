@@ -30,9 +30,11 @@ const RAFT_LOG_GC_THRESHOLD: u64 = 50;
 const RAFT_LOG_GC_COUNT_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4 / 1024;
 const RAFT_LOG_GC_SIZE_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
-const REGION_SPLIT_SIZE: u64 = 64 * 1024 * 1024;
-const REGION_MAX_SIZE: u64 = 80 * 1024 * 1024;
-const REGION_CHECK_DIFF: u64 = 8 * 1024 * 1024;
+
+pub const REGION_SPLIT_SIZE: u64 = 96 * 1024 * 1024;
+pub const REGION_MAX_SIZE: u64 = REGION_SPLIT_SIZE / 2 * 3;
+pub const REGION_CHECK_DIFF: u64 = REGION_SPLIT_SIZE / 8;
+
 const REGION_COMPACT_CHECK_TICK_INTERVAL: u64 = 0; // disable manual compaction by default.
 const REGION_COMPACT_DELETE_KEYS_COUNT: u64 = 1_000_000;
 const PD_HEARTBEAT_TICK_INTERVAL: u64 = 60000;
@@ -61,6 +63,9 @@ const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = false;
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    // true for high reliability, prevent data loss when power failure.
+    pub sync_log: bool,
+
     // store capacity.
     // TODO: if not set, we will use disk capacity instead.
     // Now we will use a default capacity if not set.
@@ -138,6 +143,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
+            sync_log: true,
             capacity: STORE_CAPACITY,
             raft_base_tick_interval: RAFT_BASE_TICK_INTERVAL,
             raft_heartbeat_ticks: RAFT_HEARTBEAT_TICKS,

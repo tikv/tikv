@@ -33,7 +33,6 @@ use kvproto::pdpb::PeerStats;
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::store::Config;
 use raftstore::store::worker::{apply, PdTask};
 use raftstore::store::worker::apply::ExecResult;
@@ -41,7 +40,7 @@ use raftstore::store::worker::apply::ExecResult;
 use util::worker::{FutureWorker as Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either, strftimespec};
-use util::collections::{HashMap, HashSet, HashMapValues as Values};
+use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
 use util::codec::number::{NumberEncoder, NumberDecoder};
 
 use pd::INVALID_ID;
@@ -57,6 +56,7 @@ use super::metrics::*;
 use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetrics, RaftMetrics};
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 const PROPOSAL_BATCH_SIZE: u64 = 16 * 1024; // 16K
 const PROPOSAL_BATCH_MAGIC_NUM: &'static [u8] = &[0, 0, 0, 0, 1, 51, 199, 9];  // 20170505
 
@@ -238,7 +238,7 @@ pub struct ReadyContext<'a, T: 'a> {
 impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
-            wb: WriteBatch::new(),
+            wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             metrics: metrics,
             trans: t,
             ready_res: Vec::with_capacity(cap),
@@ -272,10 +272,18 @@ enum RequestPolicy {
     ProposeConfChange,
 }
 
+#[derive(Default, Clone)]
+pub struct PeerStat {
+    pub written_bytes: u64,
+    pub written_keys: u64,
+    pub last_written_bytes: u64,
+    pub last_written_keys: u64,
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     cfg: Rc<Config>,
-    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
+    peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -283,8 +291,8 @@ pub struct Peer {
     pending_proposal: ProposalBatch,
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
-    pub peer_heartbeats: HashMap<u64, Instant>,
-    coprocessor_host: CoprocessorHost,
+    pub peer_heartbeats: FlatMap<u64, Instant>,
+    coprocessor_host: Arc<CoprocessorHost>,
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: u64,
     /// delete keys' count since last reset.
@@ -294,7 +302,8 @@ pub struct Peer {
 
     pub tag: String,
 
-    pub last_ready_idx: u64,
+    // Index of last scheduled committed raft log.
+    pub last_applying_idx: u64,
     pub last_compacted_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
@@ -302,6 +311,8 @@ pub struct Peer {
     pub raft_entry_max_size: u64,
 
     apply_scheduler: Scheduler<ApplyTask>,
+
+    pub pending_remove: bool,
 
     marked_to_be_checked: bool,
 
@@ -325,9 +336,7 @@ pub struct Peer {
     //      locally.
     leader_lease_expired_time: Option<Either<Timespec, Timespec>>,
 
-    pub written_bytes: u64,
-    pub written_keys: u64,
-    pub last_written_bytes: u64,
+    pub peer_stat: PeerStat,
 }
 
 impl Peer {
@@ -370,9 +379,10 @@ impl Peer {
 
         let store_id = store.store_id();
         let sched = store.snap_scheduler();
+        let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
-        let ps = try!(PeerStorage::new(store.engine(), &region, sched, tag.clone()));
+        let ps = try!(PeerStorage::new(store.engine(), region, sched, tag.clone()));
 
         let applied_index = ps.applied_index();
 
@@ -399,16 +409,17 @@ impl Peer {
             proposals: Default::default(),
             pending_proposal: Default::default(),
             pending_reads: Default::default(),
-            peer_cache: store.peer_cache(),
-            peer_heartbeats: HashMap::default(),
-            coprocessor_host: CoprocessorHost::new(),
+            peer_cache: RefCell::new(peer_cache),
+            peer_heartbeats: FlatMap::default(),
+            coprocessor_host: store.coprocessor_host.clone(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             apply_scheduler: store.apply_scheduler(),
+            pending_remove: false,
             marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
-            last_ready_idx: applied_index,
+            last_applying_idx: applied_index,
             last_compacted_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
@@ -419,12 +430,8 @@ impl Peer {
             raft_entry_max_size: cfg.raft_entry_max_size,
             cfg: cfg,
             leader_lease_expired_time: None,
-            written_bytes: 0,
-            written_keys: 0,
-            last_written_bytes: 0,
+            peer_stat: PeerStat::default(),
         };
-
-        peer.load_all_coprocessors();
 
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
@@ -473,7 +480,6 @@ impl Peer {
             }
         }
 
-        self.coprocessor_host.shutdown();
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
 
         Ok(())
@@ -481,11 +487,6 @@ impl Peer {
 
     pub fn is_initialized(&self) -> bool {
         self.get_store().is_initialized()
-    }
-
-    pub fn load_all_coprocessors(&mut self) {
-        // TODO load coprocessors from configuration
-        self.coprocessor_host.registry.register_observer(100, box SplitObserver);
     }
 
     pub fn engine(&self) -> Arc<DB> {
@@ -706,9 +707,13 @@ impl Peer {
 
     #[inline]
     pub fn ready_to_handle_pending_snap(&self) -> bool {
-        // If committed_index isn't equal to applied_index, written apply state may be overwritten
+        // If apply worker is still working, written apply state may be overwritten
         // by apply worker. So we have to wait here.
-        self.get_store().committed_index() == self.get_store().applied_index()
+        // Please note that committed_index can't be used here. When applying a snapshot,
+        // a stale heartbeat can make the leader think follower has already applied
+        // the snapshot, and send remaining log entries, which may increase committed_index.
+        // TODO: add more test
+        self.last_applying_idx == self.get_store().applied_index()
     }
 
     #[inline]
@@ -724,6 +729,9 @@ impl Peer {
         self.flush_pending_proposal(&mut ctx.metrics.propose);
 
         self.marked_to_be_checked = false;
+        if self.pending_remove {
+            return;
+        }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
@@ -734,20 +742,20 @@ impl Peer {
         }
 
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
-            debug!("{} apply index {} != committed index {}, skip applying snapshot.",
+            debug!("{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
                    self.tag,
                    self.get_store().applied_index(),
-                   self.get_store().committed_index());
+                   self.last_applying_idx);
             return;
         }
 
-        if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
+        if !self.raft_group.has_ready_since(Some(self.last_applying_idx)) {
             return;
         }
 
         debug!("{} handle raft ready", self.tag);
 
-        let mut ready = self.raft_group.ready_since(self.last_ready_idx);
+        let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
         self.on_role_changed(&ready, worker);
 
@@ -812,7 +820,7 @@ impl Peer {
         // in `ready.committed_entries` again, which will lead to inconsistency.
         if self.is_applying_snapshot() {
             // Snapshot's metadata has been applied.
-            self.last_ready_idx = self.get_store().truncated_index();
+            self.last_applying_idx = self.get_store().truncated_index();
         } else {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease.
@@ -833,7 +841,7 @@ impl Peer {
                 }
             }
             if !committed_entries.is_empty() {
-                self.last_ready_idx = committed_entries.last().unwrap().get_index();
+                self.last_applying_idx = committed_entries.last().unwrap().get_index();
                 apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
@@ -844,7 +852,7 @@ impl Peer {
         if self.is_applying_snapshot() {
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
-            self.raft_group.advance_apply(self.last_ready_idx);
+            self.raft_group.advance_apply(self.last_applying_idx);
         }
     }
 
@@ -903,8 +911,8 @@ impl Peer {
         self.raft_group.advance_apply(res.apply_state.get_applied_index());
         self.mut_store().apply_state = res.apply_state.clone();
         self.mut_store().applied_index_term = res.applied_index_term;
-        self.written_keys += res.metrics.written_keys;
-        self.written_bytes += res.metrics.written_bytes;
+        self.peer_stat.written_keys += res.metrics.written_keys;
+        self.peer_stat.written_bytes += res.metrics.written_bytes;
 
         if has_split {
             self.delete_keys_hint = res.metrics.delete_keys_hint;
@@ -1020,6 +1028,10 @@ impl Peer {
                    mut err_resp: RaftCmdResponse,
                    metrics: &mut RaftProposeMetrics)
                    -> bool {
+        if self.pending_remove {
+            return false;
+        }
+
         if self.proposals.contains(&meta.uuid) || self.pending_proposal.contains(&meta.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", meta.uuid));
             cb(err_resp);
@@ -1182,8 +1194,7 @@ impl Peer {
 
         match change_type {
             ConfChangeType::AddNode => {
-                let progress = Progress { ..Default::default() };
-                status.progress.insert(peer.get_id(), progress);
+                status.progress.insert(peer.get_id(), Progress::default());
             }
             ConfChangeType::RemoveNode => {
                 if status.progress.remove(&peer.get_id()).is_none() {
@@ -1419,7 +1430,7 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut req));
+        try!(self.coprocessor_host.pre_propose(self.region(), &mut req));
         let req_size = Message::compute_size(&req) as u64;
 
         // TODO: use local histogram metrics
@@ -1593,9 +1604,17 @@ pub fn check_epoch(region: &metapb::Region, req: &RaftCmdRequest) -> Result<()> 
 }
 
 impl Peer {
+    pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
+        self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
+    }
+
+    pub fn remove_peer_from_cache(&mut self, peer_id: u64) {
+        self.peer_cache.borrow_mut().remove(&peer_id);
+    }
+
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
-        if let Some(peer) = self.peer_cache.borrow().get(&peer_id).cloned() {
-            return Some(peer);
+        if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
+            return Some(peer.clone());
         }
 
         // Try to find in region, if found, set in cache.
@@ -1615,7 +1634,8 @@ impl Peer {
             peer: self.peer.clone(),
             down_peers: self.collect_down_peers(self.cfg.max_peer_down_duration),
             pending_peers: self.collect_pending_peers(),
-            written_bytes: self.last_written_bytes,
+            written_bytes: self.peer_stat.last_written_bytes,
+            written_keys: self.peer_stat.last_written_keys,
         };
         if let Err(e) = worker.schedule(task) {
             error!("{} failed to notify pd: {}", self.tag, e);

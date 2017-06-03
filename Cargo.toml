@@ -46,7 +46,6 @@ libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
-rustc-serialize = "0.3"
 protobuf = "1.2.1"
 nix = "0.6.0"
 utime = "0.1"
@@ -55,11 +54,11 @@ lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2"
 url = "1.2"
-getopts = "0.2"
 regex = "0.1"
 fnv = "1.0"
 sys-info = "0.4.1"
 ordermap = "0.2"
+flat_map = "0.0.4"
 mio = "0.5"
 futures = "0.1"
 tokio-core = "0.1"
@@ -80,7 +79,7 @@ git = "https://github.com/pingcap/tipb.git"
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
 default-features = false
-features = ["nightly", "push"]
+features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
 git = "https://github.com/stepancheg/grpc-rust.git"

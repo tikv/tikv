@@ -26,15 +26,15 @@ quick_error! {
         RocksDB
         ReadableNumber
         Limit(msg: String) {
-            description(&msg)
+            description(msg)
             display("{}", msg)
         }
         Address(msg: String) {
-            description(&msg)
+            description(msg)
             display("{}", msg)
         }
         StoreLabels(msg: String) {
-            description(&msg)
+            description(msg)
             display("{}", msg)
         }
     }
@@ -64,6 +64,7 @@ pub fn parse_rocksdb_per_level_compression(tp: &str)
             "bzip2" => result.push(DBCompressionType::DBBz2),
             "lz4" => result.push(DBCompressionType::DBLz4),
             "lz4hc" => result.push(DBCompressionType::DBLz4hc),
+            "zstd" => result.push(DBCompressionType::DBZstd),
             _ => return Err(ConfigError::RocksDB),
         }
     }

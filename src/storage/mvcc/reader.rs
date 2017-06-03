@@ -54,6 +54,13 @@ impl<'a> MvccReader<'a> {
         }
     }
 
+    pub fn reset(&mut self, upper_bound: Option<Vec<u8>>) {
+        self.upper_bound = upper_bound;
+        self.data_cursor = None;
+        self.lock_cursor = None;
+        self.write_cursor = None;
+    }
+
     pub fn set_key_only(&mut self, key_only: bool) {
         self.key_only = key_only;
     }
@@ -94,13 +101,13 @@ impl<'a> MvccReader<'a> {
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
-            match try!(cursor.get(&key, self.statistics)) {
+            match try!(cursor.get(key, self.statistics)) {
                 Some(v) => Some(try!(Lock::parse(v))),
                 None => None,
             }
         } else {
             self.statistics.get += 1;
-            match try!(self.snapshot.get_cf(CF_LOCK, &key)) {
+            match try!(self.snapshot.get_cf(CF_LOCK, key)) {
                 Some(v) => Some(try!(Lock::parse(&v))),
                 None => None,
             }

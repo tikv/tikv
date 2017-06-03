@@ -21,7 +21,7 @@ use kvproto::pdpb::{self, Member};
 use kvproto::pdpb_grpc::{PDAsync, PDAsyncClient};
 
 use super::super::PdFuture;
-use super::super::{Result, Error, PdClient};
+use super::super::{Result, Error, PdClient, RegionStat};
 use super::util::{validate_endpoints, sync_request, check_resp_header, LeaderClient};
 
 pub struct RpcClient {
@@ -189,17 +189,16 @@ impl PdClient for RpcClient {
     fn region_heartbeat(&self,
                         region: metapb::Region,
                         leader: metapb::Peer,
-                        down_peers: Vec<pdpb::PeerStats>,
-                        pending_peers: Vec<metapb::Peer>,
-                        written_bytes: u64)
+                        region_stat: RegionStat)
                         -> PdFuture<pdpb::RegionHeartbeatResponse> {
         let mut req = pdpb::RegionHeartbeatRequest::new();
         req.set_header(self.header());
         req.set_region(region);
         req.set_leader(leader);
-        req.set_down_peers(RepeatedField::from_vec(down_peers));
-        req.set_pending_peers(RepeatedField::from_vec(pending_peers));
-        req.set_bytes_written(written_bytes);
+        req.set_down_peers(RepeatedField::from_vec(region_stat.down_peers));
+        req.set_pending_peers(RepeatedField::from_vec(region_stat.pending_peers));
+        req.set_bytes_written(region_stat.written_bytes);
+        req.set_keys_written(region_stat.written_keys);
 
         let executor = |client: &PDAsyncClient, req: pdpb::RegionHeartbeatRequest| {
             client.RegionHeartbeat(req)

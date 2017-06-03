@@ -488,7 +488,7 @@ fn process_write_impl(cid: u64,
             }
             let mut txn = MvccTxn::new(snapshot, &mut statistics, lock_ts, None);
             for k in keys {
-                try!(txn.commit(&k, commit_ts));
+                try!(txn.commit(k, commit_ts));
             }
 
             let pr = ProcessResult::Res;
@@ -496,7 +496,7 @@ fn process_write_impl(cid: u64,
         }
         Command::Cleanup { ref key, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
-            try!(txn.rollback(&key));
+            try!(txn.rollback(key));
 
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
@@ -504,7 +504,7 @@ fn process_write_impl(cid: u64,
         Command::Rollback { ref keys, start_ts, .. } => {
             let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
             for k in keys {
-                try!(txn.rollback(&k));
+                try!(txn.rollback(k));
             }
 
             let pr = ProcessResult::Res;
@@ -523,8 +523,8 @@ fn process_write_impl(cid: u64,
             let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
             for k in keys {
                 match commit_ts {
-                    Some(ts) => try!(txn.commit(&k, ts)),
-                    None => try!(txn.rollback(&k)),
+                    Some(ts) => try!(txn.commit(k, ts)),
+                    None => try!(txn.rollback(k)),
                 }
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                     scan_key = Some(k.to_owned());
@@ -548,7 +548,7 @@ fn process_write_impl(cid: u64,
         }
         Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, 0, Some(ScanMode::Mixed));
+            let mut txn = MvccTxn::new(snapshot, &mut statistics, 0, Some(ScanMode::Forward));
             for k in keys {
                 try!(txn.gc(k, safe_point));
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {

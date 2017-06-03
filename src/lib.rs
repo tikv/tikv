@@ -48,7 +48,6 @@ extern crate threadpool;
 extern crate num;
 extern crate libc;
 extern crate crc;
-extern crate rustc_serialize;
 #[cfg(unix)]
 extern crate nix;
 extern crate alloc;
@@ -64,6 +63,7 @@ extern crate regex;
 extern crate grpc;
 extern crate fnv;
 extern crate ordermap;
+extern crate flat_map;
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_timer;

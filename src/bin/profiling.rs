@@ -13,12 +13,8 @@
 
 #[cfg(feature = "mem-profiling")]
 mod imp {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::thread::{self, Builder, JoinHandle};
-    use std::time::Duration;
     use std::ffi::CString;
-    use std::ptr;
+    use std::{ptr, env};
 
     use jemallocator;
     use libc::c_char;
@@ -27,11 +23,11 @@ mod imp {
     const PROFILE_ACTIVE: &'static [u8] = b"prof.active\0";
     const PROFILE_DUMP: &'static [u8] = b"prof.dump\0";
 
-    struct DumpFileNameGuard(Option<Vec<u8>>);
+    struct DumpPathGuard(Option<Vec<u8>>);
 
-    impl DumpFileNameGuard {
-        fn from_cstring(s: Option<CString>) -> DumpFileNameGuard {
-            DumpFileNameGuard(s.map(|s| s.into_bytes_with_nul()))
+    impl DumpPathGuard {
+        fn from_cstring(s: Option<CString>) -> DumpPathGuard {
+            DumpPathGuard(s.map(|s| s.into_bytes_with_nul()))
         }
 
         /// caller should ensure that the pointer should not be accessed after
@@ -42,66 +38,34 @@ mod imp {
         }
     }
 
-    #[inline]
-    fn get_file_name(base_name: &str, postfix: &str) -> CString {
-        CString::new(format!("{}{}", base_name, postfix)).unwrap()
-    }
-
-    pub fn profile_memory(file: Option<&str>,
-                          flag: &Arc<AtomicBool>,
-                          sleep_interval: Duration)
-                          -> Option<JoinHandle<()>> {
-        if flag.load(Ordering::SeqCst) {
-            warn!("last memory profiling has not finished yet.");
-            return None;
-        }
-
+    /// Dump the profile to the `path`.
+    ///
+    /// If `path` is `None`, will dump it in the working directory with a auto-generated name.
+    pub fn dump_prof(path: Option<&str>) {
         unsafe {
-            let mut first_file_name =
-                DumpFileNameGuard::from_cstring(file.map(|f| get_file_name(f, "-fir")));
-            if let Err(e) = jemallocator::mallctl_set(PROFILE_DUMP, first_file_name.get_mut_ptr()) {
-                println!("failed to dump the first profile: {}", e);
-                return None;
-            }
             if let Err(e) = jemallocator::mallctl_set(PROFILE_ACTIVE, true) {
-                println!("failed to activate profiling: {}", e);
-                return None;
+                error!("failed to activate profiling: {}", e);
+                return;
             }
         }
-        flag.store(true, Ordering::SeqCst);
-        let flag2 = flag.clone();
-        let mut second_file_name =
-            DumpFileNameGuard::from_cstring(file.map(|f| get_file_name(f, "-sec")));
-        Some(Builder::new()
-            .name("memory_prof".to_owned())
-            .spawn(move || {
-                // sleep some time to get the diff between two dumping.
-                thread::sleep(sleep_interval);
-                unsafe {
-                    if let Err(e) = jemallocator::mallctl_set(PROFILE_ACTIVE, false) {
-                        panic!("failed to deactivate profiling: {}", e);
-                    }
+        let mut c_path = DumpPathGuard::from_cstring(path.map(|p| CString::new(p).unwrap()));
+        let res = unsafe { jemallocator::mallctl_set(PROFILE_DUMP, c_path.get_mut_ptr()) };
+        match res {
+            Err(e) => error!("failed to dump the profile to {:?}: {}", path, e),
+            Ok(_) => {
+                if let Some(p) = path {
+                    info!("dump profile to {}", p);
+                    return;
                 }
-                thread::sleep(sleep_interval);
-                unsafe {
-                    if let Err(e) = jemallocator::mallctl_set(PROFILE_DUMP,
-                                                              second_file_name.get_mut_ptr()) {
-                        error!("failed to dump the second profile: {}", e);
-                        flag2.store(false, Ordering::SeqCst);
-                        return;
-                    }
-                }
-                flag2.store(false, Ordering::SeqCst);
-            })
-            .unwrap())
+
+                info!("dump profile to {}", env::current_dir().unwrap().display());
+            }
+        }
     }
 
     #[cfg(test)]
     mod test {
         use std::fs;
-        use std::time::*;
-        use std::sync::*;
-        use std::sync::atomic::*;
 
         use tempdir::TempDir;
 
@@ -110,20 +74,14 @@ mod imp {
         #[ignore]
         fn test_profiling_memory() {
             let dir = TempDir::new("test_profiling").unwrap();
-            let sleep_time = Duration::from_millis(1000);
-            let os_path = dir.path().to_path_buf().join("test.dump").into_os_string();
+            let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            let profiling = Arc::new(AtomicBool::new(true));
-            let handle = super::profile_memory(Some(&path), &profiling, sleep_time);
-            assert!(handle.is_none(),
-                    "no profile should be run when last profile has not finished.");
-            assert!(profiling.load(Ordering::SeqCst));
+            super::dump_prof(Some(&path));
 
-            profiling.store(false, Ordering::SeqCst);
-            let handle = super::profile_memory(Some(&path), &profiling, sleep_time);
-            assert!(profiling.load(Ordering::SeqCst));
-            assert!(handle.is_some());
-            handle.unwrap().join().unwrap();
+            let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
+            let path = os_path.into_string().unwrap();
+            super::dump_prof(Some(&path));
+
             let files = fs::read_dir(dir.path()).unwrap().count();
             assert_eq!(files, 2);
         }
@@ -132,17 +90,7 @@ mod imp {
 
 #[cfg(not(feature = "mem-profiling"))]
 mod imp {
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-    use std::time::Duration;
-    use std::thread::JoinHandle;
-
-    pub fn profile_memory(_: Option<&str>,
-                          _: &Arc<AtomicBool>,
-                          _: Duration)
-                          -> Option<JoinHandle<()>> {
-        None
-    }
+    pub fn dump_prof(_: Option<&str>) {}
 }
 
 pub use self::imp::*;
