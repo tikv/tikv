@@ -64,16 +64,6 @@ impl ServerRaftStoreRouter {
     pub fn new(ch: SendCh<StoreMsg>) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter { ch: ch }
     }
-
-    //    fn validate_store_id(&self, store_id: u64) -> RaftStoreResult<()> {
-    //        if store_id != self.store_id {
-    //            let store = store_id.to_string();
-    //            REPORT_FAILURE_MSG_COUNTER.with_label_values(&["store_not_match", &*store]).inc();
-    //            Err(RaftStoreError::StoreNotMatch(store_id, self.store_id))
-    //        } else {
-    //            Ok(())
-    //        }
-    //    }
 }
 
 impl RaftStoreRouter for ServerRaftStoreRouter {
