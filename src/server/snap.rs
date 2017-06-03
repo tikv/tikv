@@ -84,10 +84,10 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     let snap = data.msg.get_raft().get_message().get_snapshot();
     let key = try!(SnapKey::from_snap(snap));
     mgr.register(key.clone(), SnapEntry::Sending);
-    let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
     defer!({
         mgr.deregister(&key, &SnapEntry::Sending);
     });
+    let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
