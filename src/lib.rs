@@ -48,7 +48,6 @@ extern crate threadpool;
 extern crate num;
 extern crate libc;
 extern crate crc;
-extern crate rustc_serialize;
 #[cfg(unix)]
 extern crate nix;
 extern crate alloc;
