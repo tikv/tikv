@@ -189,8 +189,7 @@ mod v1 {
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX,
-                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort,
-                SnapManagerCore};
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort};
 
     pub const SNAPSHOT_VERSION: u64 = 1;
     pub const CRC32_BYTES_COUNT: usize = 4;
@@ -255,11 +254,9 @@ mod v1 {
     /// `save` method to make them persistent. When saving a crc32 checksum
     /// will be appended to the file end automatically.
     pub struct Snap {
-        core: Arc<RwLock<SnapManagerCore>>,
-        key: SnapKey,
-        size_track: Arc<RwLock<u64>>,
         file: PathBuf,
         digest: Option<Digest>,
+        size_track: Arc<RwLock<u64>>,
         // File is the file obj represent the tmpfile, string is the actual path to
         // tmpfile.
         tmp_file: Option<(File, String)>,
@@ -268,20 +265,17 @@ mod v1 {
 
     impl Snap {
         pub fn new_for_writing<T: Into<PathBuf>>(dir: T,
-                                                 core: Arc<RwLock<SnapManagerCore>>,
+                                                 size_track: Arc<RwLock<u64>>,
                                                  is_sending: bool,
-                                                 key: &SnapKey,
-                                                 size_track: Arc<RwLock<u64>>)
+                                                 key: &SnapKey)
                                                  -> io::Result<Snap> {
             let mut path = dir.into();
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
             let mut f = Snap {
-                core: core,
-                key: key.clone(),
-                size_track: size_track,
                 file: path,
                 digest: Some(Digest::new(crc32::IEEE)),
+                size_track: size_track,
                 tmp_file: None,
                 reader: None,
             };
@@ -290,20 +284,17 @@ mod v1 {
         }
 
         pub fn new_for_reading<T: Into<PathBuf>>(dir: T,
-                                                 core: Arc<RwLock<SnapManagerCore>>,
+                                                 size_track: Arc<RwLock<u64>>,
                                                  is_sending: bool,
-                                                 key: &SnapKey,
-                                                 size_track: Arc<RwLock<u64>>)
+                                                 key: &SnapKey)
                                                  -> io::Result<Snap> {
             let mut path = dir.into();
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
             let f = Snap {
-                core: core,
-                key: key.clone(),
-                size_track: size_track,
                 file: path,
                 digest: None,
+                size_track: size_track,
                 tmp_file: None,
                 reader: None,
             };
@@ -341,11 +332,6 @@ mod v1 {
         }
 
         fn try_delete(&self) -> io::Result<()> {
-            let core = self.core.rl();
-            if core.has_registered(&self.key) {
-                info!("skip to delete {} since it's registered", self.path());
-                return Ok(());
-            }
             debug!("deleting {}", self.path());
             if !self.exists() {
                 return Ok(());
@@ -610,7 +596,7 @@ mod v1 {
         use std::fs::OpenOptions;
         use tempdir::TempDir;
         use util::HandyRwLock;
-        use super::super::{SnapKey, Snapshot, SnapManagerCore};
+        use super::super::{SnapKey, Snapshot};
         use super::Snap;
 
         #[test]
@@ -619,16 +605,12 @@ mod v1 {
             let str = dir.path().to_str().unwrap().to_owned() + "/snap1";
             let path = Path::new(&str);
             assert!(!path.exists());
-            let core = Arc::new(RwLock::new(SnapManagerCore::new(str.clone(), false)));
             let key = SnapKey::new(1, 1, 1);
             let test_data = b"test_data";
             let exp_len = (test_data.len() + super::CRC32_BYTES_COUNT) as u64;
             let size_track = Arc::new(RwLock::new(0));
-            let mut f1 = Snap::new_for_writing(&path, core.clone(), true, &key, size_track.clone())
-                .unwrap();
-            let mut f2 =
-                Snap::new_for_writing(&path, core.clone(), false, &key, size_track.clone())
-                    .unwrap();
+            let mut f1 = Snap::new_for_writing(&path, size_track.clone(), true, &key).unwrap();
+            let mut f2 = Snap::new_for_writing(&path, size_track.clone(), false, &key).unwrap();
             assert!(!f1.exists());
             assert!(Path::new(&f1.tmp_file.as_ref().unwrap().1).exists());
             assert!(!f2.exists());
@@ -640,11 +622,8 @@ mod v1 {
             assert!(!f2.exists());
             assert!(Path::new(&f2.tmp_file.as_ref().unwrap().1).exists());
             let key2 = SnapKey::new(2, 1, 1);
-            let mut f3 =
-                Snap::new_for_writing(&path, core.clone(), true, &key2, size_track.clone())
-                    .unwrap();
-            let mut f4 = Snap::new_for_writing(&path, core, false, &key2, size_track.clone())
-                .unwrap();
+            let mut f3 = Snap::new_for_writing(&path, size_track.clone(), true, &key2).unwrap();
+            let mut f4 = Snap::new_for_writing(&path, size_track.clone(), false, &key2).unwrap();
             f3.write_all(test_data).unwrap();
             f4.write_all(test_data).unwrap();
             assert_eq!(*size_track.rl(), 0);
@@ -660,11 +639,9 @@ mod v1 {
             let path = TempDir::new("test-snap-mgr").unwrap();
             let path_str = path.path().to_str().unwrap().to_owned();
 
-            let core = Arc::new(RwLock::new(SnapManagerCore::new(path_str.clone(), false)));
             let key1 = SnapKey::new(1, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut f1 = Snap::new_for_writing(path_str, core, false, &key1, size_track.clone())
-                .unwrap();
+            let mut f1 = Snap::new_for_writing(path_str, size_track.clone(), false, &key1).unwrap();
             f1.write_all(b"testdata").unwrap();
             f1.save_with_checksum().unwrap();
             let mut reader = f1.get_validation_reader().unwrap();
@@ -710,8 +687,7 @@ mod v2 {
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX,
-                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort,
-                SnapManagerCore};
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort};
     use super::v1::{build_plain_cf_file, apply_plain_cf_file};
 
     pub const SNAPSHOT_VERSION: u64 = 2;
@@ -815,18 +791,15 @@ mod v2 {
     }
 
     pub struct Snap {
-        core: Arc<RwLock<SnapManagerCore>>,
-        key: SnapKey,
-        size_track: Arc<RwLock<u64>>,
         display_path: String,
         cf_files: Vec<CfFile>,
         cf_index: usize,
         meta_file: MetaFile,
+        size_track: Arc<RwLock<u64>>,
     }
 
     impl Snap {
         fn new<T: Into<PathBuf>>(dir: T,
-                                 core: Arc<RwLock<SnapManagerCore>>,
                                  key: &SnapKey,
                                  size_track: Arc<RwLock<u64>>,
                                  is_sending: bool)
@@ -867,13 +840,11 @@ mod v2 {
             };
 
             let mut s = Snap {
-                core: core,
-                key: key.clone(),
-                size_track: size_track,
                 display_path: display_path,
                 cf_files: cf_files,
                 cf_index: 0,
                 meta_file: meta_file,
+                size_track: size_track,
             };
 
             // load snapshot meta if meta_file exists
@@ -889,22 +860,20 @@ mod v2 {
         }
 
         pub fn new_for_building<T: Into<PathBuf>>(dir: T,
-                                                  core: Arc<RwLock<SnapManagerCore>>,
                                                   key: &SnapKey,
-                                                  size_track: Arc<RwLock<u64>>,
-                                                  snap: &DbSnapshot)
+                                                  snap: &DbSnapshot,
+                                                  size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, core, key, size_track, true));
+            let mut s = try!(Snap::new(dir, key, size_track, true));
             try!(s.init_for_building(snap));
             Ok(s)
         }
 
         pub fn new_for_sending<T: Into<PathBuf>>(dir: T,
-                                                 core: Arc<RwLock<SnapManagerCore>>,
                                                  key: &SnapKey,
                                                  size_track: Arc<RwLock<u64>>)
                                                  -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, core, key, size_track, true));
+            let mut s = try!(Snap::new(dir, key, size_track, true));
 
             if !s.exists() {
                 // Skip the initialization below if it doesn't exists.
@@ -921,12 +890,11 @@ mod v2 {
         }
 
         pub fn new_for_receiving<T: Into<PathBuf>>(dir: T,
-                                                   core: Arc<RwLock<SnapManagerCore>>,
                                                    key: &SnapKey,
-                                                   size_track: Arc<RwLock<u64>>,
-                                                   snapshot_meta: SnapshotMeta)
+                                                   snapshot_meta: SnapshotMeta,
+                                                   size_track: Arc<RwLock<u64>>)
                                                    -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, core, key, size_track, false));
+            let mut s = try!(Snap::new(dir, key, size_track, false));
             try!(s.set_snapshot_meta(snapshot_meta));
 
             if s.exists() {
@@ -950,11 +918,10 @@ mod v2 {
         }
 
         pub fn new_for_applying<T: Into<PathBuf>>(dir: T,
-                                                  core: Arc<RwLock<SnapManagerCore>>,
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>)
                                                   -> RaftStoreResult<Snap> {
-            let s = try!(Snap::new(dir, core, key, size_track, false));
+            let s = try!(Snap::new(dir, key, size_track, false));
             Ok(s)
         }
 
@@ -1215,11 +1182,6 @@ mod v2 {
         }
 
         fn delete(&self) {
-            let core = self.core.rl();
-            if core.has_registered(&self.key) {
-                info!("skip to delete {} since it's registered", self.path());
-                return;
-            }
             debug!("deleting {}", self.path());
             for cf_file in &self.cf_files {
                 delete_file_if_exist(&cf_file.tmp_path);
@@ -1422,7 +1384,7 @@ mod v2 {
         use raftstore::store::keys;
         use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable, Iterable};
         use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-        use super::super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SnapKey, Snapshot, SnapManagerCore};
+        use super::super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SnapKey, Snapshot};
         use super::{META_FILE_SUFFIX, Snap, SnapshotStatistics, ApplyOptions};
 
         const TEST_STORE_ID: u64 = 1;
@@ -1566,19 +1528,11 @@ mod v2 {
             let snapshot = DbSnapshot::new(db.clone());
 
             let src_dir = TempDir::new("test-snap-file-src").unwrap();
-            let core = Arc::new(RwLock::new(SnapManagerCore::new(src_dir.path()
-                                                                     .to_str()
-                                                                     .unwrap()
-                                                                     .to_owned(),
-                                                                 true)));
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(src_dir.path(),
-                                                core.clone(),
-                                                &key,
-                                                size_track.clone(),
-                                                &snapshot)
-                .unwrap();
+            let mut s1 =
+                Snap::new_for_building(src_dir.path(), &key, &snapshot, size_track.clone())
+                    .unwrap();
             // Ensure that this snapshot file doesn't exist before being built.
             assert!(!s1.exists());
             assert_eq!(*size_track.rl(), 0);
@@ -1598,9 +1552,7 @@ mod v2 {
             assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
             // Ensure this snapshot could be read for sending.
-            let mut s2 =
-                Snap::new_for_sending(src_dir.path(), core.clone(), &key, size_track.clone())
-                    .unwrap();
+            let mut s2 = Snap::new_for_sending(src_dir.path(), &key, size_track.clone()).unwrap();
             assert!(s2.exists());
 
             // TODO check meta data correct.
@@ -1609,10 +1561,9 @@ mod v2 {
             let dst_dir = TempDir::new("test-snap-file-dst").unwrap();
 
             let mut s3 = Snap::new_for_receiving(dst_dir.path(),
-                                                 core.clone(),
                                                  &key,
-                                                 size_track.clone(),
-                                                 snap_data.take_meta())
+                                                 snap_data.take_meta(),
+                                                 size_track.clone())
                 .unwrap();
             assert!(!s3.exists());
 
@@ -1633,9 +1584,7 @@ mod v2 {
             assert_eq!(*size_track.rl(), size);
 
             // Ensure a snapshot could be applied to DB.
-            let mut s4 =
-                Snap::new_for_applying(dst_dir.path(), core.clone(), &key, size_track.clone())
-                    .unwrap();
+            let mut s4 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).unwrap();
             assert!(s4.exists());
 
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
@@ -1680,18 +1629,9 @@ mod v2 {
             let snapshot = DbSnapshot::new(db.clone());
 
             let dir = TempDir::new("test-snap-validation").unwrap();
-            let core = Arc::new(RwLock::new(SnapManagerCore::new(dir.path()
-                                                                     .to_str()
-                                                                     .unwrap()
-                                                                     .to_owned(),
-                                                                 true)));
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(),
-                                                core.clone(),
-                                                &key,
-                                                size_track.clone(),
-                                                &snapshot)
+            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1701,9 +1641,8 @@ mod v2 {
             s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s1.exists());
 
-            let mut s2 =
-                Snap::new_for_building(dir.path(), core, &key, size_track.clone(), &snapshot)
-                    .unwrap();
+            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+                .unwrap();
             assert!(s2.exists());
 
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
@@ -1796,21 +1735,15 @@ mod v2 {
 
         fn copy_snapshot(from_dir: &TempDir,
                          to_dir: &TempDir,
-                         core: Arc<RwLock<SnapManagerCore>>,
                          key: &SnapKey,
                          size_track: Arc<RwLock<u64>>,
                          snapshot_meta: SnapshotMeta) {
-            let mut from =
-                Snap::new_for_sending(from_dir.path(), core.clone(), key, size_track.clone())
-                    .unwrap();
+            let mut from = Snap::new_for_sending(from_dir.path(), key, size_track.clone()).unwrap();
             assert!(from.exists());
 
-            let mut to = Snap::new_for_receiving(to_dir.path(),
-                                                 core,
-                                                 key,
-                                                 size_track.clone(),
-                                                 snapshot_meta)
-                .unwrap();
+            let mut to =
+                Snap::new_for_receiving(to_dir.path(), key, snapshot_meta, size_track.clone())
+                    .unwrap();
 
             assert!(!to.exists());
             let _ = io::copy(&mut from, &mut to).unwrap();
@@ -1827,18 +1760,9 @@ mod v2 {
             let snapshot = DbSnapshot::new(db);
 
             let dir = TempDir::new("test-snap-corruption").unwrap();
-            let core = Arc::new(RwLock::new(SnapManagerCore::new(dir.path()
-                                                                     .to_str()
-                                                                     .unwrap()
-                                                                     .to_owned(),
-                                                                 true)));
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(),
-                                                core.clone(),
-                                                &key,
-                                                size_track.clone(),
-                                                &snapshot)
+            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1850,21 +1774,12 @@ mod v2 {
 
             corrupt_snapshot_size_in(dir.path());
 
-            assert!(Snap::new_for_sending(dir.path(), core.clone(), &key, size_track.clone())
-                .is_err());
-            assert!(Snap::new_for_building(dir.path(),
-                                           core.clone(),
-                                           &key,
-                                           size_track.clone(),
-                                           &snapshot)
+            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
                 .is_err());
             s1.delete();
 
-            let mut s2 = Snap::new_for_building(dir.path(),
-                                                core.clone(),
-                                                &key,
-                                                size_track.clone(),
-                                                &snapshot)
+            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
                 .unwrap();
             assert!(!s2.exists());
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
@@ -1873,7 +1788,6 @@ mod v2 {
             let dst_dir = TempDir::new("test-snap-corruption-dst").unwrap();
             copy_snapshot(&dir,
                           &dst_dir,
-                          core.clone(),
                           &key,
                           size_track.clone(),
                           snap_data.get_meta().clone());
@@ -1882,9 +1796,7 @@ mod v2 {
             assert_eq!(1, metas.len());
             let snap_meta = metas.pop().unwrap();
 
-            let mut s5 =
-                Snap::new_for_applying(dst_dir.path(), core.clone(), &key, size_track.clone())
-                    .unwrap();
+            let mut s5 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).unwrap();
             assert!(s5.exists());
 
             let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
@@ -1898,14 +1810,9 @@ mod v2 {
             assert!(s5.apply(options).is_err());
 
             corrupt_snapshot_size_in(dst_dir.path());
-            assert!(Snap::new_for_receiving(dst_dir.path(),
-                                            core.clone(),
-                                            &key,
-                                            size_track.clone(),
-                                            snap_meta)
+            assert!(Snap::new_for_receiving(dst_dir.path(), &key, snap_meta, size_track.clone())
                 .is_err());
-            assert!(Snap::new_for_applying(dst_dir.path(), core, &key, size_track.clone())
-                .is_err());
+            assert!(Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).is_err());
         }
 
         #[test]
@@ -1917,18 +1824,9 @@ mod v2 {
             let snapshot = DbSnapshot::new(db);
 
             let dir = TempDir::new("test-snap-corruption-meta").unwrap();
-            let core = Arc::new(RwLock::new(SnapManagerCore::new(dir.path()
-                                                                     .to_str()
-                                                                     .unwrap()
-                                                                     .to_owned(),
-                                                                 true)));
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(),
-                                                core.clone(),
-                                                &key,
-                                                size_track.clone(),
-                                                &snapshot)
+            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1940,21 +1838,12 @@ mod v2 {
 
             assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-            assert!(Snap::new_for_sending(dir.path(), core.clone(), &key, size_track.clone())
-                .is_err());
-            assert!(Snap::new_for_building(dir.path(),
-                                           core.clone(),
-                                           &key,
-                                           size_track.clone(),
-                                           &snapshot)
+            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
                 .is_err());
             s1.delete();
 
-            let mut s2 = Snap::new_for_building(dir.path(),
-                                                core.clone(),
-                                                &key,
-                                                size_track.clone(),
-                                                &snapshot)
+            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
                 .unwrap();
             assert!(!s2.exists());
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
@@ -1963,20 +1852,17 @@ mod v2 {
             let dst_dir = TempDir::new("test-snap-corruption-meta-dst").unwrap();
             copy_snapshot(&dir,
                           &dst_dir,
-                          core.clone(),
                           &key,
                           size_track.clone(),
                           snap_data.get_meta().clone());
 
             assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-            assert!(Snap::new_for_applying(dst_dir.path(), core.clone(), &key, size_track.clone())
-                .is_err());
+            assert!(Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).is_err());
             assert!(Snap::new_for_receiving(dst_dir.path(),
-                                            core,
                                             &key,
-                                            size_track.clone(),
-                                            snap_data.take_meta())
+                                            snap_data.take_meta(),
+                                            size_track.clone())
                 .is_err());
         }
     }
@@ -1996,7 +1882,7 @@ pub struct SnapStats {
     pub receiving_count: usize,
 }
 
-pub struct SnapManagerCore {
+struct SnapManagerCore {
     base: String,
     registry: HashMap<SnapKey, Vec<SnapEntry>>,
     use_sst_file_snapshot: bool,
@@ -2074,11 +1960,8 @@ impl SnapManager {
         Ok(())
     }
 
-    pub fn get_core(&self) -> Arc<RwLock<SnapManagerCore>> {
-        self.core.clone()
-    }
-
-    pub fn list_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
+    // Return all snapshots which is idle not being used.
+    pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         let core = self.core.rl();
         let path = Path::new(&core.base);
         let read_dir = try!(fs::read_dir(path));
@@ -2114,6 +1997,10 @@ impl SnapManager {
                     return None;
                 }
                 let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
+                if core.has_registered(&snap_key) {
+                    // Skip those registered snapshot.
+                    return None;
+                }
                 Some((snap_key, is_sending))
             })
             .collect();
@@ -2131,34 +2018,24 @@ impl SnapManager {
                                      key: &SnapKey,
                                      snap: &DbSnapshot)
                                      -> RaftStoreResult<Box<Snapshot>> {
-        let (use_sst_file_snapshot, dir, snap_size) = {
-            let core = self.core.rl();
-            (core.use_sst_file_snapshot, core.base.clone(), core.snap_size.clone())
-        };
-        if use_sst_file_snapshot {
-            let f = try!(v2::Snap::new_for_building(&dir, self.core.clone(), key, snap_size, snap));
+        let core = self.core.rl();
+        if core.use_sst_file_snapshot {
+            let f = try!(v2::Snap::new_for_building(&core.base, key, snap, core.snap_size.clone()));
             Ok(Box::new(f))
         } else {
-            let f = try!(v1::Snap::new_for_writing(&dir, self.core.clone(), true, key, snap_size));
+            let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), true, key));
             Ok(Box::new(f))
         }
     }
 
     pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
-        let (dir, snap_size) = {
-            let core = self.core.rl();
-            (core.base.clone(), core.snap_size.clone())
-        };
-        if let Ok(s) = v1::Snap::new_for_reading(&dir,
-                                                 self.core.clone(),
-                                                 true,
-                                                 key,
-                                                 snap_size.clone()) {
+        let core = self.core.rl();
+        if let Ok(s) = v1::Snap::new_for_reading(&core.base, core.snap_size.clone(), true, key) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
         }
-        let s = try!(v2::Snap::new_for_sending(&dir, self.core.clone(), key, snap_size));
+        let s = try!(v2::Snap::new_for_sending(&core.base, key, core.snap_size.clone()));
         Ok(Box::new(s))
     }
 
@@ -2166,37 +2043,39 @@ impl SnapManager {
                                       key: &SnapKey,
                                       data: &[u8])
                                       -> RaftStoreResult<Box<Snapshot>> {
-        let (dir, snap_size) = {
-            let core = self.core.rl();
-            (core.base.clone(), core.snap_size.clone())
-        };
+        let core = self.core.rl();
         let mut snapshot_data = RaftSnapshotData::new();
         try!(snapshot_data.merge_from_bytes(data));
         if snapshot_data.get_version() == v2::SNAPSHOT_VERSION {
-            let f = try!(v2::Snap::new_for_receiving(&dir,
-                                                     self.core.clone(),
+            let f = try!(v2::Snap::new_for_receiving(&core.base,
                                                      key,
-                                                     snap_size,
-                                                     snapshot_data.take_meta()));
+                                                     snapshot_data.take_meta(),
+                                                     core.snap_size.clone()));
             Ok(Box::new(f))
         } else {
-            let f = try!(v1::Snap::new_for_writing(&dir, self.core.clone(), false, key, snap_size));
+            let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), false, key));
             Ok(Box::new(f))
         }
     }
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
-        let (dir, snap_size) = {
-            let core = self.core.rl();
-            (core.base.clone(), core.snap_size.clone())
-        };
-        if let Ok(s) = v2::Snap::new_for_applying(&dir, self.core.clone(), key, snap_size.clone()) {
+        let core = self.core.rl();
+        if let Ok(s) = v2::Snap::new_for_applying(&core.base, key, core.snap_size.clone()) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
         }
-        let s = try!(v1::Snap::new_for_reading(&dir, self.core.clone(), false, key, snap_size));
+        let s = try!(v1::Snap::new_for_reading(&core.base, core.snap_size.clone(), false, key));
         Ok(Box::new(s))
+    }
+
+    pub fn delete_snapshot(&self, key: &SnapKey, snap: Box<Snapshot>) {
+        let core = self.core.rl();
+        if core.has_registered(key) {
+            info!("skip to delete {} since it's registered", snap.path());
+            return;
+        }
+        snap.delete();
     }
 
     /// Get the approximate size of snap file exists in snap directory.
@@ -2325,24 +2204,18 @@ mod test {
 
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let mut s1 =
-            SnapV1::new_for_writing(&path, mgr.get_core(), true, &key1, size_track.clone())
-                .unwrap();
+        let mut s1 = SnapV1::new_for_writing(&path, size_track.clone(), true, &key1).unwrap();
         let test_data = b"test_data";
         let expected_size = (test_data.len() + CRC32_BYTES_COUNT) as u64;
         s1.write_all(test_data).unwrap();
         s1.save_with_checksum().unwrap();
-        let mut s2 =
-            SnapV1::new_for_writing(&path, mgr.get_core(), false, &key1, size_track.clone())
-                .unwrap();
+        let mut s2 = SnapV1::new_for_writing(&path, size_track.clone(), false, &key1).unwrap();
         s2.write_all(test_data).unwrap();
         s2.save_with_checksum().unwrap();
 
         let key2 = SnapKey::new(2, 1, 1);
-        let s3 = SnapV1::new_for_writing(&path, mgr.get_core(), true, &key2, size_track.clone())
-            .unwrap();
-        let s4 = SnapV1::new_for_writing(&path, mgr.get_core(), false, &key2, size_track.clone())
-            .unwrap();
+        let s3 = SnapV1::new_for_writing(&path, size_track.clone(), true, &key2).unwrap();
+        let s4 = SnapV1::new_for_writing(&path, size_track.clone(), false, &key2).unwrap();
 
         assert!(s1.exists());
         assert!(s2.exists());
@@ -2378,22 +2251,18 @@ mod test {
         let snapshot = DbSnapshot::new(v2::test::get_test_db(&db_dir).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let mut s1 =
-            SnapV2::new_for_building(&path, mgr.get_core(), &key1, size_track.clone(), &snapshot)
-                .unwrap();
+        let mut s1 = SnapV2::new_for_building(&path, &key1, &snapshot, size_track.clone()).unwrap();
         let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
-        let mut s = SnapV2::new_for_sending(&path, mgr.get_core(), &key1, size_track.clone())
-            .unwrap();
+        let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone()).unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = SnapV2::new_for_receiving(&path,
-                                               mgr.get_core(),
                                                &key1,
-                                               size_track.clone(),
-                                               snap_data.get_meta().clone())
+                                               snap_data.get_meta().clone(),
+                                               size_track.clone())
             .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
         assert_eq!(n, expected_size);
@@ -2402,14 +2271,8 @@ mod test {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 =
-            SnapV2::new_for_building(&path, mgr.get_core(), &key2, size_track.clone(), &snapshot)
-                .unwrap();
-        let s4 = SnapV2::new_for_receiving(&path,
-                                           mgr.get_core(),
-                                           &key2,
-                                           size_track.clone(),
-                                           snap_data.take_meta())
+        let s3 = SnapV2::new_for_building(&path, &key2, &snapshot, size_track.clone()).unwrap();
+        let s4 = SnapV2::new_for_receiving(&path, &key2, snap_data.take_meta(), size_track.clone())
             .unwrap();
 
         assert!(s1.exists());
@@ -2489,14 +2352,14 @@ mod test {
     }
 
     fn check_registry_around_deregister(mgr: SnapManager, key: &SnapKey, entry: &SnapEntry) {
-        let mut snap_keys = mgr.list_snap().unwrap();
-        assert_eq!(snap_keys.len(), 1);
-        let snap_key = snap_keys.pop().unwrap().0;
-        assert!(mgr.has_registered(&snap_key));
+        let snap_keys = mgr.list_idle_snap().unwrap();
+        assert!(snap_keys.is_empty());
+        assert!(mgr.has_registered(key));
         mgr.deregister(key, entry);
-        let mut snap_keys = mgr.list_snap().unwrap();
+        let mut snap_keys = mgr.list_idle_snap().unwrap();
         assert_eq!(snap_keys.len(), 1);
         let snap_key = snap_keys.pop().unwrap().0;
+        assert_eq!(snap_key, *key);
         assert!(!mgr.has_registered(&snap_key));
     }
 
@@ -2546,14 +2409,15 @@ mod test {
         check_registry_around_deregister(dst_mgr.clone(), &key, &SnapEntry::Receiving);
 
         // Ensure the snapshot to be applied will not be deleted on GC.
-        let mut snap_keys = dst_mgr.list_snap().unwrap();
+        let mut snap_keys = dst_mgr.list_idle_snap().unwrap();
         assert_eq!(snap_keys.len(), 1);
         let snap_key = snap_keys.pop().unwrap().0;
+        assert_eq!(snap_key, key);
         assert!(!dst_mgr.has_registered(&snap_key));
         dst_mgr.register(key.clone(), SnapEntry::Applying);
         let s4 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
         let s5 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
-        s4.delete();
+        dst_mgr.delete_snapshot(&key, s4);
         assert!(s5.exists());
     }
 }
