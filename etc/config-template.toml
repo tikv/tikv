@@ -63,13 +63,13 @@ pd-heartbeat-tick-interval = "60s"
 # Store heartbeat tick interval for reporting to pd.
 pd-store-heartbeat-tick-interval = "10s"
 
-# When the region's size exceeds region-max-size, we will split the region 
-# into two which the left region's size will be region-split-size or a little 
-# bit smaller. 
+# When the region's size exceeds region-max-size, we will split the region
+# into two which the left region's size will be region-split-size or a little
+# bit smaller.
 region-max-size = "144MB"
 region-split-size = "96MB"
-# When region size changes exceeds region-split-check-diff, we should check 
-# whether the region should be split or not. 
+# When region size changes exceeds region-split-check-diff, we should check
+# whether the region should be split or not.
 region-split-check-diff = "12MB"
 
 # Interval to check region whether need to be split or not.
@@ -203,7 +203,7 @@ stats-dump-period-sec = 600
 # compaction-readahead-size = 0
 
 # This is the maximum buffer size that is used by WritableFileWrite
-# writable-file-max-buffer-size = "1MB" 
+# writable-file-max-buffer-size = "1MB"
 
 # Use O_DIRECT for both reads and writes in background flush and compactions
 # use-direct-io-for-flush-and-compaction = false
@@ -223,43 +223,45 @@ stats-dump-period-sec = 600
 #   zstd:   kZSTD
 
 # per level compression
-compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
 
 # Approximate size of user data packed per block.  Note that the
 # block size specified here corresponds to uncompressed data.
-block-size = "64KB"
+# block-size = "64KB"
 
 # If you're doing point lookups you definitely want to turn bloom filters on, We use
 # bloom filters to avoid unnecessary disk reads. Default bits_per_key is 10, which
 # yields ~1% false positive rate. Larger bits_per_key values will reduce false positive
 # rate, but increase memory usage and space amplification.
-bloom-filter-bits-per-key = 10
+# bloom-filter-bits-per-key = 10
 
 # false means one sst file one bloom filter, true means evry block has a corresponding bloom filter
-block-based-bloom-filter = false
+# block-based-bloom-filter = false
+
+# level0-file-num-compaction-trigger = 4
 
 # Soft limit on number of level-0 files. We start slowing down writes at this point.
-#level0-slowdown-writes-trigger = 20
+# level0-slowdown-writes-trigger = 20
 
 # Maximum number of level-0 files.  We stop writes at this point.
-#level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 36
 
 # Amount of data to build up in memory (backed by an unsorted log
 # on disk) before converting to a sorted on-disk file.
-write-buffer-size = "128MB"
+# write-buffer-size = "128MB"
 
 # The maximum number of write buffers that are built up in memory.
-max-write-buffer-number = 5
+# max-write-buffer-number = 5
 
 # The minimum number of write buffers that will be merged together
 # before writing to storage.
-min-write-buffer-number-to-merge = 1
+# min-write-buffer-number-to-merge = 1
 
 # Control maximum total data size for base level (level 1).
-max-bytes-for-level-base = "512MB"
+# max-bytes-for-level-base = "512MB"
 
 # Target file size for compaction.
-target-file-size-base = "32MB"
+# target-file-size-base = "32MB"
 
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read.
 # in normal cases should tune to 30%-50% system's total memory.
@@ -270,34 +272,56 @@ target-file-size-base = "32MB"
 # during table initialization.
 # cache-index-and-filter-blocks = true
 
-# options for Column Family write
+# Options for Column Family write
 # Column Family write used to store commit informations in MVCC model
 [rocksdb.writecf]
-compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
-block-size = "64KB"
-write-buffer-size = "128MB"
-max-write-buffer-number = 5
-min-write-buffer-number-to-merge = 1
-max-bytes-for-level-base = "512MB"
-target-file-size-base = "32MB"
+# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+# block-size = "64KB"
+# write-buffer-size = "128MB"
+# max-write-buffer-number = 5
+# min-write-buffer-number-to-merge = 1
+# max-bytes-for-level-base = "512MB"
+# target-file-size-base = "32MB"
 
 # in normal cases should tune to 10%-30% system's total memory.
 # block-cache-size = "256MB"
-
+# cache-index-and-filter-blocks = true
+# level0-file-num-compaction-trigger = 4
+# level0-slowdown-writes-trigger = 20
+# level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 
 # options for Column Family raft.
 # Column Family raft is used to store raft log and raft states.
 [rocksdb.raftcf]
-compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
-block-size = "64KB"
-write-buffer-size = "128MB"
-max-write-buffer-number = 5
-min-write-buffer-number-to-merge = 1
-max-bytes-for-level-base = "512MB"
-target-file-size-base = "32MB"
+# compression-per-level = "no:no:lz4:lz4:lz4:zstd:zstd"
+# block-size = "64KB"
+# write-buffer-size = "128MB"
+# max-write-buffer-number = 5
+# min-write-buffer-number-to-merge = 1
+# max-bytes-for-level-base = "512MB"
+# target-file-size-base = "32MB"
+
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"
+# level0-file-num-compaction-trigger = 4
+# level0-slowdown-writes-trigger = 20
+# level0-stop-writes-trigger = 36
+# cache-index-and-filter-blocks = true
+
+[rocksdb.lockcf]
+# compression-per-level = "no:no:no:no:no:no:no"
+# block-size = "16KB"
+# write-buffer-size = "128MB"
+# max-write-buffer-number = 5
+# min-write-buffer-number-to-merge = 1
+# max-bytes-for-level-base = "128MB"
+# target-file-size-base = "32MB"
+# block-cache-size = "256MB"
+# level0-file-num-compaction-trigger = 1
+# level0-slowdown-writes-trigger = 20
+# level0-stop-writes-trigger = 36
+# cache-index-and-filter-blocks = true
 
 [storage]
 # notify capacity of scheduler's channel

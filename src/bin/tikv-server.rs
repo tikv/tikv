@@ -75,10 +75,11 @@ use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
 use tikv::util::time_monitor::TimeMonitor;
 
-const RAFTCF_MIN_MEM: u64 = 256 * 1024 * 1024;
-const RAFTCF_MAX_MEM: u64 = 2 * 1024 * 1024 * 1024;
 const KB: u64 = 1024;
-const MB: u64 = KB * 1024;
+const MB: u64 = 1024 * KB;
+const GB: u64 = 1024 * MB;
+const RAFTCF_MIN_MEM: u64 = 256 * MB;
+const RAFTCF_MAX_MEM: u64 = 2 * GB;
 const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
 const SEC_TO_MS: i64 = 1000;
 
@@ -381,192 +382,207 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
                                                      Some(1024 * 1024));
     opts.set_writable_file_max_buffer_size(writable_file_max_buffer_size as i32);
 
-    let use_direct_io_for_flush_and_compaction = get_toml_boolean(config,
-                                                                  "rocksdb.use-direct-io-for-flush-and-compaction",
-                                                                  Some(false));
-    opts.set_use_direct_io_for_flush_and_compaction(use_direct_io_for_flush_and_compaction);
+    let direct_io = get_toml_boolean(config,
+                                     "rocksdb.use-direct-io-for-flush-and-compaction",
+                                     Some(false));
+    opts.set_use_direct_io_for_flush_and_compaction(direct_io);
 
     opts
 }
 
+struct CfOptValues {
+    pub block_size: i64,
+    pub block_cache_size: i64,
+    pub cache_index_and_filter_blocks: bool,
+    pub use_bloom_filter: bool,
+    pub whole_key_filtering: bool,
+    pub bloom_bits_per_key: i64,
+    pub block_based_filter: bool,
+    pub compression_per_level: String,
+    pub write_buffer_size: i64,
+    pub max_write_buffer_number: i64,
+    pub min_write_buffer_number_to_merge: i64,
+    pub max_bytes_for_level_base: i64,
+    pub target_file_size_base: i64,
+    pub level_zero_file_num_compaction_trigger: i64,
+    pub level_zero_slowdown_writes_trigger: i64,
+    pub level_zero_stop_writes_trigger: i64,
+}
+
+impl Default for CfOptValues {
+    fn default() -> CfOptValues {
+        CfOptValues {
+            block_size: 64 * KB as i64,
+            block_cache_size: 256 * MB as i64,
+            cache_index_and_filter_blocks: true,
+            use_bloom_filter: false,
+            whole_key_filtering: true,
+            bloom_bits_per_key: 10,
+            block_based_filter: false,
+            compression_per_level: String::from("no:no:lz4:lz4:lz4:zstd:zstd"),
+            write_buffer_size: 128 * MB as i64,
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: 512 * MB as i64,
+            target_file_size_base: 32 * MB as i64,
+            level_zero_file_num_compaction_trigger: 4,
+            level_zero_slowdown_writes_trigger: 20,
+            level_zero_stop_writes_trigger: 36,
+        }
+    }
+}
+
 fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
-                         block_cache_default: u64,
-                         use_bloom_filter: bool,
-                         whole_key_filtering: bool)
+                         default_values: CfOptValues)
                          -> RocksdbOptions {
     let prefix = String::from("rocksdb.") + cf + ".";
-    let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     let block_size = get_toml_int(config,
                                   (prefix.clone() + "block-size").as_str(),
-                                  Some(64 * 1024));
+                                  Some(default_values.block_size));
     block_base_opts.set_block_size(block_size as usize);
     let block_cache_size = get_toml_int(config,
                                         (prefix.clone() + "block-cache-size").as_str(),
-                                        Some(block_cache_default as i64));
+                                        Some(default_values.block_cache_size));
     block_base_opts.set_lru_cache(block_cache_size as usize);
 
     let cache_index_and_filter =
         get_toml_boolean(config,
                          (prefix.clone() + "cache-index-and-filter-blocks").as_str(),
-                         Some(true));
+                         Some(default_values.cache_index_and_filter_blocks));
     block_base_opts.set_cache_index_and_filter_blocks(cache_index_and_filter);
 
-    if use_bloom_filter {
+    if default_values.use_bloom_filter {
         let bloom_bits_per_key = get_toml_int(config,
                                               (prefix.clone() + "bloom-filter-bits-per-key")
                                                   .as_str(),
-                                              Some(10));
+                                              Some(default_values.bloom_bits_per_key));
         let block_based_filter = get_toml_boolean(config,
                                                   (prefix.clone() + "block-based-bloom-filter")
                                                       .as_str(),
-                                                  Some(false));
+                                                  Some(default_values.block_based_filter));
         block_base_opts.set_bloom_filter(bloom_bits_per_key as i32, block_based_filter);
 
-        block_base_opts.set_whole_key_filtering(whole_key_filtering);
+        block_base_opts.set_whole_key_filtering(default_values.whole_key_filtering);
     }
+    let mut opts = RocksdbOptions::new();
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_toml_string(config,
                               (prefix.clone() + "compression-per-level").as_str(),
-                              Some("no:no:lz4:lz4:lz4:zstd:zstd".to_owned()));
+                              Some(default_values.compression_per_level.clone()));
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.compression_per_level(&per_level_compression);
 
     let write_buffer_size = get_toml_int(config,
                                          (prefix.clone() + "write-buffer-size").as_str(),
-                                         Some(128 * 1024 * 1024));
+                                         Some(default_values.write_buffer_size));
     opts.set_write_buffer_size(write_buffer_size as u64);
 
     let max_write_buffer_number = get_toml_int(config,
                                                (prefix.clone() + "max-write-buffer-number")
                                                    .as_str(),
-                                               Some(5));
+                                               Some(default_values.max_write_buffer_number));
     opts.set_max_write_buffer_number(max_write_buffer_number as i32);
 
     let min_write_buffer_number_to_merge =
         get_toml_int(config,
                      (prefix.clone() + "min-write-buffer-number-to-merge").as_str(),
-                     Some(1));
+                     Some(default_values.min_write_buffer_number_to_merge));
     opts.set_min_write_buffer_number_to_merge(min_write_buffer_number_to_merge as i32);
 
     let max_bytes_for_level_base = get_toml_int(config,
                                                 (prefix.clone() + "max-bytes-for-level-base")
                                                     .as_str(),
-                                                Some(512 * 1024 * 1024));
+                                                Some(default_values.max_bytes_for_level_base));
     opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
 
     let target_file_size_base = get_toml_int(config,
                                              (prefix.clone() + "target-file-size-base").as_str(),
-                                             Some(32 * 1024 * 1024));
+                                             Some(default_values.target_file_size_base));
     opts.set_target_file_size_base(target_file_size_base as u64);
+
+    let level_zero_file_num_compaction_trigger =
+        get_toml_int(config,
+                     (prefix.clone() + "level0-file-num-compaction-trigger").as_str(),
+                     Some(default_values.level_zero_file_num_compaction_trigger));
+    opts.set_level_zero_file_num_compaction_trigger(level_zero_file_num_compaction_trigger as i32);
 
     let level_zero_slowdown_writes_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-slowdown-writes-trigger").as_str(),
-                     Some(20));
+                     Some(default_values.level_zero_slowdown_writes_trigger));
     opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
 
     let level_zero_stop_writes_trigger =
         get_toml_int(config,
                      (prefix.clone() + "level0-stop-writes-trigger").as_str(),
-                     Some(36));
+                     Some(default_values.level_zero_stop_writes_trigger));
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
     opts
 }
 
 fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    // Default column family uses bloom filter.
-    let default_block_cache_size =
-        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64);
-    get_rocksdb_cf_option(config,
-                          "defaultcf",
-                          default_block_cache_size,
-                          true, // bloom filter
-                          true /* whole key filtering */)
+    let mut default_values = CfOptValues::default();
+    default_values.block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64) as i64;
+    default_values.use_bloom_filter = true;
+    default_values.whole_key_filtering = true;
+
+    get_rocksdb_cf_option(config, "defaultcf", default_values)
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let default_block_cache_size =
-        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64);
-    let mut opt = get_rocksdb_cf_option(config, "writecf", default_block_cache_size, true, false);
-    // prefix extractor(trim the timestamp at tail) for write cf.
-    opt.set_prefix_extractor("FixedSuffixSliceTransform",
+    let mut default_values = CfOptValues::default();
+    default_values.block_cache_size =
+        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64) as i64;
+    default_values.use_bloom_filter = true;
+    default_values.whole_key_filtering = false;
+
+    let mut opts = get_rocksdb_cf_option(config, "writecf", default_values);
+    // Prefix extractor(trim the timestamp at tail) for write cf.
+    opts.set_prefix_extractor("FixedSuffixSliceTransform",
                               Box::new(rocksdb_util::FixedSuffixSliceTransform::new(8)))
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    // create prefix bloom for memtable.
-    opt.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
-    opt
+    // Create prefix bloom filter for memtable.
+    opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+    opts
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let mut default_block_cache_size =
+    let mut block_cache_size =
         align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
-    if default_block_cache_size < RAFTCF_MIN_MEM {
-        default_block_cache_size = RAFTCF_MIN_MEM;
+    if block_cache_size < RAFTCF_MIN_MEM {
+        block_cache_size = RAFTCF_MIN_MEM;
     }
-    if default_block_cache_size > RAFTCF_MAX_MEM {
-        default_block_cache_size = RAFTCF_MAX_MEM;
+    if block_cache_size > RAFTCF_MAX_MEM {
+        block_cache_size = RAFTCF_MAX_MEM;
     }
-    let mut opt = get_rocksdb_cf_option(config, "raftcf", default_block_cache_size, false, false);
-    opt.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
+    let mut default_values = CfOptValues::default();
+    default_values.block_cache_size = block_cache_size as i64;
+    default_values.use_bloom_filter = true;
+    default_values.whole_key_filtering = true;
+
+    let mut opts = get_rocksdb_cf_option(config, "raftcf", default_values);
+    opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
             Box::new(rocksdb_util::FixedPrefixSliceTransform::new(region_raft_prefix_len())))
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    opt
+    opts
 }
 
 fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
-    let mut opts = RocksdbOptions::new();
-    let mut block_base_opts = BlockBasedOptions::new();
-    block_base_opts.set_block_size(16 * 1024);
+    let mut default_values = CfOptValues::default();
+    default_values.block_size = 16 * KB as i64;
+    default_values.use_bloom_filter = true;
+    default_values.whole_key_filtering = true;
+    default_values.compression_per_level = String::from("no:no:no:no:no:no:no");
+    default_values.level_zero_file_num_compaction_trigger = 1;
+    default_values.max_bytes_for_level_base = 128 * MB as i64;
 
-    let block_cache_size = get_toml_int(config,
-                                        "rocksdb.lockcf.block-cache-size",
-                                        Some(256 * 1024 * 1024));
-    block_base_opts.set_lru_cache(block_cache_size as usize);
-
-    block_base_opts.set_bloom_filter(10, false);
-    opts.set_block_based_table_factory(&block_base_opts);
-
-    let cpl = "no:no:no:no:no:no:no".to_owned();
-    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    opts.compression_per_level(&per_level_compression);
-
-    let write_buffer_size = get_toml_int(config,
-                                         "rocksdb.lockcf.write-buffer-size",
-                                         Some(128 * 1024 * 1024));
-    opts.set_write_buffer_size(write_buffer_size as u64);
-
-    let max_write_buffer_number =
-        get_toml_int(config, "rocksdb.lockcf.max-write-buffer-number", Some(5));
-    opts.set_max_write_buffer_number(max_write_buffer_number as i32);
-
-    let max_bytes_for_level_base = get_toml_int(config,
-                                                "rocksdb.lockcf.max-bytes-for-level-base",
-                                                Some(128 * 1024 * 1024));
-    opts.set_max_bytes_for_level_base(max_bytes_for_level_base as u64);
-    opts.set_target_file_size_base(32 * 1024 * 1024);
-
-    // set level0_file_num_compaction_trigger = 1 is very important,
-    // this will result in fewer sst files in lock cf.
-    opts.set_level_zero_file_num_compaction_trigger(1);
-
-    let level_zero_slowdown_writes_trigger = get_toml_int(config,
-                                                          "rocksdb.lockcf.\
-                                                           level0-slowdown-writes-trigger",
-                                                          Some(20));
-    opts.set_level_zero_slowdown_writes_trigger(level_zero_slowdown_writes_trigger as i32);
-
-    let level_zero_stop_writes_trigger = get_toml_int(config,
-                                                      "rocksdb.lockcf.level0-stop-writes-trigger",
-                                                      Some(36));
-    opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
-
-    opts
+    get_rocksdb_cf_option(config, "lockcf", default_values)
 }
 
 fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
