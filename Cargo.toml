@@ -46,7 +46,6 @@ libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
-rustc-serialize = "0.3"
 protobuf = "1.2.1"
 nix = "0.6.0"
 utime = "0.1"
