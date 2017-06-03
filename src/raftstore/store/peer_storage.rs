@@ -42,6 +42,7 @@ use storage::CF_RAFT;
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
+const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
 pub const JOB_STATUS_PENDING: usize = 0;
 pub const JOB_STATUS_RUNNING: usize = 1;
@@ -319,7 +320,7 @@ impl PeerStorage {
         let mut next_index = low;
         let mut exceeded_max_size = false;
 
-        if low + 8 >= high {
+        if high - low <= RAFT_LOG_MULTI_GET_CNT {
             // If election happens in inactive regions, they will just try
             // to fetch one empty log.
             let handle = self.engine.cf_handle(CF_RAFT).unwrap();
