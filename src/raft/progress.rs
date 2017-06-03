@@ -84,7 +84,7 @@ pub struct Progress {
 
 
 impl Progress {
-    pub fn reset_state(&mut self, state: ProgressState) {
+    fn reset_state(&mut self, state: ProgressState) {
         self.paused = false;
         self.pending_snapshot = 0;
         self.state = state;
