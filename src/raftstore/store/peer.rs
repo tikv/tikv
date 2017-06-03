@@ -1394,7 +1394,7 @@ impl Peer {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
-        if let Err(e) = self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut req) {
+        if let Err(e) = self.coprocessor_host.pre_propose(self.region(), &mut req) {
             cmd_resp::bind_error(&mut err_resp, e.into());
             cb(err_resp);
             return;
