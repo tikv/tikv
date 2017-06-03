@@ -210,7 +210,8 @@ pub struct Peer {
 
     pub tag: String,
 
-    pub last_ready_idx: u64,
+    // Index of last scheduled committed raft log.
+    pub last_applying_idx: u64,
     pub last_compacted_idx: u64,
     // Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
@@ -325,7 +326,7 @@ impl Peer {
             marked_to_be_checked: false,
             leader_missing_time: Some(Instant::now()),
             tag: tag,
-            last_ready_idx: applied_index,
+            last_applying_idx: applied_index,
             last_compacted_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
@@ -613,9 +614,13 @@ impl Peer {
 
     #[inline]
     pub fn ready_to_handle_pending_snap(&self) -> bool {
-        // If committed_index isn't equal to applied_index, written apply state may be overwritten
+        // If apply worker is still working, written apply state may be overwritten
         // by apply worker. So we have to wait here.
-        self.get_store().committed_index() == self.get_store().applied_index()
+        // Please note that committed_index can't be used here. When applying a snapshot,
+        // a stale heartbeat can make the leader think follower has already applied
+        // the snapshot, and send remaining log entries, which may increase committed_index.
+        // TODO: add more test
+        self.last_applying_idx == self.get_store().applied_index()
     }
 
     #[inline]
@@ -642,20 +647,20 @@ impl Peer {
         }
 
         if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
-            debug!("{} apply index {} != committed index {}, skip applying snapshot.",
+            debug!("{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
                    self.tag,
                    self.get_store().applied_index(),
-                   self.get_store().committed_index());
+                   self.last_applying_idx);
             return;
         }
 
-        if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
+        if !self.raft_group.has_ready_since(Some(self.last_applying_idx)) {
             return;
         }
 
         debug!("{} handle raft ready", self.tag);
 
-        let mut ready = self.raft_group.ready_since(self.last_ready_idx);
+        let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
         self.on_role_changed(&ready, worker);
 
@@ -720,7 +725,7 @@ impl Peer {
         // in `ready.committed_entries` again, which will lead to inconsistency.
         if self.is_applying_snapshot() {
             // Snapshot's metadata has been applied.
-            self.last_ready_idx = self.get_store().truncated_index();
+            self.last_applying_idx = self.get_store().truncated_index();
         } else {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease.
@@ -740,7 +745,7 @@ impl Peer {
                 }
             }
             if !committed_entries.is_empty() {
-                self.last_ready_idx = committed_entries.last().unwrap().get_index();
+                self.last_applying_idx = committed_entries.last().unwrap().get_index();
                 apply_tasks.push(Apply::new(self.region_id, self.term(), committed_entries));
             }
         }
@@ -751,7 +756,7 @@ impl Peer {
         if self.is_applying_snapshot() {
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
-            self.raft_group.advance_apply(self.last_ready_idx);
+            self.raft_group.advance_apply(self.last_applying_idx);
         }
     }
 
@@ -1091,8 +1096,7 @@ impl Peer {
 
         match change_type {
             ConfChangeType::AddNode => {
-                let progress = Progress { ..Default::default() };
-                status.progress.insert(peer.get_id(), progress);
+                status.progress.insert(peer.get_id(), Progress::default());
             }
             ConfChangeType::RemoveNode => {
                 if status.progress.remove(&peer.get_id()).is_none() {

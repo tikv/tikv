@@ -1043,9 +1043,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             first_index: u64,
                             state: RaftTruncatedState) {
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
-        let total_cnt = peer.last_ready_idx - first_index;
+        let total_cnt = peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
-        let remain_cnt = peer.last_ready_idx - state.get_index() - 1;
+        let remain_cnt = peer.last_applying_idx - state.get_index() - 1;
         peer.raft_log_size_hint = peer.raft_log_size_hint * remain_cnt / total_cnt;
         let task = RaftlogGcTask {
             engine: peer.get_store().get_engine().clone(),
