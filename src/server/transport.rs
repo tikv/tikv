@@ -146,7 +146,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
 
     fn send_store(&self, store_id: u64, msg: RaftMessage) {
         // check the corresponding token for store.
-        let addr = self.raft_client.rl().addrs.get(&store_id).map(|x| x.to_owned());
+        let addr = self.raft_client.rl().addrs.get(&store_id).cloned();
         if let Some(addr) = addr {
             self.write_data(store_id, addr, msg);
             return;
