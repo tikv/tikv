@@ -637,7 +637,7 @@ mod v1 {
         #[test]
         fn test_snap_validate() {
             let path = TempDir::new("test-snap-mgr").unwrap();
-            let path_str = path.path().to_str().unwrap().to_owned();
+            let path_str = path.path().to_str().unwrap();
 
             let key1 = SnapKey::new(1, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
@@ -1890,21 +1890,6 @@ struct SnapManagerCore {
     snap_size: Arc<RwLock<u64>>,
 }
 
-impl SnapManagerCore {
-    pub fn new(path: String, use_sst_file_snapshot: bool) -> SnapManagerCore {
-        SnapManagerCore {
-            base: path,
-            registry: map![],
-            use_sst_file_snapshot: use_sst_file_snapshot,
-            snap_size: Arc::new(RwLock::new(0)),
-        }
-    }
-
-    pub fn has_registered(&self, key: &SnapKey) -> bool {
-        self.registry.contains_key(key)
-    }
-}
-
 fn notify_stats(ch: Option<&SendCh<Msg>>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.try_send(Msg::SnapshotStats) {
@@ -1927,7 +1912,12 @@ impl SnapManager {
                                 use_sst_file_snapshot: bool)
                                 -> SnapManager {
         SnapManager {
-            core: Arc::new(RwLock::new(SnapManagerCore::new(path.into(), use_sst_file_snapshot))),
+            core: Arc::new(RwLock::new(SnapManagerCore {
+                base: path.into(),
+                registry: map![],
+                use_sst_file_snapshot: use_sst_file_snapshot,
+                snap_size: Arc::new(RwLock::new(0)),
+            })),
             ch: ch,
         }
     }
@@ -1997,7 +1987,7 @@ impl SnapManager {
                     return None;
                 }
                 let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
-                if core.has_registered(&snap_key) {
+                if core.registry.contains_key(&snap_key) {
                     // Skip those registered snapshot.
                     return None;
                 }
@@ -2011,7 +2001,7 @@ impl SnapManager {
 
     #[inline]
     pub fn has_registered(&self, key: &SnapKey) -> bool {
-        self.core.rl().has_registered(key)
+        self.core.rl().registry.contains_key(key)
     }
 
     pub fn get_snapshot_for_building(&self,
@@ -2071,7 +2061,7 @@ impl SnapManager {
 
     pub fn delete_snapshot(&self, key: &SnapKey, snap: Box<Snapshot>) {
         let core = self.core.rl();
-        if core.has_registered(key) {
+        if core.registry.contains_key(key) {
             info!("skip to delete {} since it's registered", snap.path());
             return;
         }
