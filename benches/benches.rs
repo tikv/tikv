@@ -31,6 +31,7 @@ extern crate rocksdb;
 extern crate protobuf;
 extern crate kvproto;
 
+mod snap;
 mod channel;
 mod writebatch;
 mod serialization;
