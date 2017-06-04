@@ -164,6 +164,10 @@ impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
     fn send(&self, m: RaftMessage) -> Result<()> {
         Channel::send(self, m)
     }
+
+    fn batch_send(&self, _: Vec<RaftMessage>) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {

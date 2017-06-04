@@ -557,6 +557,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             Msg::Quit => event_loop.shutdown(),
             Msg::WriteData { token, data } => self.write_data(event_loop, token, data),
             Msg::SendStore { store_id, data } => self.send_store(event_loop, store_id, data),
+            Msg::BatchSendStores { batch } => {
+                for (store_id, data) in batch {
+                    self.send_store(event_loop, store_id, data);
+                }
+            }
             Msg::ResolveResult { store_id, sock_addr, data } => {
                 self.on_resolve_result(event_loop, store_id, sock_addr, data)
             }

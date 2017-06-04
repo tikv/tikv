@@ -119,6 +119,8 @@ pub enum Msg {
     WriteData { token: Token, data: ConnData },
     // Send data to remote store.
     SendStore { store_id: u64, data: ConnData },
+    // Batch send data to remote store.
+    BatchSendStores { batch: Vec<(u64, ConnData)> },
     // Resolve store address result.
     ResolveResult {
         store_id: u64,

@@ -143,6 +143,22 @@ impl Transport for ServerTransport {
         }));
         Ok(())
     }
+
+    fn batch_send(&self, msgs: Vec<RaftMessage>) -> RaftStoreResult<()> {
+        let mut batch = Vec::with_capacity(msgs.len());
+        for msg in msgs {
+            let to_store_id = msg.get_to_peer().get_store_id();
+
+            let mut req = Message::new();
+            req.set_msg_type(MessageType::Raft);
+            req.set_raft(msg);
+
+            batch.push((to_store_id, ConnData::new(self.alloc_msg_id(), req)));
+        }
+
+        try!(self.ch.try_send(Msg::BatchSendStores { batch: batch }));
+        Ok(())
+    }
 }
 
 
