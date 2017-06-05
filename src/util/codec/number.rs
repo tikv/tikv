@@ -111,19 +111,19 @@ pub trait NumberEncoder: Write {
         self.encode_u64_desc(u)
     }
 
-    fn encode_u16_with_little_endian(&mut self, v: u16) -> Result<()> {
+    fn encode_u16_le(&mut self, v: u16) -> Result<()> {
         self.write_u16::<LittleEndian>(v).map_err(From::from)
     }
 
-    fn encode_u32_with_little_endian(&mut self, v: u32) -> Result<()> {
+    fn encode_u32_le(&mut self, v: u32) -> Result<()> {
         self.write_u32::<LittleEndian>(v).map_err(From::from)
     }
 
-    fn encode_f64_with_little_endian(&mut self, v: f64) -> Result<()> {
+    fn encode_f64_le(&mut self, v: f64) -> Result<()> {
         self.write_f64::<LittleEndian>(v).map_err(From::from)
     }
 
-    fn encode_i64_with_little_endian(&mut self, v: i64) -> Result<()> {
+    fn encode_i64_le(&mut self, v: i64) -> Result<()> {
         self.write_i64::<LittleEndian>(v).map_err(From::from)
     }
 }
@@ -189,19 +189,19 @@ pub trait NumberDecoder: Read {
         self.decode_u64_desc().map(order_decode_f64)
     }
 
-    fn decode_u16_with_little_endian(&mut self) -> Result<u16> {
+    fn decode_u16_le(&mut self) -> Result<u16> {
         self.read_u16::<LittleEndian>().map_err(From::from)
     }
 
-    fn decode_u32_with_little_endian(&mut self) -> Result<u32> {
+    fn decode_u32_le(&mut self) -> Result<u32> {
         self.read_u32::<LittleEndian>().map_err(From::from)
     }
 
-    fn decode_f64_with_little_endian(&mut self) -> Result<f64> {
+    fn decode_f64_le(&mut self) -> Result<f64> {
         self.read_f64::<LittleEndian>().map_err(From::from)
     }
 
-    fn decode_i64_with_little_endian(&mut self) -> Result<i64> {
+    fn decode_i64_le(&mut self) -> Result<i64> {
         self.read_i64::<LittleEndian>().map_err(From::from)
     }
 }
@@ -374,28 +374,22 @@ mod test {
                 F64_TESTS);
 
     test_serialize!(var_i64_little_endian_codec,
-                    encode_i64_with_little_endian,
-                    decode_i64_with_little_endian,
+                    encode_i64_le,
+                    decode_i64_le,
                     I64_TESTS);
 
-    test_serialize!(var_u16_codec,
-                    encode_u16_with_little_endian,
-                    decode_u16_with_little_endian,
-                    U16_TESTS);
-    test_serialize!(var_u32_codec,
-                    encode_u32_with_little_endian,
-                    decode_u32_with_little_endian,
-                    U32_TESTS);
+    test_serialize!(var_u16_codec, encode_u16_le, decode_u16_le, U16_TESTS);
+    test_serialize!(var_u32_codec, encode_u32_le, decode_u32_le, U32_TESTS);
 
     test_serialize!(var_i64_codec, encode_var_i64, decode_var_i64, I64_TESTS);
 
     #[test]
     #[allow(float_cmp)]
-    fn test_var_f64_with_little_endian() {
+    fn test_var_f64_le() {
         for &v in F64_TESTS {
             let mut buf = vec![];
-            buf.encode_f64_with_little_endian(v).unwrap();
-            let value = buf.as_slice().decode_f64_with_little_endian().unwrap();
+            buf.encode_f64_le(v).unwrap();
+            let value = buf.as_slice().decode_f64_le().unwrap();
             assert_eq!(v, value);
         }
     }
@@ -443,6 +437,7 @@ mod test {
     test_eof!(i64_eof, encode_i64, decode_i64, 1);
     test_eof!(u64_eof, encode_u64, decode_u64, 1);
     test_eof!(f64_eof, encode_f64, decode_f64, 1.0);
+    test_eof!(i64_desc_eof, encode_i64_desc, decode_i64_desc, 1);
 
     #[test]
     fn test_var_eof() {

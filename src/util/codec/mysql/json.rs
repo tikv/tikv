@@ -153,7 +153,7 @@ impl Json {
                     PRECEDENCE_BOOLEAN
                 }
             }
-            Json::I64(_)|Json::Double(_) => PRECEDENCE_NUMBER,
+            Json::I64(_) | Json::Double(_) => PRECEDENCE_NUMBER,
             Json::String(_) => PRECEDENCE_STRING,
         }
     }
@@ -330,20 +330,20 @@ fn decode_str(mut data: &[u8]) -> Result<Json> {
 }
 
 fn encode_double(data: f64, buf: &mut Vec<u8>) {
-    buf.encode_f64_with_little_endian(data).unwrap();
+    buf.encode_f64_le(data).unwrap();
 }
 
 fn decode_double(mut data: &[u8]) -> Result<Json> {
-    let value = try!(data.decode_f64_with_little_endian());
+    let value = try!(data.decode_f64_le());
     Ok(Json::Double(value))
 }
 
 fn encode_i64(data: i64, buf: &mut Vec<u8>) {
-    buf.encode_i64_with_little_endian(data).unwrap();
+    buf.encode_i64_le(data).unwrap();
 }
 
 fn decode_i64(mut data: &[u8]) -> Result<Json> {
-    let value = try!(data.decode_i64_with_little_endian());
+    let value = try!(data.decode_i64_le());
     Ok(Json::I64(value))
 }
 
@@ -364,8 +364,8 @@ fn encode_obj(data: &BTreeMap<String, Json>, buf: &mut Vec<u8>) {
     for key in data.keys() {
         let encode_key = key.as_bytes();
         let key_len = encode_keys.write(encode_key).unwrap();
-        key_entries.encode_u32_with_little_endian(key_offset as u32).unwrap();
-        key_entries.encode_u16_with_little_endian(key_len as u16).unwrap();
+        key_entries.encode_u32_le(key_offset as u32).unwrap();
+        key_entries.encode_u16_le(key_len as u16).unwrap();
         key_offset += key_len;
     }
 
@@ -379,8 +379,8 @@ fn encode_obj(data: &BTreeMap<String, Json>, buf: &mut Vec<u8>) {
                          &mut encode_values);
     }
     let size = value_offset;
-    buf.encode_u32_with_little_endian(element_count as u32).unwrap();
-    buf.encode_u32_with_little_endian(size as u32).unwrap();
+    buf.encode_u32_le(element_count as u32).unwrap();
+    buf.encode_u32_le(size as u32).unwrap();
     buf.write_all(key_entries.as_mut()).unwrap();
     buf.write_all(value_entries.as_mut()).unwrap();
     buf.write_all(encode_keys.as_mut()).unwrap();
@@ -389,8 +389,8 @@ fn encode_obj(data: &BTreeMap<String, Json>, buf: &mut Vec<u8>) {
 
 fn decode_obj(mut data: &[u8]) -> Result<Json> {
     // count size key_entries value_entries keys values
-    let element_count = data.decode_u32_with_little_endian().unwrap() as usize;
-    data.decode_u32_with_little_endian().unwrap();
+    let element_count = data.decode_u32_le().unwrap() as usize;
+    data.decode_u32_le().unwrap();
     // already removed count and size
     let mut obj = BTreeMap::new();
     if element_count == 0 {
@@ -406,8 +406,8 @@ fn decode_obj(mut data: &[u8]) -> Result<Json> {
 
     let mut key_offset = key_entries_len + value_entries_len;
     for _ in 0..element_count {
-        let key_real_offset = key_entries_data.decode_u32_with_little_endian().unwrap();
-        let key_len = key_entries_data.decode_u16_with_little_endian().unwrap();
+        let key_real_offset = key_entries_data.decode_u32_le().unwrap();
+        let key_len = key_entries_data.decode_u16_le().unwrap();
         let key_data = &data[key_offset..(key_offset + key_len as usize)];
         let key = String::from(str::from_utf8(key_data).unwrap());
         let value =
@@ -435,16 +435,16 @@ fn encode_array(data: &[Json], buf: &mut Vec<u8>) {
                          &mut encode_values);
     }
     let total_size = value_offset;
-    buf.encode_u32_with_little_endian(element_count as u32).unwrap();
-    buf.encode_u32_with_little_endian(total_size as u32).unwrap();
+    buf.encode_u32_le(element_count as u32).unwrap();
+    buf.encode_u32_le(total_size as u32).unwrap();
     buf.write_all(value_entries.as_mut()).unwrap();
     buf.write_all(encode_values.as_mut()).unwrap();
 }
 
 fn decode_array(mut data: &[u8]) -> Result<Json> {
     // count size value_entries values
-    let element_count = data.decode_u32_with_little_endian().unwrap() as usize;
-    data.decode_u32_with_little_endian().unwrap();
+    let element_count = data.decode_u32_le().unwrap() as usize;
+    data.decode_u32_le().unwrap();
     // already removed count and size
     let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
     let mut value_entries_data = &data[0..value_entries_len];
@@ -476,7 +476,7 @@ fn encode_item_json(data: &Json,
             }
         }
         _ => {
-            index_buf.encode_u32_with_little_endian(*offset).unwrap();
+            index_buf.encode_u32_le(*offset).unwrap();
             let cur_value_len = data.encode(data_buf.as_mut()) as u32;
             *offset += cur_value_len;
         }
@@ -493,7 +493,7 @@ fn decode_item_json(value_entries_data: &[u8],
     match code {
         TYPE_CODE_LITERAL => Json::decode(code, entry_value),
         _ => {
-            let real_offset = entry_value.decode_u32_with_little_endian().unwrap();
+            let real_offset = entry_value.decode_u32_le().unwrap();
             let offset_in_values = real_offset - data_start_position;
             Json::decode(code, &values_data[offset_in_values as usize..])
         }
