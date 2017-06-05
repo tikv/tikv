@@ -535,7 +535,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
                 Ok(ApplyTaskRes::Applys(multi_res)) => {
-                    let mut raftlog_gc_tasks = RaftlogGcTasks::from_vec(vec![]);
+                    let mut raftlog_gc_tasks = RaftlogGcTasks::new();
                     for res in multi_res {
                         if let Some(p) = self.region_peers.get_mut(&res.region_id) {
                             debug!("{} async apply finish: {:?}", p.tag, res);

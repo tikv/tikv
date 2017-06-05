@@ -58,8 +58,8 @@ impl Display for Tasks {
 }
 
 impl Tasks {
-    pub fn from_vec(tasks: Vec<Task>) -> Tasks {
-        Tasks(tasks)
+    pub fn new() -> Tasks {
+        Tasks(vec![])
     }
 }
 
