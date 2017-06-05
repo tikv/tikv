@@ -29,7 +29,6 @@ dependencies = [
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 0.1.70 (registry+https://github.com/rust-lang/crates.io-index)",
  "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
- "rustc-serialize 0.3.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "signal 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "sys-info 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -348,7 +347,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "jemalloc-sys"
 version = "0.1.0"
-source = "git+https://github.com/busyjay/jemallocator.git?branch=dev#bd0259ee6b63c8451817a4f49712a32688335c7c"
+source = "git+https://github.com/busyjay/jemallocator.git?branch=dev#079e31b1b9c9eccff9bb01afd2eab7f5037d9bf1"
 dependencies = [
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -356,7 +355,7 @@ dependencies = [
 [[package]]
 name = "jemallocator"
 version = "0.1.0"
-source = "git+https://github.com/busyjay/jemallocator.git?branch=dev#bd0259ee6b63c8451817a4f49712a32688335c7c"
+source = "git+https://github.com/busyjay/jemallocator.git?branch=dev#079e31b1b9c9eccff9bb01afd2eab7f5037d9bf1"
 dependencies = [
  "jemalloc-sys 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
 ]
