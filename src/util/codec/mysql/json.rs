@@ -13,6 +13,7 @@
 
 use super::Result;
 use std::{str, f64};
+use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::BTreeMap;
 use std::result::Result as SResult;
 use serde_json::{self, Value};
@@ -27,6 +28,25 @@ const TYPE_CODE_I64: u8 = 0x09;
 const TYPE_CODE_DOUBLE: u8 = 0x0b;
 const TYPE_CODE_STRING: u8 = 0x0c;
 
+#[allow(dead_code)]
+const PRECEDENCE_BLOB: i32 = -1;
+#[allow(dead_code)]
+const PRECEDENCE_BIT: i32 = -2;
+#[allow(dead_code)]
+const PRECEDENCE_OPAQUE: i32 = -3;
+#[allow(dead_code)]
+const PRECEDENCE_DATETIME: i32 = -4;
+#[allow(dead_code)]
+const PRECEDENCE_TIME: i32 = -5;
+#[allow(dead_code)]
+const PRECEDENCE_DATE: i32 = -6;
+const PRECEDENCE_BOOLEAN: i32 = -7;
+const PRECEDENCE_ARRAY: i32 = -8;
+const PRECEDENCE_OBJECT: i32 = -9;
+const PRECEDENCE_STRING: i32 = -10;
+const PRECEDENCE_NUMBER: i32 = -11;
+const PRECEDENCE_NULL: i32 = -12;
+
 const JSON_LITERAL_NIL: u8 = 0x00;
 const JSON_LITERAL_TRUE: u8 = 0x01;
 const JSON_LITERAL_FALSE: u8 = 0x02;
@@ -38,6 +58,7 @@ const LENGTH_KEY_ENTRY: usize = LENGTH_U32 + LENGTH_U16;
 const LENGTH_VALUE_ENTRY: usize = LENGTH_TYPE + LENGTH_U32;
 
 const ERR_EMPTY_DOCUMENT: &str = "The document is empty";
+const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
 // Json implement type json used in tikv, it specifies the following
 // implementations:
@@ -50,7 +71,7 @@ const ERR_EMPTY_DOCUMENT: &str = "The document is empty";
 // The only difference is that we use large `object` or large `array` for
 // the small corresponding ones. That means in our implementation there
 // is no difference between small `object` and big `object`, so does `array`.
-#[derive(Clone,PartialEq,Debug)]
+#[derive(Clone, Debug)]
 pub enum Json {
     Object(BTreeMap<String, Json>),
     Array(Vec<Json>),
@@ -121,8 +142,65 @@ impl Json {
         }
     }
 
+    fn get_precedence(&self) -> i32 {
+        match *self {
+            Json::Object(_) => PRECEDENCE_OBJECT,
+            Json::Array(_) => PRECEDENCE_ARRAY,
+            Json::Literal(d) => {
+                if d == JSON_LITERAL_NIL {
+                    PRECEDENCE_NULL
+                } else {
+                    PRECEDENCE_BOOLEAN
+                }
+            }
+            Json::I64(_)|Json::Double(_) => PRECEDENCE_NUMBER,
+            Json::String(_) => PRECEDENCE_STRING,
+        }
+    }
+
     pub fn to_string(&self) -> String {
         serde_json::to_string(self).unwrap()
+    }
+
+    fn as_literal(&self) -> Result<u8> {
+        if let Json::Literal(d) = *self {
+            Ok(d)
+        } else {
+            Err(invalid_type!("{} from {} to literal",
+                              ERR_CONVERT_FAILED,
+                              self.get_type_code()))
+        }
+    }
+
+    fn as_f64(&self) -> Result<f64> {
+        match *self {
+            Json::Double(d) => Ok(d),
+            Json::I64(d) => Ok(d as f64),
+            Json::Literal(d) if d != JSON_LITERAL_NIL => Ok(d as f64),
+            _ => {
+                Err(invalid_type!("{} from {} to f64",
+                                  ERR_CONVERT_FAILED,
+                                  self.get_type_code()))
+            }
+        }
+    }
+
+    fn as_str(&self) -> Result<&str> {
+        if let Json::String(ref s) = *self {
+            return Ok(s);
+        }
+        Err(invalid_type!("{} from {} to string",
+                          ERR_CONVERT_FAILED,
+                          self.get_type_code()))
+    }
+
+    fn as_array(&self) -> Result<&[Json]> {
+        if let Json::Array(ref s) = *self {
+            return Ok(s);
+        }
+        Err(invalid_type!("{} from {} to array",
+                          ERR_CONVERT_FAILED,
+                          self.get_type_code()))
     }
 }
 
@@ -156,6 +234,72 @@ impl Serialize for Json {
             Json::Double(d) => serializer.serialize_f64(d),
             Json::I64(d) => serializer.serialize_i64(d),
         }
+    }
+}
+
+impl PartialEq for Json {
+    fn eq(&self, right: &Json) -> bool {
+        self.cmp(right) == Ordering::Equal
+    }
+}
+
+impl PartialOrd for Json {
+    fn partial_cmp(&self, right: &Json) -> Option<Ordering> {
+        let precedence_diff = self.get_precedence() - right.get_precedence();
+        if precedence_diff == 0 {
+            return match self.get_type_code() {
+                TYPE_CODE_LITERAL => {
+                    let left_data = self.as_literal().unwrap();
+                    let right_data = right.as_literal().unwrap();
+                    right_data.partial_cmp(&left_data)
+                }
+                TYPE_CODE_DOUBLE | TYPE_CODE_I64 => {
+                    let left_data = self.as_f64().unwrap();
+                    let right_data = right.as_f64().unwrap();
+                    left_data.partial_cmp(&right_data)
+                }
+                TYPE_CODE_STRING => {
+                    let left_data = self.as_str().unwrap();
+                    let right_data = right.as_str().unwrap();
+                    left_data.partial_cmp(right_data)
+                }
+                TYPE_CODE_ARRAY => {
+                    let left_data = self.as_array().unwrap();
+                    let right_data = right.as_array().unwrap();
+                    left_data.partial_cmp(right_data)
+                }
+                TYPE_CODE_OBJECT => {
+                    let left_data = self.serialize();
+                    let right_data = right.serialize();
+                    left_data.partial_cmp(&right_data)
+                }
+                _ => Some(Ordering::Equal),
+            };
+        }
+
+        let left_data = self.as_f64();
+        let right_data = right.as_f64();
+        // tidb treat boolean as integer, but boolean is different from integer in JSON.
+        // so we need convert them to same type and then compare.
+        if left_data.is_ok() && right_data.is_ok() {
+            let left = left_data.unwrap();
+            let right = right_data.unwrap();
+            return left.partial_cmp(&right);
+        }
+
+        if precedence_diff > 0 {
+            Some(Ordering::Greater)
+        } else {
+            Some(Ordering::Less)
+        }
+    }
+}
+
+impl Eq for Json {}
+
+impl Ord for Json {
+    fn cmp(&self, right: &Json) -> Ordering {
+        self.partial_cmp(right).unwrap()
     }
 }
 
@@ -449,6 +593,36 @@ mod test {
         for json_str in illegal_cases {
             let resp = Json::parse_from_string(json_str);
             assert!(resp.is_err());
+        }
+    }
+
+    #[test]
+    fn test_cmp_json() {
+        let json_null = Json::parse_from_string("null").unwrap();
+        let json_bool_true = Json::parse_from_string("true").unwrap();
+        let json_bool_false = Json::parse_from_string("false").unwrap();
+        let json_integer_big = Json::parse_from_string("5").unwrap();
+        let json_integer_small = Json::parse_from_string("3").unwrap();
+        let json_str_big = Json::parse_from_string(r#""hello, world""#).unwrap();
+        let json_str_small = Json::parse_from_string(r#""hello""#).unwrap();
+        let json_array_big = Json::parse_from_string(r#"["a", "c"]"#).unwrap();
+        let json_array_small = Json::parse_from_string(r#"["a", "b"]"#).unwrap();
+        let json_object = Json::parse_from_string(r#"{"a": "b"}"#).unwrap();
+        let test_cases = vec![
+            (&json_null, &json_integer_small),
+            (&json_integer_small, &json_integer_big),
+            (&json_integer_big, &json_str_small),
+            (&json_str_small, &json_str_big),
+            (&json_str_big, &json_object),
+            (&json_object, &json_array_small),
+            (&json_array_small, &json_array_big),
+            (&json_array_big, &json_bool_false),
+            (&json_bool_false, &json_bool_true),
+        ];
+
+        for (left, right) in test_cases {
+            println!("left:{:?},right:{:?}", *left, *right);
+            assert!(*left < *right);
         }
     }
 }
