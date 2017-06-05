@@ -31,7 +31,6 @@ macro_rules! invalid_type {
 }
 
 pub mod bytes;
-pub mod rpc;
 pub mod number;
 pub mod datum;
 pub mod table;
