@@ -58,11 +58,11 @@ mod imp {
     // TODO: remove backup_path from configuration
     pub fn handle_signal(ch: SendCh<Msg>, engine: Arc<DB>, _: &str) {
         use signal::trap::Trap;
-        use nix::sys::signal::{SIGTERM, SIGINT, SIGUSR1, SIGUSR2};
-        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGUSR1, SIGUSR2]);
+        use nix::sys::signal::{SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2};
+        let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {
-                SIGTERM | SIGINT => {
+                SIGTERM | SIGINT | SIGHUP => {
                     info!("receive signal {}, stopping server...", sig);
                     ch.send(Msg::Quit).unwrap();
                     break;
