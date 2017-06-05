@@ -37,6 +37,8 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
+extern crate futures;
+extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
 
@@ -66,7 +68,7 @@ use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
-                   Config, bind, create_event_loop, create_raft_storage, Msg};
+                   Config, create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
@@ -617,6 +619,10 @@ fn build_cfg(matches: &ArgMatches,
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
     cfg_usize(&mut cfg.notify_capacity, config, "server.notify-capacity");
+    cfg_usize(&mut cfg.grpc_concurrency, config, "server.grpc-concurrency");
+    cfg_usize(&mut cfg.grpc_concurrent_stream,
+              config,
+              "server.grpc-concurrent-stream");
     if !cfg_usize(&mut cfg.end_point_concurrency,
                   config,
                   "server.end-point-concurrency") {
@@ -650,9 +656,6 @@ fn build_cfg(matches: &ArgMatches,
     cfg.advertise_addr = get_flag_string(matches, "advertise-addr")
         .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.to_owned())));
     check_advertise_address(&cfg.advertise_addr);
-
-    cfg_usize(&mut cfg.send_buffer_size, config, "server.send-buffer-size");
-    cfg_usize(&mut cfg.recv_buffer_size, config, "server.recv-buffer-size");
 
     cfg.raft_store.sync_log = get_toml_boolean(config, "raftstore.sync-log", Some(true));
     cfg_usize(&mut cfg.raft_store.notify_capacity,
@@ -897,16 +900,12 @@ fn run_raft_server(pd_client: RpcClient,
         panic!("failed to start storage, error = {:?}", e);
     }
 
-    info!("Start listening on {}...", cfg.addr);
-    let listener = bind(&cfg.addr).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-
     let server_chan = ServerChannel {
         raft_router: raft_router,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
     let svr = Server::new(&mut event_loop,
                           &cfg,
-                          listener,
                           store,
                           server_chan,
                           resolver,

@@ -84,7 +84,8 @@ default-features = false
 features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
-git = "https://github.com/stepancheg/grpc-rust.git"
+git = "https://github.com/pingcap/grpc-rs.git"
+features = ["static-link"]
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"

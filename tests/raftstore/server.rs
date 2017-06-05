@@ -13,33 +13,30 @@
 
 use std::collections::{HashMap, HashSet};
 use std::thread::{self, Builder};
-use std::net::{SocketAddr, TcpStream};
-use std::sync::{Arc, Mutex, RwLock};
-use std::sync::atomic::{Ordering, AtomicUsize};
+use std::net::SocketAddr;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use std::io::ErrorKind;
 use std::boxed::FnBox;
+use std::net::TcpListener;
+use std::io::ErrorKind;
 
+use grpc::Environment;
 use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
-use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
+use tikv::server::{ServerChannel, Server, ServerTransport, create_event_loop, Msg};
+use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, RaftClient};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
-use tikv::util::codec::rpc;
 use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, ALL_CFS};
-use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb::{self, RaftMessage};
-use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
-use super::util::sleep_ms;
 use super::transport_simulate::*;
 
 type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
@@ -49,14 +46,12 @@ pub struct ServerCluster {
     senders: HashMap<u64, SendCh<Msg>>,
     handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
     addrs: HashMap<u64, SocketAddr>,
-    conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, SimulateServerTransport>,
     store_chs: HashMap<u64, SendCh<StoreMsg>>,
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
-
-    msg_id: AtomicUsize,
     pd_client: Arc<TestPdClient>,
+    raft_client: RaftClient,
 }
 
 impl ServerCluster {
@@ -67,43 +62,12 @@ impl ServerCluster {
             handles: HashMap::new(),
             addrs: HashMap::new(),
             sim_trans: HashMap::new(),
-            conns: Mutex::new(HashMap::new()),
-            msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
             store_chs: HashMap::new(),
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
+            raft_client: RaftClient::new(Arc::new(Environment::new(1))),
         }
-    }
-
-    fn alloc_msg_id(&self) -> u64 {
-        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
-    }
-
-
-    fn pool_get(&self, addr: &SocketAddr) -> Result<TcpStream> {
-        {
-            let mut conns = self.conns
-                .lock()
-                .unwrap();
-            let conn = conns.get_mut(addr);
-            if let Some(mut pool) = conn {
-                if !pool.is_empty() {
-                    return Ok(pool.pop().unwrap());
-                }
-            }
-        }
-
-        let conn = make_std_tcp_conn(addr).unwrap();
-        Ok(conn)
-    }
-
-    fn pool_put(&self, addr: &SocketAddr, conn: TcpStream) {
-        let mut conns = self.conns
-            .lock()
-            .unwrap();
-        let p = conns.entry(*addr).or_insert_with(Vec::new);
-        p.push(conn);
     }
 }
 
@@ -133,9 +97,10 @@ impl Simulator for ServerCluster {
         let listener;
         let mut try_cnt = 0;
         loop {
-            match bind(&cfg.addr) {
-                Err(server::Error::Io(ref e)) if e.kind() == ErrorKind::AddrInUse &&
-                                                 try_cnt < 100 => sleep_ms(10),
+            match TcpListener::bind(&cfg.addr) {
+                Err(ref e) if e.kind() == ErrorKind::AddrInUse && try_cnt < 100 => {
+                    thread::sleep(Duration::from_millis(10))
+                }
                 Ok(l) => {
                     listener = l;
                     break;
@@ -146,6 +111,7 @@ impl Simulator for ServerCluster {
         }
         let addr = listener.local_addr().unwrap();
         cfg.addr = format!("{}", addr);
+        drop(listener);
 
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop(&cfg).unwrap();
@@ -187,7 +153,6 @@ impl Simulator for ServerCluster {
         };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
-                                     listener,
                                      store,
                                      server_chan,
                                      resolver,
@@ -195,6 +160,7 @@ impl Simulator for ServerCluster {
             .unwrap();
 
         let ch = server.get_sendch();
+        let addr = server.listening_addr();
 
         let t = Builder::new()
             .name(thd_name!(format!("server-{}", node_id)))
@@ -218,12 +184,7 @@ impl Simulator for ServerCluster {
     fn stop_node(&mut self, node_id: u64) {
         let (mut node, h) = self.handles.remove(&node_id).unwrap();
         let ch = self.senders.remove(&node_id).unwrap();
-        let addr = &self.addrs[&node_id];
         let _ = self.store_chs.remove(&node_id).unwrap();
-        self.conns
-            .lock()
-            .unwrap()
-            .remove(addr);
 
         ch.try_send(Msg::Quit).unwrap();
         node.stop().unwrap();
@@ -251,21 +212,10 @@ impl Simulator for ServerCluster {
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
-    fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
+    fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
-        let addr = &self.addrs[&store_id];
-
-        let mut msg = Message::new();
-        msg.set_msg_type(MessageType::Raft);
-        msg.set_raft(raft_msg);
-        let msg_id = self.alloc_msg_id();
-
-        let mut conn = self.pool_get(addr).unwrap();
-        conn.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
-        try!(rpc::encode_msg(&mut conn, msg_id, &msg));
-
-        self.pool_put(addr, conn);
-
+        let addr = self.addrs[&store_id];
+        self.raft_client.send(addr, raft_msg).unwrap();
         Ok(())
     }
 
