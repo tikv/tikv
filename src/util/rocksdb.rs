@@ -210,6 +210,22 @@ impl SliceTransform for FixedPrefixSliceTransform {
     }
 }
 
+pub struct NoopSliceTransform;
+
+impl SliceTransform for NoopSliceTransform {
+    fn transform<'a>(&mut self, key: &'a [u8]) -> &'a [u8] {
+        key
+    }
+
+    fn in_domain(&mut self, _: &[u8]) -> bool {
+        true
+    }
+
+    fn in_range(&mut self, _: &[u8]) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocksdb::{DB, Options};
