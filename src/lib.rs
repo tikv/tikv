@@ -65,7 +65,6 @@ extern crate fnv;
 extern crate ordermap;
 extern crate flat_map;
 extern crate futures;
-extern crate futures_cpupool;
 extern crate tokio_core;
 extern crate tokio_timer;
 

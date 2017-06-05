@@ -38,7 +38,6 @@ extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
 extern crate futures;
-extern crate futures_cpupool;
 extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;

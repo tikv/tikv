@@ -61,7 +61,6 @@ ordermap = "0.2"
 flat_map = "0.0.4"
 mio = "0.5"
 futures = "0.1"
-futures-cpupool = "0.1.5"
 tokio-core = "0.1"
 tokio-timer = "0.1"
 
