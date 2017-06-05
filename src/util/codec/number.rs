@@ -378,14 +378,8 @@ mod test {
                     decode_i64_le,
                     I64_TESTS);
 
-    test_serialize!(var_u16_codec,
-                    encode_u16_le,
-                    decode_u16_le,
-                    U16_TESTS);
-    test_serialize!(var_u32_codec,
-                    encode_u32_le,
-                    decode_u32_le,
-                    U32_TESTS);
+    test_serialize!(var_u16_codec, encode_u16_le, decode_u16_le, U16_TESTS);
+    test_serialize!(var_u32_codec, encode_u32_le, decode_u32_le, U32_TESTS);
 
     test_serialize!(var_i64_codec, encode_var_i64, decode_var_i64, I64_TESTS);
 
