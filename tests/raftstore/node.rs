@@ -237,7 +237,7 @@ impl Simulator for NodeCluster {
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
-    fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+    fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         self.trans.send(msg)
     }
 

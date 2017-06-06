@@ -37,6 +37,8 @@ extern crate signal;
 extern crate nix;
 extern crate prometheus;
 extern crate sys_info;
+extern crate futures;
+extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
 
@@ -66,7 +68,7 @@ use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
-                   Config, bind, create_event_loop, create_raft_storage, Msg};
+                   Config, create_event_loop, create_raft_storage, Msg};
 use tikv::server::{ServerTransport, ServerRaftStoreRouter};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
@@ -582,7 +584,13 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
     default_values.level_zero_file_num_compaction_trigger = 1;
     default_values.max_bytes_for_level_base = 128 * MB as i64;
 
-    get_rocksdb_cf_option(config, "lockcf", default_values)
+    let mut opts = get_rocksdb_cf_option(config, "lockcf", default_values);
+    // Currently if we want create bloom filter for memtable, we must set prefix extractor.
+    opts.set_prefix_extractor("NoopSliceTransform",
+                              Box::new(rocksdb_util::NoopSliceTransform))
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+    opts
 }
 
 fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
@@ -611,6 +619,10 @@ fn build_cfg(matches: &ArgMatches,
     cfg.cluster_id = cluster_id;
     cfg.addr = addr.to_owned();
     cfg_usize(&mut cfg.notify_capacity, config, "server.notify-capacity");
+    cfg_usize(&mut cfg.grpc_concurrency, config, "server.grpc-concurrency");
+    cfg_usize(&mut cfg.grpc_concurrent_stream,
+              config,
+              "server.grpc-concurrent-stream");
     if !cfg_usize(&mut cfg.end_point_concurrency,
                   config,
                   "server.end-point-concurrency") {
@@ -644,9 +656,6 @@ fn build_cfg(matches: &ArgMatches,
     cfg.advertise_addr = get_flag_string(matches, "advertise-addr")
         .unwrap_or_else(|| get_toml_string(config, "server.advertise-addr", Some(addr.to_owned())));
     check_advertise_address(&cfg.advertise_addr);
-
-    cfg_usize(&mut cfg.send_buffer_size, config, "server.send-buffer-size");
-    cfg_usize(&mut cfg.recv_buffer_size, config, "server.recv-buffer-size");
 
     cfg.raft_store.sync_log = get_toml_boolean(config, "raftstore.sync-log", Some(true));
     cfg_usize(&mut cfg.raft_store.notify_capacity,
@@ -891,16 +900,12 @@ fn run_raft_server(pd_client: RpcClient,
         panic!("failed to start storage, error = {:?}", e);
     }
 
-    info!("Start listening on {}...", cfg.addr);
-    let listener = bind(&cfg.addr).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-
     let server_chan = ServerChannel {
         raft_router: raft_router,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
     let svr = Server::new(&mut event_loop,
                           &cfg,
-                          listener,
                           store,
                           server_chan,
                           resolver,
