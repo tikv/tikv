@@ -51,7 +51,7 @@ const TMP_FILE_SUFFIX: &'static str = ".tmp";
 const SNAP_FILE_SUFFIX: &'static str = ".snap";
 const SST_FILE_SUFFIX: &'static str = ".sst";
 
-const DELETE_RETRY_MAX_TIMES: u32 = 20;
+const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
 
 quick_error! {
@@ -1164,15 +1164,6 @@ mod v2 {
                         try!(self.init_for_building(snap));
                     }
                 }
-
-                let r = self.validate();
-                if let Err(ref e) = r {
-                    warn!("[region {}] file {} is invalid, will rebuild: {:?}",
-                          region.get_id(),
-                          self.path(),
-                          e);
-                }
-                return r;
             }
 
             let mut snap_key_count = 0;
@@ -2177,16 +2168,16 @@ impl SnapManager {
                                      key: &SnapKey,
                                      snap: &DbSnapshot)
                                      -> RaftStoreResult<Box<Snapshot>> {
-        let core = self.core.rl();
-        if core.use_sst_file_snapshot {
-            let f = try!(v2::Snap::new_for_building(&core.base,
-                                                    key,
-                                                    snap,
-                                                    core.snap_size.clone(),
-                                                    Box::new(self.clone())));
+        let (use_sst_file_snapshot, dir, snap_size) = {
+            let core = self.core.rl();
+            (core.use_sst_file_snapshot, core.base.clone(), core.snap_size.clone())
+        };
+        if use_sst_file_snapshot {
+            let f =
+                try!(v2::Snap::new_for_building(dir, key, snap, snap_size, Box::new(self.clone())));
             Ok(Box::new(f))
         } else {
-            let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), true, key));
+            let f = try!(v1::Snap::new_for_writing(dir, snap_size, true, key));
             Ok(Box::new(f))
         }
     }
