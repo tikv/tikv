@@ -23,7 +23,7 @@ use std::sync::{RwLock, Arc};
 use threadpool::ThreadPool;
 use mio::Token;
 use futures::{stream, Future, Stream};
-use grpc::{Environment, ChannelBuilder};
+use grpc::{Environment, ChannelBuilder, WriteFlags};
 use kvproto::raft_serverpb::SnapshotChunk;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
@@ -137,16 +137,16 @@ fn send_snap(env: Arc<Environment>,
             snap: s.clone(),
             remain_bytes: total_size as usize,
         };
-        let first: Once<Result<SnapshotChunk>> = iter::once({
+        let first: Once<Result<(SnapshotChunk, _)>> = iter::once({
             let mut chunk = SnapshotChunk::new();
             chunk.set_message(msg);
-            Ok(chunk)
+            Ok((chunk, WriteFlags::default()))
         });
         let rests = snap_chunk.map(|item| {
             item.map(|buf| {
                     let mut chunk = SnapshotChunk::new();
                     chunk.set_data(buf);
-                    chunk
+                    (chunk, WriteFlags::default())
                 })
                 .map_err(|e| box_err!("failed to read snapshot chunk: {}", e))
         });
