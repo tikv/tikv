@@ -103,7 +103,7 @@ impl Json {
         }
     }
 
-    fn binary_len(&self) -> usize {
+    pub fn binary_len(&self) -> usize {
         LENGTH_TYPE +
         match *self {
             Json::Object(ref d) => get_obj_binary_len(d),
