@@ -225,8 +225,9 @@ impl PdClient for RpcClient {
                     inner.hb_sender = Either::Right(tx);
                     sender.sink_map_err(Error::Grpc)
                         .send_all(rx.map_err(|e| {
-                            Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
-                        }).map(|r| (r, WriteFlags::default())))
+                                Error::Other(box_err!("failed to recv heartbeat: {:?}", e))
+                            })
+                            .map(|r| (r, WriteFlags::default())))
                         .map(|_| ())
                         .boxed()
                 }
