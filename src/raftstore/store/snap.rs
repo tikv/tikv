@@ -34,7 +34,7 @@ use raftstore::store::Msg;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::transport::SendCh;
 use util::HandyRwLock;
-use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
+use util::collections::{HashMap, HashMapEntry as Entry};
 
 use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
@@ -2125,7 +2125,7 @@ impl SnapManager {
         let path = Path::new(&core.base);
         let read_dir = try!(fs::read_dir(path));
         // Remove the duplicate snap keys.
-        let set: HashSet<_> = read_dir.filter_map(|p| {
+        let mut v: Vec<_> = read_dir.filter_map(|p| {
                 let p = match p {
                     Err(e) => {
                         error!("failed to list content of {}: {:?}", core.base, e);
@@ -2163,9 +2163,9 @@ impl SnapManager {
                 Some((snap_key, is_sending))
             })
             .collect();
-        let mut vec = Vec::with_capacity(set.len());
-        vec.extend(set.into_iter());
-        Ok(vec)
+        v.sort();
+        v.dedup();
+        Ok(v)
     }
 
     #[inline]
