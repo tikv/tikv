@@ -275,7 +275,11 @@ impl PartialOrd for Json {
                 TYPE_CODE_DOUBLE | TYPE_CODE_I64 => {
                     let left_data = self.as_f64().unwrap();
                     let right_data = right.as_f64().unwrap();
-                    left_data.partial_cmp(&right_data)
+                    if (left_data - right_data).abs() < f64::EPSILON {
+                        Some(Ordering::Equal)
+                    } else {
+                        left_data.partial_cmp(&right_data)
+                    }
                 }
                 TYPE_CODE_STRING => {
                     let left_data = self.as_str().unwrap();
