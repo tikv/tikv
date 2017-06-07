@@ -232,6 +232,13 @@ impl Command {
         }
     }
 
+    pub fn need_flow_control(&self) -> bool {
+        match *self {
+            Command::Prewrite { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn tag(&self) -> &'static str {
         match *self {
             Command::Get { .. } => "get",
