@@ -120,10 +120,10 @@ fn send_snap(env: Arc<Environment>,
         try!(SnapKey::from_snap(snap))
     };
     mgr.register(key.clone(), SnapEntry::Sending);
-    let s = box_try!(mgr.get_snapshot_for_sending(&key));
     defer!({
         mgr.deregister(&key, &SnapEntry::Sending);
     });
+    let s = box_try!(mgr.get_snapshot_for_sending(&key));
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }

@@ -39,5 +39,5 @@ pub use self::bootstrap::{bootstrap_store, prepare_bootstrap, write_prepare_boot
 pub use self::engine::{Peekable, Iterable, Mutable};
 pub use self::peer_storage::{PeerStorage, do_snapshot, SnapState, RAFT_INIT_LOG_TERM,
                              RAFT_INIT_LOG_INDEX};
-pub use self::snap::{SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, SnapEntry, SnapManager,
-                     check_abort, copy_snapshot};
+pub use self::snap::{SnapKey, Snapshot, SnapshotDeleter, SnapshotStatistics, ApplyOptions,
+                     SnapEntry, SnapManager, check_abort, copy_snapshot};
