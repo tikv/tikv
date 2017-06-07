@@ -15,6 +15,7 @@ use std::sync::{self, Arc};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
+use util::RingQueue;
 use std::error;
 use std::time::Instant;
 
@@ -26,7 +27,7 @@ use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
 use util::worker::Scheduler;
-use util::rocksdb;
+use util::{self, rocksdb};
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::RegionTask;
@@ -104,6 +105,8 @@ pub fn first_index(state: &RaftApplyState) -> u64 {
     state.get_truncated_state().get_index() + 1
 }
 
+const DEFAULT_CACHE_SIZE: usize = 3000;
+
 pub struct PeerStorage {
     pub engine: Arc<DB>,
 
@@ -112,6 +115,8 @@ pub struct PeerStorage {
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub last_term: u64,
+
+    cache: RingQueue<Entry>,
 
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
@@ -258,6 +263,7 @@ impl PeerStorage {
             region: region.clone(),
             raft_state: raft_state,
             apply_state: apply_state,
+            cache: RingQueue::with_capacity(DEFAULT_CACHE_SIZE),
             snap_state: RefCell::new(SnapState::Relax),
             region_sched: region_sched,
             snap_tried_cnt: RefCell::new(0),
@@ -312,10 +318,27 @@ impl PeerStorage {
 
     pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
         try!(self.check_range(low, high));
-        let mut ents = Vec::with_capacity((high - low) as usize);
         if low == high {
-            return Ok(ents);
+            return Ok(vec![]);
         }
+        if self.cache.is_empty() {
+            return self.entries_from_db(low, high, max_size);
+        }
+        let first_index = self.cache.front().unwrap().get_index();
+        let last_index = self.cache.back().unwrap().get_index();
+        if first_index > low || last_index + 1 < high {
+            return self.entries_from_db(low, high, max_size);
+        }
+
+        let start_idx = (low - first_index) as usize;
+        let entries = self.cache.iter().skip(start_idx).take((high - low) as usize);
+        let limit = util::get_limit_at_size(entries, max_size);
+        let end_idx = start_idx + limit;
+        Ok(self.cache.to_vec(start_idx..end_idx))
+    }
+
+    fn entries_from_db(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
+        let mut ents = Vec::with_capacity((high - low) as usize);
         let mut total_size: u64 = 0;
         let mut next_index = low;
         let mut exceeded_max_size = false;
@@ -529,7 +552,7 @@ impl PeerStorage {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append(&self,
+    pub fn append(&mut self,
                   ctx: &mut InvokeContext,
                   entries: &[Entry],
                   wb: &mut WriteBatch)
@@ -557,14 +580,48 @@ impl PeerStorage {
             try!(wb.delete_cf(handle, &keys::raft_log_key(self.get_region_id(), i)));
         }
 
+        let first_index = entries.first().unwrap().get_index();
+
+        if let Some(idx) = self.cache.front().map(|e| e.get_index()) {
+            if idx > first_index {
+                self.cache.clear();
+            } else {
+                let last_cache_idx = self.cache.back().unwrap().get_index();
+                if last_cache_idx >= first_index {
+                    self.cache.truncate((first_index - idx) as usize);
+                } else if last_cache_idx + 1 < first_index {
+                    panic!("{} unexpected hole: {} < {}",
+                           self.tag,
+                           last_cache_idx,
+                           first_index);
+                }
+            }
+        }
+        self.cache.extend_from_slice(entries);
+
         ctx.raft_state.set_last_index(last_index);
         ctx.last_term = last_term;
 
         Ok(last_index)
     }
 
+    pub fn compact_to(&mut self, idx: u64) {
+        let first_index = match self.cache.front() {
+            None => return,
+            Some(e) => e.get_index(),
+        };
+        if first_index > idx {
+            return;
+        }
+        if self.cache.back().map_or(false, |e| e.get_index() < idx) {
+            self.cache.clear();
+        } else {
+            self.cache.drain(0..(idx - first_index) as usize);
+        }
+    }
+
     // Apply the peer with given snapshot.
-    pub fn apply_snapshot(&self,
+    pub fn apply_snapshot(&mut self,
                           ctx: &mut InvokeContext,
                           snap: &Snapshot,
                           wb: &mut WriteBatch)
@@ -603,6 +660,8 @@ impl PeerStorage {
               self.tag,
               region,
               ctx.apply_state);
+
+        self.cache.clear();
 
         ctx.snap_region = Some(region);
         Ok(())
@@ -837,6 +896,7 @@ impl PeerStorage {
         self.schedule_applying_snapshot();
         let prev_region = self.region.clone();
         self.region = snap_region;
+        self.cache.clear();
 
         Some(ApplySnapResult {
             prev_region: prev_region,
@@ -1327,7 +1387,7 @@ mod test {
         copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
-        let s2 = new_storage(sched, &td2);
+        let mut s2 = new_storage(sched, &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());

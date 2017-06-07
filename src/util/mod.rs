@@ -11,16 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::io;
-use std::{slice, thread};
+use std::ops::{Deref, DerefMut, Range};
+use std::{io, slice, thread};
 use std::net::{ToSocketAddrs, TcpStream, SocketAddr};
 use std::time::{Duration, Instant};
 use time::{self, Timespec};
 use std::collections::hash_map::Entry;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::collections::vec_deque::{Iter, VecDeque};
+use std::collections::vec_deque::{Iter, VecDeque, Drain};
 use std::u64;
 
 use prometheus;
@@ -449,6 +447,7 @@ pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
 }
 
 /// A simple ring queue with fixed capacity.
+#[derive(Clone, Debug)]
 pub struct RingQueue<T> {
     buf: VecDeque<T>,
     cap: usize,
@@ -465,6 +464,36 @@ impl<T> RingQueue<T> {
             buf: VecDeque::with_capacity(cap),
             cap: cap,
         }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    #[inline]
+    pub fn front(&self) -> Option<&T> {
+        self.buf.front()
+    }
+
+    #[inline]
+    pub fn back(&self) -> Option<&T> {
+        self.buf.back()
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.buf.clear()
+    }
+
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        self.buf.truncate(len)
+    }
+
+    #[inline]
+    pub fn drain(&mut self, range: Range<usize>) -> Drain<T> {
+        self.buf.drain(range)
     }
 
     pub fn push(&mut self, t: T) {
@@ -485,6 +514,39 @@ impl<T> RingQueue<T> {
             self.buf.swap_remove_front(pos)
         } else {
             None
+        }
+    }
+}
+
+impl<T: Clone> RingQueue<T> {
+    pub fn to_vec(&self, range: Range<usize>) -> Vec<T> {
+        let (part1, part2) = self.buf.as_slices();
+        if range.start > part1.len() {
+            part2[range.start - part1.len()..range.end - part1.len()].to_vec()
+        } else if range.end <= part1.len() {
+            part1[range.start..range.end].to_vec()
+        } else {
+            let mut vec = Vec::with_capacity(range.end - range.start);
+            vec.extend_from_slice(&part1[range.start..]);
+            vec.extend_from_slice(&part2[..range.end - part1.len()]);
+            vec
+        }
+    }
+
+    // TODO: use memcpy instead.
+    pub fn extend_from_slice(&mut self, other: &[T]) {
+        let start_idx = if other.len() >= self.cap {
+            self.buf.clear();
+            other.len() - self.cap
+        } else {
+            let total_len = other.len() + self.len();
+            if total_len > self.cap {
+                self.buf.drain(..total_len - self.cap);
+            }
+            0
+        };
+        for t in &other[start_idx..] {
+            self.buf.push_back(t.clone());
         }
     }
 }
@@ -550,6 +612,57 @@ mod tests {
             queue.swap_remove_front(|_| true).unwrap();
         }
         assert_eq!(None, queue.swap_remove_front(|_| true));
+    }
+
+    #[test]
+    fn test_ring_queue_to_vec() {
+        let cap = 10;
+        for pos in 0..cap {
+            let mut queue = RingQueue::with_capacity(cap);
+            for num in 0..cap + pos {
+                queue.push(num);
+            }
+            let exp: Vec<_> = (0..cap + pos).collect();
+            // now queue's start index is at pos.
+            let v = queue.to_vec(0..queue.len());
+            assert_eq!(*v, exp[pos..]);
+            for i in 0..cap {
+                queue.drain(cap - i - 1..cap - i);
+                let res = queue.to_vec(0..queue.len());
+                assert_eq!(*res, exp[pos..pos + cap - i - 1]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_ring_queue_extend() {
+        let cap = 10;
+        let buf: Vec<_> = (0..cap * 2).collect();
+        for pos in 0..cap {
+            let mut queue = RingQueue::with_capacity(cap);
+            for num in 0..cap + pos {
+                queue.push(num);
+            }
+            for init_len in (0..cap).rev() {
+                queue.drain(init_len..init_len + 1);
+                for extend_len in 0..cap * 2 {
+                    let mut test_queue = queue.clone();
+                    test_queue.extend_from_slice(&buf[..extend_len]);
+                    let res = test_queue.to_vec(0..test_queue.len());
+                    if extend_len > cap {
+                        assert_eq!(*res, buf[extend_len - cap..extend_len]);
+                    } else if init_len + extend_len > cap {
+                        let mut exp = queue.to_vec(init_len + extend_len - cap..init_len);
+                        exp.extend_from_slice(&buf[..extend_len]);
+                        assert_eq!(res, exp);
+                    } else {
+                        let mut exp = queue.to_vec(0..init_len);
+                        exp.extend_from_slice(&buf[..extend_len]);
+                        assert_eq!(res, exp);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

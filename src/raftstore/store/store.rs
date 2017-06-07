@@ -1054,6 +1054,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             end_idx: state.get_index() + 1,
         };
         peer.last_compacted_idx = task.end_idx;
+        peer.mut_store().compact_to(task.end_idx);
         if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,
