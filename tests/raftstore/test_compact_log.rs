@@ -87,7 +87,7 @@ fn check_compacted(engines: &HashMap<u64, Arc<DB>>,
 
     for (id, engine) in engines {
         let handle = get_cf_handle(engine, CF_RAFT).unwrap();
-        for i in 0..*compacted_idx.get(id).unwrap() {
+        for i in 0..compacted_idx[id] {
             let key = keys::raft_log_key(1, i);
             if engine.get_cf(handle, &key).unwrap().is_none() {
                 break;
