@@ -567,13 +567,19 @@ struct TopNHeap {
     err: Rc<RefCell<Option<String>>>,
 }
 
+const HEAP_DEFAULT_CAPACITY: usize = 1024;
+
 impl TopNHeap {
     fn new(limit: usize) -> Result<TopNHeap> {
         if limit == usize::MAX {
             return Err(box_err!("invalid limit"));
         }
+        let mut heap_capacity = HEAP_DEFAULT_CAPACITY;
+        if limit < heap_capacity {
+            heap_capacity = limit
+        }
         Ok(TopNHeap {
-            rows: BinaryHeap::with_capacity(limit),
+            rows: BinaryHeap::with_capacity(heap_capacity),
             limit: limit,
             err: Rc::new(RefCell::new(None)),
         })
