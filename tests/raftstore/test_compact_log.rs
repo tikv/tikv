@@ -49,10 +49,8 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         let value = v.as_bytes();
         cluster.must_put(key, value);
 
-        if i > 100 {
-            if check_compacted(&cluster.engines, &before_states, 1) {
-                return;
-            }
+        if i > 100 && check_compacted(&cluster.engines, &before_states, 1) {
+            return;
         }
     }
 
@@ -148,10 +146,8 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i > 100 {
-            if check_compacted(&cluster.engines, &before_states, 1) {
-                return;
-            }
+        if i > 100 && check_compacted(&cluster.engines, &before_states, 1) {
+            return;
         }
     }
     panic!("cluster is not compacted after inserting 200 entries.");
@@ -186,10 +182,8 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i >= 200 {
-            if check_compacted(&cluster.engines, &before_states, gc_limit * 2) {
-                return;
-            }
+        if i >= 200 && check_compacted(&cluster.engines, &before_states, gc_limit * 2) {
+            return;
         }
     }
 
