@@ -194,11 +194,11 @@ impl Runner {
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         self.mgr.register(snap_key.clone(), SnapEntry::Applying);
         defer!({
             self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
+        let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
@@ -213,7 +213,6 @@ impl Runner {
         try!(s.apply(options));
         region_state.set_state(PeerState::Normal);
         box_try!(self.db.put_msg(&region_key, &region_state));
-        s.delete();
         info!("[region {}] apply new data takes {:?}",
               region_id,
               timer.elapsed());
