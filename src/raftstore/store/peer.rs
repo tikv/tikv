@@ -23,7 +23,7 @@ use time::Timespec;
 use rocksdb::{DB, WriteBatch};
 use protobuf::{self, Message, MessageStatic};
 use uuid::Uuid;
-use kvproto::metapb;
+use kvproto::{metapb, errorpb};
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, CmdType, AdminCmdType, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
@@ -41,6 +41,7 @@ use util::worker::{FutureWorker as Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either, strftimespec};
 use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
+use util::codec::number::{NumberEncoder, NumberDecoder};
 
 use pd::INVALID_ID;
 
@@ -56,6 +57,8 @@ use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetr
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
+const PROPOSAL_BATCH_SIZE: u64 = 16 * 1024; // 16K
+const PROPOSAL_BATCH_MAGIC_NUM: &'static [u8] = &[0, 0, 0, 0, 1, 51, 199, 9];  // 20170505
 
 struct ReadIndexRequest {
     uuid: Uuid,
@@ -137,6 +140,94 @@ impl ProposalQueue {
     }
 }
 
+#[derive(Default)]
+pub struct ProposalBatch {
+    data: Option<Vec<u8>>,
+    ctx: Option<Vec<(ProposalMeta, Callback, RaftCmdResponse)>>,
+    uuids: HashSet<Uuid>,
+}
+
+impl ProposalBatch {
+    pub fn contains(&self, uuid: &Uuid) -> bool {
+        self.uuids.contains(uuid)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.uuids.is_empty()
+    }
+
+    fn size(&self) -> u64 {
+        if let Some(ref data) = self.data {
+            return data.len() as u64;
+        }
+        0
+    }
+
+    fn write_data(req: &RaftCmdRequest, req_size: u64) -> Vec<u8> {
+        let mut data = PROPOSAL_BATCH_MAGIC_NUM.to_vec();
+        data.encode_var_u64(req_size as u64).unwrap();
+        req.write_to_vec(&mut data).unwrap();
+        data
+    }
+
+    fn enqueue(&mut self,
+               meta: ProposalMeta,
+               cb: Callback,
+               req: RaftCmdRequest,
+               req_size: u64,
+               err_resp: RaftCmdResponse) {
+        if self.data.is_none() {
+            let mut data: Vec<u8> = Vec::with_capacity(PROPOSAL_BATCH_SIZE as usize);
+            data.append(&mut PROPOSAL_BATCH_MAGIC_NUM.to_vec());
+            self.data = Some(data);
+        }
+        let mut data: Vec<u8> = self.data.take().unwrap();
+        data.encode_var_u64(req_size).unwrap();
+        req.write_to_vec(&mut data).unwrap();
+        self.data = Some(data);
+
+        self.uuids.insert(meta.uuid);
+        if self.ctx.is_none() {
+            let mut ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
+                Vec::with_capacity(PROPOSAL_BATCH_SIZE as usize);
+            ctx.push((meta, cb, err_resp));
+            self.ctx = Some(ctx);
+        } else {
+            let mut ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
+                self.ctx.take().unwrap();
+            ctx.push((meta, cb, err_resp));
+            self.ctx = Some(ctx);
+        }
+    }
+
+    pub fn check_new_version(buf: &[u8]) -> (&[u8], bool) {
+        if buf.len() <= 8 {
+            return (buf, false);
+        }
+        if buf.starts_with(PROPOSAL_BATCH_MAGIC_NUM) {
+            let (_, left) = buf.split_at(8);
+            return (left, true);
+        }
+        (buf, false)
+    }
+
+    pub fn read_req(mut buf: &[u8]) -> (&[u8], RaftCmdRequest) {
+        let size = buf.decode_var_u64().unwrap();
+        let mut req = RaftCmdRequest::new();
+        let (msg, left) = buf.split_at(size as usize);
+        req.merge_from_bytes(msg).unwrap();
+        (left, req)
+    }
+
+    fn clear(&mut self) {
+        if !self.uuids.is_empty() {
+            self.data = None;
+            self.ctx = None;
+            self.uuids.clear();
+        }
+    }
+}
+
 pub struct ReadyContext<'a, T: 'a> {
     pub wb: WriteBatch,
     pub metrics: &'a mut RaftMetrics,
@@ -197,6 +288,7 @@ pub struct Peer {
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
     proposals: ProposalQueue,
+    pending_proposal: ProposalBatch,
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: FlatMap<u64, Instant>,
@@ -315,6 +407,7 @@ impl Peer {
             region_id: region.get_id(),
             raft_group: raft_group,
             proposals: Default::default(),
+            pending_proposal: Default::default(),
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
@@ -633,6 +726,8 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   ctx: &mut ReadyContext<T>,
                                                   worker: &Worker<PdTask>) {
+        self.flush_pending_proposal(&mut ctx.metrics.propose);
+
         self.marked_to_be_checked = false;
         if self.pending_remove {
             return;
@@ -736,6 +831,7 @@ impl Peer {
                 // have no effect. Although this may allow old uuids to be reused before old
                 // callbacks are called.
                 self.proposals.clear();
+                self.clear_pending_proposal();
             }
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
@@ -936,7 +1032,7 @@ impl Peer {
             return false;
         }
 
-        if self.proposals.contains(&meta.uuid) {
+        if self.proposals.contains(&meta.uuid) || self.pending_proposal.contains(&meta.uuid) {
             cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", meta.uuid));
             cb(err_resp);
             return false;
@@ -945,32 +1041,34 @@ impl Peer {
         debug!("{} propose command with uuid {:?}", self.tag, meta.uuid);
         metrics.all += 1;
 
-        let mut is_conf_change = false;
-
-        let res = match self.get_handle_policy(&req) {
+        match self.get_handle_policy(&req) {
             Ok(RequestPolicy::ReadLocal) => {
                 self.read_local(req, cb, metrics);
                 return false;
             }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(meta.uuid, req, cb, metrics),
-            Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
+            Ok(RequestPolicy::ReadIndex) => {
+                return self.read_index(meta.uuid, req, cb, metrics);
+            }
+            Ok(RequestPolicy::ProposeNormal) => {
+                self.maybe_propose_normal(meta, cb, req, err_resp, metrics);
+            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
-                return self.propose_transfer_leader(req, cb, metrics)
+                return self.propose_transfer_leader(req, cb, metrics);
             }
             Ok(RequestPolicy::ProposeConfChange) => {
-                is_conf_change = true;
-                self.propose_conf_change(req, metrics)
+                if let Err(e) = self.propose_conf_change(req, metrics) {
+                    cmd_resp::bind_error(&mut err_resp, e);
+                    cb(err_resp);
+                    return false;
+                }
+                self.post_propose(meta, true, cb);
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                cmd_resp::bind_error(&mut err_resp, e);
+                cb(err_resp);
+                return false;
+            }
         };
-
-        if let Err(e) = res {
-            cmd_resp::bind_error(&mut err_resp, e);
-            cb(err_resp);
-            return false;
-        }
-
-        self.post_propose(meta, is_conf_change, cb);
 
         true
     }
@@ -1152,6 +1250,72 @@ impl Peer {
         last_index <= status.progress[&peer_id].matched + TRANSFER_LEADER_ALLOW_LOG_LAG
     }
 
+    fn flush_pending_proposal(&mut self, metrics: &mut RaftProposeMetrics) {
+        if self.pending_proposal.is_empty() {
+            return;
+        }
+        let is_leader = self.is_leader();
+        let leader = self.get_peer_from_cache(self.leader_id());
+
+        let data: Vec<u8> = self.pending_proposal.data.take().unwrap();
+        metrics.batch_data_size.observe(data.len() as f64);
+
+        // TODO: use local histogram metrics
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+        let last_index = self.raft_group.raft.raft_log.last_index();
+        let err: Option<errorpb::Error> = if is_leader {
+            match self.raft_group.propose(data) {
+                Ok(_) => {
+                    if self.raft_group.raft.raft_log.last_index() == last_index {
+                        // The message is dropped silently, this usually due to leader absence
+                        // or transferring leader. Both cases can be considered as NotLeader
+                        // error.
+                        Some(Error::NotLeader(self.region_id, leader.clone()).into())
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    let e: Error = e.into();
+                    Some(e.into())
+                }
+            }
+        } else {
+            Some(Error::NotLeader(self.region_id, leader.clone()).into())
+        };
+
+        let ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
+            self.pending_proposal.ctx.take().unwrap();
+        metrics.batch_msg_cnt.observe(ctx.len() as f64);
+
+        for (meta, cb, mut err_resp) in ctx {
+            if err.is_none() {
+                self.post_propose(meta, false, cb);
+                continue;
+            }
+            err_resp.mut_header().set_error(err.clone().unwrap());
+            cb(err_resp);
+        }
+
+        self.pending_proposal.uuids.clear();
+    }
+
+    fn clear_pending_proposal(&mut self) {
+        if self.pending_proposal.is_empty() {
+            return;
+        }
+        let leader = self.get_peer_from_cache(self.leader_id());
+        let err: errorpb::Error = Error::NotLeader(self.region_id, leader.clone()).into();
+
+        let ctx: Vec<(ProposalMeta, Callback, RaftCmdResponse)> =
+            self.pending_proposal.ctx.take().unwrap();
+        for (_, cb, mut err_resp) in ctx {
+            err_resp.mut_header().set_error(err.clone());
+            cb(err_resp);
+        }
+        self.pending_proposal.clear();
+    }
+
     fn read_local(&mut self, req: RaftCmdRequest, cb: Callback, metrics: &mut RaftProposeMetrics) {
         metrics.local_read += 1;
         self.handle_read(req, cb);
@@ -1204,7 +1368,7 @@ impl Peer {
         // update leader lease.
 
         let uuid = Uuid::new_v4();
-        if self.proposals.contains(&uuid) {
+        if self.proposals.contains(&uuid) || self.pending_proposal.contains(&uuid) {
             return true;
         }
         let meta = ProposalMeta {
@@ -1221,6 +1385,44 @@ impl Peer {
         true
     }
 
+    fn maybe_propose_normal(&mut self,
+                            meta: ProposalMeta,
+                            cb: Callback,
+                            mut req: RaftCmdRequest,
+                            mut err_resp: RaftCmdResponse,
+                            metrics: &mut RaftProposeMetrics) {
+        metrics.normal += 1;
+
+        // TODO: validate request for unexpected changes.
+        if let Err(e) = self.coprocessor_host.pre_propose(self.region(), &mut req) {
+            cmd_resp::bind_error(&mut err_resp, e.into());
+            cb(err_resp);
+            return;
+        }
+
+        let req_size: u64 = Message::compute_size(&req) as u64;
+        if req_size > self.raft_entry_max_size {
+            cmd_resp::bind_error(&mut err_resp,
+                                 box_err!("entry is too large, entry size {}", req_size));
+            cb(err_resp);
+            return;
+        }
+        let is_compute_hash: bool = req.has_admin_request() &&
+            req.get_admin_request().get_cmd_type() == AdminCmdType::ComputeHash;
+
+        let total_size = req_size + self.pending_proposal.size();
+        if total_size >= PROPOSAL_BATCH_SIZE || total_size >= self.raft_entry_max_size {
+            self.flush_pending_proposal(metrics);
+        } else if is_compute_hash {
+            self.flush_pending_proposal(metrics);
+        }
+
+        self.pending_proposal.enqueue(meta, cb, req, req_size, err_resp);
+        if is_compute_hash {
+            self.flush_pending_proposal(metrics);
+        }
+    }
+
     fn propose_normal(&mut self,
                       mut req: RaftCmdRequest,
                       metrics: &mut RaftProposeMetrics)
@@ -1229,15 +1431,17 @@ impl Peer {
 
         // TODO: validate request for unexpected changes.
         try!(self.coprocessor_host.pre_propose(self.region(), &mut req));
-        let data = try!(req.write_to_bytes());
+        let req_size = Message::compute_size(&req) as u64;
 
         // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(req_size as f64);
 
-        if data.len() as u64 > self.raft_entry_max_size {
-            error!("entry is too large, entry size {}", data.len());
-            return Err(Error::RaftEntryTooLarge(self.region_id, data.len() as u64));
+        if req_size > self.raft_entry_max_size {
+            error!("entry is too large, entry size {}", req_size);
+            return Err(Error::RaftEntryTooLarge(self.region_id, req_size));
         }
+
+        let data = ProposalBatch::write_data(&req, req_size);
 
         let propose_index = self.next_proposal_index();
         try!(self.raft_group.propose(data));
@@ -1262,6 +1466,8 @@ impl Peer {
         let peer = transfer_leader.get_peer();
 
         let transfered = if self.is_tranfer_leader_allowed(peer) {
+            // Before propose transfer leader, propose all pending normal proposal
+            self.flush_pending_proposal(metrics);
             self.transfer_leader(peer);
             true
         } else {
@@ -1293,6 +1499,9 @@ impl Peer {
 
         let data = try!(req.write_to_bytes());
 
+        // Before propose conf change, propose all pending normal proposal
+        self.flush_pending_proposal(metrics);
+
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
@@ -1308,9 +1517,9 @@ impl Peer {
               cc.get_change_type(),
               cc.get_node_id());
 
-        let propose_index = self.next_proposal_index();
+        let last_index = self.raft_group.raft.raft_log.last_index();
         try!(self.raft_group.propose_conf_change(cc));
-        if self.next_proposal_index() == propose_index {
+        if self.raft_group.raft.raft_log.last_index() == last_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));

@@ -180,4 +180,18 @@ lazy_static! {
             "Size of snapshot",
              exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
+
+    pub static ref PROPOSAL_BATCH_MSG_CNT_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_proposal_batch_msg_cnt",
+            "Count of msgs in each batch_proposal",
+            exponential_buckets(1.0, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref PROPOSAL_BATCH_DATA_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_proposal_batch_data_size",
+            "Size of data in each batch_proposal",
+            exponential_buckets(4.0, 2.0, 20).unwrap()
+        ).unwrap();
 }

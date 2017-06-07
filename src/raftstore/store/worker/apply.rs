@@ -37,7 +37,7 @@ use raftstore::store::{Store, cmd_resp, keys, util};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Snapshot, Peekable, Mutable};
 use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state, compact_raft_log};
-use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
+use raftstore::store::peer::{parse_data_at, check_epoch, Peer, ProposalBatch};
 use raftstore::store::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
@@ -311,9 +311,7 @@ impl ApplyDelegate {
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, entry),
             };
 
-            if let Some(res) = res {
-                results.push(res);
-            }
+            results.extend(res);
         }
 
         if !self.pending_remove {
@@ -353,35 +351,70 @@ impl ApplyDelegate {
     fn handle_raft_entry_normal(&mut self,
                                 apply_ctx: &mut ApplyContext,
                                 entry: Entry)
-                                -> Option<ExecResult> {
+                                -> Vec<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
 
         if !data.is_empty() {
-            let cmd = parse_data_at(data, index, &self.tag);
+            let mut res = vec![];
+            let (mut data, is_new_version) = ProposalBatch::check_new_version(data);
 
-            if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
-                self.write_apply_state(apply_ctx.wb_mut());
+            if !is_new_version {
+                let cmd = parse_data_at(data, index, &self.tag);
+                if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
+                    self.write_apply_state(apply_ctx.wb_mut());
 
-                self.update_metrics(apply_ctx);
+                    self.update_metrics(apply_ctx);
 
-                // flush to engine
-                self.engine
-                    .write(apply_ctx.wb.take().unwrap())
-                    .unwrap_or_else(|e| {
-                        panic!("{} failed to write to engine, error: {:?}", self.tag, e)
-                    });
+                    // flush to engine
+                    self.engine
+                        .write(apply_ctx.wb.take().unwrap())
+                        .unwrap_or_else(|e| {
+                            panic!("{} failed to write to engine, error: {:?}", self.tag, e)
+                        });
 
-                // call callback
-                for (cb, resp) in apply_ctx.cbs.drain(..) {
-                    cb(resp);
+                    // call callback
+                    for (cb, resp) in apply_ctx.cbs.drain(..) {
+                        cb(resp);
+                    }
+                    apply_ctx.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                    apply_ctx.mark_last_bytes_and_keys();
                 }
-                apply_ctx.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
-                apply_ctx.mark_last_bytes_and_keys();
-            }
 
-            return self.process_raft_cmd(apply_ctx, index, term, cmd);
+                if let Some(exec_res) = self.process_raft_cmd(apply_ctx, index, term, cmd) {
+                    res.push(exec_res);
+                }
+            } else {
+                while !data.is_empty() {
+                    let (left, cmd) = ProposalBatch::read_req(data);
+                    if left.is_empty() && should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
+                        self.write_apply_state(apply_ctx.wb_mut());
+
+                        self.update_metrics(apply_ctx);
+
+                        // flush to engine
+                        self.engine
+                            .write(apply_ctx.wb.take().unwrap())
+                            .unwrap_or_else(|e| {
+                                panic!("{} failed to write to engine, error: {:?}", self.tag, e)
+                            });
+
+                        // call callback
+                        for (cb, resp) in apply_ctx.cbs.drain(..) {
+                            cb(resp);
+                        }
+                        apply_ctx.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                        apply_ctx.mark_last_bytes_and_keys();
+                    }
+
+                    if let Some(exec_res) = self.process_raft_cmd(apply_ctx, index, term, cmd) {
+                        res.push(exec_res);
+                    }
+                    data = left;
+                }
+            }
+            return res;
         }
 
         // when a peer become leader, it will send an empty entry.
@@ -395,34 +428,33 @@ impl ApplyDelegate {
             apply_ctx.cbs
                 .push((cmd.cb.take().unwrap(), gen_stale_req(&self.tag, cmd.uuid, cmd.term)));
         }
-        None
+        vec![]
     }
 
     fn handle_raft_entry_conf_change(&mut self,
                                      apply_ctx: &mut ApplyContext,
                                      entry: Entry)
-                                     -> Option<ExecResult> {
+                                     -> Vec<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        Some(self.process_raft_cmd(apply_ctx, index, term, cmd)
-            .map_or_else(|| {
-                             // If failed, tell raft that the config change was aborted.
-                             ExecResult::ChangePeer(Default::default())
-                         },
-                         |mut res| {
-                if let ExecResult::ChangePeer(ref mut cp) = res {
-                    cp.conf_change = conf_change;
-                } else {
-                    panic!("{} unexpected result {:?} for conf change {:?} at {}",
-                           self.tag,
-                           res,
-                           conf_change,
-                           index);
-                }
-                res
-            }))
+        let result = Some(self.process_raft_cmd(apply_ctx, index, term, cmd).map_or_else(|| {
+            // If failed, tell raft that the config change was aborted.
+            ExecResult::ChangePeer(Default::default())
+        }, |mut res| {
+            if let ExecResult::ChangePeer(ref mut cp) = res {
+                cp.conf_change = conf_change;
+            } else {
+                panic!("{} unexpected result {:?} for conf change {:?} at {}",
+                       self.tag,
+                       res,
+                       conf_change,
+                       index);
+            }
+            res
+        }));
+        result.map_or_else(|| vec![], |r| vec![r])
     }
 
     fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
