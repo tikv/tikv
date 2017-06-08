@@ -438,6 +438,8 @@ mod test {
     test_eof!(u64_eof, encode_u64, decode_u64, 1);
     test_eof!(f64_eof, encode_f64, decode_f64, 1.0);
     test_eof!(i64_desc_eof, encode_i64_desc, decode_i64_desc, 1);
+    test_eof!(u64_desc_eof, encode_u64_desc, decode_u64_desc, 1);
+    test_eof!(f64_desc_eof, encode_f64_desc, decode_f64_desc, 1.0);
 
     #[test]
     fn test_var_eof() {
