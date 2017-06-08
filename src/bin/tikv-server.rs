@@ -565,8 +565,6 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     }
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size = block_cache_size as i64;
-    default_values.use_bloom_filter = true;
-    default_values.whole_key_filtering = true;
 
     let mut opts = get_rocksdb_cf_option(config, "raftcf", default_values);
     opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
