@@ -85,7 +85,7 @@ const RAFTCF_MAX_MEM: u64 = 2 * GB;
 const LOCKCF_MIN_MEM: u64 = 256 * MB;
 const LOCKCF_MAX_MEM: u64 = GB;
 // [default cf, write cf, raft cf, lock cf]
-const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.30, 0.20, 0.02, 0.02];
+const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.25, 0.15, 0.02, 0.02];
 const SEC_TO_MS: i64 = 1000;
 
 fn sanitize_memory_usage() -> bool {
@@ -608,7 +608,7 @@ fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
         (total_cpu_num as f32 * 0.8) as usize
     } else {
         4
-     }
+    }
 }
 
 fn adjust_sched_workers_by_cpu_num(total_cpu_num: usize) -> usize {
