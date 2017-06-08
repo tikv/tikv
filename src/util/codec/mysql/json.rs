@@ -254,8 +254,7 @@ impl<'de> Deserialize<'de> for Json {
     fn deserialize<D>(deserializer: D) -> SResult<Self, D::Error>
         where D: Deserializer<'de>
     {
-        let visitor = JsonVisitor {};
-        deserializer.deserialize_any(visitor)
+        deserializer.deserialize_any(JsonVisitor)
     }
 }
 
