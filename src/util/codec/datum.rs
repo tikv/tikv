@@ -96,6 +96,15 @@ fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
 
 impl Datum {
     pub fn cmp(&self, ctx: &EvalContext, datum: &Datum) -> Result<Ordering> {
+        if let Datum::Json(_) = *self {
+            if let Datum::Json(_) = *datum {
+            } else {
+                // reverse compare when self is json while datum not.
+                let order = try!(datum.cmp(ctx, self));
+                return Ok(order.reverse());
+            }
+        }
+
         match *datum {
             Datum::Null => {
                 match *self {
@@ -1189,6 +1198,18 @@ mod test {
             (Datum::Max, Datum::Min, Ordering::Greater),
             (Datum::Null, Datum::Min, Ordering::Less),
             (Datum::Min, Datum::Min, Ordering::Equal),
+
+            (Datum::Json(Json::from_str(r#"{"key":"value"}"#).unwrap()),
+             Datum::Json(Json::from_str(r#"{"key":"value"}"#).unwrap()),
+             Ordering::Equal),
+            (Datum::I64(18), Datum::Json(Json::I64(18)), Ordering::Equal),
+            (Datum::U64(18), Datum::Json(Json::I64(20)), Ordering::Less),
+            (Datum::F64(1.2),Datum::Json(Json::Double(1.0)), Ordering::Greater),
+            (Datum::Dec(i32::MIN.into()),
+             Datum::Json(Json::Double(i32::MIN as f64)), Ordering::Equal),
+            (b"hi".as_ref().into(), Datum::Json(Json::from_str(r#""hi""#).unwrap()),
+             Ordering::Equal),
+            (Datum::Max,Datum::Json(Json::from_str(r#""MAX""#).unwrap()),Ordering::Equal),
         ];
 
         for (lhs, rhs, ret) in tests {
@@ -1260,17 +1281,25 @@ mod test {
 
     #[test]
     fn test_split_datum() {
-        let table = vec![
-            vec![Datum::I64(1)],
-            vec![Datum::F64(1f64), Datum::F64(3.15), Datum::Bytes(b"123".to_vec())],
-            vec![Datum::U64(1), Datum::F64(3.15), Datum::Bytes(b"123".to_vec()), Datum::I64(-1)],
-            vec![Datum::I64(1), Datum::I64(0)],
-            vec![Datum::Null],
-            vec![Datum::I64(100), Datum::U64(100)],
-            vec![Datum::U64(1), Datum::U64(1)],
-            vec![Datum::Dec(10.into())],
-            vec![Datum::F64(1f64), Datum::F64(3.15), Datum::Bytes(b"123456789012345".to_vec())],
-        ];
+        let table = vec![vec![Datum::I64(1)],
+                         vec![Datum::F64(1f64), Datum::F64(3.15), Datum::Bytes(b"123".to_vec())],
+                         vec![Datum::U64(1),
+                              Datum::F64(3.15),
+                              Datum::Bytes(b"123".to_vec()),
+                              Datum::I64(-1)],
+                         vec![Datum::I64(1), Datum::I64(0)],
+                         vec![Datum::Null],
+                         vec![Datum::I64(100), Datum::U64(100)],
+                         vec![Datum::U64(1), Datum::U64(1)],
+                         vec![Datum::Dec(10.into())],
+                         vec![Datum::F64(1f64),
+                              Datum::F64(3.15),
+                              Datum::Bytes(b"123456789012345".to_vec())],
+                         vec![Datum::Json(Json::from_str(r#"{"key":"value"}"#).unwrap())],
+                         vec![Datum::F64(1f64),
+                              Datum::Json(Json::from_str(r#"{"key":"value"}"#).unwrap()),
+                              Datum::F64(3.15),
+                              Datum::Bytes(b"123456789012345".to_vec())]];
 
         for case in table {
             let key_bs = encode_key(&case).unwrap();
