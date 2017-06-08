@@ -899,7 +899,11 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
-    try!(s.build(snap, state.get_region(), &mut snap_data, &mut stat));
+    try!(s.build(snap,
+                 state.get_region(),
+                 &mut snap_data,
+                 &mut stat,
+                 Box::new(mgr.clone())));
     let mut v = vec![];
     box_try!(snap_data.write_to_vec(&mut v));
     snapshot.set_data(v);
