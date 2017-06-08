@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::boxed::{Box, FnBox};
-
 use kvproto::coprocessor::Response;
 mod metrics;
 mod grpc_service;

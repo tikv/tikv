@@ -42,7 +42,6 @@ extern crate mio;
 extern crate kvproto;
 extern crate tipb;
 extern crate time;
-extern crate rustc_serialize;
 extern crate fnv;
 extern crate test;
 extern crate grpc;

@@ -32,6 +32,8 @@ use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use super::raft_client::RaftClient;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
+const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
@@ -71,6 +73,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
+            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
+            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
             .build_args();
         let grpc_server = try!(ServerBuilder::new(env.clone())
             .register_service(create_tikv(h))

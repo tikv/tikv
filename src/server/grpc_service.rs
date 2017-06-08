@@ -254,6 +254,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
+    fn kv_import(&self, _: RpcContext, _: ImportRequest, _: UnarySink<ImportResponse>) {
+        unimplemented!();
+    }
+
     fn kv_cleanup(&self,
                   ctx: RpcContext,
                   mut req: CleanupRequest,
