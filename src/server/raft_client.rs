@@ -77,10 +77,23 @@ impl RaftClient {
             .or_insert_with(|| Conn::new(env, addr))
     }
 
-    pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
+    pub fn send(&mut self, store_id: u64, addr: SocketAddr, msgs: Vec<RaftMessage>) -> Result<()> {
         let res = {
             let conn = self.get_conn(addr);
-            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()))
+            let len = msgs.len();
+            let mut res = Ok(());
+            for (i, msg) in msgs.into_iter().enumerate() {
+                let flags = if i < len - 1 {
+                    WriteFlags::default().buffer_hint(true)
+                } else {
+                    WriteFlags::default()
+                };
+                res = UnboundedSender::send(&conn.stream, (msg, flags));
+                if res.is_err() {
+                    break;
+                }
+            }
+            res
         };
         if let Err(e) = res {
             warn!("server: drop conn with tikv endpoint {} error: {:?}",

@@ -236,7 +236,7 @@ mod tests {
         let trans = server.transport();
         for i in 0..10 {
             if i % 2 == 1 {
-                trans.report_unreachable(RaftMessage::new());
+                trans.report_unreachable(vec![RaftMessage::new()]);
             }
             assert_eq!(report_unreachable_count.load(Ordering::SeqCst), (i + 1) / 2);
         }
