@@ -20,7 +20,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use util::transport::SendCh;
 use util::HandyRwLock;
 use util::worker::{Stopped, Scheduler};
-use util::collections::HashSet;
+use util::collections::{HashSet, FlatMap};
 use raft::SnapshotStatus;
 use raftstore::store::{Msg as StoreMsg, SnapshotStatusMsg, Transport, Callback};
 use raftstore::Result as RaftStoreResult;
@@ -263,6 +263,18 @@ impl<T, S> Transport for ServerTransport<T, S>
     fn send(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         self.send_store(to_store_id, vec![msg]);
+        Ok(())
+    }
+
+    fn send_all(&self, msgs: Vec<RaftMessage>) -> RaftStoreResult<()> {
+        let mut m = FlatMap::new();
+        for msg in msgs {
+            let entry = m.entry(msg.get_to_peer().get_store_id()).or_insert_with(|| vec![]);
+            entry.push(msg);
+        }
+        for (store_id, msgs) in m {
+            self.send_store(store_id, msgs);
+        }
         Ok(())
     }
 }
