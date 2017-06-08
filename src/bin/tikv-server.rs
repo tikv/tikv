@@ -596,7 +596,7 @@ fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
         (total_cpu_num as f32 * 0.8) as usize
     } else {
         4
-    }
+     }
 }
 
 fn adjust_sched_workers_by_cpu_num(total_cpu_num: usize) -> usize {
