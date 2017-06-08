@@ -49,8 +49,8 @@ use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
-                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
-                    ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
+                    CompactRunner, RaftlogGcTask, RaftlogGcTasks, RaftlogGcRunner, PdRunner,
+                    PdTask, ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
@@ -116,7 +116,7 @@ pub struct Store<T, C: 'static> {
     pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
     region_worker: Worker<RegionTask>,
-    raftlog_gc_worker: Worker<RaftlogGcTask>,
+    raftlog_gc_worker: Worker<RaftlogGcTasks>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
     consistency_check_worker: Worker<ConsistencyCheckTask>,
@@ -535,13 +535,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
                 Ok(ApplyTaskRes::Applys(multi_res)) => {
+                    let mut raftlog_gc_tasks = RaftlogGcTasks::new();
                     for res in multi_res {
                         if let Some(p) = self.region_peers.get_mut(&res.region_id) {
                             debug!("{} async apply finish: {:?}", p.tag, res);
                             p.post_apply(&res, &mut self.pending_raft_groups);
                         }
                         self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
-                        self.on_ready_result(res.region_id, res.exec_res);
+                        self.on_ready_result(res.region_id, res.exec_res, &mut raftlog_gc_tasks);
+                    }
+                    if !raftlog_gc_tasks.is_empty() {
+                        if let Err(e) = self.raftlog_gc_worker.schedule(raftlog_gc_tasks) {
+                            error!("failed to schedule compact task: {}", e);
+                        }
                     }
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
@@ -1041,7 +1047,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_ready_compact_log(&mut self,
                             region_id: u64,
                             first_index: u64,
-                            state: RaftTruncatedState) {
+                            state: RaftTruncatedState)
+                            -> RaftlogGcTask {
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let total_cnt = peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
@@ -1054,11 +1061,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             end_idx: state.get_index() + 1,
         };
         peer.last_compacted_idx = task.end_idx;
-        if let Err(e) = self.raftlog_gc_worker.schedule(task) {
-            error!("[region {}] failed to schedule compact task: {}",
-                   region_id,
-                   e);
-        }
+        task
     }
 
     fn on_ready_split_region(&mut self,
@@ -1196,13 +1199,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.region_ranges.insert(enc_end_key(&region), region.get_id());
     }
 
-    fn on_ready_result(&mut self, region_id: u64, exec_results: Vec<ExecResult>) {
+    fn on_ready_result(&mut self,
+                       region_id: u64,
+                       exec_results: Vec<ExecResult>,
+                       raftlog_gc_tasks: &mut RaftlogGcTasks) {
         // handle executing committed log results
         for result in exec_results {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(region_id, cp),
                 ExecResult::CompactLog { first_index, state } => {
-                    self.on_ready_compact_log(region_id, first_index, state)
+                    raftlog_gc_tasks.push(self.on_ready_compact_log(region_id, first_index, state))
                 }
                 ExecResult::SplitRegion { left, right, right_derive } => {
                     self.on_ready_split_region(region_id, left, right, right_derive)

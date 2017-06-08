@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 use std::error;
 use std::sync::mpsc::Sender;
+use std::ops::{Deref, DerefMut};
 
 pub struct Task {
     pub engine: Arc<DB>,
@@ -30,17 +31,35 @@ pub struct Task {
     pub end_idx: u64,
 }
 
+pub struct Tasks(Vec<Task>);
+
+impl Deref for Tasks {
+    type Target = Vec<Task>;
+
+    fn deref(&self) -> &Vec<Task> {
+        &self.0
+    }
+}
+
+impl DerefMut for Tasks {
+    fn deref_mut(&mut self) -> &mut Vec<Task> {
+        &mut self.0
+    }
+}
+
 pub struct TaskRes {
     pub collected: u64,
 }
 
-impl Display for Task {
+impl Display for Tasks {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f,
-               "GC Raft Log Task [region: {}, from: {}, to: {}]",
-               self.region_id,
-               self.start_idx,
-               self.end_idx)
+        write!(f, "Count of GC Raft Log Tasks: {}", self.len())
+    }
+}
+
+impl Tasks {
+    pub fn new() -> Tasks {
+        Tasks(vec![])
     }
 }
 
@@ -103,19 +122,21 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
-    fn run(&mut self, task: Task) {
-        debug!("[region {}] execute gc log to {}",
-               task.region_id,
-               task.end_idx);
-        match self.gc_raft_log(task.engine, task.region_id, task.start_idx, task.end_idx) {
-            Err(e) => {
-                error!("[region {}] failed to gc: {:?}", task.region_id, e);
-                self.report_collected(0);
-            }
-            Ok(n) => {
-                info!("[region {}] collected {} log entries", task.region_id, n);
-                self.report_collected(n);
+impl Runnable<Tasks> for Runner {
+    fn run(&mut self, mut tasks: Tasks) {
+        for task in tasks.drain(..) {
+            debug!("[region {}] execute gc log to {}",
+                   task.region_id,
+                   task.end_idx);
+            match self.gc_raft_log(task.engine, task.region_id, task.start_idx, task.end_idx) {
+                Err(e) => {
+                    error!("[region {}] failed to gc: {:?}", task.region_id, e);
+                    self.report_collected(0);
+                }
+                Ok(n) => {
+                    info!("[region {}] collected {} log entries", task.region_id, n);
+                    self.report_collected(n);
+                }
             }
         }
     }
@@ -149,39 +170,39 @@ mod test {
         }
         db.write(wb).unwrap();
 
-        let tbls = vec![(Task {
+        let tbls = vec![(task_to_tasks(Task {
                             engine: db.clone(),
                             region_id: region_id,
                             start_idx: 0,
                             end_idx: 10,
-                        },
+                        }),
                          10,
                          (0, 10),
                          (10, 100)),
-                        (Task {
+                        (task_to_tasks(Task {
                             engine: db.clone(),
                             region_id: region_id,
                             start_idx: 0,
                             end_idx: 50,
-                        },
+                        }),
                          40,
                          (0, 50),
                          (50, 100)),
-                        (Task {
+                        (task_to_tasks(Task {
                             engine: db.clone(),
                             region_id: region_id,
                             start_idx: 50,
                             end_idx: 50,
-                        },
+                        }),
                          0,
                          (0, 50),
                          (50, 100)),
-                        (Task {
+                        (task_to_tasks(Task {
                             engine: db.clone(),
                             region_id: region_id,
                             start_idx: 50,
                             end_idx: 60,
-                        },
+                        }),
                          10,
                          (0, 60),
                          (60, 100))];
@@ -209,5 +230,9 @@ mod test {
             let k = keys::raft_log_key(region_id, i);
             assert!(engine.get_cf(raft_handle, &k).unwrap().is_some());
         }
+    }
+
+    fn task_to_tasks(task: Task) -> Tasks {
+        Tasks::from_vec(vec![task])
     }
 }
