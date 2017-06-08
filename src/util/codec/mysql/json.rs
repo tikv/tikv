@@ -16,11 +16,13 @@ use std::{str, f64};
 use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::BTreeMap;
 use std::result::Result as SResult;
-use serde_json::{self, Value};
+use serde_json;
 use std::io::{Read, Write};
+use std::fmt;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use serde::ser::{Serialize, Serializer, SerializeTuple, SerializeMap};
+use serde::de::{self, Deserialize, Deserializer, Visitor, SeqAccess, MapAccess};
 
 const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
@@ -87,7 +89,7 @@ pub enum Json {
 impl Json {
     pub fn from_str(s: &str) -> Result<Json> {
         match serde_json::from_str(s) {
-            Ok(value) => Ok(normalize(value)),
+            Ok(value) => Ok(value),
             Err(e) => Err(invalid_type!("Illegal Json text:{:?}", e)),
         }
     }
@@ -328,6 +330,85 @@ impl Ord for Json {
     }
 }
 
+struct JsonVisitor;
+impl<'de> Visitor<'de> for JsonVisitor {
+    type Value = Json;
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "may be any string")
+    }
+
+    fn visit_unit<E>(self) -> SResult<Self::Value, E>
+        where E: de::Error
+    {
+        Ok(Json::Literal(JSON_LITERAL_NIL))
+    }
+
+    fn visit_bool<E>(self, v: bool) -> SResult<Self::Value, E>
+        where E: de::Error
+    {
+        if v {
+            Ok(Json::Literal(JSON_LITERAL_TRUE))
+        } else {
+            Ok(Json::Literal(JSON_LITERAL_FALSE))
+        }
+    }
+
+    fn visit_i64<E>(self, v: i64) -> SResult<Self::Value, E>
+        where E: de::Error
+    {
+        Ok(Json::I64(v))
+    }
+
+    fn visit_u64<E>(self, v: u64) -> SResult<Self::Value, E>
+        where E: de::Error
+    {
+        self.visit_i64(v as i64)
+    }
+
+    fn visit_f64<E>(self, v: f64) -> SResult<Self::Value, E>
+        where E: de::Error
+    {
+        Ok(Json::Double(v))
+    }
+
+    fn visit_str<E>(self, v: &str) -> SResult<Self::Value, E>
+        where E: de::Error
+    {
+        Ok(Json::String(String::from(v)))
+    }
+
+    fn visit_seq<M>(self, mut seq: M) -> SResult<Self::Value, M::Error>
+        where M: SeqAccess<'de>
+    {
+        let mut seqs = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(value) = seq.next_element()? {
+            seqs.push(value);
+        }
+        Ok(Json::Array(seqs))
+    }
+
+    fn visit_map<M>(self, mut access: M) -> SResult<Self::Value, M::Error>
+        where M: MapAccess<'de>
+    {
+        let mut map = BTreeMap::new();
+
+        // While there are entries remaining in the input, add them
+        // into our map.
+        while let Some((key, value)) = access.next_entry()? {
+            map.insert(key, value);
+        }
+        Ok(Json::Object(map))
+    }
+}
+
+impl<'de> Deserialize<'de> for Json {
+    fn deserialize<D>(deserializer: D) -> SResult<Self, D::Error>
+        where D: Deserializer<'de>
+    {
+        deserializer.deserialize_any(JsonVisitor)
+    }
+}
+
 #[allow(dead_code)]
 pub trait JsonEncoder: NumberEncoder {
     fn encode_json(&mut self, data: &Json) -> Result<()> {
@@ -565,42 +646,6 @@ pub trait JsonDecoder: NumberDecoder {
 }
 
 impl<T: Read> JsonDecoder for T {}
-
-fn normalize(data: Value) -> Json {
-    match data {
-        Value::Null => Json::Literal(JSON_LITERAL_NIL),
-        Value::Bool(data) => {
-            if !data {
-                Json::Literal(JSON_LITERAL_FALSE)
-            } else {
-                Json::Literal(JSON_LITERAL_TRUE)
-            }
-        }
-        Value::Number(ref data) => {
-            if data.is_f64() {
-                Json::Double(data.as_f64().unwrap())
-            } else {
-                Json::I64(data.as_i64().unwrap())
-            }
-        }
-        Value::String(data) => Json::String(data),
-        Value::Array(data) => {
-            let mut array = Vec::with_capacity(data.len());
-            for item in data {
-                array.push(normalize(item));
-            }
-            Json::Array(array)
-        }
-        Value::Object(data) => {
-            let mut obj = BTreeMap::new();
-            for (key, value) in data {
-                let value_item = normalize(value);
-                obj.insert(key, value_item);
-            }
-            Json::Object(obj)
-        }
-    }
-}
 
 #[cfg(test)]
 mod test {

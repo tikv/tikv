@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::sync::oneshot::{self, Sender};
 use futures::{Future, Sink, Stream};
-use grpc::{Environment, ChannelBuilder};
+use grpc::{Environment, ChannelBuilder, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
@@ -26,7 +26,7 @@ use super::{Error, Result};
 
 struct Conn {
     _client: TikvClient,
-    stream: UnboundedSender<RaftMessage>,
+    stream: UnboundedSender<(RaftMessage, WriteFlags)>,
     _close: Sender<()>,
 }
 
@@ -78,7 +78,7 @@ impl RaftClient {
     pub fn send(&mut self, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
         let res = {
             let conn = self.get_conn(addr);
-            UnboundedSender::send(&conn.stream, msg)
+            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()))
         };
         if let Err(e) = res {
             warn!("server: drop conn with tikv endpoint {} error: {:?}",
