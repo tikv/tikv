@@ -82,7 +82,10 @@ const MB: u64 = 1024 * KB;
 const GB: u64 = 1024 * MB;
 const RAFTCF_MIN_MEM: u64 = 256 * MB;
 const RAFTCF_MAX_MEM: u64 = 2 * GB;
-const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
+const LOCKCF_MIN_MEM: u64 = 256 * MB;
+const LOCKCF_MAX_MEM: u64 = GB;
+// [default cf, write cf, raft cf, lock cf]
+const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.30, 0.20, 0.02, 0.02];
 const SEC_TO_MS: i64 = 1000;
 
 fn sanitize_memory_usage() -> bool {
@@ -555,14 +558,8 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let mut block_cache_size =
-        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
-    if block_cache_size < RAFTCF_MIN_MEM {
-        block_cache_size = RAFTCF_MIN_MEM;
-    }
-    if block_cache_size > RAFTCF_MAX_MEM {
-        block_cache_size = RAFTCF_MAX_MEM;
-    }
+    let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
+    let block_cache_size = adjust_block_cache_size(cache_size, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size = block_cache_size as i64;
     default_values.use_bloom_filter = true;
@@ -575,8 +572,11 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     opts
 }
 
-fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+    let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[3]) as u64);
+    let block_cache_size = adjust_block_cache_size(cache_size, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
+    default_values.block_cache_size = block_cache_size as i64;
     default_values.block_size = 16 * KB as i64;
     default_values.use_bloom_filter = true;
     default_values.whole_key_filtering = true;
@@ -591,6 +591,16 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
     opts
+}
+
+fn adjust_block_cache_size(cache_size: u64, min_limit: u64, max_limit: u64) -> u64 {
+    if cache_size < min_limit {
+        return min_limit;
+    }
+    if cache_size > max_limit {
+        return max_limit;
+    }
+    cache_size
 }
 
 fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
@@ -762,7 +772,7 @@ fn build_raftkv(config: &toml::Value,
     let cfs_opts =
         vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
                                           get_rocksdb_default_cf_option(config, total_mem)),
-             rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config)),
+             rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_WRITE,
                                           get_rocksdb_write_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_RAFT,
