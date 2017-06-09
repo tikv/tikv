@@ -45,11 +45,11 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     let interval = 500;
     // Set lock_cf_compact_interval.
     cluster.cfg.raft_store.lock_cf_compact_interval = interval;
-    // Set lock_cf_compact_threshold.
-    cluster.cfg.raft_store.lock_cf_compact_threshold = 100;
+    // Set lock_cf_compact_bytes_threshold.
+    cluster.cfg.raft_store.lock_cf_compact_bytes_threshold = 100;
     cluster.run();
 
-    // Write 40 bytes, not reach lock_cf_compact_threshold, so there is no compaction.
+    // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no compaction.
     for i in 0..5 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
@@ -57,7 +57,7 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     // Generate one sst, if there are datas only in one memtable, no compactions will be triggered.
     flush(cluster);
 
-    // Write more 40 bytes, still not reach lock_cf_compact_threshold, so there is no compaction.
+    // Write more 40 bytes, still not reach lock_cf_compact_bytes_threshold, so there is no compaction.
     for i in 5..10 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
@@ -65,7 +65,7 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     // Generate another sst.
     flush_then_check(cluster, interval, false);
 
-    // Write more 50 bytes, reach lock_cf_compact_threshold.
+    // Write more 50 bytes, reach lock_cf_compact_bytes_threshold.
     for i in 10..15 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
