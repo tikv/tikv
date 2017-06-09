@@ -222,10 +222,12 @@ impl<'a> MvccReader<'a> {
                                key: &Key,
                                start_ts: u64)
                                -> Result<Option<(u64, WriteType)>> {
-        if let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, start_ts)) {
+        let mut seek_ts = start_ts;
+        while let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, seek_ts)) {
             if write.start_ts == start_ts {
                 return Ok(Some((commit_ts, write.write_type)));
             }
+            seek_ts = commit_ts + 1;
         }
         Ok(None)
     }

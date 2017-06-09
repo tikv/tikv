@@ -477,6 +477,30 @@ mod tests {
     }
 
     #[test]
+    fn test_mvcc_txn_rollback_after_commit() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+
+        let k = b"k";
+        let v = b"v";
+        let t1 = 1;
+        let t2 = 10;
+        let t3 = 20;
+        let t4 = 30;
+
+        must_prewrite_put(engine.as_ref(), k, v, k, t1);
+
+        must_rollback(engine.as_ref(), k, t2);
+        must_rollback(engine.as_ref(), k, t2);
+        must_rollback(engine.as_ref(), k, t4);
+
+        must_commit(engine.as_ref(), k, t1, t3);
+
+        must_rollback_err(engine.as_ref(), k, t1);
+        must_rollback_err(engine.as_ref(), k, t1);
+        must_get(engine.as_ref(), k, t4, v);
+    }
+
+    #[test]
     fn test_mvcc_txn_rollback() {
         test_mvcc_txn_rollback_imp(b"k", b"v");
 
