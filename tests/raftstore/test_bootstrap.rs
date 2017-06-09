@@ -11,18 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::{Arc, mpsc};
+use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
+use tikv::server::Node;
+use tikv::storage::ALL_CFS;
+use tikv::util::rocksdb;
+use tempdir::TempDir;
+use kvproto::metapb;
+use kvproto::raft_serverpb::RegionLocalState;
+
+use super::pd::{TestPdClient, bootstrap_with_first_region};
 use super::cluster::{Cluster, Simulator};
 use super::node::{ChannelTransport, new_node_cluster};
 use super::transport_simulate::SimulateTransport;
 use super::util::*;
-use tikv::storage::ALL_CFS;
-use tikv::util::rocksdb;
-use std::sync::{Arc, mpsc};
-use super::pd::{TestPdClient, bootstrap_with_first_region};
-use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
-use tikv::server::Node;
-use tempdir::TempDir;
-use kvproto::metapb;
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
@@ -64,10 +66,12 @@ fn test_node_bootstrap_with_prepared_data() {
     // now anthoer node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
     bootstrap_store(&engine, 0, 1).unwrap();
-    node.prepare_bootstrap_cluster(&engine, 1).unwrap();
+    let region = node.prepare_bootstrap_cluster(&engine, 1).unwrap();
     assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         .unwrap()
         .is_some());
+    let region_state_key = keys::region_state_key(region.get_id());
+    assert!(engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_some());
 
     // try to restart this node, will clear the prepare data
     node.start(event_loop,
@@ -80,7 +84,8 @@ fn test_node_bootstrap_with_prepared_data() {
         .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         .unwrap()
         .is_none());
-    assert_eq!(pd_client.get_regions_number() as u32, 1)
+    assert!(engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_none());
+    assert_eq!(pd_client.get_regions_number() as u32, 1);
 }
 
 #[test]
