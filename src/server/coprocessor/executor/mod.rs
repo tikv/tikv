@@ -19,14 +19,15 @@ mod scanner;
 pub mod table_scan;
 pub mod selection;
 
-#[allow(dead_code)] //TODO:remove it
+// TODO:remove it
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Row {
     pub handle: i64,
     pub data: RowColsDict,
 }
 
-#[allow(dead_code)] //TODO:remove it
+#[allow(dead_code)] // TODO:remove it
 impl Row {
     pub fn new(handle: i64, data: RowColsDict) -> Row {
         Row {
