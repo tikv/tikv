@@ -707,9 +707,9 @@ fn build_cfg(matches: &ArgMatches,
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
-    cfg_u64(&mut cfg.raft_store.lock_cf_compact_threshold,
+    cfg_u64(&mut cfg.raft_store.lock_cf_compact_bytes_threshold,
             config,
-            "raftstore.lock-cf-compact-threshold");
+            "raftstore.lock-cf-compact-bytes-threshold");
     cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
             config,
             "raftstore.raft-entry-max-size");
@@ -726,7 +726,7 @@ fn build_cfg(matches: &ArgMatches,
             config,
             "raftstore.consistency-check-interval");
     cfg.raft_store.use_sst_file_snapshot =
-        get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(false));
+        get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(true));
     cfg_usize(&mut cfg.storage.sched_notify_capacity,
               config,
               "storage.scheduler-notify-capacity");

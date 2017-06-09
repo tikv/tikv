@@ -39,6 +39,8 @@ use super::snap::Task as SnapTask;
 use super::metrics::*;
 use super::Error;
 
+const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
+
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling KV requests.
@@ -666,7 +668,9 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         }
         Err(Error::SchedTooBusy) => {
             let mut err = RegionError::new();
-            err.set_server_is_busy(ServerIsBusy::new());
+            let mut server_is_busy_err = ServerIsBusy::new();
+            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
         _ => None,
