@@ -133,7 +133,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             end_point_worker: end_point_worker,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
-            raft_client: RaftClient::new(env),
+            raft_client: RaftClient::new(env, cfg.grpc_raft_conn_size),
         };
 
         Ok(svr)

@@ -623,6 +623,9 @@ fn build_cfg(matches: &ArgMatches,
     cfg_usize(&mut cfg.grpc_concurrent_stream,
               config,
               "server.grpc-concurrent-stream");
+    cfg_usize(&mut cfg.grpc_raft_conn_size,
+              config,
+              "server.grpc-raft-conn-size");
     if !cfg_usize(&mut cfg.end_point_concurrency,
                   config,
                   "server.end-point-concurrency") {

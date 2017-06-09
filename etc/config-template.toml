@@ -25,6 +25,8 @@ messages-per-tick = 4096
 # grpc-concurrency = 2
 # The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
+# The number of connections to send raft messages.
+# grpc-raft-conn-size = 10
 
 # size of thread pool for endpoint task, should less than total cpu cores.
 # end-point-concurrency = 8
