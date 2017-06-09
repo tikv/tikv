@@ -9,7 +9,7 @@ RUN yum makecache \
 	&& yum install -y tar wget git which file unzip python-pip \
 	&& yum install -y make cmake gcc gcc-c++ libstdc++-static pkg-config psmisc \
 	&& yum install -y libzstd-devel lz4-devel zlib-devel bzip2-devel snappy-devel libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
-	&& yum install -y openssh-server openssl-devel \
+	&& yum install -y openssl-devel \
 	&& yum clean all
 
 RUN curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz \
@@ -42,31 +42,19 @@ ENV PATH $GOPATH/bin:$GOROOT/bin:$PATH
 RUN go get golang.org/x/tools/go/gcimporter15 \
 	&& go get github.com/golang/lint/golint
 
-RUN curl -fsSL https://get.docker.com/ | sh
-
-RUN adduser centos --uid 1000 \
-	&& echo "centos:centos" | chpasswd \
-	&& usermod -aG docker centos \
-	&& usermod -aG input centos
-
-RUN su centos -c "curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2017-03-27 -y" \
-	&& su centos -c "/home/centos/.cargo/bin/rustup default nightly-2017-03-27"
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2017-03-27 -y \
+	&& /root/.cargo/bin/rustup default nightly-2017-03-27
 
 # cache dep package
-RUN su centos -c "curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /home/centos/master.tar.gz" \
-	&& su centos -c "curl -L http://download.pingcap.org/rustfmt-v0.6.0-linux-amd64.tar.gz -o /home/centos/rustfmt-v0.6.0-linux-amd64.tar.gz" \
-	&& su centos -c "cd /home/centos && tar xf master.tar.gz && cd tikv-master && /home/centos/.cargo/bin/cargo fetch" \
-	&& su centos -c "cd /home/centos && tar xzf rustfmt-v0.6.0-linux-amd64.tar.gz -C /home/centos/.cargo/bin --strip-components=1" \
-	&& su centos -c "cd /home/centos && rm -rf master.tar.gz tikv-master rustfmt-v0.6.0-linux-amd64.tar.gz"
+RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \
+	&& curl -L http://download.pingcap.org/rustfmt-v0.6.0-linux-amd64.tar.gz -o /root/rustfmt-v0.6.0-linux-amd64.tar.gz \
+	&& cd /root && tar xf master.tar.gz && cd tikv-master && /root/.cargo/bin/cargo fetch \
+	&& cd /root && tar xzf rustfmt-v0.6.0-linux-amd64.tar.gz -C /root/.cargo/bin --strip-components=1 \
+	&& cd /root && rm -rf master.tar.gz tikv-master rustfmt-v0.6.0-linux-amd64.tar.gz
 
-RUN sed -i 's|session    required     pam_loginuid.so|session    optional     pam_loginuid.so|g' /etc/pam.d/sshd \
-	&& mkdir -p /var/run/sshd \
-	&& ssh-keygen -t rsa -b 2048 -f /etc/ssh/ssh_host_rsa_key -N "" -q \
-	&& ssh-keygen -t dsa -b 1024 -f /etc/ssh/ssh_host_dsa_key -N "" -q \
-	&& ssh-keygen -t ecdsa -b 256 -f /etc/ssh/ssh_host_ecdsa_key -N "" -q \
-	&& ssh-keygen -t ed25519 -b 2048 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
+ENV PATH /root/.cargo/bin/:$PATH
+ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
+ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
 
-EXPOSE 22
-
-CMD ["/usr/sbin/sshd", "-D"]
+CMD ["/bin/bash"]
 
