@@ -227,7 +227,7 @@ impl<C> Node<C>
                         try!(check_region_epoch(&region, &first_region));
                         try!(store::clear_prepare_bootstrap_state(engine));
                     } else {
-                        try!(store::clear_prepare_bootstrap(engine, region.get_id()));
+                        try!(store::clear_prepare_bootstrap(engine, first_region.get_id()));
                     }
                     return Ok(());
                 }
