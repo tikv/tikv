@@ -41,6 +41,7 @@ use super::metrics::*;
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
+const STREAM_INITIAL_WINDOW_SIZE: usize = 2 * 1024 * 1024;
 
 pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
@@ -104,6 +105,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
+            .stream_initial_window_size(STREAM_INITIAL_WINDOW_SIZE)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
