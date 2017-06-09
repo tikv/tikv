@@ -60,7 +60,8 @@ impl<'a> SelectionExecutor<'a> {
     pub fn new(mut meta: Selection,
                ctx: Rc<EvalContext>,
                columns_info: &[ColumnInfo],
-               src: Box<Executor + 'a>) -> Result<SelectionExecutor<'a>> {
+               src: Box<Executor + 'a>)
+               -> Result<SelectionExecutor<'a>> {
         let conditions = meta.take_conditions().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new();
@@ -71,9 +72,7 @@ impl<'a> SelectionExecutor<'a> {
         // FIXME(andelf): assume all items in columns_info are unique.
         //   For now, `SelectionExecutor` is dangling.
         let columns = columns_info.iter()
-            .filter(|col| {
-                visitor.column_ids.get(&col.get_column_id()).is_some()
-            })
+            .filter(|col| visitor.column_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect::<Vec<ColumnInfo>>();
 
@@ -83,7 +82,7 @@ impl<'a> SelectionExecutor<'a> {
             conditions: conditions,
             columns: columns,
             ctx: ctx,
-            src: src
+            src: src,
         })
     }
 }
@@ -100,14 +99,15 @@ impl<'a> Executor for SelectionExecutor<'a> {
                                       &self.columns,
                                       row.handle));
                 for expr in &self.conditions {
-                    let is_selected = evaluator.eval(&self.ctx, expr)?.into_bool(&self.ctx)?.unwrap_or(false);
+                    let is_selected =
+                        evaluator.eval(&self.ctx, expr)?.into_bool(&self.ctx)?.unwrap_or(false);
                     if !is_selected {
                         continue 'next;
                     }
                 }
-                return Ok(Some(row))
+                return Ok(Some(row));
             } else {
-                return Ok(None)
+                return Ok(None);
             }
         }
     }
@@ -139,7 +139,7 @@ mod tests {
         let mut table_scan = TableScan::new();
         // prepare cols
         let cols = test_data.get_prev_2_cols();
-         table_scan.set_columns(RepeatedField::from_vec(cols.clone()));
+        table_scan.set_columns(RepeatedField::from_vec(cols.clone()));
         // prepare range
         // whole key range for the table
         let range = get_range(1, i64::MIN, i64::MAX);
@@ -156,11 +156,8 @@ mod tests {
         let mut statistics = Statistics::default();
 
         let (snapshot, start_ts) = store.get_snapshot();
-        let inner_table_scan = TableScanExecutor::new(table_scan,
-                                                      key_ranges,
-                                                      snapshot,
-                                                      &mut statistics,
-                                                      start_ts);
+        let inner_table_scan =
+            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
 
         // NULL IS NULL
         let mut expr = Expr::new();
@@ -224,11 +221,8 @@ mod tests {
         let mut statistics = Statistics::default();
 
         let (snapshot, start_ts) = store.get_snapshot();
-        let inner_table_scan = TableScanExecutor::new(table_scan,
-                                                      key_ranges,
-                                                      snapshot,
-                                                      &mut statistics,
-                                                      start_ts);
+        let inner_table_scan =
+            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
         // col3 > 3
         let mut expr = Expr::new();
         expr.set_tp(ExprType::GT);
@@ -257,7 +251,7 @@ mod tests {
         let executor = selection_executor.as_mut().unwrap();
 
         // 6 to 10 is > 5
-        for idx in 6 .. 10 {
+        for idx in 6..10 {
             let nxt = executor.next();
             assert!(nxt.is_ok(), "error: {:?}", nxt.unwrap());
             assert!(nxt.as_ref().unwrap().is_some(), "must have value");
