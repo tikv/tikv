@@ -494,8 +494,8 @@ mod tests {
         must_rollback(engine.as_ref(), k, t4);
 
         must_commit(engine.as_ref(), k, t1, t3);
-
-        must_rollback_err(engine.as_ref(), k, t1);
+        // The rollback should be failed since the transaction
+        // was committed before.
         must_rollback_err(engine.as_ref(), k, t1);
         must_get(engine.as_ref(), k, t4, v);
     }
