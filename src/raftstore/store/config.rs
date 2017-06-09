@@ -59,7 +59,7 @@ const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 60000; // 60 seconds
 
 const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 9 seconds
 
-const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = false;
+const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = true;
 
 #[derive(Debug, Clone)]
 pub struct Config {
