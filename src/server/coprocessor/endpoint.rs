@@ -459,7 +459,7 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 }
 
 #[inline]
-fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+pub fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                            ctx: &EvalContext,
                            values: &RowColsDict,
                            cols: T,
@@ -921,7 +921,7 @@ impl SelectContextCore {
     }
 }
 
-fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
+pub fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
                        col_meta: &[ColumnInfo],
                        expr: &Expr)
                        -> Result<()> {

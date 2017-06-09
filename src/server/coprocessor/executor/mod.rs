@@ -17,8 +17,10 @@ use server::coprocessor::Result;
 
 mod scanner;
 pub mod table_scan;
+pub mod selection;
 
 #[allow(dead_code)] //TODO:remove it
+#[derive(Debug)]
 pub struct Row {
     pub handle: i64,
     pub data: RowColsDict,

@@ -21,7 +21,7 @@ use storage::{Snapshot, Statistics};
 use super::{Executor, Row};
 use super::scanner::Scanner;
 
-struct TableScanExecutor<'a> {
+pub struct TableScanExecutor<'a> {
     meta: TableScan,
     col_ids: HashSet<i64>,
     cursor: usize,
@@ -158,7 +158,6 @@ mod test {
         range.set_end(end);
         assert!(is_point(&range));
         meta.ranges = vec![range];
-
         let (snapshot, start_ts) = meta.store.get_snapshot();
 
         let mut table_scanner = TableScanExecutor::new(meta.table_scan,
@@ -177,6 +176,8 @@ mod test {
             let v = row.data.get(cid).unwrap();
             assert_eq!(encode_data[&cid], v.to_vec());
         }
+        assert!(table_scanner.next().is_ok());
+        assert!(table_scanner.next().is_ok());
         assert!(table_scanner.next().unwrap().is_none());
     }
 
