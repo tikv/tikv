@@ -149,10 +149,8 @@ impl<'a> MvccReader<'a> {
                 self.write_cursor = Some(iter);
             }
         } else {
-            let upper_bound_key = key.append_ts(0u64);
-            let upper_bound = upper_bound_key.encoded().clone();
             // use prefix bloom filter
-            let iter_opt = IterOption::new(Some(upper_bound), true).use_prefix_seek();
+            let iter_opt = IterOption::new(None, true).use_prefix_seek();
             let iter = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed));
             self.write_cursor = Some(iter);
         }
