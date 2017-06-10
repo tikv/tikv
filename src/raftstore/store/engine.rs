@@ -290,10 +290,8 @@ impl Iterable for DB {
         readopts.fill_cache(iter_opt.fill_cache);
         if iter_opt.total_order_seek_used() {
             readopts.set_total_order_seek(true);
-        } else {
-            if iter_opt.prefix_bound {
-                readopts.set_prefix_same_as_start(true);
-            }
+        } else if iter_opt.prefix_bound {
+            readopts.set_prefix_same_as_start(true);
         }
         if let Some(key) = iter_opt.upper_bound {
             readopts.set_iterate_upper_bound(&key);
@@ -306,10 +304,8 @@ impl Iterable for DB {
         readopts.fill_cache(iter_opt.fill_cache);
         if iter_opt.total_order_seek_used() {
             readopts.set_total_order_seek(true);
-        } else {
-            if iter_opt.prefix_bound {
-                readopts.set_prefix_same_as_start(true);
-            }
+        } else if iter_opt.prefix_bound {
+            readopts.set_prefix_same_as_start(true);
         }
         if let Some(key) = iter_opt.upper_bound {
             readopts.set_iterate_upper_bound(&key);
@@ -346,10 +342,8 @@ impl Iterable for Snapshot {
         opt.fill_cache(iter_opt.fill_cache);
         if iter_opt.total_order_seek_used() {
             opt.set_total_order_seek(true);
-        } else {
-            if iter_opt.prefix_bound {
-                opt.set_prefix_same_as_start(true);
-            }
+        } else if iter_opt.prefix_bound {
+            opt.set_prefix_same_as_start(true);
         }
         if let Some(key) = iter_opt.upper_bound {
             opt.set_iterate_upper_bound(&key);
@@ -366,10 +360,8 @@ impl Iterable for Snapshot {
         opt.fill_cache(iter_opt.fill_cache);
         if iter_opt.total_order_seek_used() {
             opt.set_total_order_seek(true);
-        } else {
-            if iter_opt.prefix_bound {
-                opt.set_prefix_same_as_start(true);
-            }
+        } else if iter_opt.prefix_bound {
+            opt.set_prefix_same_as_start(true);
         }
         if let Some(key) = iter_opt.upper_bound {
             opt.set_iterate_upper_bound(&key);
