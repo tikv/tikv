@@ -46,7 +46,7 @@ const DEFAULT_SNAP_GC_TIMEOUT_SECS: u64 = 4 * 60 * 60; // 4 hours
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 const DEFAULT_LOCK_CF_COMPACT_INTERVAL: u64 = 10 * 60 * 1000; // 10 min
-const DEFAULT_LOCK_CF_COMPACT_THRESHOLD: u64 = 256 * 1024 * 1024; // 256 MB
+const DEFAULT_LOCK_CF_COMPACT_BYTES_THRESHOLD: u64 = 256 * 1024 * 1024; // 256 MB
 // If the leader missing for over 2 hours,
 // a peer should consider itself as a stale peer that is out of region.
 const DEFAULT_MAX_LEADER_MISSING_SECS: u64 = 2 * 60 * 60;
@@ -110,7 +110,7 @@ pub struct Config {
     pub snap_mgr_gc_tick_interval: u64,
     pub snap_gc_timeout: u64,
     pub lock_cf_compact_interval: u64,
-    pub lock_cf_compact_threshold: u64,
+    pub lock_cf_compact_bytes_threshold: u64,
 
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
@@ -171,7 +171,7 @@ impl Default for Config {
             max_leader_missing_duration: Duration::from_secs(DEFAULT_MAX_LEADER_MISSING_SECS),
             snap_apply_batch_size: DEFAULT_SNAPSHOT_APPLY_BATCH_SIZE,
             lock_cf_compact_interval: DEFAULT_LOCK_CF_COMPACT_INTERVAL,
-            lock_cf_compact_threshold: DEFAULT_LOCK_CF_COMPACT_THRESHOLD,
+            lock_cf_compact_bytes_threshold: DEFAULT_LOCK_CF_COMPACT_BYTES_THRESHOLD,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
             raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),

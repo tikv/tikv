@@ -565,8 +565,6 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     }
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size = block_cache_size as i64;
-    default_values.use_bloom_filter = true;
-    default_values.whole_key_filtering = true;
 
     let mut opts = get_rocksdb_cf_option(config, "raftcf", default_values);
     opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
@@ -709,9 +707,9 @@ fn build_cfg(matches: &ArgMatches,
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
-    cfg_u64(&mut cfg.raft_store.lock_cf_compact_threshold,
+    cfg_u64(&mut cfg.raft_store.lock_cf_compact_bytes_threshold,
             config,
-            "raftstore.lock-cf-compact-threshold");
+            "raftstore.lock-cf-compact-bytes-threshold");
     cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
             config,
             "raftstore.raft-entry-max-size");
