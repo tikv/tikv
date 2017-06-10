@@ -25,6 +25,7 @@ const DEFAULT_NOTIFY_CAPACITY: usize = 40960;
 const DEFAULT_END_POINT_CONCURRENCY: usize = 8;
 const DEFAULT_GRPC_CONCURRENCY: usize = 2;
 const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
+const DEFAULT_GRPC_INITIAL_WINDOW_SIZE: usize = 2 * 1024 * 1024;
 const DEFAULT_END_POINT_TXN_CONCURRENCY_RATIO: f64 = 0.25;
 const DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT: usize = 2;
 const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
@@ -46,6 +47,7 @@ pub struct Config {
     pub messages_per_tick: usize,
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: usize,
+    pub grpc_initial_window_size: usize,
     pub storage: StorageConfig,
     pub raft_store: RaftStoreConfig,
     pub end_point_concurrency: usize,
@@ -64,6 +66,7 @@ impl Default for Config {
             messages_per_tick: DEFAULT_MESSAGES_PER_TICK,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
+            grpc_initial_window_size: DEFAULT_GRPC_INITIAL_WINDOW_SIZE,
             end_point_concurrency: DEFAULT_END_POINT_CONCURRENCY,
             end_point_txn_concurrency_on_busy: usize::default(),
             end_point_small_txn_tasks_limit: DEFAULT_END_POINT_SMALL_TXN_TASKS_LIMIT,
