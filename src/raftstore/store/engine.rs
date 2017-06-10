@@ -163,6 +163,7 @@ enum SeekMode {
 
 pub struct IterOption {
     upper_bound: Option<Vec<u8>>,
+    prefix_bound: bool,
     fill_cache: bool,
     seek_mode: SeekMode,
 }
@@ -171,6 +172,7 @@ impl IterOption {
     pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool) -> IterOption {
         IterOption {
             upper_bound: upper_bound,
+            prefix_bound: false,
             fill_cache: fill_cache,
             seek_mode: SeekMode::TotalOrder,
         }
@@ -179,10 +181,6 @@ impl IterOption {
     pub fn use_prefix_seek(mut self) -> IterOption {
         self.seek_mode = SeekMode::Prefix;
         self
-    }
-
-    pub fn prefix_seek_used(&self) -> bool {
-        self.seek_mode == SeekMode::Prefix
     }
 
     pub fn total_order_seek_used(&self) -> bool {
@@ -197,12 +195,18 @@ impl IterOption {
         self.upper_bound = Some(bound);
         self
     }
+
+    pub fn enable_prefix_bound(mut self) -> IterOption {
+        self.prefix_bound = true;
+        self
+    }
 }
 
 impl Default for IterOption {
     fn default() -> IterOption {
         IterOption {
             upper_bound: None,
+            prefix_bound: false,
             fill_cache: true,
             seek_mode: SeekMode::TotalOrder,
         }
@@ -284,10 +288,12 @@ impl Iterable for DB {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
         let mut readopts = ReadOptions::new();
         readopts.fill_cache(iter_opt.fill_cache);
-        if iter_opt.prefix_seek_used() {
-            readopts.set_prefix_same_as_start(true);
+        if iter_opt.total_order_seek_used() {
+            readopts.set_total_order_seek(true);
         } else {
-            readopts.set_total_order_seek(iter_opt.total_order_seek_used());
+            if iter_opt.prefix_bound {
+                readopts.set_prefix_same_as_start(true);
+            }
         }
         if let Some(key) = iter_opt.upper_bound {
             readopts.set_iterate_upper_bound(&key);
@@ -298,10 +304,12 @@ impl Iterable for DB {
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
         let mut readopts = ReadOptions::new();
         readopts.fill_cache(iter_opt.fill_cache);
-        if iter_opt.prefix_seek_used() {
-            readopts.set_prefix_same_as_start(true);
+        if iter_opt.total_order_seek_used() {
+            readopts.set_total_order_seek(true);
         } else {
-            readopts.set_total_order_seek(iter_opt.total_order_seek_used());
+            if iter_opt.prefix_bound {
+                readopts.set_prefix_same_as_start(true);
+            }
         }
         if let Some(key) = iter_opt.upper_bound {
             readopts.set_iterate_upper_bound(&key);
@@ -336,10 +344,12 @@ impl Iterable for Snapshot {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
         let mut opt = ReadOptions::new();
         opt.fill_cache(iter_opt.fill_cache);
-        if iter_opt.prefix_seek_used() {
-            opt.set_prefix_same_as_start(true);
+        if iter_opt.total_order_seek_used() {
+            opt.set_total_order_seek(true);
         } else {
-            opt.set_total_order_seek(iter_opt.total_order_seek_used());
+            if iter_opt.prefix_bound {
+                opt.set_prefix_same_as_start(true);
+            }
         }
         if let Some(key) = iter_opt.upper_bound {
             opt.set_iterate_upper_bound(&key);
@@ -354,10 +364,12 @@ impl Iterable for Snapshot {
         let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
         let mut opt = ReadOptions::new();
         opt.fill_cache(iter_opt.fill_cache);
-        if iter_opt.prefix_seek_used() {
-            opt.set_prefix_same_as_start(true);
+        if iter_opt.total_order_seek_used() {
+            opt.set_total_order_seek(true);
         } else {
-            opt.set_total_order_seek(iter_opt.total_order_seek_used());
+            if iter_opt.prefix_bound {
+                opt.set_prefix_same_as_start(true);
+            }
         }
         if let Some(key) = iter_opt.upper_bound {
             opt.set_iterate_upper_bound(&key);
