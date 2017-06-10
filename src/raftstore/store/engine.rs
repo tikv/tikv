@@ -163,7 +163,7 @@ enum SeekMode {
 
 pub struct IterOption {
     upper_bound: Option<Vec<u8>>,
-    prefix_bound: bool,
+    prefix_same_as_start: bool,
     fill_cache: bool,
     seek_mode: SeekMode,
 }
@@ -172,7 +172,7 @@ impl IterOption {
     pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool) -> IterOption {
         IterOption {
             upper_bound: upper_bound,
-            prefix_bound: false,
+            prefix_same_as_start: false,
             fill_cache: fill_cache,
             seek_mode: SeekMode::TotalOrder,
         }
@@ -196,8 +196,8 @@ impl IterOption {
         self
     }
 
-    pub fn enable_prefix_bound(mut self) -> IterOption {
-        self.prefix_bound = true;
+    pub fn set_prefix_same_as_start(mut self) -> IterOption {
+        self.prefix_same_as_start = true;
         self
     }
 }
@@ -206,7 +206,7 @@ impl Default for IterOption {
     fn default() -> IterOption {
         IterOption {
             upper_bound: None,
-            prefix_bound: false,
+            prefix_same_as_start: false,
             fill_cache: true,
             seek_mode: SeekMode::TotalOrder,
         }
@@ -290,7 +290,7 @@ impl Iterable for DB {
         readopts.fill_cache(iter_opt.fill_cache);
         if iter_opt.total_order_seek_used() {
             readopts.set_total_order_seek(true);
-        } else if iter_opt.prefix_bound {
+        } else if iter_opt.prefix_same_as_start {
             readopts.set_prefix_same_as_start(true);
         }
         if let Some(key) = iter_opt.upper_bound {
@@ -304,7 +304,7 @@ impl Iterable for DB {
         readopts.fill_cache(iter_opt.fill_cache);
         if iter_opt.total_order_seek_used() {
             readopts.set_total_order_seek(true);
-        } else if iter_opt.prefix_bound {
+        } else if iter_opt.prefix_same_as_start {
             readopts.set_prefix_same_as_start(true);
         }
         if let Some(key) = iter_opt.upper_bound {
@@ -342,7 +342,7 @@ impl Iterable for Snapshot {
         opt.fill_cache(iter_opt.fill_cache);
         if iter_opt.total_order_seek_used() {
             opt.set_total_order_seek(true);
-        } else if iter_opt.prefix_bound {
+        } else if iter_opt.prefix_same_as_start {
             opt.set_prefix_same_as_start(true);
         }
         if let Some(key) = iter_opt.upper_bound {
@@ -360,7 +360,7 @@ impl Iterable for Snapshot {
         opt.fill_cache(iter_opt.fill_cache);
         if iter_opt.total_order_seek_used() {
             opt.set_total_order_seek(true);
-        } else if iter_opt.prefix_bound {
+        } else if iter_opt.prefix_same_as_start {
             opt.set_prefix_same_as_start(true);
         }
         if let Some(key) = iter_opt.upper_bound {
