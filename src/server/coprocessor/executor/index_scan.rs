@@ -23,7 +23,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use super::{Executor, Row};
 use super::scanner::Scanner;
 
-struct IndexScanExec<'a> {
+pub struct IndexScanExec<'a> {
     desc: bool,
     col_ids: Vec<i64>,
     cursor: usize,
