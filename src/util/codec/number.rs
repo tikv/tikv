@@ -345,7 +345,7 @@ mod test {
             #[allow(unused_imports)]
             #[allow(float_cmp)]
             mod $enc {
-                use super::{I64_TESTS, U64_TESTS, U32_TESTS,U16_TESTS,F64_TESTS};
+                use super::{I64_TESTS, U64_TESTS, U32_TESTS, U16_TESTS, F64_TESTS};
                 use util::codec::number::*;
 
                 test_serialize!(serialize, $enc, $dec, $cases);
