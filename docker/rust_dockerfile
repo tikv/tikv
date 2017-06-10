@@ -42,8 +42,8 @@ ENV PATH $GOPATH/bin:$GOROOT/bin:$PATH
 RUN go get golang.org/x/tools/go/gcimporter15 \
 	&& go get github.com/golang/lint/golint
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2017-03-27 -y \
-	&& /root/.cargo/bin/rustup default nightly-2017-03-27
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2017-05-29 -y \
+	&& /root/.cargo/bin/rustup default nightly-2017-05-29
 
 # cache dep package
 RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \
