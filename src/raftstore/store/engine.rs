@@ -200,6 +200,20 @@ impl IterOption {
         self.prefix_same_as_start = true;
         self
     }
+
+    pub fn to_read_opts(&self) -> ReadOptions {
+        let mut opts = ReadOptions::new();
+        opts.fill_cache(self.fill_cache);
+        if self.total_order_seek_used() {
+            opts.set_total_order_seek(true);
+        } else if self.prefix_same_as_start {
+            opts.set_prefix_same_as_start(true);
+        }
+        if let Some(ref key) = self.upper_bound {
+            opts.set_iterate_upper_bound(key);
+        }
+        opts
+    }
 }
 
 impl Default for IterOption {
@@ -286,31 +300,12 @@ impl Peekable for DB {
 
 impl Iterable for DB {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
-        let mut readopts = ReadOptions::new();
-        readopts.fill_cache(iter_opt.fill_cache);
-        if iter_opt.total_order_seek_used() {
-            readopts.set_total_order_seek(true);
-        } else if iter_opt.prefix_same_as_start {
-            readopts.set_prefix_same_as_start(true);
-        }
-        if let Some(key) = iter_opt.upper_bound {
-            readopts.set_iterate_upper_bound(&key);
-        }
-        self.iter_opt(readopts)
+        self.iter_opt(iter_opt.to_read_opts())
     }
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
-        let mut readopts = ReadOptions::new();
-        readopts.fill_cache(iter_opt.fill_cache);
-        if iter_opt.total_order_seek_used() {
-            readopts.set_total_order_seek(true);
-        } else if iter_opt.prefix_same_as_start {
-            readopts.set_prefix_same_as_start(true);
-        }
-        if let Some(key) = iter_opt.upper_bound {
-            readopts.set_iterate_upper_bound(&key);
-        }
         let handle = try!(rocksdb::get_cf_handle(self, cf));
+        let readopts = iter_opt.to_read_opts();
         Ok(DBIterator::new_cf(self, handle, readopts))
     }
 }
@@ -338,16 +333,7 @@ impl Peekable for Snapshot {
 
 impl Iterable for Snapshot {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
-        let mut opt = ReadOptions::new();
-        opt.fill_cache(iter_opt.fill_cache);
-        if iter_opt.total_order_seek_used() {
-            opt.set_total_order_seek(true);
-        } else if iter_opt.prefix_same_as_start {
-            opt.set_prefix_same_as_start(true);
-        }
-        if let Some(key) = iter_opt.upper_bound {
-            opt.set_iterate_upper_bound(&key);
-        }
+        let mut opt = iter_opt.to_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
@@ -356,16 +342,7 @@ impl Iterable for Snapshot {
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
         let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
-        let mut opt = ReadOptions::new();
-        opt.fill_cache(iter_opt.fill_cache);
-        if iter_opt.total_order_seek_used() {
-            opt.set_total_order_seek(true);
-        } else if iter_opt.prefix_same_as_start {
-            opt.set_prefix_same_as_start(true);
-        }
-        if let Some(key) = iter_opt.upper_bound {
-            opt.set_iterate_upper_bound(&key);
-        }
+        let mut opt = iter_opt.to_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
