@@ -21,6 +21,9 @@ use grpc::{Environment, ChannelBuilder, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
+const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
+
 use util::collections::HashMap;
 use super::{Error, Result, Config};
 
@@ -36,6 +39,8 @@ impl Conn {
 
         let channel = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_initial_window_size)
+            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
+            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
             .connect(&format!("{}", addr));
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
