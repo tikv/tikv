@@ -163,6 +163,7 @@ enum SeekMode {
 
 pub struct IterOption {
     upper_bound: Option<Vec<u8>>,
+    prefix_same_as_start: bool,
     fill_cache: bool,
     seek_mode: SeekMode,
 }
@@ -171,27 +172,52 @@ impl IterOption {
     pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool) -> IterOption {
         IterOption {
             upper_bound: upper_bound,
+            prefix_same_as_start: false,
             fill_cache: fill_cache,
             seek_mode: SeekMode::TotalOrder,
         }
     }
 
+    #[inline]
     pub fn use_prefix_seek(mut self) -> IterOption {
         self.seek_mode = SeekMode::Prefix;
         self
     }
 
+    #[inline]
     pub fn total_order_seek_used(&self) -> bool {
         self.seek_mode == SeekMode::TotalOrder
     }
 
+    #[inline]
     pub fn upper_bound(&self) -> Option<&[u8]> {
         self.upper_bound.as_ref().map(|v| v.as_slice())
     }
 
+    #[inline]
     pub fn set_upper_bound(mut self, bound: Vec<u8>) -> IterOption {
         self.upper_bound = Some(bound);
         self
+    }
+
+    #[inline]
+    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOption {
+        self.prefix_same_as_start = enable;
+        self
+    }
+
+    pub fn build_read_opts(&self) -> ReadOptions {
+        let mut opts = ReadOptions::new();
+        opts.fill_cache(self.fill_cache);
+        if self.total_order_seek_used() {
+            opts.set_total_order_seek(true);
+        } else if self.prefix_same_as_start {
+            opts.set_prefix_same_as_start(true);
+        }
+        if let Some(ref key) = self.upper_bound {
+            opts.set_iterate_upper_bound(key);
+        }
+        opts
     }
 }
 
@@ -199,6 +225,7 @@ impl Default for IterOption {
     fn default() -> IterOption {
         IterOption {
             upper_bound: None,
+            prefix_same_as_start: false,
             fill_cache: true,
             seek_mode: SeekMode::TotalOrder,
         }
@@ -278,23 +305,12 @@ impl Peekable for DB {
 
 impl Iterable for DB {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
-        let mut readopts = ReadOptions::new();
-        readopts.fill_cache(iter_opt.fill_cache);
-        readopts.set_total_order_seek(iter_opt.total_order_seek_used());
-        if let Some(key) = iter_opt.upper_bound {
-            readopts.set_iterate_upper_bound(&key);
-        }
-        self.iter_opt(readopts)
+        self.iter_opt(iter_opt.build_read_opts())
     }
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
-        let mut readopts = ReadOptions::new();
-        readopts.fill_cache(iter_opt.fill_cache);
-        readopts.set_total_order_seek(iter_opt.total_order_seek_used());
-        if let Some(key) = iter_opt.upper_bound {
-            readopts.set_iterate_upper_bound(&key);
-        }
         let handle = try!(rocksdb::get_cf_handle(self, cf));
+        let readopts = iter_opt.build_read_opts();
         Ok(DBIterator::new_cf(self, handle, readopts))
     }
 }
@@ -322,12 +338,7 @@ impl Peekable for Snapshot {
 
 impl Iterable for Snapshot {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
-        let mut opt = ReadOptions::new();
-        opt.fill_cache(iter_opt.fill_cache);
-        opt.set_total_order_seek(iter_opt.total_order_seek_used());
-        if let Some(key) = iter_opt.upper_bound {
-            opt.set_iterate_upper_bound(&key);
-        }
+        let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
@@ -336,12 +347,7 @@ impl Iterable for Snapshot {
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
         let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
-        let mut opt = ReadOptions::new();
-        opt.fill_cache(iter_opt.fill_cache);
-        opt.set_total_order_seek(iter_opt.total_order_seek_used());
-        if let Some(key) = iter_opt.upper_bound {
-            opt.set_iterate_upper_bound(&key);
-        }
+        let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
