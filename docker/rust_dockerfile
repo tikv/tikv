@@ -1,4 +1,5 @@
-FROM centos:7
+# centos: 2017-06-05
+FROM centos:7@sha256:aebf12af704307dfa0079b3babdca8d7e8ff6564696882bcb5d11f1d461f9ee9
 
 MAINTAINER Liu Yin <liuy@pingcap.com>
 
