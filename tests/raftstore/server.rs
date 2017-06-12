@@ -66,7 +66,7 @@ impl ServerCluster {
             store_chs: HashMap::new(),
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
-            raft_client: RaftClient::new(Arc::new(Environment::new(1)), 1),
+            raft_client: RaftClient::new(Arc::new(Environment::new(1)), Config::new()),
         }
     }
 }
