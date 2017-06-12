@@ -104,7 +104,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let addr = try!(SocketAddr::from_str(&cfg.addr));
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(env.clone())
-            .stream_initial_window_size(cfg.grpc_initial_window_size)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
