@@ -380,7 +380,7 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     }
 
     for k in &keys {
-        // clear data which commit_ts < 30
+        // clear data whose commit_ts < 30
         store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), 30);
     }
 
