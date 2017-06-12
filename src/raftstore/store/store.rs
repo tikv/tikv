@@ -53,7 +53,7 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, 
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
-use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager};
+use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
@@ -1691,7 +1691,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        let mut snap_keys = try!(self.snap_mgr.list_snap());
+        let mut snap_keys = try!(self.snap_mgr.list_idle_snap());
         if snap_keys.is_empty() {
             return Ok(());
         }
@@ -1699,9 +1699,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         let mut is_applying_snap = false;
         for (key, is_sending) in snap_keys {
-            if self.snap_mgr.has_registered(&key) {
-                continue;
-            }
             if last_region_id != key.region_id {
                 last_region_id = key.region_id;
                 match self.region_peers.get(&key.region_id) {
@@ -1726,7 +1723,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     info!("[region {}] snap file {} has been compacted, delete.",
                           key.region_id,
                           key);
-                    s.delete();
+                    self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
                 } else if let Ok(meta) = s.meta() {
                     let modified = box_try!(meta.modified());
                     if let Ok(elapsed) = modified.elapsed() {
@@ -1734,7 +1731,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             info!("[region {}] snap file {} has been expired, delete.",
                                   key.region_id,
                                   key);
-                            s.delete();
+                            self.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
                         }
                     }
                 }
@@ -1744,7 +1741,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                       key.region_id,
                       key);
                 let a = try!(self.snap_mgr.get_snapshot_for_applying(&key));
-                a.delete();
+                self.snap_mgr.delete_snapshot(&key, a.as_ref(), false);
             }
         }
         Ok(())
@@ -1759,7 +1756,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn on_compact_lock_cf(&mut self, event_loop: &mut EventLoop<Self>) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
-        if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_threshold {
+        if self.store_stat.lock_cf_bytes_written > self.cfg.lock_cf_compact_bytes_threshold {
             self.store_stat.lock_cf_bytes_written = 0;
             let task = CompactTask {
                 cf_name: String::from(CF_LOCK),

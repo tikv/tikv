@@ -19,11 +19,15 @@ use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::server::new_server_cluster;
 
-fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, written: bool) {
+fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engine in cluster.engines.values() {
         let lock_handle = engine.cf_handle(CF_LOCK).unwrap();
         engine.flush_cf(lock_handle, true).unwrap();
     }
+}
+
+fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, written: bool) {
+    flush(cluster);
     // Wait for compaction.
     sleep_ms(interval * 2);
     for engine in cluster.engines.values() {
@@ -39,21 +43,31 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
 
 fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     let interval = 500;
-    // set lock_cf_compact_interval.
+    // Set lock_cf_compact_interval.
     cluster.cfg.raft_store.lock_cf_compact_interval = interval;
-    // set lock_cf_compact_threshold.
-    cluster.cfg.raft_store.lock_cf_compact_threshold = 100;
+    // Set lock_cf_compact_bytes_threshold.
+    cluster.cfg.raft_store.lock_cf_compact_bytes_threshold = 100;
     cluster.run();
 
-    // not reach lock_cf_compact_threshold, so there is no compaction.
-    for i in 0..50 {
+    // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no compaction.
+    for i in 0..5 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
     }
+    // Generate one sst, if there are datas only in one memtable, no compactions will be triggered.
+    flush(cluster);
+
+    // Write more 40 bytes, still not reach lock_cf_compact_bytes_threshold,
+    // so there is no compaction.
+    for i in 5..10 {
+        let (k, v) = (format!("k{}", i), format!("value{}", i));
+        cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
+    }
+    // Generate another sst.
     flush_then_check(cluster, interval, false);
 
-    // not reach lock_cf_compact_threshold, so there is no compaction.
-    for i in 0..50 {
+    // Write more 50 bytes, reach lock_cf_compact_bytes_threshold.
+    for i in 10..15 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
     }

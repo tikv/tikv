@@ -12,13 +12,14 @@
 // limitations under the License.
 
 use super::Result;
-use std::{str, f64};
-use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
+use std::cmp::{Ordering, Ord, PartialEq, PartialOrd};
+use std::{self, str, f64};
 use std::collections::BTreeMap;
-use std::result::Result as SResult;
 use serde_json;
 use std::io::{Read, Write};
 use std::fmt;
+use util::codec::Error;
+use std::str::FromStr;
 use util::codec::number::{NumberDecoder, NumberEncoder};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use serde::ser::{Serialize, Serializer, SerializeTuple, SerializeMap};
@@ -87,13 +88,6 @@ pub enum Json {
 
 #[allow(dead_code)]
 impl Json {
-    pub fn from_str(s: &str) -> Result<Json> {
-        match serde_json::from_str(s) {
-            Ok(value) => Ok(value),
-            Err(e) => Err(invalid_type!("Illegal Json text:{:?}", e)),
-        }
-    }
-
     fn get_type_code(&self) -> u8 {
         match *self {
             Json::Object(_) => TYPE_CODE_OBJECT,
@@ -178,6 +172,16 @@ impl Json {
     }
 }
 
+impl FromStr for Json {
+    type Err = Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match serde_json::from_str(s) {
+            Ok(value) => Ok(value),
+            Err(e) => Err(invalid_type!("Illegal Json text:{:?}", e)),
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn get_obj_binary_len(data: &BTreeMap<String, Json>) -> usize {
     let element_count = data.len();
@@ -226,7 +230,7 @@ fn get_var_u64_blen(mut v: u64) -> usize {
 }
 
 impl Serialize for Json {
-    fn serialize<S>(&self, serializer: S) -> SResult<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
         where S: Serializer
     {
         match *self {
@@ -337,13 +341,13 @@ impl<'de> Visitor<'de> for JsonVisitor {
         write!(formatter, "may be any string")
     }
 
-    fn visit_unit<E>(self) -> SResult<Self::Value, E>
+    fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
         Ok(Json::Literal(JSON_LITERAL_NIL))
     }
 
-    fn visit_bool<E>(self, v: bool) -> SResult<Self::Value, E>
+    fn visit_bool<E>(self, v: bool) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
         if v {
@@ -353,31 +357,31 @@ impl<'de> Visitor<'de> for JsonVisitor {
         }
     }
 
-    fn visit_i64<E>(self, v: i64) -> SResult<Self::Value, E>
+    fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
         Ok(Json::I64(v))
     }
 
-    fn visit_u64<E>(self, v: u64) -> SResult<Self::Value, E>
+    fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
         self.visit_i64(v as i64)
     }
 
-    fn visit_f64<E>(self, v: f64) -> SResult<Self::Value, E>
+    fn visit_f64<E>(self, v: f64) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
         Ok(Json::Double(v))
     }
 
-    fn visit_str<E>(self, v: &str) -> SResult<Self::Value, E>
+    fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
         Ok(Json::String(String::from(v)))
     }
 
-    fn visit_seq<M>(self, mut seq: M) -> SResult<Self::Value, M::Error>
+    fn visit_seq<M>(self, mut seq: M) -> std::result::Result<Self::Value, M::Error>
         where M: SeqAccess<'de>
     {
         let mut seqs = Vec::with_capacity(seq.size_hint().unwrap_or(0));
@@ -387,7 +391,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
         Ok(Json::Array(seqs))
     }
 
-    fn visit_map<M>(self, mut access: M) -> SResult<Self::Value, M::Error>
+    fn visit_map<M>(self, mut access: M) -> std::result::Result<Self::Value, M::Error>
         where M: MapAccess<'de>
     {
         let mut map = BTreeMap::new();
@@ -402,7 +406,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
 }
 
 impl<'de> Deserialize<'de> for Json {
-    fn deserialize<D>(deserializer: D) -> SResult<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
         where D: Deserializer<'de>
     {
         deserializer.deserialize_any(JsonVisitor)
@@ -477,7 +481,7 @@ pub trait JsonEncoder: NumberEncoder {
         for value in data {
             try!(value_entries.encode_json_item(value, &mut value_offset, &mut encode_values));
         }
-        let total_size = value_offset;
+        let total_size = count_len + size_len + value_entries_len + encode_values.len();
         try!(self.encode_u32_le(element_count as u32));
         try!(self.encode_u32_le(total_size as u32));
         try!(self.write_all(value_entries.as_mut()));
@@ -525,8 +529,9 @@ pub trait JsonEncoder: NumberEncoder {
             }
             _ => {
                 try!(self.encode_u32_le(*offset));
+                let start_len = data_buf.len();
                 try!(data_buf.encode_json_body(data));
-                *offset += (data.binary_len() - LENGTH_TYPE) as u32;
+                *offset += (data_buf.len() - start_len) as u32;
             }
         };
         Ok(())
@@ -655,9 +660,9 @@ mod test {
     fn test_json_serialize() {
         let jstr1 =
             r#"{"aaaaaaaaaaa": [1, "2", {"aa": "bb"}, 4.0], "bbbbbbbbbb": true, "ccccccccc": "d"}"#;
-        let j1 = Json::from_str(jstr1).unwrap();
+        let j1: Json = jstr1.parse().unwrap();
         let jstr2 = r#"[{"a": 1, "b": true}, 3, 3.5, "hello, world", null, true]"#;
-        let j2 = Json::from_str(jstr2).unwrap();
+        let j2: Json = jstr2.parse().unwrap();
 
         let json_nil = Json::Literal(0x00);
         let json_bool = Json::Literal(0x01);
@@ -679,7 +684,7 @@ mod test {
     #[test]
     fn test_from_str_for_object() {
         let jstr1 = r#"{"a": [1, "2", {"aa": "bb"}, 4.0, null], "c": null,"b": true}"#;
-        let j1 = Json::from_str(jstr1).unwrap();
+        let j1: Json = jstr1.parse().unwrap();
         let jstr2 = j1.to_string();
         let expect_str = r#"{"a":[1,"2",{"aa":"bb"},4.0,null],"b":true,"c":null}"#;
         assert_eq!(jstr2, expect_str);
@@ -698,7 +703,7 @@ mod test {
         };
 
         for (json_str, code) in legal_cases {
-            let json = Json::from_str(json_str).unwrap();
+            let json: Json = json_str.parse().unwrap();
             assert_eq!(json.get_type_code(), code);
         }
 
