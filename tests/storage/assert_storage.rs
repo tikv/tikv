@@ -51,10 +51,6 @@ impl AssertionStorage {
         (cluster, storage)
     }
 
-    pub fn update_with_key(&mut self, cluster: &mut Cluster<ServerCluster>, key: &str) {
-        self.update_with_key_byte(cluster, key.as_bytes());
-    }
-
     pub fn update_with_key_byte(&mut self, cluster: &mut Cluster<ServerCluster>, key: &[u8]) {
         // ensure the leader of range which contains current key has been elected
         cluster.must_get(key);
@@ -303,6 +299,21 @@ impl AssertionStorage {
 
     pub fn gc_ok(&self, safe_point: u64) {
         self.store.gc(self.ctx.clone(), safe_point).unwrap();
+    }
+
+    pub fn gc_ok_for_cluster(&mut self,
+                             cluster: &mut Cluster<ServerCluster>,
+                             region_key: &[u8],
+                             safe_point: u64) {
+        for _ in 0..3 {
+            let ret = self.store.gc(self.ctx.clone(), safe_point);
+            if ret.is_ok() {
+                return;
+            }
+            self.expect_not_leader_or_stale_command(ret.unwrap_err());
+            self.update_with_key_byte(cluster, region_key);
+        }
+        panic!("failed with 3 retry!");
     }
 
     pub fn raw_get_ok(&self, key: Vec<u8>, value: Option<Vec<u8>>) {
