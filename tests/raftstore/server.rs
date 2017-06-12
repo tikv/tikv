@@ -182,7 +182,7 @@ impl Simulator for ServerCluster {
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
         let addr = self.addrs[&store_id];
-        self.raft_client.send(addr, vec![raft_msg]).unwrap();
+        self.raft_client.send(addr, raft_msg).unwrap();
         Ok(())
     }
 

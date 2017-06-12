@@ -455,11 +455,11 @@ impl Peer {
         where T: Transport,
               I: IntoIterator<Item = eraftpb::Message>
     {
-        let mut send_msgs = vec![];
-        let mut to_peers = FlatMap::new();
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            let peer_id = msg.get_to();
+
+            try!(self.send_raft_message(msg, trans));
+
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
@@ -483,26 +483,7 @@ impl Peer {
                 }
                 _ => {}
             }
-            let msg = try!(self.build_raft_message(msg));
-            send_msgs.push(msg);
-            let mut entry = to_peers.entry(peer_id).or_insert(false);
-            if msg_type == eraftpb::MessageType::MsgSnapshot {
-                *entry = true;
-            }
         }
-
-        if let Err(e) = trans.send_all(send_msgs) {
-            warn!("{} failed to send msgs, err: {:?}", self.tag, e);
-
-            // unreachable store
-            for (id, is_snapshot) in to_peers {
-                self.raft_group.report_unreachable(id);
-                if is_snapshot {
-                    self.raft_group.report_snapshot(id, SnapshotStatus::Failure);
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -1452,7 +1433,7 @@ impl Peer {
         }
     }
 
-    fn build_raft_message(&mut self, msg: eraftpb::Message) -> Result<RaftMessage> {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &T) -> Result<()> {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // set current epoch
@@ -1470,6 +1451,7 @@ impl Peer {
         };
 
         let to_peer_id = to_peer.get_id();
+        let to_store_id = to_peer.get_store_id();
         let msg_type = msg.get_msg_type();
         debug!("{} send raft msg {:?}[size: {}] from {} to {}",
                self.tag,
@@ -1499,7 +1481,22 @@ impl Peer {
         }
 
         send_msg.set_message(msg);
-        Ok(send_msg)
+
+        if let Err(e) = trans.send(send_msg) {
+            warn!("{} failed to send msg to {} in store {}, err: {:?}",
+                  self.tag,
+                  to_peer_id,
+                  to_store_id,
+                  e);
+
+            // unreachable store
+            self.raft_group.report_unreachable(to_peer_id);
+            if msg_type == eraftpb::MessageType::MsgSnapshot {
+                self.raft_group.report_snapshot(to_peer_id, SnapshotStatus::Failure);
+            }
+        }
+
+        Ok(())
     }
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {

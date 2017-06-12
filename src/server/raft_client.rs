@@ -83,40 +83,17 @@ impl RaftClient {
             .or_insert_with(|| Conn::new(env, addr))
     }
 
-    pub fn send(&mut self, addr: SocketAddr, msgs: Vec<RaftMessage>) -> Result<()> {
-        let mut remove_index = 0;
+    pub fn send(&mut self, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
+        let index = msg.get_region_id() as usize % self.conn_size;
         let res = {
-            let mut last_msg = FlatMap::new();
-            let mut res = Ok(());
-            for msg in msgs {
-                let index = msg.get_region_id() as usize % self.conn_size;
-                if let Some(msg) = last_msg.insert(index, msg) {
-                    let conn = self.get_conn(addr, index);
-                    res = UnboundedSender::send(&conn.stream,
-                                                (msg, WriteFlags::default().buffer_hint(true)));
-                    if res.is_err() {
-                        remove_index = index;
-                        break;
-                    }
-                }
-            }
-            if res.is_ok() {
-                for (index, msg) in last_msg {
-                    let conn = self.get_conn(addr, index);
-                    res = UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()));
-                    if res.is_err() {
-                        remove_index = index;
-                        break;
-                    }
-                }
-            }
-            res
+            let conn = self.get_conn(addr, index);
+            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()))
         };
         if let Err(e) = res {
             warn!("server: drop conn with tikv endpoint {} error: {:?}",
                   addr,
                   e);
-            self.conns.remove(&(addr, remove_index));
+            self.conns.remove(&(addr, index));
             return Err(box_err!(e));
         }
         Ok(())
