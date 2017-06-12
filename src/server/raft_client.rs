@@ -21,11 +21,10 @@ use grpc::{Environment, ChannelBuilder, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
-
-use util::collections::HashMap;
+use util::collections::{HashMap, FlatMap};
 use super::{Error, Result};
+
+const GRPC_WRITE_BUFFER_SIZE: usize = 2 * 1024 * 1024;
 
 struct Conn {
     _client: TikvClient,
@@ -38,8 +37,7 @@ impl Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let channel = ChannelBuilder::new(env)
-            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
+            .http2_write_buffer_size(GRPC_WRITE_BUFFER_SIZE)
             .connect(&format!("{}", addr));
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
@@ -63,40 +61,53 @@ impl Conn {
 /// `RaftClient` is used for sending raft messages to other stores.
 pub struct RaftClient {
     env: Arc<Environment>,
-    conns: HashMap<SocketAddr, Conn>,
+    conns: HashMap<(SocketAddr, usize), Conn>,
     pub addrs: HashMap<u64, SocketAddr>,
+    conn_size: usize,
 }
 
 impl RaftClient {
-    pub fn new(env: Arc<Environment>) -> RaftClient {
+    pub fn new(env: Arc<Environment>, conn_size: usize) -> RaftClient {
         RaftClient {
             env: env,
             conns: HashMap::default(),
             addrs: HashMap::default(),
+            conn_size: conn_size,
         }
     }
 
-    fn get_conn(&mut self, addr: SocketAddr) -> &Conn {
+    fn get_conn(&mut self, addr: SocketAddr, index: usize) -> &Conn {
         let env = self.env.clone();
         self.conns
-            .entry(addr)
+            .entry((addr, index))
             .or_insert_with(|| Conn::new(env, addr))
     }
 
-    pub fn send(&mut self, store_id: u64, addr: SocketAddr, msgs: Vec<RaftMessage>) -> Result<()> {
+    pub fn send(&mut self, addr: SocketAddr, msgs: Vec<RaftMessage>) -> Result<()> {
+        let mut remove_index = 0;
         let res = {
-            let conn = self.get_conn(addr);
-            let len = msgs.len();
+            let mut last_msg = FlatMap::new();
             let mut res = Ok(());
-            for (i, msg) in msgs.into_iter().enumerate() {
-                let flags = if i < len - 1 {
-                    WriteFlags::default().buffer_hint(true)
-                } else {
-                    WriteFlags::default()
-                };
-                res = UnboundedSender::send(&conn.stream, (msg, flags));
-                if res.is_err() {
-                    break;
+            for msg in msgs {
+                let index = msg.get_region_id() as usize % self.conn_size;
+                if let Some(msg) = last_msg.insert(index, msg) {
+                    let conn = self.get_conn(addr, index);
+                    res = UnboundedSender::send(&conn.stream,
+                                                (msg, WriteFlags::default().buffer_hint(true)));
+                    if res.is_err() {
+                        remove_index = index;
+                        break;
+                    }
+                }
+            }
+            if res.is_ok() {
+                for (index, msg) in last_msg {
+                    let conn = self.get_conn(addr, index);
+                    res = UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()));
+                    if res.is_err() {
+                        remove_index = index;
+                        break;
+                    }
                 }
             }
             res
@@ -105,8 +116,7 @@ impl RaftClient {
             warn!("server: drop conn with tikv endpoint {} error: {:?}",
                   addr,
                   e);
-            self.addrs.remove(&store_id);
-            self.conns.remove(&addr);
+            self.conns.remove(&(addr, remove_index));
             return Err(box_err!(e));
         }
         Ok(())

@@ -629,6 +629,9 @@ fn build_cfg(matches: &ArgMatches,
     cfg_usize(&mut cfg.grpc_concurrent_stream,
               config,
               "server.grpc-concurrent-stream");
+    cfg_usize(&mut cfg.grpc_raft_conn_size,
+              config,
+              "server.grpc-raft-conn-size");
     if !cfg_usize(&mut cfg.end_point_concurrency,
                   config,
                   "server.end-point-concurrency") {
@@ -837,7 +840,7 @@ fn run_raft_server(pd_client: RpcClient,
     let cfs_opts =
         vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
                                           get_rocksdb_default_cf_option(config, total_mem)),
-             rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config)),
+             rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_WRITE,
                                           get_rocksdb_write_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_RAFT,
