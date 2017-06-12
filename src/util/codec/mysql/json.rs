@@ -187,7 +187,7 @@ struct JsonVisitor;
 impl<'de> Visitor<'de> for JsonVisitor {
     type Value = Json;
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "may be any string")
+        write!(formatter, "a json value")
     }
 
     fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
