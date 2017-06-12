@@ -1055,6 +1055,33 @@ fn test_index_reverse_limit() {
 }
 
 #[test]
+fn test_limit_oom() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let req = Select::from_index(&product.table, product.id).limit(100000000).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), data.len());
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut handles: Vec<_> = spliter.map(|row| row.handle).collect();
+    handles.sort();
+    for (&h, (id, _, _)) in handles.iter().zip(data) {
+        assert_eq!(id, h);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
 fn test_del_select() {
     let mut data = vec![
         (1, Some("name:0"), 2),
