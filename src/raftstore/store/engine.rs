@@ -201,12 +201,12 @@ impl IterOption {
     }
 
     #[inline]
-    pub fn set_prefix_same_as_start(mut self) -> IterOption {
-        self.prefix_same_as_start = true;
+    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOption {
+        self.prefix_same_as_start = enable;
         self
     }
 
-    pub fn to_read_opts(&self) -> ReadOptions {
+    pub fn build_read_opts(&self) -> ReadOptions {
         let mut opts = ReadOptions::new();
         opts.fill_cache(self.fill_cache);
         if self.total_order_seek_used() {
@@ -305,12 +305,12 @@ impl Peekable for DB {
 
 impl Iterable for DB {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
-        self.iter_opt(iter_opt.to_read_opts())
+        self.iter_opt(iter_opt.build_read_opts())
     }
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
         let handle = try!(rocksdb::get_cf_handle(self, cf));
-        let readopts = iter_opt.to_read_opts();
+        let readopts = iter_opt.build_read_opts();
         Ok(DBIterator::new_cf(self, handle, readopts))
     }
 }
@@ -338,7 +338,7 @@ impl Peekable for Snapshot {
 
 impl Iterable for Snapshot {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator {
-        let mut opt = iter_opt.to_read_opts();
+        let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
@@ -347,7 +347,7 @@ impl Iterable for Snapshot {
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator> {
         let handle = try!(rocksdb::get_cf_handle(&self.db, cf));
-        let mut opt = iter_opt.to_read_opts();
+        let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
         }

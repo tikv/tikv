@@ -150,7 +150,7 @@ impl<'a> MvccReader<'a> {
             }
         } else {
             // use prefix bloom filter
-            let iter_opt = IterOption::default().use_prefix_seek().set_prefix_same_as_start();
+            let iter_opt = IterOption::default().use_prefix_seek().set_prefix_same_as_start(true);
             let iter = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed));
             self.write_cursor = Some(iter);
         }
