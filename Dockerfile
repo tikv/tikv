@@ -1,13 +1,13 @@
 FROM pingcap/rust
 
-MAINTAINER siddontang
+MAINTAINER Liu Yin <liuy@pingcap.com>
 
 ADD . /tikv
 
 RUN cd /tikv && \
-    cargo build --release && \
-    cp -f target/release/tikv-server /tikv-server && \
-    cargo clean
+    make && \
+    cp -f bin/tikv-server /tikv-server && \
+    rm -rf /tikv
 
 EXPOSE 20160
 
