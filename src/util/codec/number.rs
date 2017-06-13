@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, ErrorKind, Write, Read};
 use std::mem;
 
@@ -110,6 +110,22 @@ pub trait NumberEncoder: Write {
         let u = order_encode_f64(f);
         self.encode_u64_desc(u)
     }
+
+    fn encode_u16_le(&mut self, v: u16) -> Result<()> {
+        self.write_u16::<LittleEndian>(v).map_err(From::from)
+    }
+
+    fn encode_u32_le(&mut self, v: u32) -> Result<()> {
+        self.write_u32::<LittleEndian>(v).map_err(From::from)
+    }
+
+    fn encode_f64_le(&mut self, v: f64) -> Result<()> {
+        self.write_f64::<LittleEndian>(v).map_err(From::from)
+    }
+
+    fn encode_i64_le(&mut self, v: i64) -> Result<()> {
+        self.write_i64::<LittleEndian>(v).map_err(From::from)
+    }
 }
 
 impl<T: Write> NumberEncoder for T {}
@@ -172,6 +188,22 @@ pub trait NumberDecoder: Read {
     fn decode_f64_desc(&mut self) -> Result<f64> {
         self.decode_u64_desc().map(order_decode_f64)
     }
+
+    fn decode_u16_le(&mut self) -> Result<u16> {
+        self.read_u16::<LittleEndian>().map_err(From::from)
+    }
+
+    fn decode_u32_le(&mut self) -> Result<u32> {
+        self.read_u32::<LittleEndian>().map_err(From::from)
+    }
+
+    fn decode_f64_le(&mut self) -> Result<f64> {
+        self.read_f64::<LittleEndian>().map_err(From::from)
+    }
+
+    fn decode_i64_le(&mut self) -> Result<i64> {
+        self.read_i64::<LittleEndian>().map_err(From::from)
+    }
 }
 
 impl<T: Read> NumberDecoder for T {}
@@ -181,9 +213,49 @@ mod test {
     use super::*;
     use util::codec::Error;
 
-    use std::{i64, u64, f64, f32};
+    use std::{i64, u64, i32, u32, i16, u16, f64, f32};
     use protobuf::CodedOutputStream;
     use std::io::ErrorKind;
+
+    const U16_TESTS: &'static [u16] = &[i16::MIN as u16,
+                                        i16::MAX as u16,
+                                        u16::MIN,
+                                        u16::MAX,
+                                        0,
+                                        1,
+                                        2,
+                                        10,
+                                        20,
+                                        63,
+                                        64,
+                                        65,
+                                        127,
+                                        128,
+                                        129,
+                                        255,
+                                        256,
+                                        257,
+                                        1024];
+
+    const U32_TESTS: &'static [u32] = &[i32::MIN as u32,
+                                        i32::MAX as u32,
+                                        u32::MIN,
+                                        u32::MAX,
+                                        0,
+                                        1,
+                                        2,
+                                        10,
+                                        20,
+                                        63,
+                                        64,
+                                        65,
+                                        127,
+                                        128,
+                                        129,
+                                        255,
+                                        256,
+                                        257,
+                                        1024];
 
     const U64_TESTS: &'static [u64] = &[i64::MIN as u64,
                                         i64::MAX as u64,
@@ -273,7 +345,7 @@ mod test {
             #[allow(unused_imports)]
             #[allow(float_cmp)]
             mod $enc {
-                use super::{I64_TESTS, U64_TESTS, F64_TESTS};
+                use super::{I64_TESTS, U64_TESTS, U32_TESTS, U16_TESTS, F64_TESTS};
                 use util::codec::number::*;
 
                 test_serialize!(serialize, $enc, $dec, $cases);
@@ -301,7 +373,26 @@ mod test {
                 |a, b| b.partial_cmp(a).unwrap(),
                 F64_TESTS);
 
+    test_serialize!(var_i64_little_endian_codec,
+                    encode_i64_le,
+                    decode_i64_le,
+                    I64_TESTS);
+
+    test_serialize!(var_u16_codec, encode_u16_le, decode_u16_le, U16_TESTS);
+    test_serialize!(var_u32_codec, encode_u32_le, decode_u32_le, U32_TESTS);
+
     test_serialize!(var_i64_codec, encode_var_i64, decode_var_i64, I64_TESTS);
+
+    #[test]
+    #[allow(float_cmp)]
+    fn test_var_f64_le() {
+        for &v in F64_TESTS {
+            let mut buf = vec![];
+            buf.encode_f64_le(v).unwrap();
+            let value = buf.as_slice().decode_f64_le().unwrap();
+            assert_eq!(v, value);
+        }
+    }
 
     #[test]
     fn test_var_u64_codec() {
