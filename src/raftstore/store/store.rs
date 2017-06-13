@@ -956,6 +956,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.process_ready.observe(duration_to_sec(dur) as f64);
 
+        self.trans.flush();
+
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
 

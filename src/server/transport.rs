@@ -260,6 +260,10 @@ impl<T, S> Transport for ServerTransport<T, S>
         self.send_store(to_store_id, msg);
         Ok(())
     }
+
+    fn flush(&mut self) {
+        self.raft_client.wl().flush();
+    }
 }
 
 struct SnapshotReporter {

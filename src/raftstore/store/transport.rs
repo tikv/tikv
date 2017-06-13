@@ -19,10 +19,5 @@ use raftstore::Result;
 pub trait Transport: Send + Clone {
     fn send(&self, msg: RaftMessage) -> Result<()>;
 
-    fn send_all(&self, msgs: Vec<RaftMessage>) -> Result<()> {
-        for msg in msgs {
-            let _ = self.send(msg);
-        }
-        Ok(())
-    }
+    fn flush(&mut self) {}
 }

@@ -30,6 +30,7 @@ struct Conn {
     _client: TikvClient,
     stream: UnboundedSender<(RaftMessage, WriteFlags)>,
     _close: Sender<()>,
+    active: bool,
 }
 
 impl Conn {
@@ -37,8 +38,13 @@ impl Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let channel = ChannelBuilder::new(env)
-            .http2_write_buffer_size(GRPC_WRITE_BUFFER_SIZE)
-            .connect(&format!("{}", addr));
+        		.max_concurrent_stream(1024)
+                    .max_receive_message_len(10 * 1024 * 1024)
+                    .max_send_message_len(128 * 1024 * 1024)
+        	        //	.http2_max_frame_size(64 * 1024)
+                    // .http2_write_buffer_size(64 * 1024)
+                    .stream_initial_window_size(2 * 1024 * 1024)
+        		.connect(&format!("{}", addr));
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
@@ -54,6 +60,7 @@ impl Conn {
             _client: client,
             stream: tx,
             _close: tx_close,
+            active: false,
         }
     }
 }
@@ -76,7 +83,7 @@ impl RaftClient {
         }
     }
 
-    fn get_conn(&mut self, addr: SocketAddr, index: usize) -> &Conn {
+    fn get_conn(&mut self, addr: SocketAddr, index: usize) -> &mut Conn {
         let env = self.env.clone();
         self.conns
             .entry((addr, index))
@@ -87,7 +94,8 @@ impl RaftClient {
         let index = msg.get_region_id() as usize % self.conn_size;
         let res = {
             let conn = self.get_conn(addr, index);
-            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()))
+            conn.active = true;
+            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default().buffer_hint(true)))
         };
         if let Err(e) = res {
             warn!("server: drop conn with tikv endpoint {} error: {:?}",
@@ -97,6 +105,21 @@ impl RaftClient {
             return Err(box_err!(e));
         }
         Ok(())
+    }
+
+
+    pub fn flush(&mut self) {
+        for conn in self.conns.values_mut() {
+            if conn.active == false {
+                continue;
+            }
+
+            conn.active = false;
+            if let Err(e) = UnboundedSender::send(&conn.stream,
+                                                  (RaftMessage::new(), WriteFlags::default())) {
+                error!("flush conn error {:?}", e);
+            }
+        }
     }
 }
 
