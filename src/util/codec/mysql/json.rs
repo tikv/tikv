@@ -11,8 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// FIXME(shirly): remove following later
+#![allow(dead_code)]
+
 use super::Result;
-use std::cmp::{Ordering, Ord, PartialEq, PartialOrd};
+use std::cmp::Ordering;
 use std::{self, str, f64};
 use std::collections::BTreeMap;
 use serde_json;
@@ -32,17 +35,11 @@ const TYPE_CODE_I64: u8 = 0x09;
 const TYPE_CODE_DOUBLE: u8 = 0x0b;
 const TYPE_CODE_STRING: u8 = 0x0c;
 
-#[allow(dead_code)]
 const PRECEDENCE_BLOB: i32 = -1;
-#[allow(dead_code)]
 const PRECEDENCE_BIT: i32 = -2;
-#[allow(dead_code)]
 const PRECEDENCE_OPAQUE: i32 = -3;
-#[allow(dead_code)]
 const PRECEDENCE_DATETIME: i32 = -4;
-#[allow(dead_code)]
 const PRECEDENCE_TIME: i32 = -5;
-#[allow(dead_code)]
 const PRECEDENCE_DATE: i32 = -6;
 const PRECEDENCE_BOOLEAN: i32 = -7;
 const PRECEDENCE_ARRAY: i32 = -8;
@@ -67,14 +64,14 @@ const SIZE_LEN: usize = U32_LEN;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
-// Json implements type json used in tikv, it specifies the following
-// implementations:
-// 1. Serialize `json` values into binary representation, and reading values
-//  back from the binary representation.
-// 2. Serialize `json` values into readable string representation, and reading
-// values back from string representation.
-// The binary Json format from MySQL 5.7 is in the following link:
-// https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52
+/// Json implements type json used in tikv, it specifies the following
+/// implementations:
+/// 1. Serialize `json` values into binary representation, and reading values
+///  back from the binary representation.
+/// 2. Serialize `json` values into readable string representation, and reading
+/// values back from string representation.
+// The binary Json format from `MySQL` 5.7 is in the following link:
+// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
 // The only difference is that we use large `object` or large `array` for
 // the small corresponding ones. That means in our implementation there
 // is no difference between small `object` and big `object`, so does `array`.
@@ -88,7 +85,6 @@ pub enum Json {
     String(String),
 }
 
-#[allow(dead_code)]
 impl Json {
     fn get_type_code(&self) -> u8 {
         match *self {
@@ -187,7 +183,6 @@ impl FromStr for Json {
     }
 }
 
-#[allow(dead_code)]
 fn get_obj_binary_len(data: &BTreeMap<String, Json>) -> usize {
     let element_count = data.len();
     let key_entries_len = element_count * KEY_ENTRY_LEN;
@@ -204,7 +199,6 @@ fn get_obj_binary_len(data: &BTreeMap<String, Json>) -> usize {
     ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len + keys_len + values_len
 }
 
-#[allow(dead_code)]
 fn get_array_binary_len(data: &[Json]) -> usize {
     let element_count = data.len();
     let value_entries_len = element_count * VALUE_ENTRY_LEN;
@@ -218,13 +212,11 @@ fn get_array_binary_len(data: &[Json]) -> usize {
     ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + values_len
 }
 
-#[allow(dead_code)]
 fn get_str_binary_len(data: &str) -> usize {
     let len = data.as_bytes().len();
     get_var_u64_binary_len(len as u64) + len
 }
 
-#[allow(dead_code)]
 fn get_var_u64_binary_len(mut v: u64) -> usize {
     let mut len = 1;
     while v >= 0x80 {
@@ -415,7 +407,6 @@ impl<'de> Deserialize<'de> for Json {
     }
 }
 
-#[allow(dead_code)]
 pub trait JsonEncoder: NumberEncoder {
     fn encode_json(&mut self, data: &Json) -> Result<()> {
         try!(self.write_u8(data.get_type_code()));
@@ -536,7 +527,6 @@ pub trait JsonEncoder: NumberEncoder {
 }
 impl<T: Write> JsonEncoder for T {}
 
-#[allow(dead_code)]
 pub trait JsonDecoder: NumberDecoder {
     fn decode_json(&mut self) -> Result<Json> {
         let code = try!(self.read_u8());
