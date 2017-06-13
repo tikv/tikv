@@ -774,11 +774,11 @@ impl ApplyDelegate {
         let mut new_region = region.clone();
         new_region.set_id(new_region_id);
         if right_derive {
-            region.set_start_key(split_key.to_vec());
-            new_region.set_end_key(split_key.to_vec());
+            region.set_start_key(split_key.into());
+            new_region.set_end_key(split_key.into());
         } else {
-            region.set_end_key(split_key.to_vec());
-            new_region.set_start_key(split_key.to_vec());
+            region.set_end_key(split_key.into());
+            new_region.set_start_key(split_key.into());
         }
 
         // Update new region peer ids.
@@ -1058,7 +1058,7 @@ impl ApplyDelegate {
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         let verify_req = req.get_verify_hash();
         let index = verify_req.get_index();
-        let hash = verify_req.get_hash().to_vec();
+        let hash = verify_req.get_hash().into();
         let resp = AdminResponse::new();
         Ok((resp,
             Some(ExecResult::VerifyHash {
@@ -1536,7 +1536,7 @@ mod tests {
     impl EntryBuilder {
         fn new(index: u64, term: u64) -> EntryBuilder {
             let mut req = RaftCmdRequest::new();
-            req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+            req.mut_header().set_uuid(Uuid::new_v4().as_bytes().into());
             let mut entry = Entry::new();
             entry.set_index(index);
             entry.set_term(term);
@@ -1580,8 +1580,8 @@ mod tests {
             if let Some(cf) = cf {
                 cmd.mut_put().set_cf(cf.to_owned());
             }
-            cmd.mut_put().set_key(key.to_vec());
-            cmd.mut_put().set_value(value.to_vec());
+            cmd.mut_put().set_key(key.into());
+            cmd.mut_put().set_value(value.into());
             self.req.mut_requests().push(cmd);
             self
         }
@@ -1600,7 +1600,7 @@ mod tests {
             if let Some(cf) = cf {
                 cmd.mut_delete().set_cf(cf.to_owned());
             }
-            cmd.mut_delete().set_key(key.to_vec());
+            cmd.mut_delete().set_key(key.into());
             self.req.mut_requests().push(cmd);
             self
         }
@@ -1615,7 +1615,7 @@ mod tests {
     fn test_handle_raft_committed_entries() {
         let (_path, db) = create_tmp_engine("test-delegate");
         let mut reg = Registration::default();
-        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.set_end_key(b"k5".into());
         reg.region.mut_region_epoch().set_version(3);
         let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
         let (tx, rx) = mpsc::channel();

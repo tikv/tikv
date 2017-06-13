@@ -84,16 +84,16 @@ impl<C> Node<C>
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
-            store.set_address(cfg.addr.clone());
+            store.set_address(cfg.addr.as_str().into());
         } else {
-            store.set_address(cfg.advertise_addr.clone())
+            store.set_address(cfg.advertise_addr.as_str().into())
         }
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
             let mut label = metapb::StoreLabel::new();
-            label.set_key(k.to_owned());
-            label.set_value(v.to_owned());
+            label.set_key(k.as_str().into());
+            label.set_value(v.as_str().into());
             labels.push(label);
         }
         store.set_labels(RepeatedField::from_vec(labels));
