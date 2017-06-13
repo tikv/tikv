@@ -274,6 +274,13 @@ impl RowColsDict {
         }
         None
     }
+
+    pub fn append(&mut self, cid: i64, value: &mut Vec<u8>) {
+        let offset = self.value.len();
+        let length = value.len();
+        self.value.append(value);
+        self.cols.insert(cid, RowColMeta::new(offset, length));
+    }
 }
 
 // `cut_row` cut encoded row into (col_id,offset,length)
