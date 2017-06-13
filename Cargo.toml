@@ -63,12 +63,9 @@ mio = "0.5"
 futures = "0.1"
 tokio-core = "0.1"
 tokio-timer = "0.1"
-<<<<<<< HEAD
 serde = "1.0"
 serde_json = "1.0"
-=======
 bytes = "0.4.4"
->>>>>>> 731b310... enable with-bytes feature
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
