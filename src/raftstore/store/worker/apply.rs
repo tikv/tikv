@@ -1021,7 +1021,7 @@ pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Res
             .unwrap_or_else(|e| panic!("{} failed to get {}: {:?}", tag, escape(key), e))
     };
     if let Some(res) = res {
-        resp.mut_get().set_value(res.to_vec());
+        resp.mut_get().set_value(res.to_vec().into());
     }
 
     Ok(resp)

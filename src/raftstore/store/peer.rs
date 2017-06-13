@@ -1213,7 +1213,7 @@ impl Peer {
             renew_lease_time: Some(renew_lease_time),
         };
         let mut req = RaftCmdRequest::new();
-        req.mut_header().set_uuid(uuid.as_bytes().to_vec());
+        req.mut_header().set_uuid(uuid.as_bytes().to_vec().into());
         if self.propose_normal(req, metrics).is_ok() {
             self.post_propose(meta, false, box |_| {});
         }

@@ -53,7 +53,7 @@ impl SplitObserver {
             return Err("no need to split".to_owned());
         }
 
-        split.set_split_key(key);
+        split.set_split_key(key.into());
         Ok(())
     }
 }

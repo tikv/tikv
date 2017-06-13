@@ -1949,7 +1949,7 @@ fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
     let mut request = RaftCmdRequest::new();
     request.mut_header().set_region_id(region_id);
     request.mut_header().set_peer(peer);
-    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec().into());
     request
 }
 
@@ -1962,7 +1962,7 @@ fn new_verify_hash_request(region_id: u64,
     let mut admin = AdminRequest::new();
     admin.set_cmd_type(AdminCmdType::VerifyHash);
     admin.mut_verify_hash().set_index(state.index);
-    admin.mut_verify_hash().set_hash(state.hash.clone());
+    admin.mut_verify_hash().set_hash(state.hash.clone().into());
     request.set_admin_request(admin);
     request
 }

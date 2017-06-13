@@ -176,7 +176,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         header.set_region_id(ctx.get_region_id());
         header.set_peer(ctx.get_peer().clone());
         header.set_region_epoch(ctx.get_region_epoch().clone());
-        header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        header.set_uuid(Uuid::new_v4().as_bytes().to_vec().into());
         header.set_read_quorum(ctx.get_read_quorum());
         if ctx.get_term() != 0 {
             header.set_term(ctx.get_term());
@@ -216,19 +216,19 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             match m {
                 Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::new();
-                    delete.set_key(k.encoded().to_owned());
+                    delete.set_key(k.encoded().to_owned().into());
                     if cf != CF_DEFAULT {
-                        delete.set_cf(cf.to_string());
+                        delete.set_cf(cf.into());
                     }
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
                 Modify::Put(cf, k, v) => {
                     let mut put = PutRequest::new();
-                    put.set_key(k.encoded().to_owned());
-                    put.set_value(v);
+                    put.set_key(k.encoded().to_owned().into());
+                    put.set_value(v.into());
                     if cf != CF_DEFAULT {
-                        put.set_cf(cf.to_string());
+                        put.set_cf(cf.into());
                     }
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
