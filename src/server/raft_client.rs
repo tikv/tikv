@@ -86,7 +86,7 @@ impl RaftClient {
     }
 
     pub fn send(&mut self, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
-        let index = msg.get_region_id() as usize % self.cfg.grpc_raft_conn_size;
+        let index = msg.get_region_id() as usize % self.cfg.grpc_raft_conn_num;
         let res = {
             let conn = self.get_conn(addr, index);
             UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()))
