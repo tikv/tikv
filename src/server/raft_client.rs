@@ -25,7 +25,7 @@ const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
 
 use util::collections::HashMap;
-use super::{Error, Result};
+use super::{Error, Result, Config};
 
 struct Conn {
     _client: TikvClient,
@@ -34,10 +34,11 @@ struct Conn {
 }
 
 impl Conn {
-    fn new(env: Arc<Environment>, addr: SocketAddr) -> Conn {
+    fn new(env: Arc<Environment>, addr: SocketAddr, cfg: &Config) -> Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let channel = ChannelBuilder::new(env)
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
             .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
             .connect(&format!("{}", addr));
@@ -63,34 +64,38 @@ impl Conn {
 /// `RaftClient` is used for sending raft messages to other stores.
 pub struct RaftClient {
     env: Arc<Environment>,
-    conns: HashMap<SocketAddr, Conn>,
+    conns: HashMap<(SocketAddr, usize), Conn>,
+    cfg: Config,
 }
 
 impl RaftClient {
-    pub fn new(env: Arc<Environment>) -> RaftClient {
+    pub fn new(env: Arc<Environment>, cfg: Config) -> RaftClient {
         RaftClient {
             env: env,
             conns: HashMap::default(),
+            cfg: cfg,
         }
     }
 
-    fn get_conn(&mut self, addr: SocketAddr) -> &Conn {
+    fn get_conn(&mut self, addr: SocketAddr, index: usize) -> &Conn {
         let env = self.env.clone();
+        let cfg = self.cfg.clone();
         self.conns
-            .entry(addr)
-            .or_insert_with(|| Conn::new(env, addr))
+            .entry((addr, index))
+            .or_insert_with(|| Conn::new(env, addr, &cfg))
     }
 
     pub fn send(&mut self, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
+        let index = msg.get_region_id() as usize % self.cfg.grpc_raft_conn_num;
         let res = {
-            let conn = self.get_conn(addr);
+            let conn = self.get_conn(addr, index);
             UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()))
         };
         if let Err(e) = res {
             warn!("server: drop conn with tikv endpoint {} error: {:?}",
                   addr,
                   e);
-            self.conns.remove(&addr);
+            self.conns.remove(&(addr, index));
             return Err(box_err!(e));
         }
         Ok(())
