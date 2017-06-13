@@ -111,7 +111,7 @@ pub fn new_base_request(region_id: u64, epoch: RegionEpoch, read_quorum: bool) -
     let mut req = RaftCmdRequest::new();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);
-    req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+    req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec().into());
     req.mut_header().set_read_quorum(read_quorum);
     req
 }
@@ -129,32 +129,32 @@ pub fn new_request(region_id: u64,
 pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Put);
-    cmd.mut_put().set_key(key.to_vec());
-    cmd.mut_put().set_value(value.to_vec());
+    cmd.mut_put().set_key(key.into());
+    cmd.mut_put().set_value(value.into());
     cmd
 }
 
 pub fn new_put_cf_cmd(cf: &str, key: &[u8], value: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Put);
-    cmd.mut_put().set_key(key.to_vec());
-    cmd.mut_put().set_value(value.to_vec());
-    cmd.mut_put().set_cf(cf.to_string());
+    cmd.mut_put().set_key(key.into());
+    cmd.mut_put().set_value(value.into());
+    cmd.mut_put().set_cf(cf.into());
     cmd
 }
 
 pub fn new_get_cmd(key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
-    cmd.mut_get().set_key(key.to_vec());
+    cmd.mut_get().set_key(key.into());
     cmd
 }
 
 pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Delete);
-    cmd.mut_delete().set_key(key.to_vec());
-    cmd.mut_delete().set_cf(cf.to_string());
+    cmd.mut_delete().set_key(key.into());
+    cmd.mut_delete().set_cf(cf.into());
     cmd
 }
 
@@ -215,7 +215,7 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
     let mut store = metapb::Store::new();
     store.set_id(store_id);
-    store.set_address(addr);
+    store.set_address(addr.as_str().into());
 
     store
 }
