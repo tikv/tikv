@@ -529,7 +529,7 @@ impl<T: Storage> Raft<T> {
         let commit = cmp::min(self.prs[&to].matched, self.raft_log.committed);
         m.set_commit(commit);
         if let Some(context) = ctx {
-            m.set_context(context);
+            m.set_context(context.into());
         }
         self.send(m);
     }
@@ -771,7 +771,7 @@ impl<T: Storage> Raft<T> {
             m.set_index(self.raft_log.last_index());
             m.set_log_term(self.raft_log.last_term());
             if campaign_type == CAMPAIGN_TRANSFER {
-                m.set_context(campaign_type.to_vec());
+                m.set_context(campaign_type.into());
             }
             self.send(m);
         }
@@ -1159,7 +1159,7 @@ impl<T: Storage> Raft<T> {
                         // from local member
                         let rs = ReadState {
                             index: rs.index,
-                            request_ctx: req.take_entries()[0].take_data(),
+                            request_ctx: Vec::from(&*req.take_entries()[0].take_data()),
                         };
                         self.read_states.push(rs);
                     } else {
@@ -1275,7 +1275,7 @@ impl<T: Storage> Raft<T> {
                                 // from local member
                                 let rs = ReadState {
                                     index: self.raft_log.committed,
-                                    request_ctx: m.take_entries()[0].take_data(),
+                                    request_ctx: Vec::from(&*m.take_entries()[0].take_data()),
                                 };
                                 self.read_states.push(rs);
                             } else {
@@ -1291,7 +1291,7 @@ impl<T: Storage> Raft<T> {
                 } else {
                     let rs = ReadState {
                         index: self.raft_log.committed,
-                        request_ctx: m.take_entries()[0].take_data(),
+                        request_ctx: Vec::from(&*m.take_entries()[0].take_data()),
                     };
                     self.read_states.push(rs);
                 }
@@ -1463,7 +1463,7 @@ impl<T: Storage> Raft<T> {
                 }
                 let rs = ReadState {
                     index: m.get_index(),
-                    request_ctx: m.take_entries()[0].take_data(),
+                    request_ctx: Vec::from(&*m.take_entries()[0].take_data()),
                 };
                 self.read_states.push(rs);
             }

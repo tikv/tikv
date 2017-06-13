@@ -141,7 +141,7 @@ impl MemStorageCore {
         if let Some(cs) = cs {
             self.snapshot.mut_metadata().set_conf_state(cs)
         }
-        self.snapshot.set_data(data);
+        self.snapshot.set_data(data.into());
         Ok(&self.snapshot)
     }
 

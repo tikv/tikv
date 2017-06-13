@@ -1301,7 +1301,7 @@ impl Peer {
         let mut cc = eraftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
-        cc.set_context(data);
+        cc.set_context(data.into());
 
         info!("{} propose conf change {:?} peer {:?}",
               self.tag,
