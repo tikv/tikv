@@ -669,7 +669,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         Err(Error::SchedTooBusy) => {
             let mut err = RegionError::new();
             let mut server_is_busy_err = ServerIsBusy::new();
-            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.into());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }

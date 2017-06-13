@@ -308,9 +308,9 @@ fn err_resp(e: Error) -> Response {
         Error::Full(allow) => {
             COPR_REQ_ERROR.with_label_values(&["select", "full"]).inc();
             let mut errorpb = errorpb::Error::new();
-            errorpb.set_message(format!("running batches reach limit {}", allow));
+            errorpb.set_message(format!("running batches reach limit {}", allow).as_str().into());
             let mut server_is_busy_err = ServerIsBusy::new();
-            server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
+            server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.into());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
         }
