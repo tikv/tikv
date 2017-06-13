@@ -631,9 +631,9 @@ fn build_cfg(matches: &ArgMatches,
     cfg_usize(&mut cfg.grpc_concurrent_stream,
               config,
               "server.grpc-concurrent-stream");
-    cfg_usize(&mut cfg.grpc_raft_conn_size,
+    cfg_usize(&mut cfg.grpc_raft_conn_num,
               config,
-              "server.grpc-raft-conn-size");
+              "server.grpc-raft-conn-num");
     cfg_usize(&mut cfg.grpc_stream_initial_window_size,
               config,
               "server.grpc-stream-initial-window-size");
