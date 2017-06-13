@@ -115,7 +115,7 @@ pub mod test {
     use storage::engine::{self, Engine, TEMP_DIR, Modify};
     use server::coprocessor::endpoint::prefix_next;
 
-    fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
+    pub fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
         col_info.set_tp(tp as i32);
         col_info.set_column_id(cid);
@@ -124,10 +124,8 @@ pub mod test {
 
     pub struct Data {
         pub kv_data: Vec<(Vec<u8>, Vec<u8>)>,
-        pub pk: Vec<u8>,
-        pub pk_handle: i64,
-        // encode_data[row_id][column_id]=>value
-        pub encode_data: Vec<HashMap<i64, Vec<u8>>>,
+        // expect_rows[row_id][column_id]=>value
+        pub expect_rows: Vec<HashMap<i64, Vec<u8>>>,
         pub cols: Vec<ColumnInfo>,
     }
 
@@ -137,6 +135,16 @@ pub mod test {
             let col2 = self.cols[1].clone();
             vec![col1, col2]
         }
+
+        pub fn get_index_cols(&self) -> Vec<ColumnInfo> {
+            vec![self.cols[1].clone(), self.cols[2].clone()]
+        }
+
+        pub fn get_col_pk(&self) -> ColumnInfo {
+            let mut pk_col = new_col_info(0, types::LONG);
+            pk_col.set_pk_handle(true);
+            pk_col
+        }
     }
 
     pub fn prepare_table_data(key_number: usize, table_id: i64) -> Data {
@@ -145,9 +153,7 @@ pub mod test {
                         new_col_info(3, types::NEW_DECIMAL)];
 
         let mut kv_data = Vec::new();
-        let mut pk = Vec::new();
-        let mut pk_handle = 0 as i64;
-        let mut encode_data = Vec::new();
+        let mut expect_rows = Vec::new();
 
         for handle in 0..key_number {
             let row = map![
@@ -155,13 +161,13 @@ pub mod test {
                 2 => Datum::Bytes(b"abc".to_vec()),
                 3 => Datum::Dec(10.into())
             ];
-            let mut encode_value = HashMap::default();
+            let mut expect_row = HashMap::default();
             let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
             let col_values: Vec<_> = row.iter()
-                .map(|(k, v)| {
+                .map(|(cid, v)| {
                     let f = table::flatten(v.clone()).unwrap();
                     let value = datum::encode_value(&[f]).unwrap();
-                    encode_value.insert(*k, value);
+                    expect_row.insert(*cid, value);
                     v.clone()
                 })
                 .collect();
@@ -170,18 +176,12 @@ pub mod test {
             let mut buf = vec![];
             buf.encode_i64(handle as i64).unwrap();
             let key = table::encode_row_key(table_id, &buf);
-            if pk.is_empty() {
-                pk = key.clone();
-                pk_handle = handle as i64;
-            }
-            encode_data.push(encode_value);
+            expect_rows.push(expect_row);
             kv_data.push((key, value));
         }
         Data {
             kv_data: kv_data,
-            pk: pk,
-            pk_handle: pk_handle,
-            encode_data: encode_data,
+            expect_rows: expect_rows,
             cols: cols,
         }
     }
@@ -190,19 +190,17 @@ pub mod test {
     const COMMIT_TS: u64 = 20;
 
     pub struct TestStore {
-        pk: Vec<u8>,
         snapshot: Box<Snapshot>,
         ctx: Context,
         engine: Box<Engine>,
     }
 
     impl TestStore {
-        pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)], pk: Vec<u8>) -> TestStore {
+        pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
             let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
             let ctx = Context::new();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
-                pk: pk,
                 snapshot: snapshot,
                 ctx: ctx,
                 engine: engine,
@@ -216,9 +214,13 @@ pub mod test {
             // do prewrite.
             let txn_motifies = {
                 let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
+                let mut pk = vec![];
                 for &(ref key, ref value) in kv_data {
+                    if pk.is_empty() {
+                        pk = key.clone();
+                    }
                     txn.prewrite(Mutation::Put((make_key(key), value.to_vec())),
-                                  &self.pk,
+                                  &pk,
                                   &Options::default())
                         .unwrap();
                 }
@@ -259,21 +261,20 @@ pub mod test {
         key_range
     }
 
-
     #[test]
     fn test_point_get() {
-        let pk = b"key1".to_vec();
-        let pv = b"value1";
+        let key = b"key1".to_vec();
+        let value = b"value1";
         let test_data = vec![
-            (pk.clone(), pv.to_vec()),
+            (key.clone(), value.to_vec()),
             (b"key2".to_vec(), b"value2".to_vec()),
         ];
         let mut statistics = Statistics::default();
-        let mut test_store = TestStore::new(&test_data, pk.clone());
+        let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut scanner = Scanner::new(false, false, snapshot, &mut statistics, start_ts);
-        let data = scanner.get_row(&pk).unwrap().unwrap();
-        assert_eq!(data, pv);
+        let data = scanner.get_row(&key).unwrap().unwrap();
+        assert_eq!(data, value);
     }
 
     #[test]
@@ -286,7 +287,7 @@ pub mod test {
             (table::encode_row_key(table_id, b"key2"), b"value2".to_vec()),
         ];
         let mut statistics = Statistics::default();
-        let mut test_store = TestStore::new(&test_data, pk.clone());
+        let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut scanner = Scanner::new(false, false, snapshot, &mut statistics, start_ts);
         let range = get_range(table_id, i64::MIN, i64::MAX);
@@ -306,7 +307,7 @@ pub mod test {
         let key_number = 10;
         let mut data = prepare_table_data(key_number, table_id);
         let mut statistics = Statistics::default();
-        let mut test_store = TestStore::new(&data.kv_data, data.pk.clone());
+        let mut test_store = TestStore::new(&data.kv_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut scanner = Scanner::new(true, false, snapshot, &mut statistics, start_ts);
         let range = get_range(table_id, i64::MIN, i64::MAX);
@@ -328,10 +329,10 @@ pub mod test {
         let pv = b"value1";
         let test_data = vec![
             (pk.clone(), pv.to_vec()),
-            (table::encode_row_key(table_id,b"key2"),b"value2".to_vec()),
+            (table::encode_row_key(table_id,b"key2"), b"value2".to_vec()),
         ];
         let mut statistics = Statistics::default();
-        let mut test_store = TestStore::new(&test_data, pk.clone());
+        let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut scanner = Scanner::new(false, true, snapshot, &mut statistics, start_ts);
 
@@ -349,7 +350,7 @@ pub mod test {
             (pk.clone(), pv.to_vec()),
         ];
         let mut statistics = Statistics::default();
-        let mut test_store = TestStore::new(&test_data, pk.clone());
+        let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut scanner = Scanner::new(true, false, snapshot, &mut statistics, start_ts);
         let range = get_range(table_id, i64::MIN, i64::MAX);
