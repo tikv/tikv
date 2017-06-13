@@ -306,8 +306,8 @@ mod tests {
         let mut r = Region::new();
         r.mut_peers().push(Peer::new());
         r.set_id(10);
-        r.set_start_key(b"a2".to_vec());
-        r.set_end_key(b"a7".to_vec());
+        r.set_start_key(b"a2".to_vec().into());
+        r.set_end_key(b"a7".to_vec().into());
 
         let base_data = vec![
             (b"a1".to_vec(), b"v1".to_vec()),
@@ -329,8 +329,8 @@ mod tests {
         let engine = new_temp_engine(&path);
         let mut r = Region::new();
         r.set_id(10);
-        r.set_start_key(b"key0".to_vec());
-        r.set_end_key(b"key4".to_vec());
+        r.set_start_key(b"key0".to_vec().into());
+        r.set_end_key(b"key4".to_vec().into());
         let store = new_peer_storage(engine.clone(), &r);
 
         let (key1, value1) = (b"key1", 2u64);

@@ -355,22 +355,22 @@ mod tests {
     fn test_check_region_epoch() {
         let mut r1 = metapb::Region::new();
         r1.set_id(1);
-        r1.set_start_key(keys::EMPTY_KEY.to_vec());
-        r1.set_end_key(keys::EMPTY_KEY.to_vec());
+        r1.set_start_key(keys::EMPTY_KEY.into());
+        r1.set_end_key(keys::EMPTY_KEY.into());
         r1.mut_region_epoch().set_version(1);
         r1.mut_region_epoch().set_conf_ver(1);
 
         let mut r2 = metapb::Region::new();
         r2.set_id(1);
-        r2.set_start_key(keys::EMPTY_KEY.to_vec());
-        r2.set_end_key(keys::EMPTY_KEY.to_vec());
+        r2.set_start_key(keys::EMPTY_KEY.into());
+        r2.set_end_key(keys::EMPTY_KEY.into());
         r2.mut_region_epoch().set_version(2);
         r2.mut_region_epoch().set_conf_ver(1);
 
         let mut r3 = metapb::Region::new();
         r3.set_id(1);
-        r3.set_start_key(keys::EMPTY_KEY.to_vec());
-        r3.set_end_key(keys::EMPTY_KEY.to_vec());
+        r3.set_start_key(keys::EMPTY_KEY.into());
+        r3.set_end_key(keys::EMPTY_KEY.into());
         r3.mut_region_epoch().set_version(1);
         r3.mut_region_epoch().set_conf_ver(2);
 

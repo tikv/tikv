@@ -256,8 +256,8 @@ pub mod test {
         let mut end_buf = Vec::with_capacity(8);
         end_buf.encode_i64(end).unwrap();
         let mut key_range = KeyRange::new();
-        key_range.set_start(table::encode_row_key(table_id, &start_buf));
-        key_range.set_end(table::encode_row_key(table_id, &end_buf));
+        key_range.set_start(table::encode_row_key(table_id, &start_buf).into());
+        key_range.set_end(table::encode_row_key(table_id, &end_buf).into());
         key_range
     }
 

@@ -1377,7 +1377,7 @@ mod tests {
         let mut e = Entry::new();
         e.set_index(index);
         e.set_term(term);
-        req.map(|r| e.set_data(r.write_to_bytes().unwrap()));
+        req.map(|r| e.set_data(r.write_to_bytes().unwrap().into()));
         e
     }
 
@@ -1536,7 +1536,7 @@ mod tests {
     impl EntryBuilder {
         fn new(index: u64, term: u64) -> EntryBuilder {
             let mut req = RaftCmdRequest::new();
-            req.mut_header().set_uuid(Uuid::new_v4().as_bytes().into());
+            req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec().into());
             let mut entry = Entry::new();
             entry.set_index(index);
             entry.set_term(term);
@@ -1578,7 +1578,7 @@ mod tests {
             let mut cmd = Request::new();
             cmd.set_cmd_type(CmdType::Put);
             if let Some(cf) = cf {
-                cmd.mut_put().set_cf(cf.to_owned());
+                cmd.mut_put().set_cf(cf.into());
             }
             cmd.mut_put().set_key(key.into());
             cmd.mut_put().set_value(value.into());
@@ -1598,7 +1598,7 @@ mod tests {
             let mut cmd = Request::new();
             cmd.set_cmd_type(CmdType::Delete);
             if let Some(cf) = cf {
-                cmd.mut_delete().set_cf(cf.to_owned());
+                cmd.mut_delete().set_cf(cf.into());
             }
             cmd.mut_delete().set_key(key.into());
             self.req.mut_requests().push(cmd);
@@ -1606,7 +1606,7 @@ mod tests {
         }
 
         fn build(mut self) -> Entry {
-            self.entry.set_data(self.req.write_to_bytes().unwrap());
+            self.entry.set_data(self.req.write_to_bytes().unwrap().into());
             self.entry
         }
     }
@@ -1615,7 +1615,7 @@ mod tests {
     fn test_handle_raft_committed_entries() {
         let (_path, db) = create_tmp_engine("test-delegate");
         let mut reg = Registration::default();
-        reg.region.set_end_key(b"k5".into());
+        reg.region.set_end_key(b"k5".to_vec().into());
         reg.region.mut_region_epoch().set_version(3);
         let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
         let (tx, rx) = mpsc::channel();

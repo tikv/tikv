@@ -249,8 +249,8 @@ mod tests {
 
         let mut region = Region::new();
         region.set_id(1);
-        region.set_start_key(vec![]);
-        region.set_end_key(vec![]);
+        region.set_start_key(vec![].into());
+        region.set_end_key(vec![].into());
         region.mut_peers().push(Peer::new());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);

@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn test_limit_size() {
         let mut e = Entry::new();
-        e.set_data(b"0123456789".to_vec());
+        e.set_data(b"0123456789".to_vec().into());
         let size = e.compute_size() as u64;
 
         let tbls = vec![
