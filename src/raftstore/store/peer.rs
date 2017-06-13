@@ -1476,8 +1476,8 @@ impl Peer {
             // the peer has not been known to this leader, it may exist or not.
             (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)) {
             let region = self.region();
-            send_msg.set_start_key(region.get_start_key().to_vec());
-            send_msg.set_end_key(region.get_end_key().to_vec());
+            send_msg.set_start_key(region.get_start_key().into());
+            send_msg.set_end_key(region.get_end_key().into());
         }
 
         send_msg.set_message(msg);

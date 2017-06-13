@@ -767,7 +767,7 @@ mod v2 {
             }
 
             let mut cf_file_meta = SnapshotCFFile::new();
-            cf_file_meta.set_cf(cf_file.cf.to_owned());
+            cf_file_meta.set_cf(cf_file.cf.into());
             cf_file_meta.set_size(cf_file.size);
             cf_file_meta.set_checksum(cf_file.checksum);
             meta.push(cf_file_meta);
