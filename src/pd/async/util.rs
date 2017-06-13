@@ -314,7 +314,7 @@ pub fn try_connect_leader(env: Arc<Environment>,
     let mut resp = None;
     'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
-            match connect(env.clone(), ep.as_str()) {
+            match connect(env.clone(), &**ep) {
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
@@ -322,13 +322,13 @@ pub fn try_connect_leader(env: Arc<Environment>,
                         break 'outer;
                     } else {
                         panic!("{} no longer belongs to cluster {}, it is in {}",
-                               ep,
+                               &**ep,
                                cluster_id,
                                new_cluster_id);
                     }
                 }
                 Err(e) => {
-                    error!("failed to connect to {}, {:?}", ep, e);
+                    error!("failed to connect to {}, {:?}", &**ep, e);
                     continue;
                 }
             }
@@ -339,8 +339,8 @@ pub fn try_connect_leader(env: Arc<Environment>,
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(env.clone(), ep.as_str()) {
-                info!("connect to PD leader {:?}", ep);
+            if let Ok((client, _)) = connect(env.clone(), &**ep) {
+                info!("connect to PD leader {:?}", &**ep);
                 return Ok((client, resp));
             }
         }
