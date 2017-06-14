@@ -18,7 +18,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::error;
 use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
-use kvproto::kvrpcpb::LockInfo;
+use kvproto::kvrpcpb::{LockInfo, CommandPri};
 use kvproto::errorpb;
 use self::metrics::*;
 
@@ -230,6 +230,26 @@ impl Command {
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
+    }
+
+    pub fn priority(&self) -> CommandPri {
+        match *self {
+            Command::Get { ref ctx, .. } |
+            Command::BatchGet { ref ctx, .. } |
+            Command::Scan { ref ctx, .. } |
+            Command::Prewrite { ref ctx, .. } |
+            Command::Commit { ref ctx, .. } |
+            Command::Cleanup { ref ctx, .. } |
+            Command::Rollback { ref ctx, .. } |
+            Command::ScanLock { ref ctx, .. } |
+            Command::ResolveLock { ref ctx, .. } |
+            Command::Gc { ref ctx, .. } |
+            Command::RawGet { ref ctx, .. } => ctx.get_priority(),
+        }
+    }
+
+    pub fn need_flow_control(&self) -> bool {
+        !self.readonly() && self.priority() != CommandPri::High
     }
 
     pub fn tag(&self) -> &'static str {
@@ -1022,6 +1042,48 @@ mod tests {
                        make_key(b"x"),
                        105,
                        expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_high_priority_get_put() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_get(ctx, make_key(b"x"), 100, expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_prewrite(ctx,
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            Options::default(),
+                            expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_commit(ctx, vec![make_key(b"x")], 100, 101, expect_ok(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_get(ctx, make_key(b"x"), 100, expect_get_none(tx.clone()))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_get(ctx,
+                       make_key(b"x"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec()))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();

@@ -37,7 +37,7 @@ use std::sync::mpsc::Receiver;
 
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
-use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::kvrpcpb::{Context, LockInfo, CommandPri};
 
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode, Statistics};
@@ -240,6 +240,9 @@ pub struct Scheduler {
     // worker pool
     worker_pool: ThreadPool,
 
+    // high priority commands will be delivered to this pool
+    high_priority_pool: ThreadPool,
+
     has_gc_command: bool,
 
     // used to control write flow
@@ -263,6 +266,7 @@ impl Scheduler {
             sched_too_busy_threshold: sched_too_busy_threshold,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
+            high_priority_pool: ThreadPool::new_with_name(thd_name!("sched-high-pri-pool"), 1),
             has_gc_command: false,
             running_write_count: 0,
         }
@@ -637,7 +641,15 @@ impl Scheduler {
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
         if readcmd {
-            self.worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
+            if cmd.priority() == CommandPri::High {
+                self.high_priority_pool
+                    .execute(move || process_read(cid, cmd, ch, snapshot));
+            } else {
+                self.worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
+            }
+        } else if cmd.priority() == CommandPri::High {
+            self.high_priority_pool
+                .execute(move || process_write(cid, cmd, ch, snapshot));
         } else {
             self.worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
         }
@@ -689,7 +701,7 @@ impl Scheduler {
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
-        if !cmd.readonly() && self.too_busy() {
+        if cmd.need_flow_control() && self.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.with_label_values(&[cmd.tag()]).inc();
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });
