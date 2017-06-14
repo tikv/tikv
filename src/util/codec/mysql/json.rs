@@ -544,7 +544,7 @@ pub trait JsonDecoder: NumberDecoder {
         let element_count = try!(self.decode_u32_le()) as usize;
         let total_size = try!(self.decode_u32_le()) as usize;
         let left_size = total_size - ELEMENT_COUNT_LEN - SIZE_LEN;
-        let mut data = vec![0;left_size];
+        let mut data = vec![0; left_size];
         try!(self.read_exact(&mut data));
         let mut obj = BTreeMap::new();
         if element_count == 0 {
@@ -577,7 +577,7 @@ pub trait JsonDecoder: NumberDecoder {
         let total_size = try!(self.decode_u32_le());
         // already removed count and size
         let left_size = total_size as usize - ELEMENT_COUNT_LEN - SIZE_LEN;
-        let mut data = vec![0;left_size];
+        let mut data = vec![0; left_size];
         try!(self.read_exact(&mut data));
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let mut value_entries_data = &data[0..value_entries_len];
@@ -593,7 +593,7 @@ pub trait JsonDecoder: NumberDecoder {
 
     fn decode_json_str(&mut self) -> Result<Json> {
         let length = try!(self.decode_var_u64());
-        let mut encode_value = vec![0;length as usize];
+        let mut encode_value = vec![0; length as usize];
         try!(self.read_exact(&mut encode_value));
         let value = try!(String::from_utf8(encode_value));
         Ok(Json::String(value))
@@ -618,7 +618,7 @@ pub trait JsonDecoder: NumberDecoder {
     }
 
     fn decode_json_item(&mut self, values_data: &[u8], data_start_position: u32) -> Result<Json> {
-        let mut entry = vec![0;VALUE_ENTRY_LEN];
+        let mut entry = vec![0; VALUE_ENTRY_LEN];
         try!(self.read_exact(&mut entry));
         let mut entry = entry.as_slice();
         let code = try!(entry.read_u8());
