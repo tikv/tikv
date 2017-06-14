@@ -201,7 +201,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
         if msg.get_message().has_snapshot() {
             return self.send_snapshot_sock(addr, msg);
         }
-        if let Err(e) = self.raft_client.wl().send(addr, msg) {
+        if let Err(e) = self.raft_client.wl().send(store_id, addr, msg) {
             error!("send raft msg err {:?}", e);
         }
     }

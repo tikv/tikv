@@ -21,10 +21,11 @@ use grpc::{Environment, ChannelBuilder, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 
-use util::collections::{HashMap, FlatMap};
-use super::{Error, Result};
+const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
 
-const GRPC_WRITE_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+use util::collections::HashMap;
+use super::{Error, Result, Config};
 
 struct Conn {
     _client: TikvClient,
@@ -34,17 +35,14 @@ struct Conn {
 }
 
 impl Conn {
-    fn new(env: Arc<Environment>, addr: SocketAddr) -> Conn {
+    fn new(env: Arc<Environment>, addr: SocketAddr, cfg: &Config) -> Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
         let channel = ChannelBuilder::new(env)
-        		.max_concurrent_stream(1024)
-                    .max_receive_message_len(10 * 1024 * 1024)
-                    .max_send_message_len(128 * 1024 * 1024)
-        	        //	.http2_max_frame_size(64 * 1024)
-                    // .http2_write_buffer_size(64 * 1024)
-                    .stream_initial_window_size(2 * 1024 * 1024)
-        		.connect(&format!("{}", addr));
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size)
+            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
+            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
+            .connect(&format!("{}", addr));
         let client = TikvClient::new(channel);
         let (tx, rx) = mpsc::unbounded();
         let (tx_close, rx_close) = oneshot::channel();
@@ -70,38 +68,39 @@ pub struct RaftClient {
     env: Arc<Environment>,
     conns: HashMap<(SocketAddr, usize), Conn>,
     pub addrs: HashMap<u64, SocketAddr>,
-    conn_size: usize,
+    cfg: Config,
 }
 
 impl RaftClient {
-    pub fn new(env: Arc<Environment>, conn_size: usize) -> RaftClient {
+    pub fn new(env: Arc<Environment>, cfg: Config) -> RaftClient {
         RaftClient {
             env: env,
             conns: HashMap::default(),
             addrs: HashMap::default(),
-            conn_size: conn_size,
+            cfg: cfg,
         }
     }
 
     fn get_conn(&mut self, addr: SocketAddr, index: usize) -> &mut Conn {
         let env = self.env.clone();
+        let cfg = self.cfg.clone();
         self.conns
             .entry((addr, index))
-            .or_insert_with(|| Conn::new(env, addr))
+            .or_insert_with(|| Conn::new(env, addr, &cfg))
     }
 
-    pub fn send(&mut self, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
-        let index = msg.get_region_id() as usize % self.conn_size;
+    pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
+        let index = msg.get_region_id() as usize % self.cfg.grpc_raft_conn_num;
         let res = {
             let conn = self.get_conn(addr, index);
-            conn.active = true;
-            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default().buffer_hint(true)))
+            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()))
         };
         if let Err(e) = res {
             warn!("server: drop conn with tikv endpoint {} error: {:?}",
                   addr,
                   e);
             self.conns.remove(&(addr, index));
+            self.addrs.remove(&store_id);
             return Err(box_err!(e));
         }
         Ok(())
@@ -110,14 +109,12 @@ impl RaftClient {
 
     pub fn flush(&mut self) {
         for conn in self.conns.values_mut() {
-            if conn.active == false {
-                continue;
-            }
-
-            conn.active = false;
-            if let Err(e) = UnboundedSender::send(&conn.stream,
-                                                  (RaftMessage::new(), WriteFlags::default())) {
-                error!("flush conn error {:?}", e);
+            if conn.active {
+                conn.active = false;
+                if let Err(e) = UnboundedSender::send(&conn.stream,
+                                                      (RaftMessage::new(), WriteFlags::default())) {
+                    error!("flush conn error {:?}", e);
+                }
             }
         }
     }

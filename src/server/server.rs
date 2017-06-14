@@ -61,8 +61,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
         let env = Arc::new(Environment::new(cfg.grpc_concurrency));
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(),
-                                                               cfg.grpc_raft_conn_size)));
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
         let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 

@@ -2633,7 +2633,7 @@ fn test_remove_node() {
 
     // remove all nodes from cluster
     r.remove_node(1);
-    assert_eq!(r.nodes(), vec![]);
+    assert!(r.nodes().is_empty());
 }
 
 #[test]
