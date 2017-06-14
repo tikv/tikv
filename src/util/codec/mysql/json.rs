@@ -56,7 +56,7 @@ const TYPE_LEN: usize = 1;
 const LITERAL_LEN: usize = 1;
 const U16_LEN: usize = 2;
 const U32_LEN: usize = 4;
-const I64_LEN: usize = 8;
+const NUMBER_LEN: usize = 8;
 const KEY_ENTRY_LEN: usize = U32_LEN + U16_LEN;
 const VALUE_ENTRY_LEN: usize = TYPE_LEN + U32_LEN;
 const ELEMENT_COUNT_LEN: usize = U32_LEN;
@@ -74,10 +74,11 @@ const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 pub enum Json {
     Object(BTreeMap<String, Json>),
     Array(Vec<Json>),
-    Literal(u8),
     I64(i64),
     Double(f64),
     String(String),
+    Boolean(bool),
+    None,
 }
 
 impl Json {
@@ -85,7 +86,7 @@ impl Json {
         match *self {
             Json::Object(_) => TYPE_CODE_OBJECT,
             Json::Array(_) => TYPE_CODE_ARRAY,
-            Json::Literal(_) => TYPE_CODE_LITERAL,
+            Json::Boolean(_) | Json::None => TYPE_CODE_LITERAL,
             Json::I64(_) => TYPE_CODE_I64,
             Json::Double(_) => TYPE_CODE_DOUBLE,
             Json::String(_) => TYPE_CODE_STRING,
@@ -100,8 +101,8 @@ impl Json {
         match *self {
             Json::Object(ref d) => get_obj_binary_len(d),
             Json::Array(ref d) => get_array_binary_len(d),
-            Json::Literal(_) => LITERAL_LEN,
-            Json::I64(_) | Json::Double(_) => I64_LEN,
+            Json::Boolean(_) | Json::None => LITERAL_LEN,
+            Json::I64(_) | Json::Double(_) => NUMBER_LEN,
             Json::String(ref d) => get_str_binary_len(d),
         }
     }
@@ -110,13 +111,8 @@ impl Json {
         match *self {
             Json::Object(_) => PRECEDENCE_OBJECT,
             Json::Array(_) => PRECEDENCE_ARRAY,
-            Json::Literal(d) => {
-                if d == JSON_LITERAL_NIL {
-                    PRECEDENCE_NULL
-                } else {
-                    PRECEDENCE_BOOLEAN
-                }
-            }
+            Json::Boolean(_) => PRECEDENCE_BOOLEAN,
+            Json::None => PRECEDENCE_NULL,
             Json::I64(_) | Json::Double(_) => PRECEDENCE_NUMBER,
             Json::String(_) => PRECEDENCE_STRING,
         }
@@ -127,12 +123,20 @@ impl Json {
     }
 
     fn as_literal(&self) -> Result<u8> {
-        if let Json::Literal(d) = *self {
-            Ok(d)
-        } else {
-            Err(invalid_type!("{} from {} to literal",
-                              ERR_CONVERT_FAILED,
-                              self.get_type_code()))
+        match *self {
+            Json::Boolean(d) => {
+                if d {
+                    Ok(JSON_LITERAL_TRUE)
+                } else {
+                    Ok(JSON_LITERAL_FALSE)
+                }
+            }
+            Json::None => Ok(JSON_LITERAL_NIL),
+            _ => {
+                Err(invalid_type!("{} from {} to literal",
+                                  ERR_CONVERT_FAILED,
+                                  self.get_type_code()))
+            }
         }
     }
 
@@ -140,7 +144,10 @@ impl Json {
         match *self {
             Json::Double(d) => Ok(d),
             Json::I64(d) => Ok(d as f64),
-            Json::Literal(d) if d != JSON_LITERAL_NIL => Ok(d as f64),
+            Json::Boolean(_) => {
+                let v = try!(self.as_literal());
+                Ok(v as f64)
+            }
             _ => {
                 Err(invalid_type!("{} from {} to f64",
                                   ERR_CONVERT_FAILED,
@@ -226,13 +233,8 @@ impl Serialize for Json {
         where S: Serializer
     {
         match *self {
-            Json::Literal(l) => {
-                match l {
-                    JSON_LITERAL_NIL => serializer.serialize_none(),
-                    JSON_LITERAL_TRUE => serializer.serialize_bool(true),
-                    _ => serializer.serialize_bool(false),
-                }
-            }
+            Json::None => serializer.serialize_none(),
+            Json::Boolean(d) => serializer.serialize_bool(d),
             Json::String(ref s) => serializer.serialize_str(s),
             Json::Object(ref obj) => {
                 let mut map = try!(serializer.serialize_map(Some(obj.len())));
@@ -328,17 +330,13 @@ impl<'de> Visitor<'de> for JsonVisitor {
     fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
-        Ok(Json::Literal(JSON_LITERAL_NIL))
+        Ok(Json::None)
     }
 
     fn visit_bool<E>(self, v: bool) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
-        if v {
-            Ok(Json::Literal(JSON_LITERAL_TRUE))
-        } else {
-            Ok(Json::Literal(JSON_LITERAL_FALSE))
-        }
+        Ok(Json::Boolean(v))
     }
 
     fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
@@ -409,7 +407,10 @@ pub trait JsonEncoder: NumberEncoder {
         match *data {
             Json::Object(ref d) => self.encode_obj(d),
             Json::Array(ref d) => self.encode_array(d),
-            Json::Literal(d) => self.encode_literal(d),
+            Json::Boolean(_) | Json::None => {
+                let v = try!(data.as_literal());
+                self.encode_literal(v)
+            }
             Json::I64(d) => self.encode_json_i64(d),
             Json::Double(d) => self.encode_json_f64(d),
             Json::String(ref d) => self.encode_str(d),
@@ -500,8 +501,9 @@ pub trait JsonEncoder: NumberEncoder {
         match *data {
             // If the data has length in (0, 4], it could be inline here.
             // And padding 0x00 to 4 bytes if needed.
-            Json::Literal(ref v) => {
-                try!(self.write_u8(*v));
+            Json::Boolean(_) | Json::None => {
+                let v = try!(data.as_literal());
+                try!(self.write_u8(v));
                 let left = U32_LEN - LITERAL_LEN;
                 for _ in 0..left {
                     try!(self.write_u8(JSON_LITERAL_NIL));
@@ -598,8 +600,11 @@ pub trait JsonDecoder: NumberDecoder {
     }
 
     fn decode_json_literal(&mut self) -> Result<Json> {
-        let l = try!(self.read_u8());
-        Ok(Json::Literal(l))
+        match try!(self.read_u8()) {
+            JSON_LITERAL_TRUE => Ok(Json::Boolean(true)),
+            JSON_LITERAL_FALSE => Ok(Json::Boolean(false)),
+            _ => Ok(Json::None),
+        }
     }
 
     fn decode_json_double(&mut self) -> Result<Json> {
@@ -643,8 +648,8 @@ mod test {
         let jstr2 = r#"[{"a": 1, "b": true}, 3, 3.5, "hello, world", null, true]"#;
         let j2: Json = jstr2.parse().unwrap();
 
-        let json_nil = Json::Literal(0x00);
-        let json_bool = Json::Literal(0x01);
+        let json_nil = Json::None;
+        let json_bool = Json::Boolean(true);
         let json_double = Json::Double(3.24);
         let json_str = Json::String(String::from("hello, 世界"));
         let test_cases = vec![json_nil, json_bool, json_double, json_str, j1, j2];
