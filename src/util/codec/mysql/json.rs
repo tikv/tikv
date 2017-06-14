@@ -70,11 +70,6 @@ const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 ///  back from the binary representation.
 /// 2. Serialize `json` values into readable string representation, and reading
 /// values back from string representation.
-// The binary Json format from `MySQL` 5.7 is in the following link:
-// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
-// The only difference is that we use large `object` or large `array` for
-// the small corresponding ones. That means in our implementation there
-// is no difference between small `object` and big `object`, so does `array`.
 #[derive(Clone, Debug)]
 pub enum Json {
     Object(BTreeMap<String, Json>),
@@ -261,7 +256,7 @@ impl Serialize for Json {
 
 impl PartialEq for Json {
     fn eq(&self, right: &Json) -> bool {
-        self.cmp(right) == Ordering::Equal
+        self.partial_cmp(right).unwrap() == Ordering::Equal
     }
 }
 
@@ -307,7 +302,7 @@ impl PartialOrd for Json {
 
         let left_data = self.as_f64();
         let right_data = right.as_f64();
-        // tidb treat boolean as integer, but boolean is different from integer in JSON.
+        // tidb treats boolean as integer, but boolean is different from integer in JSON.
         // so we need convert them to same type and then compare.
         if left_data.is_ok() && right_data.is_ok() {
             let left = left_data.unwrap();
@@ -320,14 +315,6 @@ impl PartialOrd for Json {
         } else {
             Some(Ordering::Less)
         }
-    }
-}
-
-impl Eq for Json {}
-
-impl Ord for Json {
-    fn cmp(&self, right: &Json) -> Ordering {
-        self.partial_cmp(right).unwrap()
     }
 }
 
@@ -407,6 +394,11 @@ impl<'de> Deserialize<'de> for Json {
     }
 }
 
+// The binary Json format from `MySQL` 5.7 is in the following link:
+// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
+// The only difference is that we use large `object` or large `array` for
+// the small corresponding ones. That means in our implementation there
+// is no difference between small `object` and big `object`, so does `array`.
 pub trait JsonEncoder: NumberEncoder {
     fn encode_json(&mut self, data: &Json) -> Result<()> {
         try!(self.write_u8(data.get_type_code()));
@@ -659,7 +651,6 @@ mod test {
         for json in test_cases {
             let mut data = vec![];
             data.encode_json(&json).unwrap();
-            // let data = json.serialize();
             let output = data.as_slice().decode_json().unwrap();
             let input_str = json.to_string();
             let output_str = output.to_string();
@@ -708,6 +699,8 @@ mod test {
         let json_bool_false = Json::from_str("false").unwrap();
         let json_integer_big = Json::from_str("5").unwrap();
         let json_integer_small = Json::from_str("3").unwrap();
+        let json_double_big = Json::from_str("5.0").unwrap();
+        let json_double_small = Json::from_str("3.1").unwrap();
         let json_str_big = Json::from_str(r#""hello, world""#).unwrap();
         let json_str_small = Json::from_str(r#""hello""#).unwrap();
         let json_array_big = Json::from_str(r#"["a", "c"]"#).unwrap();
@@ -717,6 +710,7 @@ mod test {
             (&json_null, &json_integer_small),
             (&json_integer_small, &json_integer_big),
             (&json_integer_big, &json_str_small),
+            (&json_double_small, &json_double_big),
             (&json_str_small, &json_str_big),
             (&json_str_big, &json_object),
             (&json_object, &json_array_small),
@@ -726,7 +720,7 @@ mod test {
         ];
 
         for (left, right) in test_cases {
-            assert!(*left < *right);
+            assert!(left < right);
         }
     }
 }
