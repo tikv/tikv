@@ -177,7 +177,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .into_iter()
             .map(|mut x| {
                 match x.get_op() {
-                    Op::Put => Mutation::Put((Key::from_raw(x.get_key()), (*x.take_value()).into())),
+                    Op::Put => {
+                        Mutation::Put((Key::from_raw(x.get_key()), (*x.take_value()).into()))
+                    }
                     Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
                     Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
                 }
@@ -523,7 +525,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (cb, future) = make_callback();
         let res = self.storage
-            .async_raw_put(req.take_context(), (*req.take_key()).into(), (*req.take_value()).into(), cb);
+            .async_raw_put(req.take_context(),
+                           (*req.take_key()).into(),
+                           (*req.take_value()).into(),
+                           cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -557,7 +562,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
 
         let (cb, future) = make_callback();
-        let res = self.storage.async_raw_delete(req.take_context(), Vec::from(&*req.take_key()), cb);
+        let res = self.storage
+            .async_raw_delete(req.take_context(), Vec::from(&*req.take_key()), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;

@@ -73,7 +73,8 @@ fn read_on_peer<T: Simulator>(cluster: &mut Cluster<T>,
     request.mut_header().set_peer(peer);
     let mut resp = try!(cluster.call_command(request, timeout));
     if resp.get_header().has_error() {
-        return Err(Error::Other(box_err!((&*resp.mut_header().take_error().take_message()).to_owned())));
+        return Err(Error::Other(box_err!((&*resp.mut_header().take_error().take_message())
+            .to_owned())));
     }
     assert_eq!(resp.get_responses().len(), 1);
     assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
