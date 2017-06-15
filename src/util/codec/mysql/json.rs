@@ -155,24 +155,6 @@ impl Json {
             }
         }
     }
-
-    fn as_str(&self) -> Result<&str> {
-        if let Json::String(ref s) = *self {
-            return Ok(s);
-        }
-        Err(invalid_type!("{} from {} to string",
-                          ERR_CONVERT_FAILED,
-                          self.get_type_code()))
-    }
-
-    fn as_array(&self) -> Result<&[Json]> {
-        if let Json::Array(ref s) = *self {
-            return Ok(s);
-        }
-        Err(invalid_type!("{} from {} to array",
-                          ERR_CONVERT_FAILED,
-                          self.get_type_code()))
-    }
 }
 
 impl FromStr for Json {
@@ -266,37 +248,27 @@ impl PartialOrd for Json {
     fn partial_cmp(&self, right: &Json) -> Option<Ordering> {
         let precedence_diff = self.get_precedence() - right.get_precedence();
         if precedence_diff == 0 {
-            return match self.get_type_code() {
-                TYPE_CODE_LITERAL => {
-                    if let Json::Boolean(_) = *self {
-                        let left_data = self.as_literal().unwrap();
-                        let right_data = right.as_literal().unwrap();
-                        right_data.partial_cmp(&left_data)
-                    } else {
-                        Some(Ordering::Equal)
-                    }
+            if self.get_precedence() == PRECEDENCE_NUMBER {
+                let left_data = self.as_f64().unwrap();
+                let right_data = right.as_f64().unwrap();
+                if (left_data - right_data).abs() < f64::EPSILON {
+                    return Some(Ordering::Equal);
+                } else {
+                    return left_data.partial_cmp(&right_data);
                 }
+            }
 
-                TYPE_CODE_DOUBLE | TYPE_CODE_I64 => {
-                    let left_data = self.as_f64().unwrap();
-                    let right_data = right.as_f64().unwrap();
-                    if (left_data - right_data).abs() < f64::EPSILON {
-                        Some(Ordering::Equal)
-                    } else {
-                        left_data.partial_cmp(&right_data)
-                    }
+            return match (self, right) {
+                (&Json::Boolean(left_data), &Json::Boolean(right_data)) => {
+                    left_data.partial_cmp(&right_data)
                 }
-                TYPE_CODE_STRING => {
-                    let left_data = self.as_str().unwrap();
-                    let right_data = right.as_str().unwrap();
+                (&Json::String(ref left_data), &Json::String(ref right_data)) => {
                     left_data.partial_cmp(right_data)
                 }
-                TYPE_CODE_ARRAY => {
-                    let left_data = self.as_array().unwrap();
-                    let right_data = right.as_array().unwrap();
+                (&Json::Array(ref left_data), &Json::Array(ref right_data)) => {
                     left_data.partial_cmp(right_data)
                 }
-                TYPE_CODE_OBJECT => {
+                (&Json::Object(_), &Json::Object(_)) => {
                     let mut left_data = vec![];
                     let mut right_data = vec![];
                     left_data.encode_json(self).unwrap();
@@ -704,60 +676,43 @@ mod test {
 
     #[test]
     fn test_cmp_json_between_same_type() {
-        let json_null = Json::from_str("null").unwrap();
-        let json_bool_true = Json::from_str("true").unwrap();
-        let json_bool_false = Json::from_str("false").unwrap();
-        let json_integer_big = Json::from_str("5").unwrap();
-        let json_integer_small = Json::from_str("3").unwrap();
-        let json_double_big = Json::from_str("5.0").unwrap();
-        let json_double_small = Json::from_str("3.1").unwrap();
-        let json_str_big = Json::from_str(r#""hello, world""#).unwrap();
-        let json_str_small = Json::from_str(r#""hello""#).unwrap();
-        let json_array_big = Json::from_str(r#"["a", "c"]"#).unwrap();
-        let json_array_small = Json::from_str(r#"["a", "b"]"#).unwrap();
-        let json_object_big = Json::from_str(r#"{"a": "c"}"#).unwrap();
-        let json_object_small = Json::from_str(r#"{"a": "b"}"#).unwrap();
         let test_cases = vec![
-            (&json_bool_false,&json_bool_true),
-            (&json_integer_small, &json_integer_big),
-            (&json_double_small, &json_double_big),
-            (&json_str_small, &json_str_big),
-            (&json_array_small, &json_array_big),
-            (&json_object_small,&json_object_big),
+            ("false", "true"),
+            ("3", "5"),
+            ("3.0", "4.9"),
+            (r#""hello""#, r#""hello, world""#),
+            (r#"["a", "b"]"#, r#"["a", "c"]"#),
+            (r#"{"a": "b"}"#, r#"{"a": "c"}"#),
         ];
-        for (left, right) in test_cases {
+        for (left_str, right_str) in test_cases {
+            let left: Json = left_str.parse().unwrap();
+            let right: Json = right_str.parse().unwrap();
             assert!(left < right);
             assert_eq!(left, left);
         }
-        assert_eq!(json_null, json_null);
+        assert_eq!(Json::None, Json::None);
     }
 
     #[test]
     fn test_cmp_json_between_diff_type() {
-        let json_null = Json::from_str("null").unwrap();
-        let json_bool_true = Json::from_str("true").unwrap();
-        let json_bool_false = Json::from_str("false").unwrap();
-        let json_integer = Json::from_str("2").unwrap();
-        let json_double = Json::from_str("1.1").unwrap();
-        let json_str = Json::from_str(r#""hello, world""#).unwrap();
-        let json_array = Json::from_str(r#"["a", "b"]"#).unwrap();
-        let json_object = Json::from_str(r#"{"a": "b"}"#).unwrap();
         let test_cases = vec![
-            (&json_double, &json_integer),
-            (&json_double, &json_bool_false),
-            (&json_bool_true, &json_double),
-            (&json_bool_true, &json_integer),
-            (&json_null, &json_object),
-            (&json_integer, &json_str),
-            (&json_str, &json_object),
-            (&json_object, &json_array),
-            (&json_array, &json_bool_false),
+            ("1.5", "2"),
+            ("1.5", "false"),
+            ("true", "1.5"),
+            ("true", "2"),
+            ("null", r#"{"a": "b"}"#),
+            ("2", r#""hello, world""#),
+            (r#""hello, world""#, r#"{"a": "b"}"#),
+            (r#"{"a": "b"}"#, r#"["a", "b"]"#),
+            (r#"["a", "b"]"#, "false"),
         ];
 
-        for (left, right) in test_cases {
+        for (left_str, right_str) in test_cases {
+            let left: Json = left_str.parse().unwrap();
+            let right: Json = right_str.parse().unwrap();
             assert!(left < right);
         }
 
-        assert_eq!(json_integer, json_bool_false);
+        assert_eq!(Json::I64(2), Json::Boolean(false));
     }
 }
