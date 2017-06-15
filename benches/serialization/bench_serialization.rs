@@ -33,9 +33,9 @@ fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
     for (key, value) in map {
         let mut r = Request::new();
         r.set_cmd_type(CmdType::Put);
-        r.mut_put().set_cf("tikv".to_owned());
-        r.mut_put().set_key(key.to_vec());
-        r.mut_put().set_value(value.to_vec());
+        r.mut_put().set_cf("tikv".into());
+        r.mut_put().set_key((*key).into());
+        r.mut_put().set_value((*value).into());
         reqs.push(r);
     }
     reqs
@@ -47,7 +47,7 @@ fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
     let reqs = generate_requests(map);
     cmd.set_requests(protobuf::RepeatedField::from_vec(reqs));
     let cmd_msg = cmd.write_to_bytes().unwrap();
-    e.set_data(cmd_msg);
+    e.set_data(cmd_msg.into());
     e.write_to_bytes().unwrap()
 }
 
