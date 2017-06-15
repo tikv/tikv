@@ -233,19 +233,7 @@ impl Command {
     }
 
     pub fn priority(&self) -> CommandPri {
-        match *self {
-            Command::Get { ref ctx, .. } |
-            Command::BatchGet { ref ctx, .. } |
-            Command::Scan { ref ctx, .. } |
-            Command::Prewrite { ref ctx, .. } |
-            Command::Commit { ref ctx, .. } |
-            Command::Cleanup { ref ctx, .. } |
-            Command::Rollback { ref ctx, .. } |
-            Command::ScanLock { ref ctx, .. } |
-            Command::ResolveLock { ref ctx, .. } |
-            Command::Gc { ref ctx, .. } |
-            Command::RawGet { ref ctx, .. } => ctx.get_priority(),
-        }
+        self.get_context().get_priority()
     }
 
     pub fn need_flow_control(&self) -> bool {
