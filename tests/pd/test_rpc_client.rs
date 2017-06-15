@@ -14,7 +14,11 @@
 use std::thread;
 use std::sync::Arc;
 use std::time::Duration;
+use std::net::ToSocketAddrs;
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use grpc::EnvBuilder;
 use futures::Future;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -24,12 +28,15 @@ use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError, Region
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
 
+static PORT: AtomicUsize = AtomicUsize::new(52100);
+
 #[test]
 fn test_rpc_client() {
-    let eps = "http://127.0.0.1:52729".to_owned();
+    let port = PORT.fetch_add(1, Ordering::SeqCst) as u16;
+    let eps = format!("http://127.0.0.1:{}", port);
 
     let se = Arc::new(Service::new(vec![eps.clone()]));
-    let _server = MockServer::run("127.0.0.1:52729", se.clone(), Some(se.clone()));
+    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(se.clone()));
 
     thread::sleep(Duration::from_secs(1));
 
@@ -82,14 +89,15 @@ fn test_rpc_client() {
 
 #[test]
 fn test_reboot() {
+    let port = PORT.fetch_add(1, Ordering::SeqCst) as u16;
     let mut eps = vec![
-        "http://127.0.0.1:52730".to_owned(),
+        format!("http://127.0.0.1:{}", port),
     ];
 
     let se = Arc::new(Service::new(eps.clone()));
     let lc = Arc::new(AlreadyBootstrap::new());
 
-    let _server = MockServer::run("127.0.0.1:52730", se.clone(), Some(lc.clone()));
+    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(lc.clone()));
     thread::sleep(Duration::from_secs(1));
 
     let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
@@ -106,35 +114,40 @@ fn test_reboot() {
 
 #[test]
 fn test_validate_endpoints() {
-    let eps = vec![
-        "http://127.0.0.1:13079".to_owned(),
-        "http://127.0.0.1:23079".to_owned(),
-        "http://127.0.0.1:33079".to_owned(),
+    let addrs = vec![
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
     ];
+
+    let eps: Vec<String> =
+        addrs.iter().map(|&(ip, port)| format!("https://{}:{}", ip, port)).collect();
 
     let se = Arc::new(Service::new(eps.clone()));
     let sp = Arc::new(Split::new(eps.clone()));
 
-    let _server_a = MockServer::run("127.0.0.1:13079", se.clone(), Some(sp.clone()));
-    let _server_b = MockServer::run("127.0.0.1:23079", se.clone(), Some(sp.clone()));
-    let _server_c = MockServer::run("127.0.0.1:33079", se.clone(), Some(sp.clone()));
+    let addrs: Vec<SocketAddr> =
+        addrs.iter().map(|&to| to.to_socket_addrs().unwrap().next().unwrap()).collect();
+    let _server = MockServer::run(addrs.as_slice(), se, Some(sp));
 
+    let env = Arc::new(EnvBuilder::new().cq_count(1).name_prefix("test_pd").build());
     thread::sleep(Duration::from_secs(1));
 
-    assert!(validate_endpoints(&eps).is_err());
+    assert!(validate_endpoints(env, &eps).is_err());
 }
 
 #[test]
 fn test_retry_async() {
+    let port = PORT.fetch_add(1, Ordering::SeqCst) as u16;
     let mut eps = vec![
-        "http://127.0.0.1:63080".to_owned(),
+        format!("http://127.0.0.1:{}", port),
     ];
 
     let se = Arc::new(Service::new(eps.clone()));
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
     let lc = Arc::new(Retry::new(3));
 
-    let _server_a = MockServer::run("127.0.0.1:63080", se.clone(), Some(lc.clone()));
+    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(lc.clone()));
 
     thread::sleep(Duration::from_secs(1));
 
@@ -148,18 +161,21 @@ fn test_retry_async() {
 
 #[test]
 fn test_restart_leader() {
-    let eps = vec![
-        "http://127.0.0.1:42978".to_owned(),
-        "http://127.0.0.1:52978".to_owned(),
-        "http://127.0.0.1:62978".to_owned(),
+    let addrs = vec![
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
     ];
+
+    let eps: Vec<String> =
+        addrs.iter().map(|&(ip, port)| format!("https://{}:{}", ip, port)).collect();
 
     // Service has only one GetMembersResponse, so the leader never changes.
     let se = Arc::new(Service::new(eps.clone()));
     // Start mock servers.
-    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
-    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
-    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+    let addrs: Vec<SocketAddr> =
+        addrs.iter().map(|&to| to.to_socket_addrs().unwrap().next().unwrap()).collect();
+    let _server = MockServer::run(addrs.as_slice(), se.clone(), Some(se.clone()));
 
     thread::sleep(Duration::from_secs(2));
 
@@ -184,13 +200,9 @@ fn test_restart_leader() {
     region.wait().unwrap();
 
     // Kill servers.
-    drop(_server_a);
-    drop(_server_b);
-    drop(_server_c);
+    drop(_server);
     // Restart them again.
-    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
-    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
-    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+    let _server = MockServer::run(addrs.as_slice(), se.clone(), Some(se.clone()));
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
@@ -201,18 +213,20 @@ fn test_restart_leader() {
 
 #[test]
 fn test_change_leader_async() {
-    let mut eps = vec![
-        "http://127.0.0.1:42979".to_owned(),
-        "http://127.0.0.1:52979".to_owned(),
-        "http://127.0.0.1:62979".to_owned(),
+    let addrs = vec![
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
+        ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
     ];
+    let mut eps: Vec<String> =
+        addrs.iter().map(|&(ip, port)| format!("https://{}:{}", ip, port)).collect();
 
     let se = Arc::new(Service::new(eps.clone()));
     let lc = Arc::new(LeaderChange::new(eps.clone()));
 
-    let _server_a = MockServer::run("127.0.0.1:42979", se.clone(), Some(lc.clone()));
-    let _server_b = MockServer::run("127.0.0.1:52979", se.clone(), Some(lc.clone()));
-    let _server_c = MockServer::run("127.0.0.1:62979", se.clone(), Some(lc.clone()));
+    let addrs: Vec<SocketAddr> =
+        addrs.iter().map(|&to| to.to_socket_addrs().unwrap().next().unwrap()).collect();
+    let _server = MockServer::run(addrs.as_slice(), se.clone(), Some(lc.clone()));
 
     thread::sleep(Duration::from_secs(1));
 

@@ -59,7 +59,7 @@ impl Split {
 }
 
 impl Mocker for Split {
-    fn get_member(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
+    fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let idx = self.idx.fetch_add(1, Ordering::SeqCst);
         info!("[Split] get_member: {:?}",
               self.resps[idx % self.resps.len()]);

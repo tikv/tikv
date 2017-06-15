@@ -14,10 +14,7 @@
 use std::sync::Arc;
 use std::net::ToSocketAddrs;
 
-use futures;
 use futures::Future;
-
-use grpc::Error as GrpcError;
 use grpc::{Server as GrpcServer, ServerBuilder, RpcContext, UnarySink, RequestStream, DuplexSink,
            Environment, RpcStatus, RpcStatusCode};
 
@@ -66,7 +63,9 @@ fn hijack_unary<F, R, C: Mocker>(mock: &Mock<C>, ctx: RpcContext, sink: UnarySin
     };
 
     match resp {
-        Some(Ok(resp)) => ctx.spawn(sink.success(resp).map_err(move |err| panic!("failed to reply: {:?}", err))),
+        Some(Ok(resp)) => {
+            ctx.spawn(sink.success(resp).map_err(move |err| panic!("failed to reply: {:?}", err)))
+        }
         Some(Err(err)) => {
             let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)));
             ctx.spawn(sink.fail(status).map_err(move |err| panic!("failed to reply: {:?}", err)));

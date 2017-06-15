@@ -13,8 +13,6 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use grpc::error::GrpcError;
-
 use kvproto::pdpb::*;
 
 use super::Mocker;
@@ -45,7 +43,7 @@ impl Mocker for Retry {
             Some(Ok(GetRegionResponse::new()))
         } else {
             info!("[Retry] return Err(_)");
-            Some(Err(GrpcError::Other("Please retry")))
+            Some(Err("please retry".to_owned()))
         }
     }
 }

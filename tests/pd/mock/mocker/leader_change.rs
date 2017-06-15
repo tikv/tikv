@@ -15,9 +15,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use protobuf::RepeatedField;
-
-use grpc::error::GrpcError;
-
 use kvproto::pdpb::*;
 
 use super::Mocker;
@@ -90,16 +87,16 @@ const DEAD_NAME: &'static str = "walking_dead";
 const DEAD_URL: &'static str = "http://127.0.0.1:65534";
 
 impl Mocker for LeaderChange {
-    fn get_member(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
+    fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut r = self.r.lock().unwrap();
         let now = Instant::now();
         if now.duration_since(r.ts) > LeaderChange::get_leader_interval() {
             r.idx += 1;
             r.ts = now;
-            return Some(Err(GrpcError::Other("not leader")));
+            return Some(Err("not leader".to_owned()));
         }
 
-        info!("[LeaderChange] GetMembers: {:?}",
+        info!("[LeaderChange] get_members: {:?}",
               self.resps[r.idx % self.resps.len()]);
         Some(Ok(self.resps[r.idx % self.resps.len()].clone()))
     }
@@ -114,6 +111,6 @@ impl Mocker for LeaderChange {
                    self.resps[r.idx % self.resps.len()].get_leader());
         }
 
-        Some(Err(GrpcError::Other("not leader")))
+        Some(Err("not leader".to_owned()))
     }
 }

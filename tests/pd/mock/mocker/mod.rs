@@ -16,19 +16,20 @@ use std::result;
 use kvproto::pdpb::*;
 
 mod service;
-// mod split;
-// mod bootstrap;
-// mod leader_change;
-// mod retry;
+mod split;
+mod bootstrap;
+mod leader_change;
+mod retry;
 
-pub use grpc::Result;
 pub use self::service::Service;
-// pub use self::split::Split;
-// pub use self::bootstrap::AlreadyBootstrap;
-// pub use self::leader_change::LeaderChange;
-// pub use self::retry::Retry;
+pub use self::split::Split;
+pub use self::bootstrap::AlreadyBootstrap;
+pub use self::leader_change::LeaderChange;
+pub use self::retry::Retry;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 42;
+
+pub type Result<T> = result::Result<T, String>;
 
 pub trait Mocker {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
