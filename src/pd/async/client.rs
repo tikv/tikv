@@ -20,7 +20,7 @@ use grpc::EnvBuilder;
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::pdpb_grpc::PDClient;
+use kvproto::pdpb_grpc;
 
 use super::super::PdFuture;
 use super::super::{Result, Error, PdClient, RegionStat};
@@ -173,7 +173,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let executor = |client: &PDClient, req: pdpb::GetRegionByIDRequest| {
+        let executor = |client: &pdpb_grpc::PdClient, req: pdpb::GetRegionByIDRequest| {
             let handler = client.get_region_by_id_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|mut resp| {
@@ -206,7 +206,7 @@ impl PdClient for RpcClient {
         req.set_bytes_written(region_stat.written_bytes);
         req.set_keys_written(region_stat.written_keys);
 
-        let executor = |client: &PDClient, req: pdpb::RegionHeartbeatRequest| {
+        let executor = |client: &pdpb_grpc::PdClient, req: pdpb::RegionHeartbeatRequest| {
             let handler = client.region_heartbeat_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -226,7 +226,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
 
-        let executor = |client: &PDClient, req: pdpb::AskSplitRequest| {
+        let executor = |client: &pdpb_grpc::PdClient, req: pdpb::AskSplitRequest| {
             let handler = client.ask_split_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -246,7 +246,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_stats(stats);
 
-        let executor = |client: &PDClient, req: pdpb::StoreHeartbeatRequest| {
+        let executor = |client: &pdpb_grpc::PdClient, req: pdpb::StoreHeartbeatRequest| {
             let handler = client.store_heartbeat_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|resp| {
@@ -267,7 +267,7 @@ impl PdClient for RpcClient {
         req.set_left(left);
         req.set_right(right);
 
-        let executor = |client: &PDClient, req: pdpb::ReportSplitRequest| {
+        let executor = |client: &pdpb_grpc::PdClient, req: pdpb::ReportSplitRequest| {
             let handler = client.report_split_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|resp| {
