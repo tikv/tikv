@@ -90,7 +90,7 @@ const DEAD_NAME: &'static str = "walking_dead";
 const DEAD_URL: &'static str = "http://127.0.0.1:65534";
 
 impl Mocker for LeaderChange {
-    fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
+    fn get_member(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut r = self.r.lock().unwrap();
         let now = Instant::now();
         if now.duration_since(r.ts) > LeaderChange::get_leader_interval() {
@@ -104,7 +104,7 @@ impl Mocker for LeaderChange {
         Some(Ok(self.resps[r.idx % self.resps.len()].clone()))
     }
 
-    fn GetRegionByID(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+    fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         let mut r = self.r.lock().unwrap();
         let now = Instant::now();
         if now.duration_since(r.ts) > LeaderChange::get_leader_interval() {

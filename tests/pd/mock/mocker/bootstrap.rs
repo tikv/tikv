@@ -27,7 +27,7 @@ impl AlreadyBootstrap {
 }
 
 impl Mocker for AlreadyBootstrap {
-    fn Bootstrap(&self, _: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
+    fn bootstrap(&self, _: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
         let mut err = Error::new();
         err.set_field_type(ErrorType::ALREADY_BOOTSTRAPPED);
         err.set_message("cluster is already bootstrapped".to_owned());
@@ -42,7 +42,7 @@ impl Mocker for AlreadyBootstrap {
         Some(Ok(resp))
     }
 
-    fn IsBootstrapped(&self, _: &IsBootstrappedRequest) -> Option<Result<IsBootstrappedResponse>> {
+    fn is_bootstrapped(&self, _: &IsBootstrappedRequest) -> Option<Result<IsBootstrappedResponse>> {
         let mut header = ResponseHeader::new();
         header.set_cluster_id(DEFAULT_CLUSTER_ID);
 
