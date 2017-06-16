@@ -36,7 +36,7 @@ fn test_rpc_client() {
     let eps = format!("http://127.0.0.1:{}", port);
 
     let se = Arc::new(Service::new(vec![eps.clone()]));
-    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(se.clone()));
+    let _server = MockServer::run::<_, Service>(("127.0.0.1", port), se.clone(), None);
 
     thread::sleep(Duration::from_secs(1));
 
@@ -97,7 +97,7 @@ fn test_reboot() {
     let se = Arc::new(Service::new(eps.clone()));
     let al = Arc::new(AlreadyBootstrap::new());
 
-    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(al.clone()));
+    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(al));
     thread::sleep(Duration::from_secs(1));
 
     let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
@@ -175,7 +175,7 @@ fn test_restart_leader() {
     // Start mock servers.
     let addrs: Vec<SocketAddr> =
         addrs.iter().map(|&to| to.to_socket_addrs().unwrap().next().unwrap()).collect();
-    let _server = MockServer::run(addrs.as_slice(), se.clone(), Some(se.clone()));
+    let _server = MockServer::run::<_, Service>(addrs.as_slice(), se.clone(), None);
 
     thread::sleep(Duration::from_secs(2));
 
@@ -202,7 +202,7 @@ fn test_restart_leader() {
     // Kill servers.
     drop(_server);
     // Restart them again.
-    let _server = MockServer::run(addrs.as_slice(), se.clone(), Some(se.clone()));
+    let _server = MockServer::run::<_, Service>(addrs.as_slice(), se.clone(), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
