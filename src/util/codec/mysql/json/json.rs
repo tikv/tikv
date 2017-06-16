@@ -14,7 +14,7 @@
 // FIXME(shirly): remove following later
 #![allow(dead_code)]
 
-use super::Result;
+use super::super::Result;
 use std::cmp::Ordering;
 use std::{self, str, f64};
 use std::collections::BTreeMap;
