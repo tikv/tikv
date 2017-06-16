@@ -55,12 +55,16 @@ impl Server {
 
 fn hijack_unary<F, R, C: Mocker>(mock: &Mock<C>, ctx: RpcContext, sink: UnarySink<R>, f: F)
     where R: Send + 'static,
-          F: FnOnce(&Mocker) -> Option<Result<R>>
+          F: Fn(&Mocker) -> Option<Result<R>>
 {
-    let resp = match mock.case {
+    let mut resp = match mock.case {
         Some(ref case) => f(case.as_ref()),
         None => f(mock.handler.as_ref()),
     };
+
+    if resp.is_none() {
+        resp = f(mock.handler.as_ref())
+    }
 
     match resp {
         Some(Ok(resp)) => {
@@ -78,6 +82,7 @@ fn hijack_unary<F, R, C: Mocker>(mock: &Mock<C>, ctx: RpcContext, sink: UnarySin
     }
 }
 
+#[derive(Debug)]
 struct Mock<C: Mocker> {
     handler: Arc<Service>,
     case: Option<Arc<C>>,

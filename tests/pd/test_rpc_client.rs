@@ -95,9 +95,9 @@ fn test_reboot() {
     ];
 
     let se = Arc::new(Service::new(eps.clone()));
-    let lc = Arc::new(AlreadyBootstrap::new());
+    let al = Arc::new(AlreadyBootstrap::new());
 
-    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(lc.clone()));
+    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(al.clone()));
     thread::sleep(Duration::from_secs(1));
 
     let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
@@ -121,7 +121,7 @@ fn test_validate_endpoints() {
     ];
 
     let eps: Vec<String> =
-        addrs.iter().map(|&(ip, port)| format!("https://{}:{}", ip, port)).collect();
+        addrs.iter().map(|&(ip, port)| format!("http://{}:{}", ip, port)).collect();
 
     let se = Arc::new(Service::new(eps.clone()));
     let sp = Arc::new(Split::new(eps.clone()));
@@ -145,9 +145,9 @@ fn test_retry_async() {
 
     let se = Arc::new(Service::new(eps.clone()));
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
-    let lc = Arc::new(Retry::new(3));
+    let retry = Arc::new(Retry::new(3));
 
-    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(lc.clone()));
+    let _server = MockServer::run(("127.0.0.1", port), se.clone(), Some(retry));
 
     thread::sleep(Duration::from_secs(1));
 
@@ -168,7 +168,7 @@ fn test_restart_leader() {
     ];
 
     let eps: Vec<String> =
-        addrs.iter().map(|&(ip, port)| format!("https://{}:{}", ip, port)).collect();
+        addrs.iter().map(|&(ip, port)| format!("http://{}:{}", ip, port)).collect();
 
     // Service has only one GetMembersResponse, so the leader never changes.
     let se = Arc::new(Service::new(eps.clone()));
@@ -219,7 +219,7 @@ fn test_change_leader_async() {
         ("127.0.0.1", PORT.fetch_add(1, Ordering::SeqCst) as u16),
     ];
     let mut eps: Vec<String> =
-        addrs.iter().map(|&(ip, port)| format!("https://{}:{}", ip, port)).collect();
+        addrs.iter().map(|&(ip, port)| format!("http://{}:{}", ip, port)).collect();
 
     let se = Arc::new(Service::new(eps.clone()));
     let lc = Arc::new(LeaderChange::new(eps.clone()));
