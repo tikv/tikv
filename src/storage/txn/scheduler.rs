@@ -34,6 +34,8 @@
 use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
+use std::thread;
 
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
@@ -431,6 +433,10 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Ok(val) => ProcessResult::Value { value: val },
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
             }
+        }
+        Command::Pause { duration, .. } => {
+            thread::sleep(Duration::from_millis(duration));
+            ProcessResult::Res
         }
         _ => panic!("unsupported read command"),
     };
