@@ -821,12 +821,14 @@ fn run_raft_server(pd_client: RpcClient,
                    total_mem: u64) {
     info!("tikv server config: {:?}", cfg);
 
-    let store_path = &cfg.storage.path;
-    let mut lock_path = Path::new(store_path).to_path_buf();
-    lock_path.push("LOCK");
+    let store_path = Path::new(&cfg.storage.path);
+    let lock_path = store_path.join(Path::new("LOCK"));
+    let db_path = store_path.join(Path::new("db"));
+    let snap_path = store_path.join(Path::new("snap"));
+
     let f = File::create(lock_path).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     if f.try_lock_exclusive().is_err() {
-        panic!("lock {} failed, maybe another instance is using this directory.",
+        panic!("lock {:?} failed, maybe another instance is using this directory.",
                store_path);
     }
 
@@ -838,7 +840,6 @@ fn run_raft_server(pd_client: RpcClient,
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
     // Create engine, storage.
-    let path = Path::new(&cfg.storage.path).to_path_buf();
     let db_opts = get_rocksdb_db_option(config);
     let cfs_opts =
         vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
@@ -848,8 +849,6 @@ fn run_raft_server(pd_client: RpcClient,
                                           get_rocksdb_write_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_RAFT,
                                           get_rocksdb_raftlog_cf_option(config, total_mem))];
-    let mut db_path = path.clone();
-    db_path.push("db");
     let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
                                                            .unwrap(),
                                                        db_opts,
@@ -862,10 +861,7 @@ fn run_raft_server(pd_client: RpcClient,
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let mut snap_path = path.clone();
-    snap_path.push("snap");
-    let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = SnapManager::new(snap_path,
+    let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
                                     cfg.raft_store.use_sst_file_snapshot);
     let mut server = Server::new(&cfg,
