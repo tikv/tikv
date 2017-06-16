@@ -687,6 +687,7 @@ impl Scheduler {
     /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
     fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();
+        SCHED_COMMANDS_PRI_COUNTER_VEC.with_label_values(&[cmd.priority_tag()]).inc();
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
         let lock = gen_command_lock(&self.latches, &cmd);

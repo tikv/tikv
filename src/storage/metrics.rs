@@ -64,6 +64,13 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
+    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: CounterVec =
+        register_counter_vec!(
+            "tikv_scheduler_commands_pri_total",
+            "Total count of difference priority commands",
+            &["priority"]
+        ).unwrap();
+
     pub static ref KV_COMMAND_KEYREAD_HISTOGRAM_VEC: HistogramVec =
         register_histogram_vec!(
             "tikv_scheduler_kv_command_key_read",

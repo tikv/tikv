@@ -236,6 +236,14 @@ impl Command {
         self.get_context().get_priority()
     }
 
+    pub fn priority_tag(&self) -> &'static str {
+        match self.get_context().get_priority() {
+            CommandPri::Low => "low",
+            CommandPri::Normal => "normal",
+            CommandPri::High => "high",
+        }
+    }
+
     pub fn need_flow_control(&self) -> bool {
         !self.readonly() && self.priority() != CommandPri::High
     }
