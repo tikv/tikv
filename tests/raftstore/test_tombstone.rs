@@ -78,18 +78,19 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(existing_kvs[1].0, keys::region_state_key(r1));
 
     let mut ident = StoreIdent::new();
-    ident.set_cluster_id(cluster.id());
-    ident.set_store_id(2);
-    assert_eq!(ident.write_to_bytes().unwrap(), existing_kvs[0].1);
+    ident.merge_from_bytes(&existing_kvs[0].1).unwrap();
+    assert_eq!(ident.get_store_id(), 2);
+    assert_eq!(ident.get_cluster_id(), cluster.id());
 
-    let mut state: RegionLocalState =
-        engine_3.get_msg(&keys::region_state_key(r1)).unwrap().unwrap();
-    state.set_state(PeerState::Tombstone);
-    if state.write_to_bytes().unwrap() != existing_kvs[1].1 {
-        let mut existing_state = RegionLocalState::new();
-        existing_state.merge_from_bytes(&existing_kvs[1].1).unwrap();
-        panic!("{:?} != {:?}", state, existing_state);
-    }
+    let mut state = RegionLocalState::new();
+    state.merge_from_bytes(&existing_kvs[1].1).unwrap();
+    assert_eq!(state.get_state(), PeerState::Tombstone);
+
+    // The peer 2 may be destroyed by:
+    // 1. Apply the ConfChange RemovePeer command, the tombstone ConfVer is 4
+    // 2. Receive a GC command before applying 1, the tombstone ConfVer is 3
+    let conf_ver = state.get_region().get_region_epoch().get_conf_ver();
+    assert!(conf_ver == 4 || conf_ver == 3);
 
     // Send a stale raft message to peer (2, 2)
     let mut raft_msg = raft_serverpb::RaftMessage::new();
