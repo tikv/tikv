@@ -455,7 +455,7 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 }
 
 #[inline]
-fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+pub fn inflate_with_col<'a, T>(eval: &mut Evaluator,
                            ctx: &EvalContext,
                            values: &RowColsDict,
                            cols: T,
@@ -497,10 +497,10 @@ fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
     chunks.last_mut().unwrap()
 }
 
-struct SortRow {
-    key: Vec<Datum>,
-    handle: i64,
-    data: RowColsDict,
+pub struct SortRow {
+    pub key: Vec<Datum>,
+    pub handle: i64,
+    pub data: RowColsDict,
     order_cols: Rc<Vec<ByItem>>,
     ctx: Rc<EvalContext>,
     err: Rc<RefCell<Option<String>>>,
@@ -561,8 +561,8 @@ impl SortRow {
     }
 }
 
-struct TopNHeap {
-    rows: BinaryHeap<SortRow>,
+pub struct TopNHeap {
+    pub rows: BinaryHeap<SortRow>,
     limit: usize,
     err: Rc<RefCell<Option<String>>>,
 }
@@ -570,7 +570,7 @@ struct TopNHeap {
 const HEAP_MAX_CAPACITY: usize = 1024;
 
 impl TopNHeap {
-    fn new(limit: usize) -> Result<TopNHeap> {
+    pub fn new(limit: usize) -> Result<TopNHeap> {
         if limit == usize::MAX {
             return Err(box_err!("invalid limit"));
         }
@@ -583,14 +583,14 @@ impl TopNHeap {
     }
 
     #[inline]
-    fn check_err(&self) -> Result<()> {
+    pub fn check_err(&self) -> Result<()> {
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
             return Err(box_err!(err_msg.to_owned()));
         }
         Ok(())
     }
 
-    fn try_add_row(&mut self,
+    pub fn try_add_row(&mut self,
                    handle: i64,
                    order_cols: Rc<Vec<ByItem>>,
                    ctx: Rc<EvalContext>,
@@ -612,7 +612,7 @@ impl TopNHeap {
         self.check_err()
     }
 
-    fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
+    pub fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
         let sorted_data = self.rows.into_sorted_vec();
         // check is needed here since err may caused by any call of cmp
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
@@ -644,7 +644,6 @@ impl PartialOrd for SortRow {
         Some(self.cmp(rhs))
     }
 }
-
 
 pub struct SelectContextCore {
     ctx: Rc<EvalContext>,
@@ -941,7 +940,6 @@ fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
     }
     Ok(())
 }
-
 
 pub struct SelectContext<'a> {
     snap: SnapshotStore<'a>,
