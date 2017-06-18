@@ -12,5 +12,7 @@
 // limitations under the License.
 
 pub mod json;
+mod path_expr;
+mod functions;
 
 pub use self::json::{Json, JsonEncoder, JsonDecoder};

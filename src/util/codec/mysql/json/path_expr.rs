@@ -1,0 +1,171 @@
+// Copyright 2017 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// From MySQL 5.7, JSON path expression grammar:
+//     pathExpression ::= scope (pathLeg)*
+//     scope ::= [ columnReference ] '$'
+//     columnReference ::= // omit...
+//     pathLeg ::= member | arrayLocation | '**'
+//     member ::= '.' (keyName | '*')
+//     arrayLocation ::= '[' (non-negative-integer | '*') ']'
+//     keyName ::= ECMAScript-identifier | ECMAScript-string-literal
+//
+// And some implementation limits in MySQL 5.7:
+//     1) columnReference in scope must be empty now;
+//     2) double asterisk(**) could not be last leg;
+//
+// Examples:
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.a') -> "b"
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c') -> [1, "2"]
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.a', '$.c') -> ["b", [1, "2"]]
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[0]') -> 1
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[2]') -> NULL
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[*]') -> [1, "2"]
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
+
+// FIXME: remove following later
+#![allow(dead_code)]
+
+use std::ops::Index;
+use std::ascii::AsciiExt;
+use regex::Regex;
+use super::super::Result;
+use super::functions::unquote_string;
+
+pub const PATH_EXPR_ASTERISK: &'static str = "*";
+
+// [a-zA-Z_][a-zA-Z0-9_]* matches any identifier;
+// "[^"\\]*(\\.[^"\\]*)*" matches any string literal which can carry escaped quotes.
+const PATH_EXPR_LEG_RE_STR: &'static str = r#"(\.\s*(?:(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)|(?P<asterisk>\*)|(?P<quote_key>"[^"\\]*(\\.[^"\\]*)*"))|(?P<index>\[\s*([0-9]+|\*)\s*\])|(?P<double_asterisk>\*\*))"#;
+
+#[derive(Clone, Debug)]
+pub enum PathLeg {
+    /// `Key` indicates the path leg  with '.key'.
+    Key(String),
+    /// `Index` indicates the path leg with form '[number]'.
+    Index(i32),
+    /// `DoubleAsterisk` indicates the path leg with form '**'.
+    DoubleAsterisk,
+}
+
+// ArrayIndexAsterisk is for parsing '*' into a number.
+// we need this number represent "all".
+pub const PATH_EXPR_ARRAY_INDEX_ASTERISK: i32 = -1;
+
+pub type PathExpressionFlag = u8;
+
+const PATH_EXPRESSION_CONTAINS_ASTERISK: PathExpressionFlag = 0x01;
+const PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK: PathExpressionFlag = 0x02;
+
+pub fn contains_any_asterisk(flags: PathExpressionFlag) -> bool {
+    let mut f = flags & PATH_EXPRESSION_CONTAINS_ASTERISK;
+    f &= PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK;
+    f != 0
+}
+
+pub struct PathExpression {
+    pub legs: Vec<PathLeg>,
+    pub flags: PathExpressionFlag,
+}
+
+impl PathExpression {
+    pub fn pop_one_leg(&self) -> (PathLeg, PathExpression) {
+        let mut pe = PathExpression {
+            legs: self.legs[1..].to_vec(),
+            flags: 0,
+        };
+        for leg in &pe.legs {
+            match *leg {
+                PathLeg::Index(i) if i == PATH_EXPR_ARRAY_INDEX_ASTERISK => {
+                    pe.flags |= PATH_EXPRESSION_CONTAINS_ASTERISK
+                }
+                PathLeg::Key(ref key) if key == "*" => {
+                    pe.flags |= PATH_EXPRESSION_CONTAINS_ASTERISK
+                }
+                PathLeg::DoubleAsterisk => pe.flags |= PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                _ => {}
+            }
+        }
+        (self.legs[0].clone(), pe)
+    }
+}
+
+/// Parses a JSON path expression. Returns a `PathExpression`
+/// object which can be used in `JSON_EXTRACT`, `JSON_SET` and so on.
+pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
+    // Find the position of first '$'. If any no-blank characters in
+    // path_expr[0: dollarIndex], return an error.
+    let dollar_index = match path_expr.find('$') {
+        Some(i) => i,
+        None => return Err(box_err!("Invalid JSON path: {}", path_expr)),
+    };
+    if path_expr.index(0..dollar_index).char_indices().any(|(_, c)| !c.is_ascii_whitespace()) {
+        return Err(box_err!("Invalid JSON path: {}", path_expr));
+    }
+
+    let expr = path_expr.index(0..dollar_index)
+        .trim_left_matches(|c| char::is_ascii_whitespace(&c));
+
+    let re = Regex::new(PATH_EXPR_LEG_RE_STR).unwrap();
+    let mut legs = vec![];
+    let mut flags = PathExpressionFlag::default();
+    let mut last_end = 0;
+    for (start, end) in re.find_iter(expr) {
+        // Check all characters between two legs are blank.
+        if expr.index(last_end..start).char_indices().any(|(_, c)| !c.is_ascii_whitespace()) {
+            return Err(box_err!("Invalid JSON path: {}", path_expr));
+        }
+        last_end = end;
+
+        let next_char = expr.index(start..).chars().next().unwrap();
+        if next_char == '[' {
+            // The leg is an index of a JSON array.
+            let leg = expr[start + 1..end].trim_matches(|c| char::is_ascii_whitespace(&c));
+            let index_str = leg[0..leg.len() - 1].trim_matches(|c| char::is_ascii_whitespace(&c));
+            let index;
+            if index_str == PATH_EXPR_ASTERISK {
+                flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
+                index = PATH_EXPR_ARRAY_INDEX_ASTERISK
+            } else {
+                index = box_try!(index_str.parse());
+            }
+            legs.push(PathLeg::Index(index))
+        } else if next_char == '.' {
+            // The leg is a key of a JSON object.
+            let mut key =
+                expr[start + 1..end].trim_matches(|c| char::is_ascii_whitespace(&c)).to_owned();
+            if key == PATH_EXPR_ASTERISK {
+                flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
+            } else if key.chars().next().unwrap() == '"' {
+                // We need unquote the origin string.
+                key = try!(unquote_string(key[1..key.len() - 1].as_bytes()));
+            }
+            legs.push(PathLeg::Key(key))
+        } else {
+            // The leg is '**'.
+            flags |= PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK;
+            legs.push(PathLeg::DoubleAsterisk);
+        }
+    }
+    if !legs.is_empty() {
+        if let PathLeg::DoubleAsterisk = *legs.last().unwrap() {
+            // The last leg of a path expression cannot be '**'.
+            return Err(box_err!("Invalid JSON path: {}", path_expr));
+        }
+    }
+    Ok(PathExpression {
+        legs: legs,
+        flags: flags,
+    })
+}
