@@ -47,32 +47,65 @@ pub fn unquote_string(s: &[u8]) -> Result<String> {
     let mut ret = String::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
-        if char::from(s[i]) == '\\' {
-            if i + 1 == s.len() {
+        let c = char::from(s[i]);
+        if c == '\\' {
+            i += 1;
+            if i == s.len() {
                 return Err(box_err!("Missing a closing quotation mark in string"));
             }
-            match char::from(s[i]) {
-                '"' => ret.push('"'),
-                'b' => ret.push('\x08'),
-                'f' => ret.push('\x0C'),
-                'n' => ret.push('\x0A'),
-                'r' => ret.push('\x0D'),
-                't' => ret.push('\x0B'),
-                '\\' => ret.push('\\'),
-                'u' => {
-                    if i + 4 >= s.len() {
-                        return Err(box_err!("Invalid unicode"));
-                    }
-                    let unicode = try!(String::from_utf8(s[i..i + 5].to_vec()));
-                    ret += &unicode;
-                    i += 4;
+            let c = char::from(s[i]);
+            match c {
+                '"' => {
+                    ret.push('"');
+                    i += 1;
                 }
-                _ => ret.push(char::from(s[i])),
+                'b' => {
+                    ret.push('\x08');
+                    i += 1;
+                }
+                'f' => {
+                    ret.push('\x0C');
+                    i += 1;
+                }
+                'n' => {
+                    ret.push('\x0A');
+                    i += 1;
+                }
+                'r' => {
+                    ret.push('\x0D');
+                    i += 1;
+                }
+                't' => {
+                    ret.push('\x0B');
+                    i += 1;
+                }
+                '\\' => {
+                    ret.push('\\');
+                    i += 1;
+                }
+                'u' => {
+                    if i + 1 >= s.len() {
+                        return Err(box_err!("Invalid utf8"));
+                    }
+                    i += 1;
+                    // calculate how many following bytes are there for this utf8 code point.
+                    let len = calc_utf8_bytes_len(s[i]);
+                    if i + len > s.len() {
+                        return Err(box_err!("Invalid utf8"));
+                    }
+                    let unicode = try!(String::from_utf8(s[i..i + len].to_vec()));
+                    ret += &unicode;
+                    i += len;
+                }
+                _ => {
+                    ret.push(c);
+                    i += 1;
+                }
             }
         } else {
-            ret.push(char::from(s[i]))
+            ret.push(c);
+            i += 1;
         }
-        i += 1;
     }
     Ok(ret)
 }
@@ -145,4 +178,84 @@ fn get_sorted_keys(m: &BTreeMap<String, Json>) -> Vec<String> {
     }
     keys.sort();
     keys
+}
+
+fn calc_utf8_bytes_len(b: u8) -> usize {
+    let mut len = 0;
+    let mut b = b;
+    loop {
+        if b & 0x80 == 0 {
+            return len;
+        } else {
+            len += 1;
+            // utf8mb4 takes at most 4 bytes for one utf8 char.
+            if len == 4 {
+                return len;
+            }
+        }
+        b <<= 1;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_get_sorted_keys() {
+        let mut m = BTreeMap::new();
+        let keys = ["a", "b", "c"];
+        for k in &keys {
+            m.insert(String::from(*k), Json::None);
+        }
+        let expected: Vec<_> = keys.iter().map(|x| String::from(*x)).collect();
+        assert_eq!(super::get_sorted_keys(&m), expected);
+    }
+
+    #[test]
+    fn test_calc_utf8_bytes_len() {
+        let b = 229;
+        assert_eq!(calc_utf8_bytes_len(b), 3);
+    }
+
+    #[test]
+    fn test_unquote_string() {
+        let mut test_cases = vec![// [\, b] => [\b]
+                                  (vec![0x5c, 0x62], true, Some("\x08")),
+                                  // [\, f] => [\f]
+                                  (vec![0x5c, 0x66], true, Some("\x0C")),
+                                  // [\, n] => [\n]
+                                  (vec![0x5c, 0x6E], true, Some("\x0A")),
+                                  // [\, r] => [\r]
+                                  (vec![0x5c, 0x72], true, Some("\x0D")),
+                                  // [\, t] => [\t]
+                                  (vec![0x5c, 0x74], true, Some("\x0B")),
+                                  // [\, \] => [\\]
+                                  (vec![0x5c, 0x5c], true, Some("\x5c")),
+                                  (vec![0x5c, 0x75, 229, 165, 189], true, Some("好")),
+                                  (vec![0x5c, 0x75, 229, 165, 189, 0x0], true, Some("好\x00")),
+                                  (vec![0x5b], true, Some("[")),
+                                  // invalid input
+                                  (vec![0x5c], false, None),
+                                  (vec![0x5c, 0x75, 229], false, None)];
+        for (i, (input, no_error, expected)) in test_cases.drain(..).enumerate() {
+            let r = unquote_string(&input[..]);
+            if no_error {
+                assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
+                let got = r.unwrap();
+                let expected = String::from(expected.unwrap());
+                assert_eq!(got,
+                           expected,
+                           "#{} expect {:?} but got {:?}",
+                           i,
+                           expected,
+                           got);
+            } else {
+                assert!(r.is_err(), "#{} expected error but got {:?}", i, r);
+            }
+        }
+    }
+
+    #[test]
+    fn test_json_extract() {}
 }
