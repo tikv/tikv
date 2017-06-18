@@ -32,11 +32,18 @@ impl Json {
             return None;
         }
         if path_expr_list.len() == 1 && elem_list.len() == 1 {
-            // If path_expr contains asterisks, elem_list.length won't be 1
+            // If path_expr contains asterisks, elem_list.len() won't be 1
             // even if path_expr_list.len() equals to 1.
             return Some(elem_list.remove(0));
         }
         Some(Json::Array(elem_list))
+    }
+
+    pub fn unquote(&self) -> Result<String> {
+        match *self {
+            Json::String(ref s) => unquote_string(s.as_bytes()),
+            _ => Ok(format!("{:?}", self)),
+        }
     }
 }
 
@@ -145,6 +152,7 @@ pub fn extract_json(j: Json, path_expr: &PathExpression) -> Vec<Json> {
             }
         }
         PathLeg::DoubleAsterisk => {
+            ret.append(&mut extract_json(j.clone(), &sub_path_expr));
             match j {
                 Json::Array(array) => {
                     for child in array {
@@ -200,6 +208,9 @@ fn calc_utf8_bytes_len(b: u8) -> usize {
 #[cfg(test)]
 mod test {
     use super::*;
+    use super::super::path_expr::{PathExpressionFlag, PATH_EXPR_ARRAY_INDEX_ASTERISK,
+                                  PATH_EXPRESSION_CONTAINS_ASTERISK,
+                                  PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK};
 
     #[test]
     fn test_get_sorted_keys() {
@@ -257,5 +268,89 @@ mod test {
     }
 
     #[test]
-    fn test_json_extract() {}
+    fn test_json_extract() {
+        let mut m = BTreeMap::new();
+        m.insert(String::from("a"), Json::String(String::from("a1")));
+        m.insert(String::from("b"), Json::Double(3.14));
+        m.insert(String::from("c"), Json::Boolean(false));
+        let mut mm = BTreeMap::new();
+        mm.insert(String::from("g"), Json::Object(m.clone()));
+        let mut test_cases =
+            vec![// no path expression
+                 (Json::None, vec![], None),
+                 // Index
+                 (Json::Array(vec![Json::Boolean(true), Json::I64(2017)]),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::Index(0)],
+                           flags: PathExpressionFlag::default(),
+                       }],
+                  Some(Json::Boolean(true))),
+                 (Json::Array(vec![Json::Boolean(true), Json::I64(2017)]),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                           flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
+                       }],
+                  Some(Json::Array(vec![Json::Boolean(true), Json::I64(2017)]))),
+                 (Json::Array(vec![Json::Boolean(true), Json::I64(2017)]),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::Index(2)],
+                           flags: PathExpressionFlag::default(),
+                       }],
+                  None),
+                 (Json::Double(6.18),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::Index(0)],
+                           flags: PathExpressionFlag::default(),
+                       }],
+                  Some(Json::Double(6.18))),
+                 // Key
+                 (Json::Object(m.clone()),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::Key(String::from("c"))],
+                           flags: PathExpressionFlag::default(),
+                       }],
+                  Some(Json::Boolean(false))),
+                 (Json::Object(m.clone()),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::Key(String::from(PATH_EXPR_ASTERISK))],
+                           flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
+                       }],
+                  Some(Json::Array(vec![Json::String(String::from("a1")),
+                                        Json::Double(3.14),
+                                        Json::Boolean(false)]))),
+                 (Json::Object(m.clone()),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::Key(String::from("d"))],
+                           flags: PathExpressionFlag::default(),
+                       }],
+                  None),
+                 // Double asterisks
+                 (Json::I64(21),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                           flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                       }],
+                  None),
+                 (Json::Object(mm),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                           flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                       }],
+                  Some(Json::Boolean(false))),
+                 (Json::Array(vec![Json::Object(m), Json::Boolean(true)]),
+                  vec![PathExpression {
+                           legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                           flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                       }],
+                  Some(Json::Boolean(false)))];
+        for (i, (j, exprs, expected)) in test_cases.drain(..).enumerate() {
+            let got = j.extract(&exprs[..]);
+            assert_eq!(got,
+                       expected,
+                       "#{} expect {:?}, but got {:?}",
+                       i,
+                       expected,
+                       got);
+        }
+    }
 }

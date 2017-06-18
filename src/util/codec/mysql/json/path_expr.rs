@@ -66,8 +66,8 @@ pub const PATH_EXPR_ARRAY_INDEX_ASTERISK: i32 = -1;
 
 pub type PathExpressionFlag = u8;
 
-const PATH_EXPRESSION_CONTAINS_ASTERISK: PathExpressionFlag = 0x01;
-const PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK: PathExpressionFlag = 0x02;
+pub const PATH_EXPRESSION_CONTAINS_ASTERISK: PathExpressionFlag = 0x01;
+pub const PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK: PathExpressionFlag = 0x02;
 
 pub fn contains_any_asterisk(flags: PathExpressionFlag) -> bool {
     ((flags & PATH_EXPRESSION_CONTAINS_ASTERISK) != 0) ||
