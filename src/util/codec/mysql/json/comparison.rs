@@ -13,10 +13,11 @@
 
 // FIXME(shirly): remove following later
 #![allow(dead_code)]
+use std::cmp::Ordering;
+use std::f64;
+
 use super::super::Result;
 use super::{Json, JsonEncoder, ERR_CONVERT_FAILED};
-use std::f64;
-use std::cmp::Ordering;
 
 const PRECEDENCE_BLOB: i32 = -1;
 const PRECEDENCE_BIT: i32 = -2;

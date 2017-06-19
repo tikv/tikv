@@ -11,15 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Json;
-use std::{str, f64};
-use std::collections::BTreeMap;
-use serde_json;
-use std::fmt;
 use util::codec::Error;
-use std::str::FromStr;
 use serde::ser::{Serialize, Serializer, SerializeTuple, SerializeMap};
 use serde::de::{self, Deserialize, Deserializer, Visitor, SeqAccess, MapAccess};
+use serde_json;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::{str, f64};
+use std::str::FromStr;
+
+use super::Json;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
@@ -34,7 +35,7 @@ impl FromStr for Json {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match serde_json::from_str(s) {
             Ok(value) => Ok(value),
-            Err(e) => Err(invalid_type!("Illegal Json text:{:?}", e)),
+            Err(e) => Err(invalid_type!("Illegal Json text: {:?}", e)),
         }
     }
 }

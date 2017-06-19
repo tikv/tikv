@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::super::Result;
-use super::{Json, ERR_CONVERT_FAILED};
+
+use byteorder::{ReadBytesExt, WriteBytesExt};
 use std::{str, f64};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use util::codec::number::{NumberDecoder, NumberEncoder};
-use byteorder::{ReadBytesExt, WriteBytesExt};
+
+use super::super::Result;
+use super::{Json, ERR_CONVERT_FAILED};
 
 const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
