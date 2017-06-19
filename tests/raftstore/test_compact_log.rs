@@ -24,7 +24,6 @@ use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
-use super::server::new_server_cluster;
 
 fn get_msg_cf_or_default<M>(engine: &DB, cf: &str, key: &[u8]) -> M
     where M: protobuf::Message + protobuf::MessageStatic

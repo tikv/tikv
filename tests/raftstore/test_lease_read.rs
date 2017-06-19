@@ -33,7 +33,6 @@ use tikv::util::{escape, HandyRwLock};
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
-use super::server::new_server_cluster;
 use super::transport_simulate::*;
 use super::util::*;
 
