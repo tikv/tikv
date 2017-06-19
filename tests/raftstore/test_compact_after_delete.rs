@@ -51,13 +51,6 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_server_compact_after_delete() {
-    let count = 1;
-    let mut cluster = new_server_cluster(0, count);
-    test_compact_after_delete(&mut cluster);
-}
-
-#[test]
 fn test_node_compact_after_delete() {
     let count = 1;
     let mut cluster = new_node_cluster(0, count);
