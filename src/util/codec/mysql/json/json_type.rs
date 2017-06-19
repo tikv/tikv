@@ -13,15 +13,17 @@
 
 use super::Json;
 
-const JSON_TYPE_BOOLEAN: &[u8] = b"BOOLEAN";
-const JSON_TYPE_NONE: &[u8] = b"NULL";
-const JSON_TYPE_INTEGER: &[u8] = b"INTEGER";
-const JSON_TYPE_DOUBLE: &[u8] = b"DOUBLE";
-const JSON_TYPE_STRING: &[u8] = b"STRING";
-const JSON_TYPE_OBJECT: &[u8] = b"OBJECT";
-const JSON_TYPE_ARRAY: &[u8] = b"ARRAY";
+const JSON_TYPE_BOOLEAN: &'static [u8] = b"BOOLEAN";
+const JSON_TYPE_NONE: &'static [u8] = b"NULL";
+const JSON_TYPE_INTEGER: &'static [u8] = b"INTEGER";
+const JSON_TYPE_DOUBLE: &'static [u8] = b"DOUBLE";
+const JSON_TYPE_STRING: &'static [u8] = b"STRING";
+const JSON_TYPE_OBJECT: &'static [u8] = b"OBJECT";
+const JSON_TYPE_ARRAY: &'static [u8] = b"ARRAY";
 
 impl Json {
+    // json_type is the implementation for
+    // https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-type
     pub fn json_type(&self) -> &[u8] {
         match *self {
             Json::Object(_) => JSON_TYPE_OBJECT,
@@ -38,6 +40,7 @@ impl Json {
 #[cfg(test)]
 mod test {
     use super::*;
+
     #[test]
     fn test_type() {
         let test_cases = vec![
