@@ -11,7 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Result;
+// FIXME(shirly): remove following later
+#![allow(dead_code)]
+
+use super::super::Result;
+use std::cmp::Ordering;
 use std::{self, str, f64};
 use std::collections::BTreeMap;
 use serde_json;
@@ -31,46 +35,58 @@ const TYPE_CODE_I64: u8 = 0x09;
 const TYPE_CODE_DOUBLE: u8 = 0x0b;
 const TYPE_CODE_STRING: u8 = 0x0c;
 
+const PRECEDENCE_BLOB: i32 = -1;
+const PRECEDENCE_BIT: i32 = -2;
+const PRECEDENCE_OPAQUE: i32 = -3;
+const PRECEDENCE_DATETIME: i32 = -4;
+const PRECEDENCE_TIME: i32 = -5;
+const PRECEDENCE_DATE: i32 = -6;
+const PRECEDENCE_BOOLEAN: i32 = -7;
+const PRECEDENCE_ARRAY: i32 = -8;
+const PRECEDENCE_OBJECT: i32 = -9;
+const PRECEDENCE_STRING: i32 = -10;
+const PRECEDENCE_NUMBER: i32 = -11;
+const PRECEDENCE_NULL: i32 = -12;
+
 const JSON_LITERAL_NIL: u8 = 0x00;
 const JSON_LITERAL_TRUE: u8 = 0x01;
 const JSON_LITERAL_FALSE: u8 = 0x02;
 
-const LENGTH_TYPE: usize = 1;
-const LENGTH_LITERAL: usize = 1;
-const LENGTH_U16: usize = 2;
-const LENGTH_U32: usize = 4;
-const LENGTH_I64: usize = 8;
-const LENGTH_KEY_ENTRY: usize = LENGTH_U32 + LENGTH_U16;
-const LENGTH_VALUE_ENTRY: usize = LENGTH_TYPE + LENGTH_U32;
+const TYPE_LEN: usize = 1;
+const LITERAL_LEN: usize = 1;
+const U16_LEN: usize = 2;
+const U32_LEN: usize = 4;
+const NUMBER_LEN: usize = 8;
+const KEY_ENTRY_LEN: usize = U32_LEN + U16_LEN;
+const VALUE_ENTRY_LEN: usize = TYPE_LEN + U32_LEN;
+const ELEMENT_COUNT_LEN: usize = U32_LEN;
+const SIZE_LEN: usize = U32_LEN;
 
-// Json implement type json used in tikv, it specifies the following
-// implementations:
-// 1. Serialize `json` values into binary representation, and reading values
-//  back from the binary representation.
-// 2. Serialize `json` values into readable string representation, and reading
-// values back from string representation.
-// The binary Json format from MySQL 5.7 is in the following link:
-// https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52
-// The only difference is that we use large `object` or large `array` for
-// the small corresponding ones. That means in our implementation there
-// is no difference between small `object` and big `object`, so does `array`.
-#[derive(Clone, PartialEq, Debug)]
+const ERR_CONVERT_FAILED: &str = "Can not covert from ";
+
+/// Json implements type json used in tikv, it specifies the following
+/// implementations:
+/// 1. Serialize `json` values into binary representation, and reading values
+///  back from the binary representation.
+/// 2. Serialize `json` values into readable string representation, and reading
+/// values back from string representation.
+#[derive(Clone, Debug)]
 pub enum Json {
     Object(BTreeMap<String, Json>),
     Array(Vec<Json>),
-    Literal(u8),
     I64(i64),
     Double(f64),
     String(String),
+    Boolean(bool),
+    None,
 }
 
-#[allow(dead_code)]
 impl Json {
     fn get_type_code(&self) -> u8 {
         match *self {
             Json::Object(_) => TYPE_CODE_OBJECT,
             Json::Array(_) => TYPE_CODE_ARRAY,
-            Json::Literal(_) => TYPE_CODE_LITERAL,
+            Json::Boolean(_) | Json::None => TYPE_CODE_LITERAL,
             Json::I64(_) => TYPE_CODE_I64,
             Json::Double(_) => TYPE_CODE_DOUBLE,
             Json::String(_) => TYPE_CODE_STRING,
@@ -78,18 +94,66 @@ impl Json {
     }
 
     fn binary_len(&self) -> usize {
-        LENGTH_TYPE +
+        TYPE_LEN + self.body_binary_len()
+    }
+
+    fn body_binary_len(&self) -> usize {
         match *self {
             Json::Object(ref d) => get_obj_binary_len(d),
             Json::Array(ref d) => get_array_binary_len(d),
-            Json::Literal(_) => LENGTH_LITERAL,
-            Json::I64(_) | Json::Double(_) => LENGTH_I64,
+            Json::Boolean(_) | Json::None => LITERAL_LEN,
+            Json::I64(_) | Json::Double(_) => NUMBER_LEN,
             Json::String(ref d) => get_str_binary_len(d),
+        }
+    }
+
+    fn get_precedence(&self) -> i32 {
+        match *self {
+            Json::Object(_) => PRECEDENCE_OBJECT,
+            Json::Array(_) => PRECEDENCE_ARRAY,
+            Json::Boolean(_) => PRECEDENCE_BOOLEAN,
+            Json::None => PRECEDENCE_NULL,
+            Json::I64(_) | Json::Double(_) => PRECEDENCE_NUMBER,
+            Json::String(_) => PRECEDENCE_STRING,
         }
     }
 
     pub fn to_string(&self) -> String {
         serde_json::to_string(self).unwrap()
+    }
+
+    fn as_literal(&self) -> Result<u8> {
+        match *self {
+            Json::Boolean(d) => {
+                if d {
+                    Ok(JSON_LITERAL_TRUE)
+                } else {
+                    Ok(JSON_LITERAL_FALSE)
+                }
+            }
+            Json::None => Ok(JSON_LITERAL_NIL),
+            _ => {
+                Err(invalid_type!("{} from {} to literal",
+                                  ERR_CONVERT_FAILED,
+                                  self.get_type_code()))
+            }
+        }
+    }
+
+    fn as_f64(&self) -> Result<f64> {
+        match *self {
+            Json::Double(d) => Ok(d),
+            Json::I64(d) => Ok(d as f64),
+            Json::Boolean(_) => {
+                let v = try!(self.as_literal());
+                Ok(v as f64)
+            }
+            _ => {
+                Err(invalid_type!("{} from {} to f64",
+                                  ERR_CONVERT_FAILED,
+                                  self.get_type_code()))
+            }
+        }
     }
 }
 
@@ -103,45 +167,41 @@ impl FromStr for Json {
     }
 }
 
-#[allow(dead_code)]
 fn get_obj_binary_len(data: &BTreeMap<String, Json>) -> usize {
     let element_count = data.len();
-    let key_entries_len = element_count * LENGTH_KEY_ENTRY;
-    let value_entries_len = element_count * LENGTH_VALUE_ENTRY;
+    let key_entries_len = element_count * KEY_ENTRY_LEN;
+    let value_entries_len = element_count * VALUE_ENTRY_LEN;
     let mut keys_len = 0;
     let mut values_len = 0;
     for (k, v) in data {
         keys_len += k.len();
         if v.get_type_code() != TYPE_CODE_LITERAL {
-            values_len += v.binary_len() - LENGTH_TYPE;
+            values_len += v.body_binary_len();
         }
     }
     // object: element-count size key-entry* value-entry* key* value*
-    LENGTH_U32 + LENGTH_U32 + key_entries_len + value_entries_len + keys_len + values_len
+    ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len + keys_len + values_len
 }
 
-#[allow(dead_code)]
 fn get_array_binary_len(data: &[Json]) -> usize {
     let element_count = data.len();
-    let value_entries_len = element_count * LENGTH_VALUE_ENTRY;
+    let value_entries_len = element_count * VALUE_ENTRY_LEN;
     let mut values_len = 0;
     for v in data {
         if v.get_type_code() != TYPE_CODE_LITERAL {
-            values_len += v.binary_len() - LENGTH_TYPE;
+            values_len += v.body_binary_len();
         }
     }
     // array ::= element-count size value-entry* value*
-    LENGTH_U32 + LENGTH_U32 + value_entries_len + values_len
+    ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + values_len
 }
 
-#[allow(dead_code)]
 fn get_str_binary_len(data: &str) -> usize {
     let len = data.as_bytes().len();
-    get_var_u64_blen(len as u64) + len
+    get_var_u64_binary_len(len as u64) + len
 }
 
-#[allow(dead_code)]
-fn get_var_u64_blen(mut v: u64) -> usize {
+fn get_var_u64_binary_len(mut v: u64) -> usize {
     let mut len = 1;
     while v >= 0x80 {
         v >>= 7;
@@ -155,13 +215,8 @@ impl Serialize for Json {
         where S: Serializer
     {
         match *self {
-            Json::Literal(l) => {
-                match l {
-                    JSON_LITERAL_NIL => serializer.serialize_none(),
-                    JSON_LITERAL_TRUE => serializer.serialize_bool(true),
-                    _ => serializer.serialize_bool(false),
-                }
-            }
+            Json::None => serializer.serialize_none(),
+            Json::Boolean(d) => serializer.serialize_bool(d),
             Json::String(ref s) => serializer.serialize_str(s),
             Json::Object(ref obj) => {
                 let mut map = try!(serializer.serialize_map(Some(obj.len())));
@@ -183,6 +238,65 @@ impl Serialize for Json {
     }
 }
 
+impl PartialEq for Json {
+    fn eq(&self, right: &Json) -> bool {
+        self.partial_cmp(right).unwrap() == Ordering::Equal
+    }
+}
+
+impl PartialOrd for Json {
+    fn partial_cmp(&self, right: &Json) -> Option<Ordering> {
+        let precedence_diff = self.get_precedence() - right.get_precedence();
+        if precedence_diff == 0 {
+            if self.get_precedence() == PRECEDENCE_NUMBER {
+                let left_data = self.as_f64().unwrap();
+                let right_data = right.as_f64().unwrap();
+                if (left_data - right_data).abs() < f64::EPSILON {
+                    return Some(Ordering::Equal);
+                } else {
+                    return left_data.partial_cmp(&right_data);
+                }
+            }
+
+            return match (self, right) {
+                (&Json::Boolean(left_data), &Json::Boolean(right_data)) => {
+                    left_data.partial_cmp(&right_data)
+                }
+                (&Json::String(ref left_data), &Json::String(ref right_data)) => {
+                    left_data.partial_cmp(right_data)
+                }
+                (&Json::Array(ref left_data), &Json::Array(ref right_data)) => {
+                    left_data.partial_cmp(right_data)
+                }
+                (&Json::Object(_), &Json::Object(_)) => {
+                    let mut left_data = vec![];
+                    let mut right_data = vec![];
+                    left_data.encode_json(self).unwrap();
+                    right_data.encode_json(right).unwrap();
+                    left_data.partial_cmp(&right_data)
+                }
+                _ => Some(Ordering::Equal),
+            };
+        }
+
+        let left_data = self.as_f64();
+        let right_data = right.as_f64();
+        // tidb treats boolean as integer, but boolean is different from integer in JSON.
+        // so we need convert them to same type and then compare.
+        if left_data.is_ok() && right_data.is_ok() {
+            let left = left_data.unwrap();
+            let right = right_data.unwrap();
+            return left.partial_cmp(&right);
+        }
+
+        if precedence_diff > 0 {
+            Some(Ordering::Greater)
+        } else {
+            Some(Ordering::Less)
+        }
+    }
+}
+
 struct JsonVisitor;
 impl<'de> Visitor<'de> for JsonVisitor {
     type Value = Json;
@@ -193,17 +307,13 @@ impl<'de> Visitor<'de> for JsonVisitor {
     fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
-        Ok(Json::Literal(JSON_LITERAL_NIL))
+        Ok(Json::None)
     }
 
     fn visit_bool<E>(self, v: bool) -> std::result::Result<Self::Value, E>
         where E: de::Error
     {
-        if v {
-            Ok(Json::Literal(JSON_LITERAL_TRUE))
-        } else {
-            Ok(Json::Literal(JSON_LITERAL_FALSE))
-        }
+        Ok(Json::Boolean(v))
     }
 
     fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
@@ -244,9 +354,6 @@ impl<'de> Visitor<'de> for JsonVisitor {
         where M: MapAccess<'de>
     {
         let mut map = BTreeMap::new();
-
-        // While there are entries remaining in the input, add them
-        // into our map.
         while let Some((key, value)) = access.next_entry()? {
             map.insert(key, value);
         }
@@ -262,8 +369,11 @@ impl<'de> Deserialize<'de> for Json {
     }
 }
 
-
-#[allow(dead_code)]
+// The binary Json format from `MySQL` 5.7 is in the following link:
+// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
+// The only difference is that we use large `object` or large `array` for
+// the small corresponding ones. That means in our implementation there
+// is no difference between small `object` and big `object`, so does `array`.
 pub trait JsonEncoder: NumberEncoder {
     fn encode_json(&mut self, data: &Json) -> Result<()> {
         try!(self.write_u8(data.get_type_code()));
@@ -274,7 +384,10 @@ pub trait JsonEncoder: NumberEncoder {
         match *data {
             Json::Object(ref d) => self.encode_obj(d),
             Json::Array(ref d) => self.encode_array(d),
-            Json::Literal(d) => self.encode_literal(d),
+            Json::Boolean(_) | Json::None => {
+                let v = try!(data.as_literal());
+                self.encode_literal(v)
+            }
             Json::I64(d) => self.encode_json_i64(d),
             Json::Double(d) => self.encode_json_f64(d),
             Json::String(ref d) => self.encode_str(d),
@@ -283,18 +396,14 @@ pub trait JsonEncoder: NumberEncoder {
 
     fn encode_obj(&mut self, data: &BTreeMap<String, Json>) -> Result<()> {
         // object: element-count size key-entry* value-entry* key* value*
-        // element-count ::= uint32 number of members in object or number of elements in array
         let element_count = data.len();
-        let element_count_len = LENGTH_U32;
-        // size ::= uint32 number of bytes in the binary representation of the object or array
-        let size_len = LENGTH_U32;
         // key-entry ::= key-offset(uint32) key-length(uint16)
-        let key_entries_len = LENGTH_KEY_ENTRY * element_count;
+        let key_entries_len = KEY_ENTRY_LEN * element_count;
         // value-entry ::= type(byte) offset-or-inlined-value(uint32)
-        let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
+        let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let mut key_entries = Vec::with_capacity(key_entries_len);
         let mut encode_keys = Vec::new();
-        let mut key_offset = element_count_len + size_len + key_entries_len + value_entries_len;
+        let mut key_offset = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len;
         for key in data.keys() {
             let encode_key = key.as_bytes();
             let key_len = try!(encode_keys.write(encode_key));
@@ -309,7 +418,8 @@ pub trait JsonEncoder: NumberEncoder {
         for value in data.values() {
             try!(value_entries.encode_json_item(value, &mut value_offset, &mut encode_values));
         }
-        let size = value_offset;
+        let size = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len +
+                   encode_keys.len() + encode_values.len();
         try!(self.encode_u32_le(element_count as u32));
         try!(self.encode_u32_le(size as u32));
         try!(self.write_all(key_entries.as_mut()));
@@ -322,16 +432,14 @@ pub trait JsonEncoder: NumberEncoder {
     fn encode_array(&mut self, data: &[Json]) -> Result<()> {
         // array ::= element-count size value-entry* value*
         let element_count = data.len();
-        let count_len = LENGTH_U32;
-        let size_len = LENGTH_U32;
-        let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
-        let mut value_offset = (count_len + size_len + value_entries_len) as u32;
+        let value_entries_len = VALUE_ENTRY_LEN * element_count;
+        let mut value_offset = (ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len) as u32;
         let mut value_entries = Vec::with_capacity(value_entries_len);
         let mut encode_values = vec![];
         for value in data {
             try!(value_entries.encode_json_item(value, &mut value_offset, &mut encode_values));
         }
-        let total_size = count_len + size_len + value_entries_len + encode_values.len();
+        let total_size = ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + encode_values.len();
         try!(self.encode_u32_le(element_count as u32));
         try!(self.encode_u32_le(total_size as u32));
         try!(self.write_all(value_entries.as_mut()));
@@ -370,9 +478,10 @@ pub trait JsonEncoder: NumberEncoder {
         match *data {
             // If the data has length in (0, 4], it could be inline here.
             // And padding 0x00 to 4 bytes if needed.
-            Json::Literal(ref v) => {
-                try!(self.write_u8(*v));
-                let left = LENGTH_U32 - LENGTH_LITERAL;
+            Json::Boolean(_) | Json::None => {
+                let v = try!(data.as_literal());
+                try!(self.write_u8(v));
+                let left = U32_LEN - LITERAL_LEN;
                 for _ in 0..left {
                     try!(self.write_u8(JSON_LITERAL_NIL));
                 }
@@ -389,7 +498,6 @@ pub trait JsonEncoder: NumberEncoder {
 }
 impl<T: Write> JsonEncoder for T {}
 
-#[allow(dead_code)]
 pub trait JsonDecoder: NumberDecoder {
     fn decode_json(&mut self) -> Result<Json> {
         let code = try!(self.read_u8());
@@ -412,19 +520,19 @@ pub trait JsonDecoder: NumberDecoder {
         // count size key_entries value_entries keys values
         let element_count = try!(self.decode_u32_le()) as usize;
         let total_size = try!(self.decode_u32_le()) as usize;
-        let left_size = total_size - LENGTH_U32 - LENGTH_U32;
-        let mut data = vec![0;left_size];
+        let left_size = total_size - ELEMENT_COUNT_LEN - SIZE_LEN;
+        let mut data = vec![0; left_size];
         try!(self.read_exact(&mut data));
         let mut obj = BTreeMap::new();
         if element_count == 0 {
             return Ok(Json::Object(obj));
         }
         // key_entries
-        let key_entries_len = LENGTH_KEY_ENTRY * element_count;
+        let key_entries_len = KEY_ENTRY_LEN * element_count;
         let mut key_entries_data = &data[0..key_entries_len];
 
         // value-entry ::= type(byte) offset-or-inlined-value(uint32)
-        let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
+        let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let mut value_entries_data = &data[key_entries_len..(key_entries_len + value_entries_len)];
         let mut key_offset = key_entries_len + value_entries_len;
         for _ in 0..element_count {
@@ -445,14 +553,14 @@ pub trait JsonDecoder: NumberDecoder {
         let element_count = try!(self.decode_u32_le()) as usize;
         let total_size = try!(self.decode_u32_le());
         // already removed count and size
-        let left_size = total_size as usize - LENGTH_U32 - LENGTH_U32;
-        let mut data = vec![0;left_size];
+        let left_size = total_size as usize - ELEMENT_COUNT_LEN - SIZE_LEN;
+        let mut data = vec![0; left_size];
         try!(self.read_exact(&mut data));
-        let value_entries_len = LENGTH_VALUE_ENTRY * element_count;
+        let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let mut value_entries_data = &data[0..value_entries_len];
         let values_data = &data[value_entries_len..];
         let mut array_data = Vec::with_capacity(element_count);
-        let data_start_offset = (LENGTH_U32 + LENGTH_U32 + value_entries_len) as u32;
+        let data_start_offset = (U32_LEN + U32_LEN + value_entries_len) as u32;
         for _ in 0..element_count {
             let value = try!(value_entries_data.decode_json_item(values_data, data_start_offset));
             array_data.push(value);
@@ -462,15 +570,18 @@ pub trait JsonDecoder: NumberDecoder {
 
     fn decode_json_str(&mut self) -> Result<Json> {
         let length = try!(self.decode_var_u64());
-        let mut encode_value = vec![0;length as usize];
+        let mut encode_value = vec![0; length as usize];
         try!(self.read_exact(&mut encode_value));
         let value = try!(String::from_utf8(encode_value));
         Ok(Json::String(value))
     }
 
     fn decode_json_literal(&mut self) -> Result<Json> {
-        let l = try!(self.read_u8());
-        Ok(Json::Literal(l))
+        match try!(self.read_u8()) {
+            JSON_LITERAL_TRUE => Ok(Json::Boolean(true)),
+            JSON_LITERAL_FALSE => Ok(Json::Boolean(false)),
+            _ => Ok(Json::None),
+        }
     }
 
     fn decode_json_double(&mut self) -> Result<Json> {
@@ -484,7 +595,7 @@ pub trait JsonDecoder: NumberDecoder {
     }
 
     fn decode_json_item(&mut self, values_data: &[u8], data_start_position: u32) -> Result<Json> {
-        let mut entry = vec![0;LENGTH_VALUE_ENTRY];
+        let mut entry = vec![0; VALUE_ENTRY_LEN];
         try!(self.read_exact(&mut entry));
         let mut entry = entry.as_slice();
         let code = try!(entry.read_u8());
@@ -514,15 +625,14 @@ mod test {
         let jstr2 = r#"[{"a": 1, "b": true}, 3, 3.5, "hello, world", null, true]"#;
         let j2: Json = jstr2.parse().unwrap();
 
-        let json_nil = Json::Literal(0x00);
-        let json_bool = Json::Literal(0x01);
+        let json_nil = Json::None;
+        let json_bool = Json::Boolean(true);
         let json_double = Json::Double(3.24);
         let json_str = Json::String(String::from("hello, 世界"));
         let test_cases = vec![json_nil, json_bool, json_double, json_str, j1, j2];
         for json in test_cases {
             let mut data = vec![];
             data.encode_json(&json).unwrap();
-            // let data = json.serialize();
             let output = data.as_slice().decode_json().unwrap();
             let input_str = json.to_string();
             let output_str = output.to_string();
@@ -562,5 +672,47 @@ mod test {
             let resp = Json::from_str(json_str);
             assert!(resp.is_err());
         }
+    }
+
+    #[test]
+    fn test_cmp_json_between_same_type() {
+        let test_cases = vec![
+            ("false", "true"),
+            ("3", "5"),
+            ("3.0", "4.9"),
+            (r#""hello""#, r#""hello, world""#),
+            (r#"["a", "b"]"#, r#"["a", "c"]"#),
+            (r#"{"a": "b"}"#, r#"{"a": "c"}"#),
+        ];
+        for (left_str, right_str) in test_cases {
+            let left: Json = left_str.parse().unwrap();
+            let right: Json = right_str.parse().unwrap();
+            assert!(left < right);
+            assert_eq!(left, left);
+        }
+        assert_eq!(Json::None, Json::None);
+    }
+
+    #[test]
+    fn test_cmp_json_between_diff_type() {
+        let test_cases = vec![
+            ("1.5", "2"),
+            ("1.5", "false"),
+            ("true", "1.5"),
+            ("true", "2"),
+            ("null", r#"{"a": "b"}"#),
+            ("2", r#""hello, world""#),
+            (r#""hello, world""#, r#"{"a": "b"}"#),
+            (r#"{"a": "b"}"#, r#"["a", "b"]"#),
+            (r#"["a", "b"]"#, "false"),
+        ];
+
+        for (left_str, right_str) in test_cases {
+            let left: Json = left_str.parse().unwrap();
+            let right: Json = right_str.parse().unwrap();
+            assert!(left < right);
+        }
+
+        assert_eq!(Json::I64(2), Json::Boolean(false));
     }
 }

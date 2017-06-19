@@ -24,7 +24,6 @@ use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
-use super::server::new_server_cluster;
 
 fn get_msg_cf_or_default<M>(engine: &DB, cf: &str, key: &[u8]) -> M
     where M: protobuf::Message + protobuf::MessageStatic
@@ -198,13 +197,6 @@ fn test_node_compact_log() {
 }
 
 #[test]
-fn test_server_compact_log() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_compact_log(&mut cluster);
-}
-
-#[test]
 fn test_node_compact_count_limit() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
@@ -212,23 +204,9 @@ fn test_node_compact_count_limit() {
 }
 
 #[test]
-fn test_server_compact_count_limit() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_compact_count_limit(&mut cluster);
-}
-
-#[test]
 fn test_node_compact_many_times() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_compact_many_times(&mut cluster);
-}
-
-#[test]
-fn test_server_compact_many_times() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
     test_compact_many_times(&mut cluster);
 }
 
@@ -318,12 +296,5 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_node_compact_size_limit() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_compact_size_limit(&mut cluster);
-}
-
-#[test]
-fn test_server_compact_size_limit() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
     test_compact_size_limit(&mut cluster);
 }

@@ -33,7 +33,6 @@ use tikv::util::{escape, HandyRwLock};
 
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
-use super::server::new_server_cluster;
 use super::transport_simulate::*;
 use super::util::*;
 
@@ -206,23 +205,9 @@ fn test_one_node_renew_lease() {
 }
 
 #[test]
-fn test_one_server_renew_lease() {
-    let count = 1;
-    let mut cluster = new_server_cluster(0, count);
-    test_renew_lease(&mut cluster);
-}
-
-#[test]
 fn test_node_renew_lease() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    test_renew_lease(&mut cluster);
-}
-
-#[test]
-fn test_server_renew_lease() {
-    let count = 3;
-    let mut cluster = new_server_cluster(0, count);
     test_renew_lease(&mut cluster);
 }
 
@@ -272,13 +257,6 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_node_lease_expired() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    test_lease_expired(&mut cluster);
-}
-
-#[test]
-fn test_server_lease_expired() {
-    let count = 3;
-    let mut cluster = new_server_cluster(0, count);
     test_lease_expired(&mut cluster);
 }
 
@@ -374,13 +352,6 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
 
 #[test]
 fn test_node_lease_unsafe_during_leader_transfers() {
-    let count = 3;
-    let mut cluster = new_node_cluster(0, count);
-    test_lease_unsafe_during_leader_transfers(&mut cluster);
-}
-
-#[test]
-fn test_server_lease_unsafe_during_leader_transfers() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     test_lease_unsafe_during_leader_transfers(&mut cluster);
