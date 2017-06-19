@@ -12,5 +12,6 @@
 // limitations under the License.
 
 pub mod json;
+mod json_type;
 
 pub use self::json::{Json, JsonEncoder, JsonDecoder};
