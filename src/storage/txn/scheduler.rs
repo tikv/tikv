@@ -632,6 +632,13 @@ impl Scheduler {
         ctx.tag
     }
 
+    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool {
+        match priority {
+            CommandPri::Low | CommandPri::Normal => &self.worker_pool,
+            CommandPri::High => &self.high_priority_pool,
+        }
+    }
+
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
@@ -646,18 +653,11 @@ impl Scheduler {
         }
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
+        let worker_pool = self.fetch_worker_pool(cmd.priority());
         if readcmd {
-            if cmd.priority() == CommandPri::High {
-                self.high_priority_pool
-                    .execute(move || process_read(cid, cmd, ch, snapshot));
-            } else {
-                self.worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
-            }
-        } else if cmd.priority() == CommandPri::High {
-            self.high_priority_pool
-                .execute(move || process_write(cid, cmd, ch, snapshot));
+            worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
         } else {
-            self.worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
+            worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
         }
     }
 
