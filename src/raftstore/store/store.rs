@@ -743,7 +743,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // Maybe split, but not registered yet.
                 if util::is_first_vote_msg(msg) {
                     self.pending_votes.push(msg.to_owned());
-                    info!("[region {}] region not exist but receive first vote msg",
+                    info!("[region {}] doesn't exist yet, wait for it to be split",
                           region_id);
                     return Ok(true);
                 }
