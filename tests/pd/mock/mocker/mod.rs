@@ -23,7 +23,7 @@ mod retry;
 
 pub use self::service::Service;
 pub use self::split::Split;
-pub use self::bootstrap::AlreadyBootstrap;
+pub use self::bootstrap::AlreadyBootstrapped;
 pub use self::leader_change::LeaderChange;
 pub use self::retry::Retry;
 
@@ -97,4 +97,6 @@ pub trait Mocker {
                           -> Option<Result<PutClusterConfigResponse>> {
         None
     }
+
+    fn set_endpoints(&self, _: Vec<String>) {}
 }

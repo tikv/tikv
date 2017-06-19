@@ -27,14 +27,14 @@ use super::DEFAULT_CLUSTER_ID as CLUSTER_ID;
 #[derive(Debug)]
 pub struct Service {
     id_allocator: AtomicUsize,
-    member_resp: GetMembersResponse,
+    members_resp: Mutex<Option<GetMembersResponse>>,
     storage: Mutex<HashMap<String, Vec<u8>>>,
 }
 
 impl Service {
-    pub fn new(eps: Vec<String>) -> Service {
+    pub fn new() -> Service {
         Service {
-            member_resp: Self::get_members_response(eps),
+            members_resp: Mutex::new(None),
             id_allocator: AtomicUsize::new(1), // start from 1.
             storage: Mutex::new(HashMap::new()),
         }
@@ -45,33 +45,32 @@ impl Service {
         header.set_cluster_id(CLUSTER_ID);
         header
     }
+}
 
-    fn get_members_response(eps: Vec<String>) -> GetMembersResponse {
-        let mut members = Vec::with_capacity(eps.len());
-        for (i, ep) in (&eps).into_iter().enumerate() {
-            let mut m = Member::new();
-            m.set_name(format!("pd{}", i));
-            m.set_member_id(100 + i as u64);
-            m.set_client_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
-            m.set_peer_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
-            members.push(m);
-        }
-
-        let mut member_resp = GetMembersResponse::new();
-        member_resp.set_members(RepeatedField::from_vec(members.clone()));
-        member_resp.set_leader(members.pop().unwrap());
-        member_resp.set_header(Self::header());
-
-        info!("[Service] member_resp {:?}", member_resp);
-        member_resp
+fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
+    let mut members = Vec::with_capacity(eps.len());
+    for (i, ep) in (&eps).into_iter().enumerate() {
+        let mut m = Member::new();
+        m.set_name(format!("pd{}", i));
+        m.set_member_id(100 + i as u64);
+        m.set_client_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
+        m.set_peer_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
+        members.push(m);
     }
+
+    let mut members_resp = GetMembersResponse::new();
+    members_resp.set_members(RepeatedField::from_vec(members.clone()));
+    members_resp.set_leader(members.pop().unwrap());
+    members_resp.set_header(Service::header());
+
+    members_resp
 }
 
 // TODO: Check cluster ID.
 // TODO: Support more rpc.
 impl Mocker for Service {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
-        Some(Ok(self.member_resp.clone()))
+        Some(Ok(self.members_resp.lock().unwrap().clone().unwrap()))
     }
 
     fn bootstrap(&self, req: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
@@ -202,6 +201,13 @@ impl Mocker for Service {
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
+    }
+
+    fn set_endpoints(&self, eps: Vec<String>) {
+        let members_resp = make_members_response(eps);
+        info!("[Service] members_resp {:?}", members_resp);
+        let mut resp = self.members_resp.lock().unwrap();
+        *resp = Some(members_resp);
     }
 }
 

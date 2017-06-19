@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::net::ToSocketAddrs;
+use std::net::{ToSocketAddrs, SocketAddr};
 
 use futures::Future;
 use grpc::{Server as GrpcServer, ServerBuilder, RpcContext, UnarySink, RequestStream, DuplexSink,
@@ -21,35 +21,61 @@ use grpc::{Server as GrpcServer, ServerBuilder, RpcContext, UnarySink, RequestSt
 use kvproto::pdpb::*;
 use kvproto::pdpb_grpc::{self, PD};
 
-use super::Mocker;
+use super::mocker::Mocker;
 use super::mocker::Service;
 use super::mocker::Result;
 
 pub struct Server {
-    _server: GrpcServer,
+    server: GrpcServer,
 }
 
 impl Server {
-    pub fn run<A, C>(addrs: A, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
+    pub fn run<C>(eps_count: usize, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
+        where C: Mocker + Send + Sync + 'static
+    {
+        let eps: Vec<SocketAddr> = [0].iter()
+            .cycle()
+            .take(eps_count)
+            .map(|_| ("127.0.0.1", 0).to_socket_addrs().unwrap().next().unwrap())
+            .collect();
+
+        Server::run_with_eps(eps.as_slice(), handler, case)
+    }
+
+    pub fn run_with_eps<A, C>(eps: A, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
         where A: ToSocketAddrs,
               C: Mocker + Send + Sync + 'static
     {
         let m = Mock {
-            handler: handler,
-            case: case,
+            handler: handler.clone(),
+            case: case.clone(),
         };
         let service = pdpb_grpc::create_pd(m);
-
         let env = Arc::new(Environment::new(1));
         let mut sb = ServerBuilder::new(env).register_service(service);
-
-        for addr in addrs.to_socket_addrs().unwrap() {
-            sb = sb.bind(format!("{}", addr.ip()), addr.port());
+        for ep in eps.to_socket_addrs().unwrap() {
+            sb = sb.bind(format!("{}", ep.ip()), ep.port());
         }
 
         let mut server = sb.build().unwrap();
+        {
+            let addrs = server.bind_addrs();
+            handler.set_endpoints(addrs.iter()
+                .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+                .collect());
+            if let Some(case) = case.as_ref() {
+                case.set_endpoints(addrs.iter()
+                    .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+                    .collect());
+            }
+        }
+
         server.start();
-        Server { _server: server }
+        Server { server: server }
+    }
+
+    pub fn bind_addrs(&self) -> Vec<(String, u16)> {
+        self.server.bind_addrs().to_vec()
     }
 }
 
