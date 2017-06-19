@@ -101,7 +101,15 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         cluster_id: cluster_id,
         addr: "127.0.0.1:0".to_owned(),
         raft_store: store_cfg,
-        storage: StorageConfig::default(),
+        storage: StorageConfig {
+            sched_worker_pool_size: 1,
+            ..StorageConfig::default()
+        },
+        grpc_concurrency: 1,
+        // Considering connection selection algo is involved, maybe
+        // use 2 or larger value here?
+        grpc_raft_conn_num: 1,
+        end_point_concurrency: 1,
         ..ServerConfig::default()
     }
 }
