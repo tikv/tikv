@@ -19,7 +19,7 @@ use grpc::{Server as GrpcServer, ServerBuilder, RpcContext, UnarySink, RequestSt
            Environment, RpcStatus, RpcStatusCode};
 
 use kvproto::pdpb::*;
-use kvproto::pdpb_grpc::{self, PD};
+use kvproto::pdpb_grpc::{self, Pd};
 
 use super::mocker::Mocker;
 use super::mocker::Service;
@@ -128,7 +128,7 @@ impl<C: Mocker> Clone for Mock<C> {
     }
 }
 
-impl<C: Mocker> PD for Mock<C> {
+impl<C: Mocker> Pd for Mock<C> {
     fn get_members(&self,
                    ctx: RpcContext,
                    req: GetMembersRequest,
