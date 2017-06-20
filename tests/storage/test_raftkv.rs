@@ -8,7 +8,8 @@ use raftstore::transport_simulate::IsolationFilterFactory;
 use raftstore::server::new_server_cluster_with_cfs;
 use tikv::raftstore::store::engine::IterOption;
 
-fn test_raftkv(read_quorum: bool) {
+#[test]
+fn test_raftkv() {
     let count = 1;
     let mut cluster = new_server_cluster_with_cfs(0, count, &["cf", CF_RAFT]);
     cluster.run();
@@ -24,7 +25,6 @@ fn test_raftkv(read_quorum: bool) {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
-    ctx.set_read_quorum(read_quorum);
 
     get_put(&ctx, storage.as_ref());
     batch(&ctx, storage.as_ref());
@@ -37,26 +37,7 @@ fn test_raftkv(read_quorum: bool) {
 }
 
 #[test]
-fn test_raftkv_with_read_local() {
-    test_raftkv(false);
-}
-
-#[test]
-fn test_raftkv_with_read_quorum() {
-    test_raftkv(true);
-}
-
-#[test]
-fn test_read_with_quorum() {
-    test_read_leader_in_lease(true);
-}
-
-#[test]
-fn test_read_with_lease() {
-    test_read_leader_in_lease(false);
-}
-
-fn test_read_leader_in_lease(read_quorum: bool) {
+fn test_read_leader_in_lease() {
     let count = 3;
     let mut cluster = new_server_cluster_with_cfs(0, count, &["cf", CF_RAFT]);
     cluster.run();
@@ -75,7 +56,6 @@ fn test_read_leader_in_lease(read_quorum: bool) {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
-    ctx.set_read_quorum(read_quorum);
 
     // write some data
     assert_none(&ctx, storage.as_ref(), k2);
@@ -85,7 +65,7 @@ fn test_read_leader_in_lease(read_quorum: bool) {
     cluster.add_send_filter(IsolationFilterFactory::new(leader.get_store_id()));
 
     // leader still in lease, check if can read on leader
-    assert_eq!(can_read(&ctx, storage.as_ref(), k2, v2), !read_quorum);
+    assert_eq!(can_read(&ctx, storage.as_ref(), k2, v2), true);
 }
 
 pub fn make_key(k: &[u8]) -> Key {
