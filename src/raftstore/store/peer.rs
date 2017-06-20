@@ -1022,8 +1022,7 @@ impl Peer {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
-        if (req.has_header() && req.get_header().get_read_quorum()) ||
-           !self.raft_group.raft.in_lease() {
+        if !self.raft_group.raft.in_lease() {
             return Ok(RequestPolicy::ReadIndex);
         }
 
