@@ -19,7 +19,6 @@ use rocksdb::Range;
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
-use super::server::new_server_cluster;
 
 fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.region_compact_check_interval = 500_000;
@@ -48,13 +47,6 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
             engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
         assert_eq!(approximate_size, 0);
     }
-}
-
-#[test]
-fn test_server_compact_after_delete() {
-    let count = 1;
-    let mut cluster = new_server_cluster(0, count);
-    test_compact_after_delete(&mut cluster);
 }
 
 #[test]
