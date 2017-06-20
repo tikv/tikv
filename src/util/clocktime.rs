@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// `now_monotonic_raw` returns the monotonic raw clocktime corresponding to "now".
+// `raw_now` returns the monotonic time since some unspecified starting point.
 pub use self::inner::raw_now;
 
 #[cfg(not(target_os = "linux"))]
