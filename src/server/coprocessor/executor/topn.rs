@@ -33,7 +33,6 @@ use super::{Executor, Row};
 use super::super::Result;
 use super::super::endpoint::inflate_with_col;
 
-
 const HEAP_MAX_CAPACITY: usize = 1024;
 
 pub struct SortRow {
@@ -100,6 +99,29 @@ impl SortRow {
     }
 }
 
+impl Ord for SortRow {
+    fn cmp(&self, right: &SortRow) -> CmpOrdering {
+        if let Ok(order) = self.cmp_and_check(right) {
+            return order;
+        }
+        CmpOrdering::Equal
+    }
+}
+
+impl Eq for SortRow {}
+
+impl PartialOrd for SortRow {
+    fn partial_cmp(&self, rhs: &SortRow) -> Option<CmpOrdering> {
+        Some(self.cmp(rhs))
+    }
+}
+
+impl PartialEq for SortRow {
+    fn eq(&self, right: &SortRow) -> bool {
+        self.cmp(right) == CmpOrdering::Equal
+    }
+}
+
 pub struct TopNHeap {
     pub rows: BinaryHeap<SortRow>,
     limit: usize,
@@ -159,29 +181,6 @@ impl TopNHeap {
     }
 }
 
-impl Ord for SortRow {
-    fn cmp(&self, right: &SortRow) -> CmpOrdering {
-        if let Ok(order) = self.cmp_and_check(right) {
-            return order;
-        }
-        CmpOrdering::Equal
-    }
-}
-
-impl Eq for SortRow {}
-
-impl PartialOrd for SortRow {
-    fn partial_cmp(&self, rhs: &SortRow) -> Option<CmpOrdering> {
-        Some(self.cmp(rhs))
-    }
-}
-
-impl PartialEq for SortRow {
-    fn eq(&self, right: &SortRow) -> bool {
-        self.cmp(right) == CmpOrdering::Equal
-    }
-}
-
 struct ExprColumnRefVisitor {
     col_ids: HashSet<i64>,
 }
@@ -203,23 +202,24 @@ impl ExprColumnRefVisitor {
     }
 }
 
-pub struct TopNExecutor {
+pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
     columns: Vec<ColumnInfo>,
-    cursor: usize,
-    heap: TopNHeap,
+    heap: Option<TopNHeap>,
     executed: bool,
-    src: Box<Executor>,
+    res: Option<Vec<SortRow>>,
+    cursor: usize,
+
+    src: Box<Executor + 'a>,
     ctx: Rc<EvalContext>,
-    eval: Evaluator,
 }
 
-impl TopNExecutor {
+impl<'a> TopNExecutor<'a> {
     pub fn new(mut meta: TopN,
                ctx: Rc<EvalContext>,
                columns_info: &[ColumnInfo],
-               src: Box<Executor>)
-               -> Result<TopNExecutor> {
+               src: Box<Executor + 'a>)
+               -> Result<TopNExecutor<'a>> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new();
@@ -233,33 +233,30 @@ impl TopNExecutor {
 
         Ok(TopNExecutor {
             order_by: Rc::new(order_by),
-            heap: try!(TopNHeap::new(meta.get_limit() as usize)),
+            heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
             columns: columns,
-            cursor: 0,
             executed: false,
+            res: None,
+            cursor: 0,
             ctx: ctx,
             src: src,
-            eval: Evaluator::default(),
         })
     }
 
     fn inner_next(&mut self) -> Result<Option<()>> {
         if let Some(row) = try!(self.src.next()) {
-            try!(inflate_with_col(&mut self.eval,
-                                  &self.ctx,
-                                  &row.data,
-                                  &self.columns,
-                                  row.handle));
+            let mut eval = Evaluator::default();
+            try!(inflate_with_col(&mut eval, &self.ctx, &row.data, &self.columns, row.handle));
             let mut ob_values = Vec::with_capacity(self.order_by.len());
             for by_item in self.order_by.as_ref().iter() {
-                let v = box_try!(self.eval.eval(&self.ctx, by_item.get_expr()));
+                let v = box_try!(eval.eval(&self.ctx, by_item.get_expr()));
                 ob_values.push(v);
             }
-            try!(self.heap.try_add_row(row.handle,
-                                       row.data,
-                                       ob_values,
-                                       self.order_by.clone(),
-                                       self.ctx.clone()));
+            try!(self.heap.as_mut().unwrap().try_add_row(row.handle,
+                                                         row.data,
+                                                         ob_values,
+                                                         self.order_by.clone(),
+                                                         self.ctx.clone()));
             Ok(Some(()))
         } else {
             Ok(None)
@@ -267,21 +264,26 @@ impl TopNExecutor {
     }
 }
 
-impl Executor for TopNExecutor {
+impl<'a> Executor for TopNExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.executed {
             while try!(self.inner_next()).is_some() {}
             self.executed = true;
+            self.res = Some(try!(self.heap.take().unwrap().into_sorted_vec()));
+            self.res.as_mut().unwrap().reverse();
         }
-        if self.cursor >= self.heap.rows.len() {
+        let res = self.res.as_mut().unwrap();
+        if res.is_empty() {
             return Ok(None);
         }
-        self.cursor += 1;
-        let sort_row = self.heap.rows.pop().unwrap();
-        Ok(Some(Row {
-            handle: sort_row.handle,
-            data: sort_row.data,
-        }))
+        if let Some(sort_row) = res.pop() {
+            Ok(Some(Row {
+                handle: sort_row.handle,
+                data: sort_row.data,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -289,11 +291,19 @@ impl Executor for TopNExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::table_scan::TableScanExecutor;
+    use super::super::scanner::test::{TestStore, get_range, new_col_info};
     use util::codec::Datum;
     use util::collections::HashMap;
-    use util::codec::table::RowColsDict;
+    use util::codec::table::{self, RowColsDict};
     use util::codec::number::NumberEncoder;
+    use util::codec::mysql::types;
+    use storage::Statistics;
+
+    use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
+
+    use protobuf::RepeatedField;
 
     fn new_order_by(col_id: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
@@ -357,15 +367,19 @@ mod tests {
     #[test]
     fn test_topn_heap_with_cmp_error() {
         let mut order_cols = Vec::new();
-        order_cols.push(new_order_by(0, true));
-        order_cols.push(new_order_by(1, false));
+        order_cols.push(new_order_by(0, false));
+        order_cols.push(new_order_by(1, true));
         let order_cols = Rc::new(order_cols);
         let ctx = Rc::new(EvalContext::default());
         let mut topn_heap = TopNHeap::new(5).unwrap();
 
         let ob_values1: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
-        topn_heap.try_add_row(0 as i64, row_data, ob_values1, order_cols.clone(), ctx.clone())
+        topn_heap.try_add_row(0 as i64,
+                         row_data,
+                         ob_values1,
+                         order_cols.clone(),
+                         ctx.clone())
             .unwrap();
 
         let ob_values2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
@@ -387,5 +401,78 @@ mod tests {
                          ctx.clone())
             .is_err());
         assert!(topn_heap.into_sorted_vec().is_err());
+    }
+
+    // the first column should be i64 since it will be used as row handle
+    pub fn gen_table_data(tid: i64,
+                          cis: &[ColumnInfo],
+                          rows: &[Vec<Datum>])
+                          -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut kv_data = Vec::new();
+        let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
+        for cols in rows.iter() {
+            let col_values: Vec<_> = cols.iter().map(|v| v.clone()).collect();
+            let value = table::encode_row(col_values, &col_ids).unwrap();
+            let mut buf = vec![];
+            buf.encode_i64(cols[0].i64()).unwrap();
+            let key = table::encode_row_key(tid, &buf);
+            kv_data.push((key, value));
+        }
+        kv_data
+    }
+
+    #[test]
+    fn test_topn_executor() {
+        // prepare data and store
+        let tid = 1;
+        let cis = vec![new_col_info(1, types::LONG_LONG),
+                       new_col_info(2, types::VARCHAR),
+                       new_col_info(3, types::NEW_DECIMAL)];
+        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
+                            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec()), Datum::Dec(7.into())],
+                            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::Dec(8.into())],
+                            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec()), Datum::Dec(3.into())],
+                            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::Dec(5.into())],
+                            vec![Datum::I64(6), Datum::Bytes(b"e".to_vec()), Datum::Dec(9.into())],
+                            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::Dec(6.into())]];
+        let table_data = gen_table_data(tid, &cis, &raw_data);
+        let mut test_store = TestStore::new(&table_data);
+        // init table scan meta
+        let mut table_scan = TableScan::new();
+        table_scan.set_table_id(tid);
+        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+        // prepare range
+        let range1 = get_range(tid, 0, 4);
+        let range2 = get_range(tid, 5, 10);
+        let key_ranges = vec![range1, range2];
+        // init TableScan
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut statistics = Statistics::default();
+        let ts_ect =
+            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+
+        // init TopN meta
+        let mut ob_vec = Vec::with_capacity(2);
+        ob_vec.push(new_order_by(2, false));
+        ob_vec.push(new_order_by(3, true));
+        let mut topn = TopN::default();
+        topn.set_order_by(RepeatedField::from_vec(ob_vec));
+        let limit = 4;
+        topn.set_limit(limit);
+        // init topn executor
+        let mut topn_ect = TopNExecutor::new(topn,
+                                             Rc::new(EvalContext::default()),
+                                             &cis,
+                                             Box::new(ts_ect))
+            .unwrap();
+        let mut topn_rows = Vec::with_capacity(limit as usize);
+        while let Some(row) = topn_ect.next().unwrap() {
+            topn_rows.push(row);
+        }
+        assert_eq!(topn_rows.len(), 4);
+        let expect_row_handles = vec![1, 3, 2, 6];
+        for (row, handle) in topn_rows.iter().zip(expect_row_handles) {
+            assert_eq!(row.handle, handle);
+        }
     }
 }
