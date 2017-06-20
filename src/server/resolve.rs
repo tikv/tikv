@@ -189,7 +189,7 @@ mod tests {
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
             sock.set_port(util::duration_to_ms(self.start.elapsed()) as u16);
-            store.set_address(format!("{}:{}", sock.ip(), sock.port()));
+            store.set_address(format!("{}:{}", sock.ip(), sock.port()).as_str().into());
             Ok(store)
         }
         fn get_cluster_config(&self) -> Result<metapb::Cluster> {

@@ -119,8 +119,8 @@ mod tests {
                               ("6", "3", "6", false, true)];
         for (key, start_key, end_key, is_in_region, is_in_region_inclusive) in test_cases {
             let mut region = metapb::Region::new();
-            region.set_start_key(start_key.as_bytes().to_vec());
-            region.set_end_key(end_key.as_bytes().to_vec());
+            region.set_start_key(start_key.as_bytes().into());
+            region.set_end_key(end_key.as_bytes().into());
             let mut result = check_key_in_region(key.as_bytes(), &region);
             assert_eq!(result.is_ok(), is_in_region);
             result = check_key_in_region_inclusive(key.as_bytes(), &region);

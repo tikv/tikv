@@ -43,7 +43,7 @@ fn entry(t: EntryType, term: u64, i: u64, data: Option<Vec<u8>>) -> Entry {
     e.set_index(i);
     e.set_term(term);
     if let Some(d) = data {
-        e.set_data(d);
+        e.set_data(d.into());
     }
     e.set_entry_type(t);
     e
@@ -114,7 +114,7 @@ fn test_raw_node_read_index_to_old_leader() {
     // elect r1 as leader
     nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
     let mut test_entries = Entry::new();
-    test_entries.set_data(b"testdata".to_vec());
+    test_entries.set_data(b"testdata".to_vec().into());
 
     // send readindex request to r2(follower)
     let _ =

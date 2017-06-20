@@ -84,16 +84,16 @@ impl<C> Node<C>
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
-            store.set_address(cfg.addr.clone());
+            store.set_address(cfg.addr.as_str().into());
         } else {
-            store.set_address(cfg.advertise_addr.clone())
+            store.set_address(cfg.advertise_addr.as_str().into())
         }
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
             let mut label = metapb::StoreLabel::new();
-            label.set_key(k.to_owned());
-            label.set_value(v.to_owned());
+            label.set_key(k.as_str().into());
+            label.set_value(v.as_str().into());
             labels.push(label);
         }
         store.set_labels(RepeatedField::from_vec(labels));
@@ -355,22 +355,22 @@ mod tests {
     fn test_check_region_epoch() {
         let mut r1 = metapb::Region::new();
         r1.set_id(1);
-        r1.set_start_key(keys::EMPTY_KEY.to_vec());
-        r1.set_end_key(keys::EMPTY_KEY.to_vec());
+        r1.set_start_key(keys::EMPTY_KEY.into());
+        r1.set_end_key(keys::EMPTY_KEY.into());
         r1.mut_region_epoch().set_version(1);
         r1.mut_region_epoch().set_conf_ver(1);
 
         let mut r2 = metapb::Region::new();
         r2.set_id(1);
-        r2.set_start_key(keys::EMPTY_KEY.to_vec());
-        r2.set_end_key(keys::EMPTY_KEY.to_vec());
+        r2.set_start_key(keys::EMPTY_KEY.into());
+        r2.set_end_key(keys::EMPTY_KEY.into());
         r2.mut_region_epoch().set_version(2);
         r2.mut_region_epoch().set_conf_ver(1);
 
         let mut r3 = metapb::Region::new();
         r3.set_id(1);
-        r3.set_start_key(keys::EMPTY_KEY.to_vec());
-        r3.set_end_key(keys::EMPTY_KEY.to_vec());
+        r3.set_start_key(keys::EMPTY_KEY.into());
+        r3.set_end_key(keys::EMPTY_KEY.into());
         r3.mut_region_epoch().set_version(1);
         r3.mut_region_epoch().set_conf_ver(2);
 

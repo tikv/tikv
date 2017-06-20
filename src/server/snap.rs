@@ -145,7 +145,7 @@ fn send_snap(env: Arc<Environment>,
         let rests = snap_chunk.map(|item| {
             item.map(|buf| {
                     let mut chunk = SnapshotChunk::new();
-                    chunk.set_data(buf);
+                    chunk.set_data(buf.into());
                     (chunk, WriteFlags::default())
                 })
                 .map_err(|e| box_err!("failed to read snapshot chunk: {}", e))

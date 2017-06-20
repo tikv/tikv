@@ -324,8 +324,8 @@ mod tests {
         assert_eq!(enc_start_key(&region), vec![DATA_PREFIX]);
         assert_eq!(enc_end_key(&region), vec![DATA_PREFIX + 1]);
 
-        region.set_start_key(vec![1]);
-        region.set_end_key(vec![2]);
+        region.set_start_key(vec![1].into());
+        region.set_end_key(vec![2].into());
         assert_eq!(enc_start_key(&region), vec![DATA_PREFIX, 1]);
         assert_eq!(enc_end_key(&region), vec![DATA_PREFIX, 2]);
     }

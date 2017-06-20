@@ -155,9 +155,9 @@ mod test {
         let (ref key, _) = wrapper.data.kv_data[handle];
         // prepare range
         let mut range = KeyRange::new();
-        range.set_start(key.clone());
+        range.set_start(key.clone().into());
         let end = prefix_next(&key.clone());
-        range.set_end(end);
+        range.set_end(end.into());
         assert!(is_point(&range));
         wrapper.ranges = vec![range];
 

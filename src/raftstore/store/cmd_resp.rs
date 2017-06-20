@@ -20,7 +20,7 @@ use kvproto::raft_cmdpb::RaftCmdResponse;
 use raftstore::Error;
 
 pub fn bind_uuid(resp: &mut RaftCmdResponse, uuid: Uuid) {
-    resp.mut_header().set_uuid(uuid.as_bytes().to_vec());
+    resp.mut_header().set_uuid(uuid.as_bytes().to_vec().into());
 }
 
 pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {

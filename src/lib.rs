@@ -69,6 +69,7 @@ extern crate tokio_core;
 extern crate tokio_timer;
 extern crate serde_json;
 extern crate serde;
+extern crate bytes;
 
 #[macro_use]
 pub mod util;

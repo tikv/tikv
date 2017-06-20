@@ -141,8 +141,8 @@ mod test {
         let mut end_buf = Vec::with_capacity(8);
         end_buf.encode_i64(end).unwrap();
         let mut key_range = KeyRange::new();
-        key_range.set_start(table::encode_index_seek_key(table_id, idx_id, &start_buf));
-        key_range.set_end(table::encode_index_seek_key(table_id, idx_id, &end_buf));
+        key_range.set_start(table::encode_index_seek_key(table_id, idx_id, &start_buf).into());
+        key_range.set_end(table::encode_index_seek_key(table_id, idx_id, &end_buf).into());
         key_range
     }
 
@@ -229,11 +229,11 @@ mod test {
         let (ref split_key, _) = wrapper.data.kv_data[KEY_NUMBER / 3];
         let (ref end_key, _) = wrapper.data.kv_data[KEY_NUMBER / 2];
         let mut r1 = KeyRange::new();
-        r1.set_start(start_key.clone());
-        r1.set_end(split_key.clone());
+        r1.set_start(start_key.clone().into());
+        r1.set_end(split_key.clone().into());
         let mut r2 = KeyRange::new();
-        r2.set_start(split_key.clone());
-        r2.set_end(end_key.clone());
+        r2.set_start(split_key.clone().into());
+        r2.set_end(end_key.clone().into());
         wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let mut scanner = IndexScanExec::new(&mut wrapper.scan,

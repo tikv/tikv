@@ -144,7 +144,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl Into<errorpb::Error> for Error {
     fn into(self) -> errorpb::Error {
         let mut errorpb = errorpb::Error::new();
-        errorpb.set_message(error::Error::description(&self).to_owned());
+        errorpb.set_message(error::Error::description(&self).into());
 
         match self {
             Error::RegionNotFound(region_id) => {
@@ -162,10 +162,10 @@ impl Into<errorpb::Error> for Error {
             }
             Error::StoreNotMatch(..) => errorpb.set_store_not_match(errorpb::StoreNotMatch::new()),
             Error::KeyNotInRegion(key, region) => {
-                errorpb.mut_key_not_in_region().set_key(key);
+                errorpb.mut_key_not_in_region().set_key(key.into());
                 errorpb.mut_key_not_in_region().set_region_id(region.get_id());
-                errorpb.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
-                errorpb.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
+                errorpb.mut_key_not_in_region().set_start_key(region.get_start_key().into());
+                errorpb.mut_key_not_in_region().set_end_key(region.get_end_key().into());
             }
             Error::StaleEpoch(_, new_regions) => {
                 let mut e = errorpb::StaleEpoch::new();
@@ -177,7 +177,7 @@ impl Into<errorpb::Error> for Error {
             }
             Error::Transport(transport::Error::Discard(_)) => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::new();
-                server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.into());
                 errorpb.set_server_is_busy(server_is_busy_err);
             }
             _ => {}

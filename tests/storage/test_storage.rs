@@ -228,8 +228,8 @@ fn test_txn_store_scan_key_only() {
 
 fn lock(key: &[u8], primary: &[u8], ts: u64) -> LockInfo {
     let mut lock = LockInfo::new();
-    lock.set_key(key.to_vec());
-    lock.set_primary_lock(primary.to_vec());
+    lock.set_key(key.into());
+    lock.set_primary_lock(primary.into());
     lock.set_lock_version(ts);
     lock
 }

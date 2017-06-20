@@ -21,10 +21,11 @@ use std::cell::RefCell;
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType, ByItem};
-use protobuf::{Message as PbMsg, RepeatedField};
+use protobuf::{Message as PbMsg, RepeatedField, Chars};
 use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
+use bytes::Bytes;
 
 use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
 use util::codec::table::{RowColsDict, TableDecoder};
@@ -291,7 +292,8 @@ fn err_resp(e: Error) -> Response {
             COPR_REQ_ERROR.with_label_values(&["select", "lock"]).inc();
         }
         Error::Other(_) => {
-            resp.set_other_error(format!("{}", e));
+            let chars = Chars::from_bytes(Bytes::from(format!("{}", e))).unwrap();
+            resp.set_other_error(chars);
             COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
         }
         Error::Outdated(deadline, now, tp) => {
@@ -301,15 +303,14 @@ fn err_resp(e: Error) -> Response {
             COPR_REQ_ERROR.with_label_values(&["select", "outdated"]).inc();
             OUTDATED_REQ_WAIT_TIME.with_label_values(&["select", t])
                 .observe(elapsed.as_secs() as f64);
-
-            resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
+            resp.set_other_error(Chars::from(OUTDATED_ERROR_MSG));
         }
         Error::Full(allow) => {
             COPR_REQ_ERROR.with_label_values(&["select", "full"]).inc();
             let mut errorpb = errorpb::Error::new();
-            errorpb.set_message(format!("running batches reach limit {}", allow));
+            errorpb.set_message(format!("running batches reach limit {}", allow).as_str().into());
             let mut server_is_busy_err = ServerIsBusy::new();
-            server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
+            server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.into());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
         }
@@ -395,7 +396,8 @@ impl TiDbEndPoint {
                     // should we handle locked here too?
                     sel_resp.set_error(to_pb_error(&e));
                     // TODO add detail error
-                    resp.set_other_error(format!("{}", e));
+                    let chars = Chars::from_bytes(Bytes::from(format!("{}", e))).unwrap();
+                    resp.set_other_error(chars);
                 } else {
                     // other error should be handle by ti client.
                     return Err(e);
@@ -403,7 +405,7 @@ impl TiDbEndPoint {
             }
         }
         let data = box_try!(sel_resp.write_to_bytes());
-        resp.set_data(data);
+        resp.set_data(Bytes::from(data));
 
         Ok(resp)
     }

@@ -407,24 +407,24 @@ impl<'a> Select<'a> {
         }
         self.sel.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
 
-        req.set_data(self.sel.write_to_bytes().unwrap());
+        req.set_data(self.sel.write_to_bytes().unwrap().into());
 
         let mut range = KeyRange::new();
 
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(i64::MIN).unwrap();
         if self.idx < 0 {
-            range.set_start(table::encode_row_key(self.table.id, &buf));
+            range.set_start(table::encode_row_key(self.table.id, &buf).into());
         } else {
-            range.set_start(table::encode_index_seek_key(self.table.id, self.idx, &buf));
+            range.set_start(table::encode_index_seek_key(self.table.id, self.idx, &buf).into());
         }
 
         buf.clear();
         buf.encode_i64(i64::MAX).unwrap();
         if self.idx < 0 {
-            range.set_end(table::encode_row_key(self.table.id, &buf));
+            range.set_end(table::encode_row_key(self.table.id, &buf).into());
         } else {
-            range.set_end(table::encode_index_seek_key(self.table.id, self.idx, &buf));
+            range.set_end(table::encode_index_seek_key(self.table.id, self.idx, &buf).into());
         }
         req.set_ranges(RepeatedField::from_vec(vec![range]));
         req

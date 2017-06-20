@@ -109,8 +109,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                     res.set_region_error(err);
                 } else {
                     match v {
-                        Ok(Some(val)) => res.set_value(val),
-                        Ok(None) => res.set_value(vec![]),
+                        Ok(Some(val)) => res.set_value(val.into()),
+                        Ok(None) => res.set_value(vec![].into()),
                         Err(e) => res.set_error(extract_key_error(&e)),
                     }
                 }
@@ -177,7 +177,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .into_iter()
             .map(|mut x| {
                 match x.get_op() {
-                    Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
+                    Op::Put => {
+                        Mutation::Put((Key::from_raw(x.get_key()), (*x.take_value()).into()))
+                    }
                     Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
                     Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
                 }
@@ -190,7 +192,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let (cb, future) = make_callback();
         let res = self.storage.async_prewrite(req.take_context(),
                                               mutations,
-                                              req.take_primary_lock(),
+                                              (*req.take_primary_lock()).into(),
                                               req.get_start_version(),
                                               options,
                                               cb);
@@ -487,7 +489,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
 
         let (cb, future) = make_callback();
-        let res = self.storage.async_raw_get(req.take_context(), req.take_key(), cb);
+        let res = self.storage.async_raw_get(req.take_context(), (*req.take_key()).into(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -500,9 +502,9 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                     resp.set_region_error(err);
                 } else {
                     match v {
-                        Ok(Some(val)) => resp.set_value(val),
+                        Ok(Some(val)) => resp.set_value(val.into()),
                         Ok(None) => {}
-                        Err(e) => resp.set_error(format!("{}", e)),
+                        Err(e) => resp.set_error(format!("{}", e).as_str().into()),
                     }
                 }
                 resp
@@ -523,7 +525,10 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (cb, future) = make_callback();
         let res = self.storage
-            .async_raw_put(req.take_context(), req.take_key(), req.take_value(), cb);
+            .async_raw_put(req.take_context(),
+                           (*req.take_key()).into(),
+                           (*req.take_value()).into(),
+                           cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -535,7 +540,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
-                    resp.set_error(format!("{}", e));
+                    resp.set_error(format!("{}", e).as_str().into());
                 }
                 resp
             })
@@ -557,7 +562,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
 
         let (cb, future) = make_callback();
-        let res = self.storage.async_raw_delete(req.take_context(), req.take_key(), cb);
+        let res = self.storage
+            .async_raw_delete(req.take_context(), Vec::from(&*req.take_key()), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -569,7 +575,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else if let Err(e) = v {
-                    resp.set_error(format!("{}", e));
+                    resp.set_error(format!("{}", e).as_str().into());
                 }
                 resp
             })
@@ -669,7 +675,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         Err(Error::SchedTooBusy) => {
             let mut err = RegionError::new();
             let mut server_is_busy_err = ServerIsBusy::new();
-            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.into());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
@@ -692,8 +698,8 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
                                                                     ts,
                                                                     ttl })) => {
             let mut lock_info = LockInfo::new();
-            lock_info.set_key(key.to_owned());
-            lock_info.set_primary_lock(primary.to_owned());
+            lock_info.set_key(key.as_slice().into());
+            lock_info.set_primary_lock(primary.as_slice().into());
             lock_info.set_lock_version(ts);
             lock_info.set_lock_ttl(ttl);
             key_error.set_locked(lock_info);
@@ -701,11 +707,11 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict)) |
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound)) => {
             debug!("txn conflicts: {}", err);
-            key_error.set_retryable(format!("{:?}", err));
+            key_error.set_retryable(format!("{:?}", err).as_str().into());
         }
         _ => {
             error!("txn aborts: {}", err);
-            key_error.set_abort(format!("{:?}", err));
+            key_error.set_abort(format!("{:?}", err).as_str().into());
         }
     }
     key_error
@@ -718,8 +724,8 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
                 .map(|r| match r {
                     Ok((key, value)) => {
                         let mut pair = KvPair::new();
-                        pair.set_key(key);
-                        pair.set_value(value);
+                        pair.set_key(key.into());
+                        pair.set_value(value.into());
                         pair
                     }
                     Err(e) => {

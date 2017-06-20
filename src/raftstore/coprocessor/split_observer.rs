@@ -53,7 +53,7 @@ impl SplitObserver {
             return Err("no need to split".to_owned());
         }
 
-        split.set_split_key(key);
+        split.set_split_key(key.into());
         Ok(())
     }
 }
@@ -94,7 +94,7 @@ mod test {
         let mut req = AdminRequest::new();
         req.set_cmd_type(AdminCmdType::Split);
         let mut split_req = SplitRequest::new();
-        split_req.set_split_key(key.to_vec());
+        split_req.set_split_key(key.into());
         req.set_split(split_req);
         req
     }
@@ -125,7 +125,7 @@ mod test {
         let key = new_row_key(256, 2, 1, 0);
         let mut r = Region::new();
         r.set_id(10);
-        r.set_start_key(region_start_key);
+        r.set_start_key(region_start_key.into());
 
         let mut ctx = ObserverContext::new(&r);
         let observer = SplitObserver;

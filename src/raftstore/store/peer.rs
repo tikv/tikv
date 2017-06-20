@@ -1213,7 +1213,7 @@ impl Peer {
             renew_lease_time: Some(renew_lease_time),
         };
         let mut req = RaftCmdRequest::new();
-        req.mut_header().set_uuid(uuid.as_bytes().to_vec());
+        req.mut_header().set_uuid(uuid.as_bytes().to_vec().into());
         if self.propose_normal(req, metrics).is_ok() {
             self.post_propose(meta, false, box |_| {});
         }
@@ -1301,7 +1301,7 @@ impl Peer {
         let mut cc = eraftpb::ConfChange::new();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
-        cc.set_context(data);
+        cc.set_context(data.into());
 
         info!("{} propose conf change {:?} peer {:?}",
               self.tag,
@@ -1476,8 +1476,8 @@ impl Peer {
             // the peer has not been known to this leader, it may exist or not.
             (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)) {
             let region = self.region();
-            send_msg.set_start_key(region.get_start_key().to_vec());
-            send_msg.set_end_key(region.get_end_key().to_vec());
+            send_msg.set_start_key(region.get_start_key().into());
+            send_msg.set_end_key(region.get_end_key().into());
         }
 
         send_msg.set_message(msg);

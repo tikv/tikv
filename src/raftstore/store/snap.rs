@@ -767,7 +767,7 @@ mod v2 {
             }
 
             let mut cf_file_meta = SnapshotCFFile::new();
-            cf_file_meta.set_cf(cf_file.cf.to_owned());
+            cf_file_meta.set_cf(cf_file.cf.into());
             cf_file_meta.set_size(cf_file.size);
             cf_file_meta.set_checksum(cf_file.checksum);
             meta.push(cf_file_meta);
@@ -1513,8 +1513,8 @@ mod v2 {
             peer.set_id(peer_id);
             let mut region = Region::new();
             region.set_id(region_id);
-            region.set_start_key(b"a".to_vec());
-            region.set_end_key(b"z".to_vec());
+            region.set_start_key(b"a".to_vec().into());
+            region.set_end_key(b"z".to_vec().into());
             region.mut_region_epoch().set_version(1);
             region.mut_region_epoch().set_conf_ver(1);
             region.mut_peers().push(peer.clone());

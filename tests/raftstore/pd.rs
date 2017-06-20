@@ -350,8 +350,8 @@ fn setdiff_peers(left: &metapb::Region, right: &metapb::Region) -> Vec<metapb::P
 pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
     let mut region = metapb::Region::new();
     region.set_id(1);
-    region.set_start_key(keys::EMPTY_KEY.to_vec());
-    region.set_end_key(keys::EMPTY_KEY.to_vec());
+    region.set_start_key(keys::EMPTY_KEY.into());
+    region.set_end_key(keys::EMPTY_KEY.into());
     region.mut_region_epoch().set_version(1);
     region.mut_region_epoch().set_conf_ver(1);
     let peer = new_peer(1, 1);

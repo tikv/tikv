@@ -158,7 +158,7 @@ impl PdClient for RpcClient {
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         let mut req = pdpb::GetRegionRequest::new();
         req.set_header(self.header());
-        req.set_region_key(key.to_vec());
+        req.set_region_key(key.into());
 
         let mut resp = try!(sync_request(&self.leader_client,
                                          LEADER_CHANGE_RETRY,
