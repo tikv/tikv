@@ -177,7 +177,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         header.set_peer(ctx.get_peer().clone());
         header.set_region_epoch(ctx.get_region_epoch().clone());
         header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        header.set_read_quorum(ctx.get_read_quorum());
         if ctx.get_term() != 0 {
             header.set_term(ctx.get_term());
         }
