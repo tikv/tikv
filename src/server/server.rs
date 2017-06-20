@@ -368,6 +368,7 @@ impl SnapshotReporter {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use std::thread;
     use std::sync::{Arc, Mutex};
     use std::sync::mpsc::{self, Sender};
@@ -475,7 +476,7 @@ mod tests {
             })
             .unwrap();
 
-        rx.recv().unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
 
         ch.try_send(Msg::Quit).unwrap();
         h.join().unwrap();
