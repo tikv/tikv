@@ -22,8 +22,8 @@ const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
 
 const CHAR_BACKSPACE: char = '\x08';
 const CHAR_HORIZONTAL_TAB: char = '\x09';
-const CHAR_LINE_FEED: char = '\x0A';
-const CHAR_FORM_FEED: char = '\x0C';
+const CHAR_LINEFEED: char = '\x0A';
+const CHAR_FORMFEED: char = '\x0C';
 const CHAR_CARRIAGE_RETURN: char = '\x0D';
 
 impl Json {
@@ -45,13 +45,13 @@ pub fn unquote_string(s: &str) -> Result<String> {
         if ch == '\\' {
             let c = match chars.next() {
                 Some(c) => c,
-                None => return Err(box_err!("Missing a closing quotation mark in string")),
+                None => return Err(box_err!("Incomplete escaped sequence")),
             };
             match c {
                 '"' => ret.push('"'),
                 'b' => ret.push(CHAR_BACKSPACE),
-                'f' => ret.push(CHAR_FORM_FEED),
-                'n' => ret.push(CHAR_LINE_FEED),
+                'f' => ret.push(CHAR_FORMFEED),
+                'n' => ret.push(CHAR_LINEFEED),
                 'r' => ret.push(CHAR_CARRIAGE_RETURN),
                 't' => ret.push(CHAR_HORIZONTAL_TAB),
                 '\\' => ret.push('\\'),
