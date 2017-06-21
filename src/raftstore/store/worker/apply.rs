@@ -205,7 +205,10 @@ pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
 
 /// Call the callback of `cmd` when it can not be processed further.
 fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
-    info!("{} command at [index: {}, term: {}] is stale, skip", tag, cmd.index, cmd.term);
+    info!("{} command at [index: {}, term: {}] is stale, skip",
+          tag,
+          cmd.index,
+          cmd.term);
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
