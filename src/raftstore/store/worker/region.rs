@@ -125,43 +125,15 @@ impl Runner {
         timer.observe_duration();
     }
 
-    fn delete_all_in_range(&self,
-                           start_key: &[u8],
-                           end_key: &[u8],
-                           abort: &AtomicUsize)
-                           -> Result<()> {
-        let mut wb = WriteBatch::new();
-        let mut size_cnt = 0;
+    fn delete_all_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let wb = WriteBatch::new();
         for cf in self.db.cf_names() {
-            try!(check_abort(abort));
-            let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
-
             let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
             let mut it = box_try!(self.db.new_iterator_cf(cf, iter_opt));
-
-            try!(check_abort(abort));
             it.seek(start_key.into());
-            while it.valid() {
-                {
-                    let key = it.key();
-                    if key >= end_key {
-                        break;
-                    }
-
-                    box_try!(wb.delete_cf(handle, key));
-                    size_cnt += key.len();
-                    if size_cnt >= self.batch_size {
-                        // Can't use write_without_wal here.
-                        // Otherwise it may cause dirty data when applying snapshot.
-                        box_try!(self.db.write(wb));
-                        wb = WriteBatch::new();
-                        size_cnt = 0;
-                    }
-                };
-                try!(check_abort(abort));
-                if !it.next() {
-                    break;
-                }
+            if it.valid() {
+                let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
+                box_try!(wb.delete_range_cf(handle, start_key, end_key));
             }
         }
 
@@ -184,7 +156,9 @@ impl Runner {
         let region = region_state.get_region().clone();
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
-        box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
+        try!(check_abort(&abort));
+        box_try!(self.delete_all_in_range(&start_key, &end_key));
+        try!(check_abort(&abort));
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState = match box_try!(self.db.get_msg_cf(CF_RAFT, &state_key)) {
@@ -251,8 +225,7 @@ impl Runner {
               region_id,
               escape(&start_key),
               escape(&end_key));
-        let status = AtomicUsize::new(JOB_STATUS_PENDING);
-        if let Err(e) = self.delete_all_in_range(&start_key, &end_key, &status) {
+        if let Err(e) = self.delete_all_in_range(&start_key, &end_key) {
             error!("failed to delete data in [{}, {}): {:?}",
                    escape(&start_key),
                    escape(&end_key),
