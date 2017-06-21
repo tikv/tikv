@@ -54,7 +54,6 @@ pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
     columns: Vec<ColumnInfo>,
     heap: Option<TopNHeap>,
-    executed: bool,
     iter: Option<IntoIter<SortRow>>,
 
     src: Box<Executor + 'a>,
@@ -82,7 +81,6 @@ impl<'a> TopNExecutor<'a> {
             order_by: Rc::new(order_by),
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
             columns: columns,
-            executed: false,
             iter: None,
             ctx: ctx,
             src: src,
@@ -110,9 +108,8 @@ impl<'a> TopNExecutor<'a> {
 
 impl<'a> Executor for TopNExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
-        if !self.executed {
+        if self.iter.is_none() {
             try!(self.fetch_all());
-            self.executed = true;
             self.iter = Some(try!(self.heap.take().unwrap().into_sorted_vec()).into_iter());
         }
         let iter = self.iter.as_mut().unwrap();
