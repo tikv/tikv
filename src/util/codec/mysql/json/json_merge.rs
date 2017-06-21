@@ -22,18 +22,14 @@ impl Json {
     // 3. a scalar value is autowrapped as an array before merge;
     // 4. an adjacent array and object are merged by autowrapping the object as an array.
     pub fn merge(self, suffixes: Vec<Json>) -> Json {
-        let mut data: Json = match self {
+        let base_data: Json = match self {
             Json::Object(obj) => Json::Object(obj),
             Json::Array(array) => Json::Array(array),
-            json => {
-                let mut array = Vec::with_capacity(suffixes.len() + 1);
-                array.push(json);
-                Json::Array(array)
-            }
+            json => Json::Array(vec![json]),
         };
-        let mut left_num = suffixes.len();
-        for suffix in suffixes {
-            data = match (data, suffix) {
+
+        suffixes.into_iter().fold(base_data, |data, suffix| {
+            match (data, suffix) {
                 (Json::Array(mut array), Json::Array(mut sub_array)) => {
                     // rule 1
                     array.append(&mut sub_array);
@@ -58,22 +54,14 @@ impl Json {
                 }
                 (obj, Json::Array(mut sub_array)) => {
                     // rule 4
-                    let mut array: Vec<Json> = Vec::with_capacity(sub_array.len() + left_num + 1);
-                    array.push(obj);
+                    let mut array = vec![obj];
                     array.append(&mut sub_array);
                     Json::Array(array)
                 }
-                (obj, suffix) => {
-                    // rule 3, 4
-                    let mut array = Vec::with_capacity(left_num + 1);
-                    array.push(obj);
-                    array.push(suffix);
-                    Json::Array(array)
-                }
-            };
-            left_num -= 1;
-        }
-        data
+                // rule 3, 4
+                (obj, suffix) => Json::Array(vec![obj, suffix]),
+            }
+        })
     }
 }
 
