@@ -78,9 +78,6 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        if msg.get_region_id() == 0 {
-            return Ok(());
-        }
         self.try_send(StoreMsg::RaftMessage(msg))
     }
 
