@@ -149,10 +149,8 @@ impl<'a> MvccReader<'a> {
                 self.write_cursor = Some(iter);
             }
         } else {
-            let upper_bound_key = key.append_ts(0u64);
-            let upper_bound = upper_bound_key.encoded().clone();
             // use prefix bloom filter
-            let iter_opt = IterOption::new(Some(upper_bound), true).use_prefix_seek();
+            let iter_opt = IterOption::default().use_prefix_seek().set_prefix_same_as_start(true);
             let iter = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed));
             self.write_cursor = Some(iter);
         }
@@ -222,10 +220,12 @@ impl<'a> MvccReader<'a> {
                                key: &Key,
                                start_ts: u64)
                                -> Result<Option<(u64, WriteType)>> {
-        if let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, start_ts)) {
+        let mut seek_ts = start_ts;
+        while let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, seek_ts)) {
             if write.start_ts == start_ts {
                 return Ok(Some((commit_ts, write.write_type)));
             }
+            seek_ts = commit_ts + 1;
         }
         Ok(None)
     }

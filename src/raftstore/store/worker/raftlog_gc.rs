@@ -114,7 +114,7 @@ impl Runnable<Task> for Runner {
                 self.report_collected(0);
             }
             Ok(n) => {
-                info!("[region {}] collected {} log entries", task.region_id, n);
+                debug!("[region {}] collected {} log entries", task.region_id, n);
                 self.report_collected(n);
             }
         }

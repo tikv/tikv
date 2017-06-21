@@ -16,7 +16,7 @@ use std::collections::BinaryHeap;
 use std::time::{Instant, Duration};
 use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
-use std::cmp::Ordering as CmpOrdering;
+use std::cmp::{self, Ordering as CmpOrdering};
 use std::cell::RefCell;
 use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
@@ -567,13 +567,16 @@ struct TopNHeap {
     err: Rc<RefCell<Option<String>>>,
 }
 
+const HEAP_MAX_CAPACITY: usize = 1024;
+
 impl TopNHeap {
     fn new(limit: usize) -> Result<TopNHeap> {
         if limit == usize::MAX {
             return Err(box_err!("invalid limit"));
         }
+        let cap = cmp::min(limit, HEAP_MAX_CAPACITY);
         Ok(TopNHeap {
-            rows: BinaryHeap::with_capacity(limit),
+            rows: BinaryHeap::with_capacity(cap),
             limit: limit,
             err: Rc::new(RefCell::new(None)),
         })
@@ -1363,5 +1366,13 @@ mod tests {
             assert_eq!(row.handle, handle);
             assert_eq!(row.key, exp_keys);
         }
+    }
+
+    #[test]
+    fn test_topn_limit_oom() {
+        let topn_heap = TopNHeap::new(usize::MAX - 1);
+        assert!(topn_heap.is_ok());
+        let topn_heap = TopNHeap::new(usize::MAX);
+        assert!(topn_heap.is_err());
     }
 }

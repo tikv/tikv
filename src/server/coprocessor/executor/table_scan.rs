@@ -117,7 +117,7 @@ mod test {
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
 
-    struct TableScanExecutorMeta {
+    struct TableScanTestWrapper {
         data: Data,
         store: TestStore,
         table_scan: TableScan,
@@ -125,10 +125,10 @@ mod test {
         cols: Vec<ColumnInfo>,
     }
 
-    impl Default for TableScanExecutorMeta {
-        fn default() -> TableScanExecutorMeta {
+    impl Default for TableScanTestWrapper {
+        fn default() -> TableScanTestWrapper {
             let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
-            let test_store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
+            let test_store = TestStore::new(&test_data.kv_data);
             let mut table_scan = TableScan::new();
             // prepare cols
             let cols = test_data.get_prev_2_cols();
@@ -137,7 +137,7 @@ mod test {
             // prepare range
             let range = get_range(TABLE_ID, i64::MIN, i64::MAX);
             let key_ranges = vec![range];
-            TableScanExecutorMeta {
+            TableScanTestWrapper {
                 data: test_data,
                 store: test_store,
                 table_scan: table_scan,
@@ -150,31 +150,34 @@ mod test {
     #[test]
     fn test_point_get() {
         let mut statistics = Statistics::default();
-        let mut meta = TableScanExecutorMeta::default();
+        let mut wrapper = TableScanTestWrapper::default();
+        let handle = 0;
+        let (ref key, _) = wrapper.data.kv_data[handle];
         // prepare range
         let mut range = KeyRange::new();
-        range.set_start(meta.data.pk.clone());
-        let end = prefix_next(&meta.data.pk.clone());
+        range.set_start(key.clone());
+        let end = prefix_next(&key.clone());
         range.set_end(end);
         assert!(is_point(&range));
-        meta.ranges = vec![range];
-        let (snapshot, start_ts) = meta.store.get_snapshot();
+        wrapper.ranges = vec![range];
 
-        let mut table_scanner = TableScanExecutor::new(meta.table_scan,
-                                                       meta.ranges,
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+
+        let mut table_scanner = TableScanExecutor::new(wrapper.table_scan,
+                                                       wrapper.ranges,
                                                        snapshot,
                                                        &mut statistics,
                                                        start_ts);
 
         let row = table_scanner.next().unwrap().unwrap();
-        assert_eq!(row.handle, meta.data.pk_handle);
-        assert_eq!(row.data.len(), meta.cols.len());
+        assert_eq!(row.handle, handle as i64);
+        assert_eq!(row.data.len(), wrapper.cols.len());
 
-        let encode_data = &meta.data.encode_data[0];
-        for col in &meta.cols {
+        let expect_row = &wrapper.data.expect_rows[handle];
+        for col in &wrapper.cols {
             let cid = col.get_column_id();
             let v = row.data.get(cid).unwrap();
-            assert_eq!(encode_data[&cid], v.to_vec());
+            assert_eq!(expect_row[&cid], v.to_vec());
         }
         assert!(table_scanner.next().unwrap().is_none());
     }
@@ -182,16 +185,16 @@ mod test {
     #[test]
     fn test_multiple_ranges() {
         let mut statistics = Statistics::default();
-        let mut meta = TableScanExecutorMeta::default();
+        let mut wrapper = TableScanTestWrapper::default();
         // prepare range
         let r1 = get_range(TABLE_ID, i64::MIN, 0);
         let r2 = get_range(TABLE_ID, 0, (KEY_NUMBER / 2) as i64);
         let r3 = get_range(TABLE_ID, (KEY_NUMBER / 2) as i64, i64::MAX);
-        meta.ranges = vec![r1, r2, r3];
+        wrapper.ranges = vec![r1, r2, r3];
 
-        let (snapshot, start_ts) = meta.store.get_snapshot();
-        let mut table_scanner = TableScanExecutor::new(meta.table_scan,
-                                                       meta.ranges,
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let mut table_scanner = TableScanExecutor::new(wrapper.table_scan,
+                                                       wrapper.ranges,
                                                        snapshot,
                                                        &mut statistics,
                                                        start_ts);
@@ -199,12 +202,12 @@ mod test {
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
-            assert_eq!(row.data.len(), meta.cols.len());
-            let encode_data = &meta.data.encode_data[handle];
-            for col in &meta.cols {
+            assert_eq!(row.data.len(), wrapper.cols.len());
+            let expect_row = &wrapper.data.expect_rows[handle];
+            for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid], v.to_vec());
+                assert_eq!(expect_row[&cid], v.to_vec());
             }
         }
         assert!(table_scanner.next().unwrap().is_none());
@@ -213,11 +216,11 @@ mod test {
     #[test]
     fn test_reverse_scan() {
         let mut statistics = Statistics::default();
-        let mut meta = TableScanExecutorMeta::default();
-        meta.table_scan.set_desc(true);
-        let (snapshot, start_ts) = meta.store.get_snapshot();
-        let mut table_scanner = TableScanExecutor::new(meta.table_scan,
-                                                       meta.ranges,
+        let mut wrapper = TableScanTestWrapper::default();
+        wrapper.table_scan.set_desc(true);
+        let (snapshot, start_ts) = wrapper.store.get_snapshot();
+        let mut table_scanner = TableScanExecutor::new(wrapper.table_scan,
+                                                       wrapper.ranges,
                                                        snapshot,
                                                        &mut statistics,
                                                        start_ts);
@@ -226,12 +229,12 @@ mod test {
             let handle = KEY_NUMBER - tid - 1;
             let row = table_scanner.next().unwrap().unwrap();
             assert_eq!(row.handle, handle as i64);
-            assert_eq!(row.data.len(), meta.cols.len());
-            let encode_data = &meta.data.encode_data[handle];
-            for col in &meta.cols {
+            assert_eq!(row.data.len(), wrapper.cols.len());
+            let expect_row = &wrapper.data.expect_rows[handle];
+            for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();
-                assert_eq!(encode_data[&cid], v.to_vec());
+                assert_eq!(expect_row[&cid], v.to_vec());
             }
         }
         assert!(table_scanner.next().unwrap().is_none());

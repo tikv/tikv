@@ -43,6 +43,7 @@ quick_error!{
         Io(err: IoError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Protobuf(err: ProtobufError) {
@@ -53,43 +54,52 @@ quick_error!{
         Grpc(err: GrpcError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Codec(err: CodecError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         AddrParse(err: AddrParseError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         RaftServer(err: RaftServerError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Engine(err: EngineError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Storage(err: StorageError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Pd(err: PdError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         SnapWorkerStopped(err: Stopped<SnapTask>) {
             from()
+            display("{:?}", err)
         }
         EndPointStopped(err: Stopped<EndPointTask>) {
             from()
+            display("{:?}", err)
         }
         Sink {
             description("failed to poll from mpsc receiver")
@@ -97,6 +107,7 @@ quick_error!{
         Canceled(err: Canceled) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
     }

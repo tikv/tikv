@@ -39,7 +39,7 @@ use raftstore::store::worker::apply::ExecResult;
 
 use util::worker::{FutureWorker as Worker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
-use util::{clocktime, Either, strftimespec};
+use util::{clocktime, Either};
 use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
 
 use pd::INVALID_ID;
@@ -601,7 +601,7 @@ impl Peer {
                     self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
                     debug!("{} becomes leader and lease expired time is {:?}",
                            self.tag,
-                           strftimespec(next_expired_time));
+                           next_expired_time);
                     self.heartbeat_pd(worker)
                 }
                 StateRole::Follower => {
@@ -858,8 +858,8 @@ impl Peer {
             if current_expired_time < next_expired_time {
                 debug!("{} update leader lease expired time from {:?} to {:?}",
                        self.tag,
-                       strftimespec(current_expired_time),
-                       strftimespec(next_expired_time));
+                       current_expired_time,
+                       next_expired_time);
                 self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
             }
         } else if self.is_leader() {
@@ -869,7 +869,7 @@ impl Peer {
             let next_expired_time = self.next_lease_expired_time(propose_time);
             debug!("{} update leader lease expired time from None to {:?}",
                    self.tag,
-                   strftimespec(next_expired_time));
+                   next_expired_time);
             self.leader_lease_expired_time = Some(Either::Left(next_expired_time));
         }
     }
@@ -1046,7 +1046,7 @@ impl Peer {
 
             debug!("{} leader lease expired time {:?} is outdated",
                    self.tag,
-                   strftimespec(safe_expired_time));
+                   safe_expired_time);
             // Reset leader lease expiring time.
             self.leader_lease_expired_time = None;
         }

@@ -14,10 +14,13 @@
 use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
 
-
 mod scanner;
 pub mod table_scan;
+<<<<<<< HEAD
 pub mod selection;
+=======
+pub mod index_scan;
+>>>>>>> upstream/master
 
 // TODO:remove it
 #[allow(dead_code)]
