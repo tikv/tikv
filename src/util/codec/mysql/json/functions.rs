@@ -14,7 +14,7 @@
 // FIXME: remove following later
 #![allow(dead_code)]
 
-use std::{u32, char};
+use std::{u32, char, str};
 use super::super::Result;
 use super::json::Json;
 
@@ -56,15 +56,19 @@ pub fn unquote_string(s: &str) -> Result<String> {
                 't' => ret.push(CHAR_HORIZONTAL_TAB),
                 '\\' => ret.push('\\'),
                 'u' => {
-                    let mut unicode = String::with_capacity(ESCAPED_UNICODE_BYTES_SIZE);
-                    for _ in 0..ESCAPED_UNICODE_BYTES_SIZE {
-                        match chars.next() {
-                            Some(c) => unicode.push(c),
-                            None => return Err(box_err!("Invalid unicode: {}", unicode)),
-                        }
+                    let b = chars.as_str().as_bytes();
+                    if b.len() < ESCAPED_UNICODE_BYTES_SIZE {
+                        return Err(box_err!("Invalid unicode, byte len too short: {:?}", b));
                     }
-                    let utf8 = try!(decode_escaped_unicode(&unicode));
+                    let unicode = try!(str::from_utf8(&b[0..ESCAPED_UNICODE_BYTES_SIZE]));
+                    if unicode.len() != ESCAPED_UNICODE_BYTES_SIZE {
+                        return Err(box_err!("Invalid unicode, char len too short: {}", unicode));
+                    }
+                    let utf8 = try!(decode_escaped_unicode(unicode));
                     ret.push(utf8);
+                    for _ in 0..ESCAPED_UNICODE_BYTES_SIZE {
+                        chars.next();
+                    }
                 }
                 _ => {
                     // For all other escape sequences, backslash is ignored.
