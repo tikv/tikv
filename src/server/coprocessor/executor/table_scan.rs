@@ -176,8 +176,6 @@ mod test {
             let v = row.data.get(cid).unwrap();
             assert_eq!(encode_data[&cid], v.to_vec());
         }
-        assert!(table_scanner.next().is_ok());
-        assert!(table_scanner.next().is_ok());
         assert!(table_scanner.next().unwrap().is_none());
     }
 
