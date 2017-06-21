@@ -61,7 +61,9 @@ impl PendingCmd {
 impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
-            panic!("callback of pending command at [index: {}, term: {}] is leak.", self.index, self.term);
+            panic!("callback of pending command at [index: {}, term: {}] is leak.",
+                   self.index,
+                   self.term);
         }
     }
 }
