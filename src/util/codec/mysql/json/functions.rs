@@ -20,11 +20,17 @@ use super::json::Json;
 
 const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
 
+const CHAR_BACKSPACE: char = '\x08';
+const CHAR_HORIZONTAL_TAB: char = '\x09';
+const CHAR_LINE_FEED: char = '\x0A';
+const CHAR_FORM_FEED: char = '\x0C';
+const CHAR_CARRIAGE_RETURN: char = '\x0D';
+
 impl Json {
     pub fn unquote(&self) -> Result<String> {
         match *self {
             Json::String(ref s) => unquote_string(s),
-            _ => Ok(format!("{:?}", self)),
+            _ => Ok(self.to_string()),
         }
     }
 }
@@ -43,11 +49,11 @@ pub fn unquote_string(s: &str) -> Result<String> {
             };
             match c {
                 '"' => ret.push('"'),
-                'b' => ret.push('\x08'),
-                'f' => ret.push('\x0C'),
-                'n' => ret.push('\x0A'),
-                'r' => ret.push('\x0D'),
-                't' => ret.push('\x0B'),
+                'b' => ret.push(CHAR_BACKSPACE),
+                'f' => ret.push(CHAR_FORM_FEED),
+                'n' => ret.push(CHAR_LINE_FEED),
+                'r' => ret.push(CHAR_CARRIAGE_RETURN),
+                't' => ret.push(CHAR_HORIZONTAL_TAB),
                 '\\' => ret.push('\\'),
                 'u' => {
                     let mut unicode = String::with_capacity(ESCAPED_UNICODE_BYTES_SIZE);
@@ -108,7 +114,7 @@ mod test {
                                   ("\\f", true, Some("\x0C")),
                                   ("\\n", true, Some("\x0A")),
                                   ("\\r", true, Some("\x0D")),
-                                  ("\\t", true, Some("\x0B")),
+                                  ("\\t", true, Some("\x09")),
                                   ("\\\\", true, Some("\x5c")),
                                   ("\\u597d", true, Some("好")),
                                   ("0\\u597d0", true, Some("0好0")),
@@ -142,7 +148,7 @@ mod test {
                                   Json::Boolean(true),
                                   Json::None];
         for (i, j) in test_cases.drain(..).enumerate() {
-            let expected = format!("{:?}", j);
+            let expected = j.to_string();
             let r = j.unquote();
             assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
             let got = r.unwrap();
