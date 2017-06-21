@@ -25,12 +25,12 @@ struct LimitExecutor<'a> {
 }
 
 impl<'a> LimitExecutor<'a> {
-    fn new(limit: Limit, src: Box<Executor + 'a>) -> Result<LimitExecutor> {
-        Ok(LimitExecutor {
+    fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+        LimitExecutor {
             limit: limit.get_limit() as u64,
             cursor: 0,
             src: src,
-        })
+        }
     }
 }
 
@@ -115,7 +115,7 @@ mod tests {
         let limit = 5;
         limit_meta.set_limit(limit);
         // init topn executor
-        let mut limit_ect = LimitExecutor::new(limit_meta, Box::new(ts_ect)).unwrap();
+        let mut limit_ect = LimitExecutor::new(limit_meta, Box::new(ts_ect));
         let mut limit_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = limit_ect.next().unwrap() {
             limit_rows.push(row);
