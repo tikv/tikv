@@ -17,6 +17,7 @@
 use std::usize;
 use std::rc::Rc;
 use std::collections::HashSet;
+use std::vec::IntoIter;
 
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
@@ -54,8 +55,7 @@ pub struct TopNExecutor<'a> {
     columns: Vec<ColumnInfo>,
     heap: Option<TopNHeap>,
     executed: bool,
-    res: Option<Vec<SortRow>>,
-    cursor: usize,
+    iter: Option<IntoIter<SortRow>>,
 
     src: Box<Executor + 'a>,
     ctx: Rc<EvalContext>,
@@ -83,15 +83,14 @@ impl<'a> TopNExecutor<'a> {
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
             columns: columns,
             executed: false,
-            res: None,
-            cursor: 0,
+            iter: None,
             ctx: ctx,
             src: src,
         })
     }
 
-    fn inner_next(&mut self) -> Result<Option<()>> {
-        if let Some(row) = try!(self.src.next()) {
+    fn fetch_all(&mut self) -> Result<()> {
+        while let Some(row) = try!(self.src.next()) {
             let mut eval = Evaluator::default();
             try!(inflate_with_col(&mut eval, &self.ctx, &row.data, &self.columns, row.handle));
             let mut ob_values = Vec::with_capacity(self.order_by.len());
@@ -104,32 +103,27 @@ impl<'a> TopNExecutor<'a> {
                                                          ob_values,
                                                          self.order_by.clone(),
                                                          self.ctx.clone()));
-            Ok(Some(()))
-        } else {
-            Ok(None)
         }
+        Ok(())
     }
 }
 
 impl<'a> Executor for TopNExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.executed {
-            while try!(self.inner_next()).is_some() {}
+            try!(self.fetch_all());
             self.executed = true;
-            self.res = Some(try!(self.heap.take().unwrap().into_sorted_vec()));
-            self.res.as_mut().unwrap().reverse();
+            self.iter = Some(try!(self.heap.take().unwrap().into_sorted_vec()).into_iter());
         }
-        let res = self.res.as_mut().unwrap();
-        if res.is_empty() {
-            return Ok(None);
-        }
-        if let Some(sort_row) = res.pop() {
-            Ok(Some(Row {
-                handle: sort_row.handle,
-                data: sort_row.data,
-            }))
-        } else {
-            Ok(None)
+        let iter = self.iter.as_mut().unwrap();
+        match iter.next() {
+            Some(sort_row) => {
+                Ok(Some(Row {
+                    handle: sort_row.handle,
+                    data: sort_row.data,
+                }))
+            }
+            None => Ok(None),
         }
     }
 }
