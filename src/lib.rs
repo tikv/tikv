@@ -21,7 +21,6 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![recursion_limit="100"]
-#![feature(ascii_ctype)]
 
 #![allow(module_inception)]
 #![allow(should_implement_trait)]
