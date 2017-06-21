@@ -17,169 +17,16 @@
 use std::usize;
 use std::rc::Rc;
 use std::collections::HashSet;
-use std::cell::RefCell;
-use std::collections::BinaryHeap;
-use std::cmp::{self, Ordering as CmpOrdering};
 
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType, ByItem};
 use util::codec::number::NumberDecoder;
-use util::codec::datum::Datum;
-use util::codec::table::RowColsDict;
 use util::xeval::{Evaluator, EvalContext};
 
 use super::{Executor, Row};
 use super::super::Result;
-use super::super::endpoint::inflate_with_col;
-
-const HEAP_MAX_CAPACITY: usize = 1024;
-
-pub struct SortRow {
-    pub handle: i64,
-    pub data: RowColsDict,
-    pub values: Vec<Datum>,
-    order_cols: Rc<Vec<ByItem>>,
-    ctx: Rc<EvalContext>,
-    err: Rc<RefCell<Option<String>>>,
-}
-
-impl SortRow {
-    fn new(handle: i64,
-           data: RowColsDict,
-           values: Vec<Datum>,
-           order_cols: Rc<Vec<ByItem>>,
-           ctx: Rc<EvalContext>,
-           err: Rc<RefCell<Option<String>>>)
-           -> SortRow {
-        SortRow {
-            handle: handle,
-            data: data,
-            values: values,
-            order_cols: order_cols,
-            ctx: ctx,
-            err: err,
-        }
-    }
-
-    fn cmp_and_check(&self, right: &SortRow) -> Result<CmpOrdering> {
-        // check err
-        try!(self.check_err());
-        let values = self.values.iter().zip(right.values.iter());
-        for (col, (v1, v2)) in self.order_cols.as_ref().iter().zip(values) {
-            match v1.cmp(self.ctx.as_ref(), v2) {
-                Ok(CmpOrdering::Equal) => {
-                    continue;
-                }
-                Ok(order) => {
-                    if col.get_desc() {
-                        return Ok(order.reverse());
-                    }
-                    return Ok(order);
-                }
-                Err(err) => {
-                    self.set_err(format!("cmp failed with:{:?}", err));
-                    try!(self.check_err());
-                }
-            }
-        }
-        Ok(CmpOrdering::Equal)
-    }
-
-    #[inline]
-    fn check_err(&self) -> Result<()> {
-        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
-            return Err(box_err!(err_msg.to_owned()));
-        }
-        Ok(())
-    }
-
-    fn set_err(&self, err_msg: String) {
-        *self.err.borrow_mut() = Some(err_msg);
-    }
-}
-
-impl Ord for SortRow {
-    fn cmp(&self, right: &SortRow) -> CmpOrdering {
-        if let Ok(order) = self.cmp_and_check(right) {
-            return order;
-        }
-        CmpOrdering::Equal
-    }
-}
-
-impl Eq for SortRow {}
-
-impl PartialOrd for SortRow {
-    fn partial_cmp(&self, rhs: &SortRow) -> Option<CmpOrdering> {
-        Some(self.cmp(rhs))
-    }
-}
-
-impl PartialEq for SortRow {
-    fn eq(&self, right: &SortRow) -> bool {
-        self.cmp(right) == CmpOrdering::Equal
-    }
-}
-
-pub struct TopNHeap {
-    pub rows: BinaryHeap<SortRow>,
-    limit: usize,
-    err: Rc<RefCell<Option<String>>>,
-}
-
-impl TopNHeap {
-    pub fn new(limit: usize) -> Result<TopNHeap> {
-        if limit == usize::MAX {
-            return Err(box_err!("invalid limit"));
-        }
-        let cap = cmp::min(limit, HEAP_MAX_CAPACITY);
-        Ok(TopNHeap {
-            rows: BinaryHeap::with_capacity(cap),
-            limit: limit,
-            err: Rc::new(RefCell::new(None)),
-        })
-    }
-
-    #[inline]
-    pub fn check_err(&self) -> Result<()> {
-        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
-            return Err(box_err!(err_msg.to_owned()));
-        }
-        Ok(())
-    }
-
-    pub fn try_add_row(&mut self,
-                       handle: i64,
-                       data: RowColsDict,
-                       values: Vec<Datum>,
-                       order_cols: Rc<Vec<ByItem>>,
-                       ctx: Rc<EvalContext>)
-                       -> Result<()> {
-        let row = SortRow::new(handle, data, values, order_cols, ctx, self.err.clone());
-        // push into heap when heap is not full
-        if self.rows.len() < self.limit {
-            self.rows.push(row);
-        } else {
-            // swap top value with row when heap is full and current row is less than top data
-            let mut top_data = self.rows.peek_mut().unwrap();
-            let order = try!(row.cmp_and_check(&top_data));
-            if CmpOrdering::Less == order {
-                *top_data = row;
-            }
-        }
-        self.check_err()
-    }
-
-    pub fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
-        let sorted_data = self.rows.into_sorted_vec();
-        // check is needed here since err may caused by any call of cmp
-        if let Some(ref err_msg) = *self.err.as_ref().borrow() {
-            return Err(box_err!(err_msg.to_owned()));
-        }
-        Ok(sorted_data)
-    }
-}
+use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
 
 struct ExprColumnRefVisitor {
     col_ids: HashSet<i64>,
@@ -358,9 +205,9 @@ mod tests {
         let result = topn_heap.into_sorted_vec().unwrap();
         assert_eq!(result.len(), exp.len());
         for (row, (handle, _, name, count)) in result.iter().zip(exp) {
-            let exp_values: Vec<Datum> = vec![name, count];
+            let exp_key: Vec<Datum> = vec![name, count];
             assert_eq!(row.handle, handle);
-            assert_eq!(row.values, exp_values);
+            assert_eq!(row.key, exp_key);
         }
     }
 
@@ -411,7 +258,7 @@ mod tests {
         let mut kv_data = Vec::new();
         let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
         for cols in rows.iter() {
-            let col_values: Vec<_> = cols.iter().cloned().collect();
+            let col_values: Vec<_> = cols.to_vec();
             let value = table::encode_row(col_values, &col_ids).unwrap();
             let mut buf = vec![];
             buf.encode_i64(cols[0].i64()).unwrap();
