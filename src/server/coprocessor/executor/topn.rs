@@ -469,7 +469,7 @@ mod tests {
         while let Some(row) = topn_ect.next().unwrap() {
             topn_rows.push(row);
         }
-        assert_eq!(topn_rows.len(), 4);
+        assert_eq!(topn_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 3, 2, 6];
         for (row, handle) in topn_rows.iter().zip(expect_row_handles) {
             assert_eq!(row.handle, handle);

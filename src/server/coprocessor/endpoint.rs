@@ -456,11 +456,11 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 
 #[inline]
 pub fn inflate_with_col<'a, T>(eval: &mut Evaluator,
-                           ctx: &EvalContext,
-                           values: &RowColsDict,
-                           cols: T,
-                           h: i64)
-                           -> Result<()>
+                               ctx: &EvalContext,
+                               values: &RowColsDict,
+                               cols: T,
+                               h: i64)
+                               -> Result<()>
     where T: IntoIterator<Item = &'a ColumnInfo>
 {
     for col in cols {

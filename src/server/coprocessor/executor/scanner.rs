@@ -52,8 +52,8 @@ impl<'a> Scanner<'a> {
             self.init_with_range(range);
         }
         let seek_key = self.seek_key.take().unwrap();
-        if range.get_start() > range.get_end() {		
-            return Ok(None);		
+        if range.get_start() > range.get_end() {
+            return Ok(None);
         }
         let kv = if self.desc {
             try!(self.reader.reverse_seek(Key::from_raw(&seek_key), self.start_ts))
