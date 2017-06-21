@@ -166,7 +166,7 @@ impl Datum {
 
     fn cmp_f64(&self, ctx: &EvalContext, f: f64) -> Result<Ordering> {
         match *self {
-            Datum::Null | Datum::Min | Datum::Json(_) => Ok(Ordering::Less),
+            Datum::Null | Datum::Min => Ok(Ordering::Less),
             Datum::Max => Ok(Ordering::Greater),
             Datum::I64(i) => cmp_f64(i as f64, f),
             Datum::U64(u) => cmp_f64(u as f64, f),
@@ -187,6 +187,7 @@ impl Datum {
                 let ff = try!(t.to_f64());
                 cmp_f64(ff, f)
             }
+            Datum::Json(ref json) => Datum::F64(f).cmp_json(json),
         }
     }
 
