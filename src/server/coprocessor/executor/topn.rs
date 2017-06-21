@@ -70,7 +70,7 @@ impl<'a> TopNExecutor<'a> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new();
-        for by_item in order_by.iter() {
+        for by_item in &order_by {
             try!(visitor.visit(by_item.get_expr()));
         }
         let columns = columns_info.iter()
