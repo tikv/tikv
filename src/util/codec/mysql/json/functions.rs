@@ -66,7 +66,10 @@ pub fn unquote_string(s: &str) -> Result<String> {
                     let utf8 = try!(decode_escaped_unicode(&unicode));
                     ret.push(utf8);
                 }
-                _ => ret.push(c),
+                _ => {
+                    // For all other escape sequences, backslash is ignored.
+                    ret.push(c);
+                }
             }
         } else {
             ret.push(ch);
@@ -118,6 +121,7 @@ mod test {
                                   ("\\\\", true, Some("\x5c")),
                                   ("\\u597d", true, Some("好")),
                                   ("0\\u597d0", true, Some("0好0")),
+                                  ("\\a", true, Some("a")),
                                   ("[", true, Some("[")),
                                   // invalid input
                                   ("\\", false, None),
