@@ -66,9 +66,9 @@ mod tests {
 
     // the first column should be i64 since it will be used as row handle
     fn gen_table_data(tid: i64,
-                          cis: &[ColumnInfo],
-                          rows: &[Vec<Datum>])
-                          -> Vec<(Vec<u8>, Vec<u8>)> {
+                      cis: &[ColumnInfo],
+                      rows: &[Vec<Datum>])
+                      -> Vec<(Vec<u8>, Vec<u8>)> {
         let mut kv_data = Vec::new();
         let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
         for cols in rows.iter() {
