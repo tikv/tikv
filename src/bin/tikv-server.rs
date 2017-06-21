@@ -392,6 +392,11 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
                                      Some(false));
     opts.set_use_direct_io_for_flush_and_compaction(direct_io);
 
+    let concurrent_write = get_toml_boolean(config,
+                                            "rocksdb.allow-concurrent-memtable-write",
+                                            Some(false));
+    opts.allow_concurrent_memtable_write(concurrent_write);
+
     opts
 }
 
