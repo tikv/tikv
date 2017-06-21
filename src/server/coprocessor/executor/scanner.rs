@@ -48,13 +48,13 @@ impl<'a> Scanner<'a> {
     }
 
     pub fn next_row(&mut self, range: &KeyRange) -> Result<Option<(Vec<u8>, Value)>> {
-        if range.get_start() > range.get_end() {
-            return Ok(None);
-        }
         if self.seek_key.is_none() {
             self.init_with_range(range);
         }
         let seek_key = self.seek_key.take().unwrap();
+        if range.get_start() > range.get_end() {		
+            return Ok(None);		
+        }
         let kv = if self.desc {
             try!(self.reader.reverse_seek(Key::from_raw(&seek_key), self.start_ts))
         } else {
