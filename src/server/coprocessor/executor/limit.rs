@@ -27,7 +27,7 @@ struct LimitExecutor<'a> {
 impl<'a> LimitExecutor<'a> {
     fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
         LimitExecutor {
-            limit: limit.get_limit() as u64,
+            limit: limit.get_limit(),
             cursor: 0,
             src: src,
         }
