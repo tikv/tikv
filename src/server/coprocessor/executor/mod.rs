@@ -17,6 +17,7 @@ use server::coprocessor::Result;
 mod scanner;
 pub mod table_scan;
 pub mod index_scan;
+pub mod topn;
 pub mod limit;
 
 #[allow(dead_code)] //TODO:remove it

@@ -49,38 +49,16 @@ impl<'a> Executor for LimitExecutor<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::topn::test::gen_table_data;
     use util::codec::mysql::types;
-    use storage::Statistics;
     use util::codec::datum::Datum;
-    use util::codec::table;
-    use util::codec::number::NumberEncoder;
-
-    use tipb::schema::ColumnInfo;
+    use storage::Statistics;
     use tipb::executor::TableScan;
-
     use protobuf::RepeatedField;
-
-    // the first column should be i64 since it will be used as row handle
-    fn gen_table_data(tid: i64,
-                      cis: &[ColumnInfo],
-                      rows: &[Vec<Datum>])
-                      -> Vec<(Vec<u8>, Vec<u8>)> {
-        let mut kv_data = Vec::new();
-        let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
-        for cols in rows.iter() {
-            let col_values: Vec<_> = cols.to_vec();
-            let value = table::encode_row(col_values, &col_ids).unwrap();
-            let mut buf = vec![];
-            buf.encode_i64(cols[0].i64()).unwrap();
-            let key = table::encode_row_key(tid, &buf);
-            kv_data.push((key, value));
-        }
-        kv_data
-    }
 
     #[test]
     fn test_limit_executor() {
