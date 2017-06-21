@@ -411,7 +411,7 @@ mod tests {
         let mut kv_data = Vec::new();
         let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
         for cols in rows.iter() {
-            let col_values: Vec<_> = cols.iter().map(|v| v.clone()).collect();
+            let col_values: Vec<_> = cols.iter().cloned().collect();
             let value = table::encode_row(col_values, &col_ids).unwrap();
             let mut buf = vec![];
             buf.encode_i64(cols[0].i64()).unwrap();
