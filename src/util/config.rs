@@ -88,7 +88,7 @@ fn split_property(property: &str) -> Result<(f64, &str), ConfigError> {
     let (num, unit) = property.split_at(indx);
     num.parse::<f64>()
         .map(|f| (f, unit))
-        .or(Err(ConfigError::Value(format!("cannot parse {:?} as f64", num))))
+        .or_else(|_| Err(ConfigError::Value(format!("cannot parse {:?} as f64", num))))
 }
 
 const UNIT: usize = 1;
