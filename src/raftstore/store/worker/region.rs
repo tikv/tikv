@@ -31,7 +31,7 @@ use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, 
 use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyOptions, keys,
                        Peekable};
 use raftstore::store::snap::{Error, Result};
-use storage::CF_RAFT;
+use storage::{CF_RAFT, CF_WRITE};
 
 use super::metrics::*;
 
@@ -133,7 +133,15 @@ impl Runner {
             it.seek(start_key.into());
             if it.valid() {
                 let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
-                box_try!(wb.delete_range_cf(handle, start_key, end_key));
+                if cf == CF_WRITE {
+                    // We enable memtable prefix bloom for CF_WRITE, for delete_range operation RocksDB
+                    // will add start key to bloom, and the start key will go through function
+                    // prefix_extractor->Transform, in our case the prefix_extractor is FixedSuffixSliceTransform,
+                    // if the length of start key less than 8, we will encounter index out of range error.
+                    box_try!(wb.delete_range_cf(handle, it.key(), end_key));
+                } else {
+                    box_try!(wb.delete_range_cf(handle, start_key, end_key));
+                }
             }
         }
 
