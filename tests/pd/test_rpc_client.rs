@@ -14,8 +14,6 @@
 use std::thread;
 use std::sync::Arc;
 use std::time::Duration;
-use std::net::ToSocketAddrs;
-use std::net::SocketAddr;
 
 use grpc::EnvBuilder;
 use futures::Future;
@@ -185,15 +183,12 @@ fn test_restart_leader() {
     region.wait().unwrap();
 
     // Get the random binded addrs.
-    let eps: Vec<SocketAddr> = server.bind_addrs()
-        .into_iter()
-        .map(|(ip, port)| (ip.as_str(), port).to_socket_addrs().unwrap().next().unwrap())
-        .collect();
+    let eps = server.bind_addrs();
 
     // Kill servers.
     drop(server);
     // Restart them again.
-    let _server = MockServer::run_with_eps::<_, Service>(eps.as_slice(), se.clone(), None);
+    let _server = MockServer::run_with_eps::<Service>(eps.as_slice(), se.clone(), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));

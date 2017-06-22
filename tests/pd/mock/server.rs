@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::net::ToSocketAddrs;
 
 use futures::Future;
 use grpc::{Server as GrpcServer, ServerBuilder, RpcContext, UnarySink, RequestStream, DuplexSink,
@@ -33,13 +32,15 @@ impl Server {
     pub fn run<C>(eps_count: usize, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
         where C: Mocker + Send + Sync + 'static
     {
-        let eps = vec![("127.0.0.1", 0).to_socket_addrs().unwrap().next().unwrap(); eps_count];
+        let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
         Server::run_with_eps(eps.as_slice(), handler, case)
     }
 
-    pub fn run_with_eps<A, C>(eps: A, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
-        where A: ToSocketAddrs,
-              C: Mocker + Send + Sync + 'static
+    pub fn run_with_eps<C>(eps: &[(String, u16)],
+                           handler: Arc<Service>,
+                           case: Option<Arc<C>>)
+                           -> Server
+        where C: Mocker + Send + Sync + 'static
     {
         let m = Mock {
             handler: handler.clone(),
@@ -48,8 +49,8 @@ impl Server {
         let service = pdpb_grpc::create_pd(m);
         let env = Arc::new(Environment::new(1));
         let mut sb = ServerBuilder::new(env).register_service(service);
-        for ep in eps.to_socket_addrs().unwrap() {
-            sb = sb.bind(format!("{}", ep.ip()), ep.port());
+        for ep in eps {
+            sb = sb.bind(ep.0.as_str(), ep.1);
         }
 
         let mut server = sb.build().unwrap();
@@ -78,7 +79,8 @@ fn hijack_unary<F, R, C: Mocker>(mock: &Mock<C>, ctx: RpcContext, sink: UnarySin
     where R: Send + 'static,
           F: Fn(&Mocker) -> Option<Result<R>>
 {
-    let resp = mock.case.as_ref().and_then(|case| f(case.as_ref())).or_else(|| f(mock.handler.as_ref()));
+    let resp =
+        mock.case.as_ref().and_then(|case| f(case.as_ref())).or_else(|| f(mock.handler.as_ref()));
 
     match resp {
         Some(Ok(resp)) => {
