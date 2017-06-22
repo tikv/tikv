@@ -93,7 +93,7 @@ impl Json {
         }
     }
 
-    fn binary_len(&self) -> usize {
+    pub fn binary_len(&self) -> usize {
         TYPE_LEN + self.body_binary_len()
     }
 
@@ -235,6 +235,13 @@ impl Serialize for Json {
             Json::Double(d) => serializer.serialize_f64(d),
             Json::I64(d) => serializer.serialize_i64(d),
         }
+    }
+}
+
+impl Eq for Json {}
+impl Ord for Json {
+    fn cmp(&self, right: &Json) -> Ordering {
+        self.partial_cmp(right).unwrap()
     }
 }
 
