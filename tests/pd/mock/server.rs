@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::net::{ToSocketAddrs, SocketAddr};
+use std::net::ToSocketAddrs;
 
 use futures::Future;
 use grpc::{Server as GrpcServer, ServerBuilder, RpcContext, UnarySink, RequestStream, DuplexSink,
@@ -33,12 +33,7 @@ impl Server {
     pub fn run<C>(eps_count: usize, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
         where C: Mocker + Send + Sync + 'static
     {
-        let eps: Vec<SocketAddr> = [0].iter()
-            .cycle()
-            .take(eps_count)
-            .map(|_| ("127.0.0.1", 0).to_socket_addrs().unwrap().next().unwrap())
-            .collect();
-
+        let eps = vec![("127.0.0.1", 0).to_socket_addrs().unwrap().next().unwrap(); eps_count];
         Server::run_with_eps(eps.as_slice(), handler, case)
     }
 
@@ -83,14 +78,7 @@ fn hijack_unary<F, R, C: Mocker>(mock: &Mock<C>, ctx: RpcContext, sink: UnarySin
     where R: Send + 'static,
           F: Fn(&Mocker) -> Option<Result<R>>
 {
-    let mut resp = match mock.case {
-        Some(ref case) => f(case.as_ref()),
-        None => f(mock.handler.as_ref()),
-    };
-
-    if resp.is_none() {
-        resp = f(mock.handler.as_ref())
-    }
+    let resp = mock.case.as_ref().and_then(|case| f(case.as_ref())).or_else(|| f(mock.handler.as_ref()));
 
     match resp {
         Some(Ok(resp)) => {
@@ -116,14 +104,9 @@ struct Mock<C: Mocker> {
 
 impl<C: Mocker> Clone for Mock<C> {
     fn clone(&self) -> Self {
-        let case = match self.case {
-            Some(ref c) => Some(c.clone()),
-            None => None,
-        };
-
         Mock {
             handler: self.handler.clone(),
-            case: case,
+            case: self.case.clone(),
         }
     }
 }

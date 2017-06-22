@@ -65,7 +65,7 @@ impl Mocker for LeaderChange {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut inner = self.inner.lock().unwrap();
         let now = Instant::now();
-        if now.duration_since(inner.r.ts) > LeaderChange::get_leader_interval() {
+        if now - inner.r.ts > LeaderChange::get_leader_interval() {
             inner.r.idx += 1;
             inner.r.ts = now;
             return Some(Err("not leader".to_owned()));
