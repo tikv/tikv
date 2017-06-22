@@ -127,7 +127,7 @@ impl<'a> Executor for TopNExecutor<'a> {
 
 
 #[cfg(test)]
-mod tests {
+pub mod test {
     use super::*;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
@@ -154,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_topn_heap() {
+    pub fn test_topn_heap() {
         let mut order_cols = Vec::new();
         order_cols.push(new_order_by(0, true));
         order_cols.push(new_order_by(1, false));
