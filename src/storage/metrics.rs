@@ -67,7 +67,7 @@ lazy_static! {
     pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: CounterVec =
         register_counter_vec!(
             "tikv_scheduler_commands_pri_total",
-            "Total count of difference priority commands",
+            "Total count of different priority commands",
             &["priority"]
         ).unwrap();
 
