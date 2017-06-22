@@ -51,7 +51,7 @@ pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ConfigEr
         "lz4" => Ok(DBCompressionType::DBLz4),
         "lz4hc" => Ok(DBCompressionType::DBLz4hc),
         "zstd" => Ok(DBCompressionType::DBZstd),
-        v => Err(ConfigError::Value(format!("cannot parse {:?} as a compression type", v))),
+        v => Err(ConfigError::Value(format!("invalid compression type {:?}", v))),
     }
 }
 
