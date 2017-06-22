@@ -14,4 +14,5 @@
 pub mod json;
 mod json_type;
 mod json_merge;
+mod functions;
 pub use self::json::{Json, JsonEncoder, JsonDecoder};
