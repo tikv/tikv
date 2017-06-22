@@ -18,7 +18,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::error;
 use std::sync::{Arc, Mutex};
 use std::io::Error as IoError;
-use kvproto::kvrpcpb::LockInfo;
+use kvproto::kvrpcpb::{LockInfo, CommandPri};
 use kvproto::errorpb;
 use self::metrics::*;
 
@@ -138,6 +138,7 @@ pub enum Command {
         keys: Vec<Key>,
     },
     RawGet { ctx: Context, key: Key },
+    Pause { ctx: Context, duration: u64 },
 }
 
 impl Display for Command {
@@ -206,6 +207,9 @@ impl Display for Command {
             Command::RawGet { ref ctx, ref key } => {
                 write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
             }
+            Command::Pause { ref ctx, duration } => {
+                write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
+            }
         }
     }
 }
@@ -225,11 +229,28 @@ impl Command {
             Command::BatchGet { .. } |
             Command::Scan { .. } |
             Command::ScanLock { .. } |
-            Command::RawGet { .. } => true,
+            Command::RawGet { .. } |
+            Command::Pause { .. } => true,
             Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
+    }
+
+    pub fn priority(&self) -> CommandPri {
+        self.get_context().get_priority()
+    }
+
+    pub fn priority_tag(&self) -> &'static str {
+        match self.get_context().get_priority() {
+            CommandPri::Low => "low",
+            CommandPri::Normal => "normal",
+            CommandPri::High => "high",
+        }
+    }
+
+    pub fn need_flow_control(&self) -> bool {
+        !self.readonly() && self.priority() != CommandPri::High
     }
 
     pub fn tag(&self) -> &'static str {
@@ -245,6 +266,7 @@ impl Command {
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
+            Command::Pause { .. } => "pause",
         }
     }
 
@@ -260,7 +282,8 @@ impl Command {
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
-            Command::RawGet { .. } => 0,
+            Command::RawGet { .. } |
+            Command::Pause { .. } => 0,
         }
     }
 
@@ -276,7 +299,8 @@ impl Command {
             Command::ScanLock { ref ctx, .. } |
             Command::ResolveLock { ref ctx, .. } |
             Command::Gc { ref ctx, .. } |
-            Command::RawGet { ref ctx, .. } => ctx,
+            Command::RawGet { ref ctx, .. } |
+            Command::Pause { ref ctx, .. } => ctx,
         }
     }
 
@@ -292,7 +316,8 @@ impl Command {
             Command::ScanLock { ref mut ctx, .. } |
             Command::ResolveLock { ref mut ctx, .. } |
             Command::Gc { ref mut ctx, .. } |
-            Command::RawGet { ref mut ctx, .. } => ctx,
+            Command::RawGet { ref mut ctx, .. } |
+            Command::Pause { ref mut ctx, .. } => ctx,
         }
     }
 }
@@ -458,6 +483,15 @@ impl Storage {
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        Ok(())
+    }
+
+    pub fn async_pause(&self, ctx: Context, duration: u64, callback: Callback<()>) -> Result<()> {
+        let cmd = Command::Pause {
+            ctx: ctx,
+            duration: duration,
+        };
+        try!(self.send(cmd, StorageCb::Boolean(callback)));
         Ok(())
     }
 
@@ -694,58 +728,62 @@ mod tests {
     use std::sync::mpsc::{channel, Sender};
     use kvproto::kvrpcpb::Context;
 
-    fn expect_get_none(done: Sender<i32>) -> Callback<Option<Value>> {
+    fn expect_get_none(done: Sender<i32>, id: i32) -> Callback<Option<Value>> {
         Box::new(move |x: Result<Option<Value>>| {
             assert_eq!(x.unwrap(), None);
-            done.send(1).unwrap();
+            done.send(id).unwrap();
         })
     }
 
-    fn expect_get_val(done: Sender<i32>, v: Vec<u8>) -> Callback<Option<Value>> {
+    fn expect_get_val(done: Sender<i32>, v: Vec<u8>, id: i32) -> Callback<Option<Value>> {
         Box::new(move |x: Result<Option<Value>>| {
             assert_eq!(x.unwrap().unwrap(), v);
-            done.send(1).unwrap();
+            done.send(id).unwrap();
         })
     }
 
-    fn expect_ok<T>(done: Sender<i32>) -> Callback<T> {
+    fn expect_ok<T>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             assert!(x.is_ok());
-            done.send(1).unwrap();
+            done.send(id).unwrap();
         })
     }
 
-    fn expect_fail<T>(done: Sender<i32>) -> Callback<T> {
+    fn expect_fail<T>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             assert!(x.is_err());
-            done.send(1).unwrap();
+            done.send(id).unwrap();
         })
     }
 
-    fn expect_too_busy<T>(done: Sender<i32>) -> Callback<T> {
+    fn expect_too_busy<T>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             assert!(x.is_err());
             match x {
                 Err(Error::SchedTooBusy) => {}
                 _ => panic!("expect too busy"),
             }
-            done.send(1).unwrap();
+            done.send(id).unwrap();
         })
     }
 
-    fn expect_scan(done: Sender<i32>, pairs: Vec<Option<KvPair>>) -> Callback<Vec<Result<KvPair>>> {
+    fn expect_scan(done: Sender<i32>,
+                   pairs: Vec<Option<KvPair>>,
+                   id: i32)
+                   -> Callback<Vec<Result<KvPair>>> {
         Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
             let rlt: Vec<Option<KvPair>> = rlt.unwrap()
                 .into_iter()
                 .map(Result::ok)
                 .collect();
             assert_eq!(rlt, pairs);
-            done.send(1).unwrap()
+            done.send(id).unwrap()
         })
     }
 
     fn expect_batch_get_vals(done: Sender<i32>,
-                             pairs: Vec<Option<KvPair>>)
+                             pairs: Vec<Option<KvPair>>,
+                             id: i32)
                              -> Callback<Vec<Result<KvPair>>> {
         Box::new(move |rlt: Result<Vec<Result<KvPair>>>| {
             let rlt: Vec<Option<KvPair>> = rlt.unwrap()
@@ -753,7 +791,7 @@ mod tests {
                 .map(Result::ok)
                 .collect();
             assert_eq!(rlt, pairs);
-            done.send(1).unwrap()
+            done.send(id).unwrap()
         })
     }
 
@@ -766,7 +804,7 @@ mod tests {
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        100,
-                       expect_get_none(tx.clone()))
+                       expect_get_none(tx.clone(), 0))
             .unwrap();
         rx.recv().unwrap();
         storage.async_prewrite(Context::new(),
@@ -774,26 +812,26 @@ mod tests {
                             b"x".to_vec(),
                             100,
                             Options::default(),
-                            expect_ok(tx.clone()))
+                            expect_ok(tx.clone(), 1))
             .unwrap();
         rx.recv().unwrap();
         storage.async_commit(Context::new(),
                           vec![make_key(b"x")],
                           100,
                           101,
-                          expect_ok(tx.clone()))
+                          expect_ok(tx.clone(), 2))
             .unwrap();
         rx.recv().unwrap();
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        100,
-                       expect_get_none(tx.clone()))
+                       expect_get_none(tx.clone(), 3))
             .unwrap();
         rx.recv().unwrap();
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        101,
-                       expect_get_val(tx.clone(), b"100".to_vec()))
+                       expect_get_val(tx.clone(), b"100".to_vec(), 4))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -816,7 +854,7 @@ mod tests {
                             b"a".to_vec(),
                             1,
                             Options::default(),
-                            expect_fail(tx.clone()))
+                            expect_fail(tx.clone(), 0))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -837,14 +875,14 @@ mod tests {
                             b"a".to_vec(),
                             1,
                             Options::default(),
-                            expect_ok(tx.clone()))
+                            expect_ok(tx.clone(), 0))
             .unwrap();
         rx.recv().unwrap();
         storage.async_commit(Context::new(),
                           vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
                           1,
                           2,
-                          expect_ok(tx.clone()))
+                          expect_ok(tx.clone(), 1))
             .unwrap();
         rx.recv().unwrap();
         storage.async_scan(Context::new(),
@@ -857,7 +895,8 @@ mod tests {
             Some((b"a".to_vec(), b"aa".to_vec())),
             Some((b"b".to_vec(), b"bb".to_vec())),
             Some((b"c".to_vec(), b"cc".to_vec())),
-            ]))
+            ],
+                                    2))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -878,14 +917,14 @@ mod tests {
                             b"a".to_vec(),
                             1,
                             Options::default(),
-                            expect_ok(tx.clone()))
+                            expect_ok(tx.clone(), 0))
             .unwrap();
         rx.recv().unwrap();
         storage.async_commit(Context::new(),
                           vec![make_key(b"a"),make_key(b"b"),make_key(b"c"),],
                           1,
                           2,
-                          expect_ok(tx.clone()))
+                          expect_ok(tx.clone(), 1))
             .unwrap();
         rx.recv().unwrap();
         storage.async_batch_get(Context::new(),
@@ -896,7 +935,8 @@ mod tests {
             Some((b"a".to_vec(), b"aa".to_vec())),
             Some((b"b".to_vec(), b"bb".to_vec())),
             Some((b"c".to_vec(), b"cc".to_vec())),
-            ]))
+            ],
+                                                   2))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -913,14 +953,14 @@ mod tests {
                             b"x".to_vec(),
                             100,
                             Options::default(),
-                            expect_ok(tx.clone()))
+                            expect_ok(tx.clone(), 0))
             .unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
                             Options::default(),
-                            expect_ok(tx.clone()))
+                            expect_ok(tx.clone(), 1))
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
@@ -928,25 +968,25 @@ mod tests {
                           vec![make_key(b"x")],
                           100,
                           110,
-                          expect_ok(tx.clone()))
+                          expect_ok(tx.clone(), 2))
             .unwrap();
         storage.async_commit(Context::new(),
                           vec![make_key(b"y")],
                           101,
                           111,
-                          expect_ok(tx.clone()))
+                          expect_ok(tx.clone(), 3))
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        120,
-                       expect_get_val(tx.clone(), b"100".to_vec()))
+                       expect_get_val(tx.clone(), b"100".to_vec(), 4))
             .unwrap();
         storage.async_get(Context::new(),
                        make_key(b"y"),
                        120,
-                       expect_get_val(tx.clone(), b"101".to_vec()))
+                       expect_get_val(tx.clone(), b"101".to_vec(), 5))
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
@@ -955,7 +995,7 @@ mod tests {
                             b"x".to_vec(),
                             105,
                             Options::default(),
-                            expect_fail(tx.clone()))
+                            expect_fail(tx.clone(), 6))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -971,21 +1011,21 @@ mod tests {
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        100,
-                       expect_get_none(tx.clone()))
+                       expect_get_none(tx.clone(), 0))
             .unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
                             b"x".to_vec(),
                             100,
                             Options::default(),
-                            expect_ok(tx.clone()))
+                            expect_ok(tx.clone(), 1))
             .unwrap();
         storage.async_prewrite(Context::new(),
                             vec![Mutation::Put((make_key(b"y"), b"101".to_vec()))],
                             b"y".to_vec(),
                             101,
                             Options::default(),
-                            expect_too_busy(tx.clone()))
+                            expect_too_busy(tx.clone(), 2))
             .unwrap();
         rx.recv().unwrap();
         rx.recv().unwrap();
@@ -995,7 +1035,7 @@ mod tests {
                             b"y".to_vec(),
                             102,
                             Options::default(),
-                            expect_ok(tx.clone()))
+                            expect_ok(tx.clone(), 3))
             .unwrap();
         rx.recv().unwrap();
         storage.stop().unwrap();
@@ -1012,18 +1052,111 @@ mod tests {
                             b"x".to_vec(),
                             100,
                             Options::default(),
-                            expect_ok(tx.clone()))
+                            expect_ok(tx.clone(), 0))
             .unwrap();
         rx.recv().unwrap();
-        storage.async_cleanup(Context::new(), make_key(b"x"), 100, expect_ok(tx.clone()))
+        storage.async_cleanup(Context::new(),
+                           make_key(b"x"),
+                           100,
+                           expect_ok(tx.clone(), 1))
             .unwrap();
         rx.recv().unwrap();
         storage.async_get(Context::new(),
                        make_key(b"x"),
                        105,
-                       expect_get_none(tx.clone()))
+                       expect_get_none(tx.clone(), 2))
             .unwrap();
         rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_high_priority_get_put() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_get(ctx, make_key(b"x"), 100, expect_get_none(tx.clone(), 0))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_prewrite(ctx,
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            Options::default(),
+                            expect_ok(tx.clone(), 1))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_commit(ctx,
+                          vec![make_key(b"x")],
+                          100,
+                          101,
+                          expect_ok(tx.clone(), 2))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_get(ctx, make_key(b"x"), 100, expect_get_none(tx.clone(), 3))
+            .unwrap();
+        rx.recv().unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_get(ctx,
+                       make_key(b"x"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 4))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_high_priority_no_block() {
+        let mut config = Config::new();
+        config.sched_worker_pool_size = 1;
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       100,
+                       expect_get_none(tx.clone(), 0))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            Options::default(),
+                            expect_ok(tx.clone(), 1))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_commit(Context::new(),
+                          vec![make_key(b"x")],
+                          100,
+                          101,
+                          expect_ok(tx.clone(), 2))
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage.async_pause(Context::new(), 1000, expect_ok(tx.clone(), 3)).unwrap();
+        let mut ctx = Context::new();
+        ctx.set_priority(CommandPri::High);
+        storage.async_get(ctx,
+                       make_key(b"x"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 4))
+            .unwrap();
+        // Command Get with high priority not block by command Pause.
+        assert_eq!(rx.recv().unwrap(), 4);
+        assert_eq!(rx.recv().unwrap(), 3);
+
         storage.stop().unwrap();
     }
 }
