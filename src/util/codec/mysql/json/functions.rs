@@ -16,7 +16,7 @@
 
 use std::{u32, char, str};
 use super::super::Result;
-use super::json::Json;
+use super::Json;
 
 const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
 
