@@ -247,7 +247,7 @@ mod test {
             ("$.a[b]", false),
             ("$.a[*]", true),
             ("$.*[b]", true),
-            //("$**.a[b]", true),
+            ("$**.a[b]", true),
         ];
         for (i, (path_expr, expected)) in test_cases.drain(..).enumerate() {
             let r = parse_json_path_expr(path_expr);

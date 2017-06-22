@@ -14,13 +14,20 @@
 // FIXME: remove following later
 #![allow(dead_code)]
 
-use std::{u32, char};
+use std::{u32, char, str};
 use std::collections::BTreeMap;
 use super::super::Result;
 use super::json::Json;
 use super::path_expr::{PathLeg, PathExpression, PATH_EXPR_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK};
 
 const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
+
+
+const CHAR_BACKSPACE: char = '\x08';
+const CHAR_HORIZONTAL_TAB: char = '\x09';
+const CHAR_LINEFEED: char = '\x0A';
+const CHAR_FORMFEED: char = '\x0C';
+const CHAR_CARRIAGE_RETURN: char = '\x0D';
 
 impl Json {
     // extract receives several path expressions as arguments, matches them in j, and returns
@@ -45,7 +52,7 @@ impl Json {
     pub fn unquote(&self) -> Result<String> {
         match *self {
             Json::String(ref s) => unquote_string(s),
-            _ => Ok(format!("{:?}", self)),
+            _ => Ok(self.to_string()),
         }
     }
 }
@@ -60,28 +67,35 @@ pub fn unquote_string(s: &str) -> Result<String> {
         if ch == '\\' {
             let c = match chars.next() {
                 Some(c) => c,
-                None => return Err(box_err!("Missing a closing quotation mark in string")),
+                None => return Err(box_err!("Incomplete escaped sequence")),
             };
             match c {
                 '"' => ret.push('"'),
-                'b' => ret.push('\x08'),
-                'f' => ret.push('\x0C'),
-                'n' => ret.push('\x0A'),
-                'r' => ret.push('\x0D'),
-                't' => ret.push('\x0B'),
+                'b' => ret.push(CHAR_BACKSPACE),
+                'f' => ret.push(CHAR_FORMFEED),
+                'n' => ret.push(CHAR_LINEFEED),
+                'r' => ret.push(CHAR_CARRIAGE_RETURN),
+                't' => ret.push(CHAR_HORIZONTAL_TAB),
                 '\\' => ret.push('\\'),
                 'u' => {
-                    let mut unicode = String::with_capacity(ESCAPED_UNICODE_BYTES_SIZE);
-                    for _ in 0..ESCAPED_UNICODE_BYTES_SIZE {
-                        match chars.next() {
-                            Some(c) => unicode.push(c),
-                            None => return Err(box_err!("Invalid unicode: {}", unicode)),
-                        }
+                    let b = chars.as_str().as_bytes();
+                    if b.len() < ESCAPED_UNICODE_BYTES_SIZE {
+                        return Err(box_err!("Invalid unicode, byte len too short: {:?}", b));
                     }
-                    let utf8 = try!(decode_escaped_unicode(&unicode));
+                    let unicode = try!(str::from_utf8(&b[0..ESCAPED_UNICODE_BYTES_SIZE]));
+                    if unicode.len() != ESCAPED_UNICODE_BYTES_SIZE {
+                        return Err(box_err!("Invalid unicode, char len too short: {}", unicode));
+                    }
+                    let utf8 = try!(decode_escaped_unicode(unicode));
                     ret.push(utf8);
+                    for _ in 0..ESCAPED_UNICODE_BYTES_SIZE {
+                        chars.next();
+                    }
                 }
-                _ => ret.push(c),
+                _ => {
+                    // For all other escape sequences, backslash is ignored.
+                    ret.push(c);
+                }
             }
         } else {
             ret.push(ch);
@@ -301,10 +315,11 @@ mod test {
                                   ("\\f", true, Some("\x0C")),
                                   ("\\n", true, Some("\x0A")),
                                   ("\\r", true, Some("\x0D")),
-                                  ("\\t", true, Some("\x0B")),
+                                  ("\\t", true, Some("\x09")),
                                   ("\\\\", true, Some("\x5c")),
                                   ("\\u597d", true, Some("好")),
                                   ("0\\u597d0", true, Some("0好0")),
+                                  ("\\a", true, Some("a")),
                                   ("[", true, Some("[")),
                                   // invalid input
                                   ("\\", false, None),
@@ -335,7 +350,7 @@ mod test {
                                   Json::Boolean(true),
                                   Json::None];
         for (i, j) in test_cases.drain(..).enumerate() {
-            let expected = format!("{:?}", j);
+            let expected = j.to_string();
             let r = j.unquote();
             assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
             let got = r.unwrap();
