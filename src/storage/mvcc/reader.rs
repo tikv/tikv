@@ -18,6 +18,7 @@ use super::lock::Lock;
 use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
+use kvproto::kvrpcpb::IsolationLevel;
 
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
@@ -32,6 +33,7 @@ pub struct MvccReader<'a> {
 
     fill_cache: bool,
     upper_bound: Option<Vec<u8>>,
+    isolation_level: IsolationLevel,
 }
 
 impl<'a> MvccReader<'a> {
@@ -39,7 +41,8 @@ impl<'a> MvccReader<'a> {
                statistics: &'a mut Statistics,
                scan_mode: Option<ScanMode>,
                fill_cache: bool,
-               upper_bound: Option<Vec<u8>>)
+               upper_bound: Option<Vec<u8>>,
+               isolation_level: IsolationLevel)
                -> MvccReader<'a> {
         MvccReader {
             snapshot: snapshot,
@@ -48,6 +51,7 @@ impl<'a> MvccReader<'a> {
             lock_cursor: None,
             write_cursor: None,
             scan_mode: scan_mode,
+            isolation_level: isolation_level,
             key_only: false,
             fill_cache: fill_cache,
             upper_bound: upper_bound,
@@ -176,21 +180,27 @@ impl<'a> MvccReader<'a> {
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
-        if let Some(lock) = try!(self.load_lock(key)) {
-            if lock.ts <= ts {
-                if ts == u64::MAX && try!(key.raw()) == lock.primary {
-                    // when ts==u64::MAX(which means to get latest committed version for
-                    // primary key),and current key is the primary key, returns the latest
-                    // commit version's value
-                    ts = lock.ts - 1;
-                } else {
-                    // There is a pending lock. Client should wait or clean it.
-                    return Err(Error::KeyIsLocked {
-                        key: try!(key.raw()),
-                        primary: lock.primary,
-                        ts: lock.ts,
-                        ttl: lock.ttl,
-                    });
+        // if self.isolation_level == IsolationLevel::SI
+        match self.isolation_level {
+            IsolationLevel::RU => {}
+            _ => {
+                if let Some(lock) = try!(self.load_lock(key)) {
+                    if lock.ts <= ts {
+                        if ts == u64::MAX && try!(key.raw()) == lock.primary {
+                            // when ts==u64::MAX(which means to get latest committed version for
+                            // primary key),and current key is the primary key, returns the latest
+                            // commit version's value
+                            ts = lock.ts - 1;
+                        } else {
+                            // There is a pending lock. Client should wait or clean it.
+                            return Err(Error::KeyIsLocked {
+                                key: try!(key.raw()),
+                                primary: lock.primary,
+                                ts: lock.ts,
+                                ttl: lock.ttl,
+                            });
+                        }
+                    }
                 }
             }
         }
