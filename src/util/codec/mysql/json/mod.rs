@@ -13,5 +13,6 @@
 
 pub mod json;
 mod json_type;
+mod functions;
 
 pub use self::json::{Json, JsonEncoder, JsonDecoder};
