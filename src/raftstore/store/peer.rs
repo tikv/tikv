@@ -86,6 +86,11 @@ struct ReadIndexQueue {
 }
 
 impl ReadIndexQueue {
+    fn next_id(&mut self) -> u64 {
+        self.id_allocator += 1;
+        self.id_allocator
+    }
+
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             for (_, cb) in read.cmds.drain(..) {
@@ -1166,11 +1171,7 @@ impl Peer {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        let id = self.pending_reads.id_allocator;
-        // It's ok to overflow. If there are two entries share same id, then
-        // there should be u64::MAX entries kept in memory in which case TiKV
-        // should oom already. At lease true for amd64 architect.
-        self.pending_reads.id_allocator = id.overflowing_add(1).0;
+        let id = self.pending_reads.next_id();
         let ctx: [u8; 8] = unsafe { mem::transmute(id) };
         self.raft_group.read_index(ctx.to_vec());
 
