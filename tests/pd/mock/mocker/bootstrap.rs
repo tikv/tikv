@@ -20,12 +20,6 @@ use super::DEFAULT_CLUSTER_ID;
 #[derive(Debug)]
 pub struct AlreadyBootstrapped;
 
-impl AlreadyBootstrapped {
-    pub fn new() -> AlreadyBootstrapped {
-        AlreadyBootstrapped
-    }
-}
-
 impl Mocker for AlreadyBootstrapped {
     fn bootstrap(&self, _: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
         let mut err = Error::new();

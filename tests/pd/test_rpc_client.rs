@@ -88,7 +88,7 @@ fn test_rpc_client() {
 fn test_reboot() {
     let eps_count = 1;
     let se = Arc::new(Service::new());
-    let al = Arc::new(AlreadyBootstrapped::new());
+    let al = Arc::new(AlreadyBootstrapped);
     let server = MockServer::run(eps_count, se.clone(), Some(al));
     let eps: Vec<String> = server.bind_addrs()
         .into_iter()
