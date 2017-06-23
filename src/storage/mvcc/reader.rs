@@ -14,7 +14,7 @@
 use storage::engine::{Snapshot, Cursor, ScanMode, Statistics};
 use storage::{Key, Value, CF_LOCK, CF_WRITE};
 use super::{Error, Result};
-use super::lock::{Lock, LockType};
+use super::lock::Lock;
 use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
@@ -182,28 +182,7 @@ impl<'a> MvccReader<'a> {
         // Check for locks that signal concurrent writes.
         // if self.isolation_level == IsolationLevel::SI
         match self.isolation_level {
-            IsolationLevel::RU => {
-                if let Some(mut lock) = try!(self.load_lock(key)) {
-                    if lock.ts <= ts {
-                        match lock.lock_type {
-                            LockType::Put | LockType::Lock => {
-                                if lock.short_value.is_some() {
-                                    if self.key_only {
-                                        return Ok(Some(vec![]));
-                                    }
-                                    return Ok(lock.short_value.take());
-                                } else {
-                                    return self.load_data(key, lock.ts).map(Some);
-                                }
-                            }
-                            LockType::Delete => {
-                                return Ok(None);
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {
+            IsolationLevel::SI => {
                 if let Some(lock) = try!(self.load_lock(key)) {
                     if lock.ts <= ts {
                         if ts == u64::MAX && try!(key.raw()) == lock.primary {
@@ -223,6 +202,7 @@ impl<'a> MvccReader<'a> {
                     }
                 }
             }
+            IsolationLevel::RC => {}
         }
         loop {
             match try!(self.seek_write(key, ts)) {

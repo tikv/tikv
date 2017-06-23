@@ -74,7 +74,6 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "shuning/add-isolation-level"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
