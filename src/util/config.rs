@@ -51,7 +51,7 @@ pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ConfigEr
         "lz4" => Ok(DBCompressionType::DBLz4),
         "lz4hc" => Ok(DBCompressionType::DBLz4hc),
         "zstd" => Ok(DBCompressionType::DBZstd),
-        v => Err(ConfigError::Value(format!("invalid compression type {:?}", v))),
+        _ => Err(ConfigError::Value(format!("invalid compression type {:?}", tp))),
     }
 }
 
@@ -68,7 +68,7 @@ pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, Conf
         1 => Ok(DBRecoveryMode::AbsoluteConsistency),
         2 => Ok(DBRecoveryMode::PointInTime),
         3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
-        v => Err(ConfigError::Value(format!("invalid recovery mode: {:?}", v))),
+        _ => Err(ConfigError::Value(format!("invalid recovery mode: {:?}", mode))),
     }
 }
 
@@ -125,7 +125,7 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
         "m" => Ok((num * (MINTUE as f64)) as i64),
         "h" => Ok((num * (HOUR as f64)) as i64),
 
-        v => Err(ConfigError::Value(format!("invalid unit {:?}", v))),
+        _ => Err(ConfigError::Value(format!("invalid unit {:?}", unit))),
     }
 }
 
