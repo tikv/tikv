@@ -30,18 +30,18 @@ impl Json {
 
         suffixes.into_iter().fold(base_data, |data, suffix| {
             match (data, suffix) {
+                // rule 1
                 (Json::Array(mut array), Json::Array(mut sub_array)) => {
-                    // rule 1
                     array.append(&mut sub_array);
                     Json::Array(array)
                 }
+                // rule 3, 4
                 (Json::Array(mut array), suffix) => {
-                    // rule 3, 4
                     array.push(suffix);
                     Json::Array(array)
                 }
+                // rule 2
                 (Json::Object(mut obj), Json::Object(sub_obj)) => {
-                    // rule 2
                     for (sub_key, sub_value) in sub_obj {
                         let v = if let Some(value) = obj.remove(&sub_key) {
                             value.merge(vec![sub_value])
@@ -52,8 +52,8 @@ impl Json {
                     }
                     Json::Object(obj)
                 }
+                // rule 4
                 (obj, Json::Array(mut sub_array)) => {
-                    // rule 4
                     let mut array = vec![obj];
                     array.append(&mut sub_array);
                     Json::Array(array)
@@ -73,7 +73,7 @@ mod test {
     fn test_merge() {
         let test_cases = vec![
             (r#"{"a": 1}"#, r#"{"b": 2}"#, r#"{"a": 1, "b": 2}"#),
-            (r#"{"a": 1}"#,r#"{"a": 2}"#, r#"{"a": [1, 2]}"#),
+            (r#"{"a": 1}"#, r#"{"a": 2}"#, r#"{"a": [1, 2]}"#),
             (r#"[1]"#, r#"[2]"#, r#"[1, 2]"#),
             (r#"{"a": 1}"#, r#"[1]"#,r#"[{"a": 1}, 1]"#),
             (r#"[1]"#, r#"{"a": 1}"#,r#"[1, {"a": 1}]"#),
