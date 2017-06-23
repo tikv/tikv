@@ -15,7 +15,6 @@
 #![allow(dead_code)]
 
 use std::{u32, char, str};
-use std::collections::BTreeMap;
 use super::super::Result;
 use super::json::Json;
 use super::path_expr::{PathLeg, PathExpression, PATH_EXPR_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK};
@@ -121,7 +120,7 @@ pub fn extract_json(j: Json, path_expr: &PathExpression) -> Vec<Json> {
             // If j is not an array, autowrap that into array.
             let array = match j {
                 Json::Array(array) => array,
-                _ => wrap_to_array(j),
+                _ => vec![j],
             };
             if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
                 for child in array {
@@ -134,9 +133,8 @@ pub fn extract_json(j: Json, path_expr: &PathExpression) -> Vec<Json> {
         PathLeg::Key(key) => {
             if let Json::Object(map) = j {
                 if key == PATH_EXPR_ASTERISK {
-                    let sorted_keys = get_sorted_keys(&map);
-                    for key in sorted_keys {
-                        ret.append(&mut extract_json(map[&key].clone(), &sub_path_expr))
+                    for key in map.keys() {
+                        ret.append(&mut extract_json(map[key].clone(), &sub_path_expr))
                     }
                 } else if map.contains_key(&key) {
                     ret.append(&mut extract_json(map[&key].clone(), &sub_path_expr))
@@ -152,9 +150,8 @@ pub fn extract_json(j: Json, path_expr: &PathExpression) -> Vec<Json> {
                     }
                 }
                 Json::Object(map) => {
-                    let sorted_keys = get_sorted_keys(&map);
-                    for key in sorted_keys {
-                        ret.append(&mut extract_json(map[&key].clone(), path_expr))
+                    for key in map.keys() {
+                        ret.append(&mut extract_json(map[key].clone(), path_expr))
                     }
                 }
                 _ => {}
@@ -164,22 +161,6 @@ pub fn extract_json(j: Json, path_expr: &PathExpression) -> Vec<Json> {
     ret
 }
 
-fn wrap_to_array(j: Json) -> Vec<Json> {
-    let mut array = Vec::with_capacity(1);
-    array.push(j.clone());
-    array
-}
-
-// Get_sorted_keys returns sorted keys of a map.
-fn get_sorted_keys(m: &BTreeMap<String, Json>) -> Vec<String> {
-    let mut keys = Vec::with_capacity(m.len());
-    for k in m.keys() {
-        keys.push(k.clone());
-    }
-    keys.sort();
-    keys
-}
-
 #[cfg(test)]
 mod test {
     use std::collections::BTreeMap;
@@ -187,17 +168,6 @@ mod test {
     use super::super::path_expr::{PathExpressionFlag, PATH_EXPR_ARRAY_INDEX_ASTERISK,
                                   PATH_EXPRESSION_CONTAINS_ASTERISK,
                                   PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK};
-
-    #[test]
-    fn test_get_sorted_keys() {
-        let mut m = BTreeMap::new();
-        let keys = ["a", "b", "c"];
-        for k in &keys {
-            m.insert(String::from(*k), Json::None);
-        }
-        let expected: Vec<_> = keys.iter().map(|x| String::from(*x)).collect();
-        assert_eq!(super::get_sorted_keys(&m), expected);
-    }
 
     #[test]
     fn test_json_extract() {
