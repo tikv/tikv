@@ -167,6 +167,7 @@ pub fn extract_json(j: &Json, path_legs: &[PathLeg]) -> Vec<Json> {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
     use std::collections::BTreeMap;
     use super::*;
     use super::super::path_expr::{PathExpressionFlag, PATH_EXPR_ARRAY_INDEX_ASTERISK,
@@ -175,81 +176,84 @@ mod test {
 
     #[test]
     fn test_json_extract() {
-        let mut m = BTreeMap::new();
-        m.insert(String::from("a"), Json::String(String::from("a1")));
-        m.insert(String::from("b"), Json::Double(20.08));
-        m.insert(String::from("c"), Json::Boolean(false));
-        let mut mm = BTreeMap::new();
-        mm.insert(String::from("g"), Json::Object(m.clone()));
-        let mut test_cases =
-            vec![// no path expression
-                 (Json::None, vec![], None),
-                 // Index
-                 (Json::Array(vec![Json::Boolean(true), Json::I64(2017)]),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::Index(0)],
-                           flags: PathExpressionFlag::default(),
-                       }],
-                  Some(Json::Boolean(true))),
-                 (Json::Array(vec![Json::Boolean(true), Json::I64(2017)]),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
-                           flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
-                       }],
-                  Some(Json::Array(vec![Json::Boolean(true), Json::I64(2017)]))),
-                 (Json::Array(vec![Json::Boolean(true), Json::I64(2017)]),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::Index(2)],
-                           flags: PathExpressionFlag::default(),
-                       }],
-                  None),
-                 (Json::Double(6.18),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::Index(0)],
-                           flags: PathExpressionFlag::default(),
-                       }],
-                  Some(Json::Double(6.18))),
-                 // Key
-                 (Json::Object(m.clone()),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::Key(String::from("c"))],
-                           flags: PathExpressionFlag::default(),
-                       }],
-                  Some(Json::Boolean(false))),
-                 (Json::Object(m.clone()),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::Key(String::from(PATH_EXPR_ASTERISK))],
-                           flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
-                       }],
-                  Some(Json::Array(vec![Json::String(String::from("a1")),
-                                        Json::Double(20.08),
-                                        Json::Boolean(false)]))),
-                 (Json::Object(m.clone()),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::Key(String::from("d"))],
-                           flags: PathExpressionFlag::default(),
-                       }],
-                  None),
-                 // Double asterisks
-                 (Json::I64(21),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                           flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                       }],
-                  None),
-                 (Json::Object(mm),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                           flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                       }],
-                  Some(Json::Boolean(false))),
-                 (Json::Array(vec![Json::Object(m), Json::Boolean(true)]),
-                  vec![PathExpression {
-                           legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
-                           flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                       }],
-                  Some(Json::Boolean(false)))];
-        for (i, (j, exprs, expected)) in test_cases.drain(..).enumerate() {
+        let mut test_cases = vec![// no path expression
+            ("null", vec![], None),
+            // Index
+            ("[true, 2017]",
+             vec![PathExpression {
+                 legs: vec![PathLeg::Index(0)],
+                 flags: PathExpressionFlag::default(),
+             }],
+             Some("true")),
+            ("[true, 2017]",
+             vec![PathExpression {
+                 legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                 flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
+             }],
+             Some("[true, 2017]")),
+            ("[true, 2107]",
+             vec![PathExpression {
+                 legs: vec![PathLeg::Index(2)],
+                 flags: PathExpressionFlag::default(),
+             }],
+             None),
+            ("6.18",
+             vec![PathExpression {
+                 legs: vec![PathLeg::Index(0)],
+                 flags: PathExpressionFlag::default(),
+             }],
+             Some("6.18")),
+            // Key
+            (r#"{"a": "a1", "b": 20.08, "c": false}"#,
+             vec![PathExpression {
+                 legs: vec![PathLeg::Key(String::from("c"))],
+                 flags: PathExpressionFlag::default(),
+             }],
+             Some("false")),
+            (r#"{"a": "a1", "b": 20.08, "c": false}"#,
+             vec![PathExpression {
+                  legs: vec![PathLeg::Key(String::from(PATH_EXPR_ASTERISK))],
+                  flags: PATH_EXPRESSION_CONTAINS_ASTERISK,
+             }],
+             Some(r#"["a1", 20.08, false]"#)),
+            (r#"{"a": "a1", "b": 20.08, "c": false}"#,
+              vec![PathExpression {
+                  legs: vec![PathLeg::Key(String::from("d"))],
+                  flags: PathExpressionFlag::default(),
+              }],
+              None),
+             // Double asterisks
+             ("21",
+              vec![PathExpression {
+                  legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                  flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+              }],
+              None),
+             (r#"{"g": {"a": "a1", "b": 20.08, "c": false}}"#,
+              vec![PathExpression {
+                  legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                  flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+              }],
+              Some("false")),
+             (r#"[{"a": "a1", "b": 20.08, "c": false}, true]"#,
+              vec![PathExpression {
+                  legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
+                  flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+              }],
+              Some("false")),
+            ];
+        for (i, (js, exprs, expected)) in test_cases.drain(..).enumerate() {
+            let j = js.parse();
+            assert!(j.is_ok(), "#{} expect parse ok but got {:?}", i, j);
+            let j: Json = j.unwrap();
+            let expected = match expected {
+                Some(es) => {
+                    let e = Json::from_str(es);
+                    assert!(e.is_ok(), "#{} expect parse json ok but got {:?}", i, e);
+                    Some(e.unwrap())
+                }
+                None => None,
+            };
             let got = j.extract(&exprs[..]);
             assert_eq!(got,
                        expected,
@@ -263,12 +267,12 @@ mod test {
     #[test]
     fn test_decode_escaped_unicode() {
         let mut test_cases = vec![
-            ("5e8a", '床'),
-            ("524d", '前'),
-            ("660e", '明'),
-            ("6708", '月'),
-            ("5149", '光'),
-        ];
+                ("5e8a", '床'),
+                ("524d", '前'),
+                ("660e", '明'),
+                ("6708", '月'),
+                ("5149", '光'),
+            ];
         for (i, (escaped, expected)) in test_cases.drain(..).enumerate() {
             let d = decode_escaped_unicode(escaped);
             assert!(d.is_ok(), "#{} expect ok but got err {:?}", i, d);
