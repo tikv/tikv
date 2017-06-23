@@ -79,28 +79,6 @@ pub struct PathExpression {
     pub flags: PathExpressionFlag,
 }
 
-impl PathExpression {
-    pub fn pop_one_leg(&self) -> (PathLeg, PathExpression) {
-        let mut pe = PathExpression {
-            legs: self.legs[1..].to_vec(),
-            flags: 0,
-        };
-        for leg in &pe.legs {
-            match *leg {
-                PathLeg::Index(i) if i == PATH_EXPR_ARRAY_INDEX_ASTERISK => {
-                    pe.flags |= PATH_EXPRESSION_CONTAINS_ASTERISK
-                }
-                PathLeg::Key(ref key) if key == "*" => {
-                    pe.flags |= PATH_EXPRESSION_CONTAINS_ASTERISK
-                }
-                PathLeg::DoubleAsterisk => pe.flags |= PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
-                _ => {}
-            }
-        }
-        (self.legs[0].clone(), pe)
-    }
-}
-
 /// Parses a JSON path expression. Returns a `PathExpression`
 /// object which can be used in `JSON_EXTRACT`, `JSON_SET` and so on.
 pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
@@ -114,8 +92,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
         return Err(box_err!("Invalid JSON path: {}", path_expr));
     }
 
-    let expr = path_expr.index(dollar_index + 1..)
-        .trim_left_matches(|c| char::is_ascii_whitespace(&c));
+    let expr = path_expr.index(dollar_index + 1..).trim_left();
 
     let re = Regex::new(PATH_EXPR_LEG_RE_STR).unwrap();
     let mut legs = vec![];
@@ -131,8 +108,8 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
         let next_char = expr.index(start..).chars().next().unwrap();
         if next_char == '[' {
             // The leg is an index of a JSON array.
-            let leg = expr[start + 1..end].trim_matches(|c| char::is_ascii_whitespace(&c));
-            let index_str = leg[0..leg.len() - 1].trim_matches(|c| char::is_ascii_whitespace(&c));
+            let leg = expr[start + 1..end].trim();
+            let index_str = leg[0..leg.len() - 1].trim();
             let index = if index_str == PATH_EXPR_ASTERISK {
                 flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
                 PATH_EXPR_ARRAY_INDEX_ASTERISK
@@ -142,8 +119,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
             legs.push(PathLeg::Index(index))
         } else if next_char == '.' {
             // The leg is a key of a JSON object.
-            let mut key =
-                expr[start + 1..end].trim_matches(|c| char::is_ascii_whitespace(&c)).to_owned();
+            let mut key = expr[start + 1..end].trim().to_owned();
             if key == PATH_EXPR_ASTERISK {
                 flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
             } else if key.chars().next().unwrap() == '"' {
