@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
+// Refer to https://dev.mysql.com/doc/refman/5.7/en/json-path-syntax.html
 // From MySQL 5.7, JSON path expression grammar:
 //     pathExpression ::= scope (pathLeg)*
 //     scope ::= [ columnReference ] '$'
