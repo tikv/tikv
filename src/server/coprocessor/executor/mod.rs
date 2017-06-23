@@ -18,6 +18,8 @@ mod scanner;
 pub mod table_scan;
 pub mod selection;
 pub mod index_scan;
+pub mod topn;
+pub mod limit;
 
 // TODO:remove it
 #[allow(dead_code)]

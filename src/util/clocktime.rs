@@ -59,6 +59,9 @@ mod tests {
         let early_time = raw_now();
         let late_time = raw_now();
         // The monotonic raw clocktime must be strictly monotonic increasing.
-        assert!(late_time > early_time);
+        assert!(late_time >= early_time,
+                "expect late time {:?} >= early time {:?}",
+                late_time,
+                early_time);
     }
 }
