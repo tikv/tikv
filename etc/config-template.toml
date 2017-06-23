@@ -218,6 +218,9 @@ stats-dump-period-sec = 600
 # Limit the disk IO of compaction and flush.
 # rate-bytes-per-sec = 0
 
+# If true, allow multi-writers to update mem tables in parallel.
+# allow-concurrent-memtable-write = false
+
 # Column Family default used to store actual data of the database.
 [rocksdb.defaultcf]
 # compression method (if any) is used to compress a block.
