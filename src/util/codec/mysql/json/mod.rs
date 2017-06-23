@@ -16,6 +16,7 @@ mod binary;
 mod comparison;
 mod serde;
 mod json_type;
+mod json_merge;
 mod functions;
 
 pub use self::binary::{JsonEncoder, JsonDecoder};
