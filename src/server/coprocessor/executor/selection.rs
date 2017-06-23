@@ -98,7 +98,7 @@ impl<'a> Executor for SelectionExecutor<'a> {
                                   row.handle));
             for expr in &self.conditions {
                 let val = try!(evaluator.eval(&self.ctx, expr));
-                let is_selected =  try!(val.into_bool(&self.ctx));
+                let is_selected = try!(val.into_bool(&self.ctx));
                 if !is_selected.unwrap_or(false) {
                     continue 'next;
                 }
@@ -274,7 +274,8 @@ mod tests {
             selection_rows.push(row);
         }
 
-        let expect_row_handles = raw_data.iter().filter(|r| r[2].i64() > 5).map(|r| r[0].i64()).collect::<Vec<_>>();
+        let expect_row_handles =
+            raw_data.iter().filter(|r| r[2].i64() > 5).map(|r| r[0].i64()).collect::<Vec<_>>();
         assert!(expect_row_handles.len() < raw_data.len());
         assert_eq!(selection_rows.len(), expect_row_handles.len());
         let result_row = selection_rows.iter().map(|r| r.handle).collect::<Vec<_>>();
