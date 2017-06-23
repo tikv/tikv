@@ -149,6 +149,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use std::sync::{Arc, Mutex};
     use std::sync::mpsc::{self, Sender};
     use std::net::SocketAddr;
@@ -244,7 +245,7 @@ mod tests {
         let mut msg = RaftMessage::new();
         msg.set_region_id(1);
         trans.send(msg).unwrap();
-        rx.recv().unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
         server.stop().unwrap();
     }
 }
