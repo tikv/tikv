@@ -33,10 +33,10 @@ impl Server {
         where C: Mocker + Send + Sync + 'static
     {
         let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
-        Server::run_with_eps(eps.as_slice(), handler, case)
+        Server::run_with_eps(eps, handler, case)
     }
 
-    pub fn run_with_eps<C>(eps: &[(String, u16)],
+    pub fn run_with_eps<C>(eps: Vec<(String, u16)>,
                            handler: Arc<Service>,
                            case: Option<Arc<C>>)
                            -> Server
@@ -49,8 +49,8 @@ impl Server {
         let service = pdpb_grpc::create_pd(m);
         let env = Arc::new(Environment::new(1));
         let mut sb = ServerBuilder::new(env).register_service(service);
-        for ep in eps {
-            sb = sb.bind(ep.0.as_str(), ep.1);
+        for (host, port) in eps {
+            sb = sb.bind(host, port);
         }
 
         let mut server = sb.build().unwrap();

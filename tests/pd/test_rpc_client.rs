@@ -188,7 +188,7 @@ fn test_restart_leader() {
     // Kill servers.
     drop(server);
     // Restart them again.
-    let _server = MockServer::run_with_eps::<Service>(eps.as_slice(), se.clone(), None);
+    let _server = MockServer::run_with_eps::<Service>(eps, se.clone(), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));

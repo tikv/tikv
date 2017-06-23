@@ -18,11 +18,11 @@ use super::Result;
 use super::DEFAULT_CLUSTER_ID;
 
 #[derive(Debug)]
-pub struct AlreadyBootstrapped {}
+pub struct AlreadyBootstrapped;
 
 impl AlreadyBootstrapped {
     pub fn new() -> AlreadyBootstrapped {
-        AlreadyBootstrapped {}
+        AlreadyBootstrapped
     }
 }
 
