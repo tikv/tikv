@@ -125,7 +125,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
             if key == PATH_EXPR_ASTERISK {
                 flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
             } else if key.chars().next().unwrap() == '"' {
-                // We need unquote the origin string.
+                // We need to unquote the origin string.
                 key = try!(unquote_string(&key[1..key.len() - 1]));
             }
             legs.push(PathLeg::Key(key))
@@ -179,6 +179,12 @@ mod test {
                                    true,
                                    Some(PathExpression {
                                       legs: vec![PathLeg::Key(String::from("a"))],
+                                      flags: PathExpressionFlag::default(),
+                                  })),
+                                  ("$.\"hello world\"",
+                                   true,
+                                   Some(PathExpression {
+                                      legs: vec![PathLeg::Key(String::from("hello world"))],
                                       flags: PathExpressionFlag::default(),
                                   })),
                                   ("$[0]",
