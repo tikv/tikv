@@ -17,7 +17,6 @@ use std::time::Duration;
 use std::thread;
 
 use rocksdb::DB;
-use uuid::Uuid;
 use protobuf;
 use time::Duration as TimeDuration;
 
@@ -116,7 +115,6 @@ pub fn new_base_request(region_id: u64, epoch: RegionEpoch, read_quorum: bool) -
     let mut req = RaftCmdRequest::new();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);
-    req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
     req.mut_header().set_read_quorum(read_quorum);
     req
 }
