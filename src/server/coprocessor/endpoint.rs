@@ -920,10 +920,10 @@ impl SelectContextCore {
     }
 }
 
-pub fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
-                           col_meta: &[ColumnInfo],
-                           expr: &Expr)
-                           -> Result<()> {
+fn collect_col_in_expr(cols: &mut HashMap<i64, ColumnInfo>,
+                       col_meta: &[ColumnInfo],
+                       expr: &Expr)
+                       -> Result<()> {
     if expr.get_tp() == ExprType::ColumnRef {
         let i = box_try!(expr.get_val().decode_i64());
         if let Entry::Vacant(e) = cols.entry(i) {
