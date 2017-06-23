@@ -29,22 +29,29 @@ use super::{Executor, Row};
 use super::super::Result;
 use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
 
-struct ExprColumnRefVisitor {
-    col_ids: HashSet<i64>,
+pub struct ExprColumnRefVisitor {
+    pub col_ids: HashSet<i64>,
 }
 
 impl ExprColumnRefVisitor {
-    fn new() -> ExprColumnRefVisitor {
+    pub fn new() -> ExprColumnRefVisitor {
         ExprColumnRefVisitor { col_ids: HashSet::new() }
     }
 
-    fn visit(&mut self, expr: &Expr) -> Result<()> {
+    pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
             self.col_ids.insert(box_try!(expr.get_val().decode_i64()));
         } else {
             for sub_expr in expr.get_children() {
                 try!(self.visit(sub_expr));
             }
+        }
+        Ok(())
+    }
+
+    pub fn batch_visit(&mut self, exprs: &[Expr]) -> Result<()> {
+        for expr in exprs {
+            try!(self.visit(expr));
         }
         Ok(())
     }
