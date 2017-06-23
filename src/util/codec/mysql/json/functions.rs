@@ -35,7 +35,7 @@ impl Json {
     pub fn extract(&self, path_expr_list: &[PathExpression]) -> Option<Json> {
         let mut elem_list = Vec::with_capacity(path_expr_list.len());
         for path_expr in path_expr_list {
-            elem_list.append(&mut extract_json(self.clone(), path_expr))
+            elem_list.append(&mut extract_json(self, path_expr))
         }
         if elem_list.is_empty() {
             return None;
@@ -109,7 +109,7 @@ fn decode_escaped_unicode(s: &str) -> Result<char> {
 }
 
 // extract_json is used by JSON::extract().
-pub fn extract_json(j: Json, path_expr: &PathExpression) -> Vec<Json> {
+pub fn extract_json(j: &Json, path_expr: &PathExpression) -> Vec<Json> {
     if path_expr.legs.is_empty() {
         return vec![j.clone()];
     }
@@ -117,41 +117,45 @@ pub fn extract_json(j: Json, path_expr: &PathExpression) -> Vec<Json> {
     let mut ret = vec![];
     match current_leg {
         PathLeg::Index(i) => {
-            // If j is not an array, autowrap that into array.
-            let array = match j {
-                Json::Array(array) => array,
-                _ => vec![j],
-            };
-            if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
-                for child in array {
-                    ret.append(&mut extract_json(child, &sub_path_expr))
+            match *j {
+                Json::Array(ref array) => {
+                    if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
+                        for child in array {
+                            ret.append(&mut extract_json(child, &sub_path_expr))
+                        }
+                    } else if (i as usize) < array.len() {
+                        ret.append(&mut extract_json(&array[i as usize], &sub_path_expr))
+                    }
                 }
-            } else if (i as usize) < array.len() {
-                ret.append(&mut extract_json(array[i as usize].clone(), &sub_path_expr))
+                _ => {
+                    if (i == PATH_EXPR_ARRAY_INDEX_ASTERISK) || (i as usize == 0) {
+                        ret.append(&mut extract_json(j, &sub_path_expr))
+                    }
+                }
             }
         }
         PathLeg::Key(key) => {
-            if let Json::Object(map) = j {
+            if let Json::Object(ref map) = *j {
                 if key == PATH_EXPR_ASTERISK {
                     for key in map.keys() {
-                        ret.append(&mut extract_json(map[key].clone(), &sub_path_expr))
+                        ret.append(&mut extract_json(&map[key], &sub_path_expr))
                     }
                 } else if map.contains_key(&key) {
-                    ret.append(&mut extract_json(map[&key].clone(), &sub_path_expr))
+                    ret.append(&mut extract_json(&map[&key], &sub_path_expr))
                 }
             }
         }
         PathLeg::DoubleAsterisk => {
-            ret.append(&mut extract_json(j.clone(), &sub_path_expr));
-            match j {
-                Json::Array(array) => {
+            ret.append(&mut extract_json(j, &sub_path_expr));
+            match *j {
+                Json::Array(ref array) => {
                     for child in array {
-                        ret.append(&mut extract_json(child.clone(), path_expr))
+                        ret.append(&mut extract_json(child, path_expr))
                     }
                 }
-                Json::Object(map) => {
+                Json::Object(ref map) => {
                     for key in map.keys() {
-                        ret.append(&mut extract_json(map[key].clone(), path_expr))
+                        ret.append(&mut extract_json(&map[key], path_expr))
                     }
                 }
                 _ => {}
