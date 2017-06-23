@@ -14,14 +14,8 @@
 use std::boxed::Box;
 use std::error;
 
-use uuid::Uuid;
-
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raftstore::Error;
-
-pub fn bind_uuid(resp: &mut RaftCmdResponse, uuid: Uuid) {
-    resp.mut_header().set_uuid(uuid.as_bytes().to_vec());
-}
 
 pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {
     if term == 0 {
@@ -41,10 +35,9 @@ pub fn new_error(err: Error) -> RaftCmdResponse {
     resp
 }
 
-pub fn err_resp(e: Error, uuid: Uuid, term: u64) -> RaftCmdResponse {
+pub fn err_resp(e: Error, term: u64) -> RaftCmdResponse {
     let mut resp = new_error(e);
     bind_term(&mut resp, term);
-    bind_uuid(&mut resp, uuid);
     resp
 }
 
