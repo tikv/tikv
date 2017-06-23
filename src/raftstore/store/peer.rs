@@ -15,14 +15,12 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::vec::Vec;
-use std::default::Default;
+use std::{mem, slice};
 use std::time::{Instant, Duration};
 
 use time::Timespec;
 use rocksdb::{DB, WriteBatch};
 use protobuf::{self, Message, MessageStatic};
-use uuid::Uuid;
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, CmdType, AdminCmdType, AdminResponse,
@@ -58,31 +56,45 @@ const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
 const DEFAULT_APPEND_WB_SIZE: usize = 4 * 1024;
 
 struct ReadIndexRequest {
-    uuid: Uuid,
+    id: u64,
     cmds: Vec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
+}
+
+impl ReadIndexRequest {
+    fn binary_id(&self) -> &[u8] {
+        unsafe {
+            let id = &self.id as *const u64 as *const u8;
+            slice::from_raw_parts(id, 8)
+        }
+    }
 }
 
 impl Drop for ReadIndexRequest {
     fn drop(&mut self) {
         if !self.cmds.is_empty() {
-            panic!("callback of index read {} is leak.", self.uuid);
+            panic!("callback of index read at {} is leak.", self.id);
         }
     }
 }
 
 #[derive(Default)]
 struct ReadIndexQueue {
+    id_allocator: u64,
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
 }
 
 impl ReadIndexQueue {
-    fn clear_uncommitted(&mut self, tag: &str, term: u64) {
+    fn next_id(&mut self) -> u64 {
+        self.id_allocator += 1;
+        self.id_allocator
+    }
+
+    fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
-            for (req, cb) in read.cmds.drain(..) {
-                let uuid = util::get_uuid_from_req(&req).unwrap();
-                apply::notify_stale_req(tag, term, uuid, cb);
+            for (_, cb) in read.cmds.drain(..) {
+                apply::notify_stale_req(term, cb);
             }
         }
     }
@@ -96,7 +108,7 @@ pub enum StaleState {
 }
 
 pub struct ProposalMeta {
-    pub uuid: Uuid,
+    pub index: u64,
     pub term: u64,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
@@ -105,35 +117,25 @@ pub struct ProposalMeta {
 #[derive(Default)]
 struct ProposalQueue {
     queue: VecDeque<ProposalMeta>,
-    uuids: HashSet<Uuid>,
 }
 
 impl ProposalQueue {
-    pub fn contains(&self, uuid: &Uuid) -> bool {
-        self.uuids.contains(uuid)
-    }
-
     fn pop(&mut self, term: u64) -> Option<ProposalMeta> {
         self.queue.pop_front().and_then(|meta| {
             if meta.term > term {
                 self.queue.push_front(meta);
                 return None;
             }
-            self.uuids.remove(&meta.uuid);
             Some(meta)
         })
     }
 
     fn push(&mut self, meta: ProposalMeta) {
-        self.uuids.insert(meta.uuid);
         self.queue.push_back(meta);
     }
 
     fn clear(&mut self) {
-        if !self.uuids.is_empty() {
-            self.uuids.clear();
-            self.queue.clear();
-        }
+        self.queue.clear();
     }
 }
 
@@ -381,9 +383,8 @@ impl Peer {
         }
 
         for mut read in self.pending_reads.reads.drain(..) {
-            for (req, cb) in read.cmds.drain(..) {
-                let uuid = util::get_uuid_from_req(&req).unwrap();
-                apply::notify_req_region_removed(region.get_id(), self.peer.get_id(), uuid, cb);
+            for (_, cb) in read.cmds.drain(..) {
+                apply::notify_req_region_removed(region.get_id(), cb);
             }
         }
 
@@ -733,15 +734,14 @@ impl Peer {
             if !to_be_updated {
                 // It's not leader anymore, we are safe to clear proposals. If it becomes leader
                 // again, the lease should be updated when election is finished, old proposals
-                // have no effect. Although this may allow old uuids to be reused before old
-                // callbacks are called.
+                // have no effect.
                 self.proposals.clear();
             }
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
                 if to_be_updated {
-                    to_be_updated = !self.maybe_update_lease(entry.get_term(), entry.get_data());
+                    to_be_updated = !self.maybe_update_lease(entry);
                 }
             }
             if !committed_entries.is_empty() {
@@ -765,7 +765,7 @@ impl Peer {
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
-                assert_eq!(state.request_ctx.as_slice(), read.uuid.as_bytes());
+                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 for (req, cb) in read.cmds.drain(..) {
                     // TODO: we should add test case that a split happens before pending
                     // read-index is handled. To do this we need to control async-apply
@@ -777,7 +777,7 @@ impl Peer {
         } else {
             for state in &ready.read_states {
                 let read = &self.pending_reads.reads[self.pending_reads.ready_cnt];
-                assert_eq!(state.request_ctx.as_slice(), read.uuid.as_bytes());
+                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 self.pending_reads.ready_cnt += 1;
                 propose_time = Some(read.renew_lease_time);
             }
@@ -788,7 +788,7 @@ impl Peer {
         if ready.ss.is_some() {
             let term = self.term();
             // all uncommitted reads will be dropped silently in raft.
-            self.pending_reads.clear_uncommitted(&self.tag, term);
+            self.pending_reads.clear_uncommitted(term);
         }
 
         if let Some(Either::Right(_)) = self.leader_lease_expired_time {
@@ -877,12 +877,8 @@ impl Peer {
     /// Try to update lease.
     ///
     /// If the it can make sure that its lease is the latest lease, returns true.
-    fn maybe_update_lease(&mut self, term: u64, data: &[u8]) -> bool {
-        let mut req = RaftCmdRequest::new();
-        let propose_time = match req.merge_from_bytes(data)
-            .ok()
-            .and_then(|_| util::get_uuid_from_req(&req))
-            .and_then(|uuid| self.find_propose_time(uuid, term)) {
+    fn maybe_update_lease(&mut self, entry: &eraftpb::Entry) -> bool {
+        let propose_time = match self.find_propose_time(entry.get_index(), entry.get_term()) {
             Some(t) => t,
             _ => return false,
         };
@@ -913,9 +909,9 @@ impl Peer {
         true
     }
 
-    fn find_propose_time(&mut self, uuid: Uuid, term: u64) -> Option<Timespec> {
+    fn find_propose_time(&mut self, index: u64, term: u64) -> Option<Timespec> {
         while let Some(meta) = self.proposals.pop(term) {
-            if meta.uuid == uuid {
+            if meta.index == index && meta.term == term {
                 return Some(meta.renew_lease_time.unwrap());
             }
         }
@@ -926,7 +922,6 @@ impl Peer {
     ///
     /// Return true means the request has been proposed successfully.
     pub fn propose(&mut self,
-                   meta: ProposalMeta,
                    cb: Callback,
                    req: RaftCmdRequest,
                    mut err_resp: RaftCmdResponse,
@@ -936,13 +931,6 @@ impl Peer {
             return false;
         }
 
-        if self.proposals.contains(&meta.uuid) {
-            cmd_resp::bind_error(&mut err_resp, box_err!("duplicated uuid {:?}", meta.uuid));
-            cb(err_resp);
-            return false;
-        }
-
-        debug!("{} propose command with uuid {:?}", self.tag, meta.uuid);
         metrics.all += 1;
 
         let mut is_conf_change = false;
@@ -952,7 +940,7 @@ impl Peer {
                 self.read_local(req, cb, metrics);
                 return false;
             }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(meta.uuid, req, cb, metrics),
+            Ok(RequestPolicy::ReadIndex) => return self.read_index(req, cb, metrics),
             Ok(RequestPolicy::ProposeNormal) => self.propose_normal(req, metrics),
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(req, cb, metrics)
@@ -964,15 +952,22 @@ impl Peer {
             Err(e) => Err(e),
         };
 
-        if let Err(e) = res {
-            cmd_resp::bind_error(&mut err_resp, e);
-            cb(err_resp);
-            return false;
+        match res {
+            Err(e) => {
+                cmd_resp::bind_error(&mut err_resp, e);
+                cb(err_resp);
+                false
+            }
+            Ok(idx) => {
+                let meta = ProposalMeta {
+                    index: idx,
+                    term: self.term(),
+                    renew_lease_time: None,
+                };
+                self.post_propose(meta, is_conf_change, cb);
+                true
+            }
         }
-
-        self.post_propose(meta, is_conf_change, cb);
-
-        true
     }
 
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
@@ -981,8 +976,8 @@ impl Peer {
 
         let t = ApplyTask::propose(self.peer_id(),
                                    self.region_id,
-                                   meta.uuid,
                                    is_conf_change,
+                                   meta.index,
                                    meta.term,
                                    cb);
         self.apply_scheduler.schedule(t).unwrap();
@@ -1008,8 +1003,8 @@ impl Peer {
                 CmdType::Get | CmdType::Snap => is_read = true,
                 CmdType::Delete | CmdType::Put => is_write = true,
                 CmdType::Prewrite | CmdType::Invalid => {
-                    return Err(box_err!("invalid cmd type, message {:?} maybe currupted",
-                                        req.get_header().get_uuid()));
+                    return Err(box_err!("invalid cmd type {:?}, message maybe currupted",
+                                        r.get_cmd_type()));
                 }
             }
 
@@ -1158,7 +1153,6 @@ impl Peer {
     }
 
     fn read_index(&mut self,
-                  uuid: Uuid,
                   req: RaftCmdRequest,
                   cb: Callback,
                   metrics: &mut RaftProposeMetrics)
@@ -1177,7 +1171,9 @@ impl Peer {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        self.raft_group.read_index(uuid.as_bytes().to_vec());
+        let id = self.pending_reads.next_id();
+        let ctx: [u8; 8] = unsafe { mem::transmute(id) };
+        self.raft_group.read_index(ctx.to_vec());
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -1185,12 +1181,12 @@ impl Peer {
         if pending_read_count == last_pending_read_count &&
            ready_read_count == last_ready_read_count {
             // The message gets dropped silently, can't be handled anymore.
-            apply::notify_stale_req(&self.tag, self.term(), uuid, cb);
+            apply::notify_stale_req(self.term(), cb);
             return false;
         }
 
         self.pending_reads.reads.push_back(ReadIndexRequest {
-            uuid: uuid,
+            id: id,
             cmds: vec![(req, cb)],
             renew_lease_time: renew_lease_time,
         });
@@ -1203,18 +1199,13 @@ impl Peer {
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
 
-        let uuid = Uuid::new_v4();
-        if self.proposals.contains(&uuid) {
-            return true;
-        }
-        let meta = ProposalMeta {
-            uuid: uuid,
-            term: self.term(),
-            renew_lease_time: Some(renew_lease_time),
-        };
-        let mut req = RaftCmdRequest::new();
-        req.mut_header().set_uuid(uuid.as_bytes().to_vec());
-        if self.propose_normal(req, metrics).is_ok() {
+        let req = RaftCmdRequest::new();
+        if let Ok(index) = self.propose_normal(req, metrics) {
+            let meta = ProposalMeta {
+                index: index,
+                term: self.term(),
+                renew_lease_time: Some(renew_lease_time),
+            };
             self.post_propose(meta, false, box |_| {});
         }
 
@@ -1224,7 +1215,7 @@ impl Peer {
     fn propose_normal(&mut self,
                       mut req: RaftCmdRequest,
                       metrics: &mut RaftProposeMetrics)
-                      -> Result<()> {
+                      -> Result<u64> {
         metrics.normal += 1;
 
         // TODO: validate request for unexpected changes.
@@ -1247,7 +1238,7 @@ impl Peer {
             return Err(Error::NotLeader(self.region_id, None));
         }
 
-        Ok(())
+        Ok(propose_index)
     }
 
     // Return true to if the transfer leader request is accepted.
@@ -1281,7 +1272,7 @@ impl Peer {
     fn propose_conf_change(&mut self,
                            req: RaftCmdRequest,
                            metrics: &mut RaftProposeMetrics)
-                           -> Result<()> {
+                           -> Result<u64> {
         if self.raft_group.raft.pending_conf {
             info!("{} there is a pending conf change, try later", self.tag);
             return Err(box_err!("{} there is a pending conf change, try later", self.tag));
@@ -1316,10 +1307,10 @@ impl Peer {
             return Err(Error::NotLeader(self.region_id, None));
         }
 
-        Ok(())
+        Ok(propose_index)
     }
 
-    fn handle_read(&mut self, mut req: RaftCmdRequest, cb: Callback) {
+    fn handle_read(&mut self, req: RaftCmdRequest, cb: Callback) {
         let mut resp = self.exec_read(&req).unwrap_or_else(|e| {
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
@@ -1328,7 +1319,6 @@ impl Peer {
             cmd_resp::new_error(e)
         });
 
-        resp.mut_header().set_uuid(req.mut_header().take_uuid());
         cmd_resp::bind_term(&mut resp, self.term());
         cb(resp);
     }
