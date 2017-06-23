@@ -40,7 +40,6 @@ extern crate rand;
 extern crate mio;
 extern crate tempdir;
 extern crate rocksdb;
-extern crate uuid;
 extern crate kvproto;
 extern crate time;
 extern crate tipb;
