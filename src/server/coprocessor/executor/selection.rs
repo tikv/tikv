@@ -70,7 +70,6 @@ impl<'a> SelectionExecutor<'a> {
         }
 
         // FIXME(andelf): assume all items in columns_info are unique.
-        // For now, `SelectionExecutor` is dangling.
         let columns = columns_info.iter()
             .filter(|col| visitor.column_ids.get(&col.get_column_id()).is_some())
             .cloned()
@@ -112,51 +111,22 @@ impl<'a> Executor for SelectionExecutor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::scanner::test::{TestStore, prepare_table_data, get_range};
-    use tipb::executor::TableScan;
-    use super::super::table_scan::TableScanExecutor;
-
     use std::i64;
-    use kvproto::coprocessor::KeyRange;
+
     use storage::Statistics;
     use protobuf::RepeatedField;
-    use server::coprocessor::endpoint::{is_point, prefix_next};
-
     use util::codec::number::NumberEncoder;
-
-    // build expr
     use tipb::expression::{Expr, ExprType};
+    use util::codec::table;
+    use util::codec::mysql::types;
+    use util::codec::datum::Datum;
+    use tipb::executor::TableScan;
 
+    use super::*;
+    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::table_scan::TableScanExecutor;
 
-    #[test]
-    fn test_selection_smoke() {
-        let test_data = prepare_table_data(10, 1);
-        let mut store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
-        let mut table_scan = TableScan::new();
-        // prepare cols
-        let cols = test_data.get_prev_2_cols();
-        table_scan.set_columns(RepeatedField::from_vec(cols.clone()));
-        // prepare range
-        // whole key range for the table
-        let range = get_range(1, i64::MIN, i64::MAX);
-        let key_ranges = vec![range];
-
-
-        // make a simple range with only 1 item
-        let mut range = KeyRange::new();
-        range.set_start(test_data.pk.clone());
-        let end = prefix_next(&test_data.pk.clone());
-        range.set_end(end);
-        assert!(is_point(&range));
-
-        let mut statistics = Statistics::default();
-
-        let (snapshot, start_ts) = store.get_snapshot();
-        let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
-
-        // NULL IS NULL
+    fn new_const_expr() -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::NullEQ);
         expr.mut_children().push({
@@ -169,99 +139,145 @@ mod tests {
             lhs.set_tp(ExprType::Null);
             lhs
         });
-
-        let mut selection = Selection::new();
-        selection.mut_conditions().push(expr);
-
-        let mut selection_executor = SelectionExecutor::new(selection,
-                                                            Rc::new(EvalContext::default()),
-                                                            &cols,
-                                                            Box::new(inner_table_scan));
-
-        assert!(selection_executor.is_ok());
-        let executor = selection_executor.as_mut().unwrap();
-        let nxt = executor.next();
-        assert!(nxt.is_ok());
-        assert!(nxt.as_ref().unwrap().is_some());
-        let a_row = nxt.unwrap().unwrap();
-        assert_eq!(a_row.data.len(), cols.len(), "same column size");
-
-        let encode_data = &test_data.encode_data[0];
-        for col in &cols {
-            let cid = col.get_column_id();
-            let v = a_row.data.get(cid).unwrap();
-            assert_eq!(encode_data[&cid], v.to_vec());
-        }
+        expr
     }
 
-    #[test]
-    fn test_selection_simple_condition() {
-        let test_data = prepare_table_data(10, 1);
-        let mut store = TestStore::new(&test_data.kv_data, test_data.pk.clone());
-        let mut table_scan = TableScan::new();
-        // prepare cols
-        // let cols = test_data.get_prev_2_cols();
-        let cols = test_data.cols.clone(); // all cols
-        table_scan.set_columns(RepeatedField::from_vec(cols.clone()));
-        // prepare range
-        // whole key range for the table
-        let range = get_range(1, i64::MIN, i64::MAX);
-        let key_ranges = vec![range];
-
-        // make a simple range with only 1 item
-        let mut range = KeyRange::new();
-        range.set_start(test_data.pk.clone());
-        let end = prefix_next(&test_data.pk.clone());
-        range.set_end(end);
-        assert!(is_point(&range));
-
-        let mut statistics = Statistics::default();
-
-        let (snapshot, start_ts) = store.get_snapshot();
-        let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
-        // col3 > 3
+    fn new_col_gt_u64_expr(col_id: i64, val: u64) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::GT);
         expr.mut_children().push({
             let mut lhs = Expr::new();
             lhs.set_tp(ExprType::ColumnRef);
-            lhs.mut_val().encode_i64(3).unwrap();
+            lhs.mut_val().encode_i64(col_id).unwrap();
             lhs
         });
         expr.mut_children().push({
             let mut lhs = Expr::new();
             lhs.set_tp(ExprType::Uint64);
-            lhs.mut_val().encode_u64(5).unwrap();
+            lhs.mut_val().encode_u64(val).unwrap();
             lhs
         });
+        expr
+    }
 
+    // the first column should be i64 since it will be used as row handle
+    pub fn gen_table_data(tid: i64,
+                          cis: &[ColumnInfo],
+                          rows: &[Vec<Datum>])
+                          -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut kv_data = Vec::new();
+        let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
+        for cols in rows.iter() {
+            let col_values = cols.to_vec();
+            let value = table::encode_row(col_values, &col_ids).unwrap();
+            let mut buf = vec![];
+            buf.encode_i64(cols[0].i64()).unwrap();
+            let key = table::encode_row_key(tid, &buf);
+            kv_data.push((key, value));
+        }
+        kv_data
+    }
+
+    #[test]
+    fn test_selection_executor_simple() {
+        let tid = 1;
+        let cis = vec![new_col_info(1, types::LONG_LONG),
+                       new_col_info(2, types::VARCHAR),
+                       new_col_info(3, types::NEW_DECIMAL)];
+        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
+                            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec()), Datum::Dec(7.into())],
+                            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::Dec(8.into())],
+                            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec()), Datum::Dec(3.into())],
+                            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::Dec(5.into())],
+                            vec![Datum::I64(6), Datum::Bytes(b"e".to_vec()), Datum::Dec(9.into())],
+                            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::Dec(6.into())]];
+
+        let table_data = gen_table_data(tid, &cis, &raw_data);
+        let mut test_store = TestStore::new(&table_data);
+
+        let mut table_scan = TableScan::new();
+        table_scan.set_table_id(tid);
+        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+        // prepare range
+        let key_ranges = vec![get_range(tid, 0, i64::MAX)];
+
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut statistics = Statistics::default();
+
+        let inner_table_scan =
+            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+
+        // selection executor
         let mut selection = Selection::new();
+        let expr = new_const_expr();
         selection.mut_conditions().push(expr);
 
         let mut selection_executor = SelectionExecutor::new(selection,
                                                             Rc::new(EvalContext::default()),
-                                                            &cols,
-                                                            Box::new(inner_table_scan));
+                                                            &cis,
+                                                            Box::new(inner_table_scan))
+            .unwrap();
 
-        assert!(selection_executor.is_ok());
-        let executor = selection_executor.as_mut().unwrap();
-
-        // 6 to 10 is > 5
-        for idx in 6..100 {
-            let nxt = executor.next();
-            assert!(nxt.is_ok(), "error: {:?}", nxt.unwrap());
-            assert!(nxt.as_ref().unwrap().is_some(), "must have value");
-            let a_row = nxt.unwrap().unwrap();
-            assert_eq!(a_row.data.len(), cols.len(), "must have same column size");
-            let encode_data = &test_data.encode_data[idx];
-            for col in &cols {
-                let cid = col.get_column_id();
-                let v = a_row.data.get(cid).unwrap();
-                //assert_eq!(encode_data[&cid], v.to_vec());
-                println!("=> {:?} vs {:?}", encode_data[&cid], v.to_vec());
-            }
+        let mut selection_rows = Vec::with_capacity(raw_data.len());
+        while let Some(row) = selection_executor.next().unwrap() {
+            selection_rows.push(row);
         }
-        assert!(executor.next().unwrap().is_none());
+
+        assert_eq!(selection_rows.len(), raw_data.len());
+        let expect_row_handles = raw_data.iter().map(|r| r[0].i64()).collect::<Vec<_>>();
+        let result_row = selection_rows.iter().map(|r| r.handle).collect::<Vec<_>>();
+        assert_eq!(result_row, expect_row_handles);
+    }
+
+    #[test]
+    fn test_selection_executor_condition() {
+        let tid = 1;
+        let cis = vec![new_col_info(1, types::LONG_LONG),
+                       new_col_info(2, types::VARCHAR),
+                       new_col_info(3, types::LONG_LONG)];
+        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::I64(7)],
+                            vec![Datum::I64(2), Datum::Bytes(b"b".to_vec()), Datum::I64(7)],
+                            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::I64(8)],
+                            vec![Datum::I64(4), Datum::Bytes(b"d".to_vec()), Datum::I64(3)],
+                            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::I64(5)],
+                            vec![Datum::I64(6), Datum::Bytes(b"e".to_vec()), Datum::I64(9)],
+                            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::I64(6)]];
+
+        let table_data = gen_table_data(tid, &cis, &raw_data);
+        let mut test_store = TestStore::new(&table_data);
+
+        let mut table_scan = TableScan::new();
+        table_scan.set_table_id(tid);
+        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+        // prepare range
+        let key_ranges = vec![get_range(tid, 0, i64::MAX)];
+
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut statistics = Statistics::default();
+
+        let inner_table_scan =
+            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+
+        // selection executor
+        let mut selection = Selection::new();
+        let expr = new_col_gt_u64_expr(3, 5);
+        selection.mut_conditions().push(expr);
+
+        let mut selection_executor = SelectionExecutor::new(selection,
+                                                            Rc::new(EvalContext::default()),
+                                                            &cis,
+                                                            Box::new(inner_table_scan))
+            .unwrap();
+
+        let mut selection_rows = Vec::with_capacity(raw_data.len());
+        while let Some(row) = selection_executor.next().unwrap() {
+            selection_rows.push(row);
+        }
+
+        let expect_row_handles = raw_data.iter().filter(|r| r[2].i64() > 5).map(|r| r[0].i64()).collect::<Vec<_>>();
+        assert!(expect_row_handles.len() < raw_data.len());
+        assert_eq!(selection_rows.len(), expect_row_handles.len());
+        let result_row = selection_rows.iter().map(|r| r.handle).collect::<Vec<_>>();
+        assert_eq!(result_row, expect_row_handles);
     }
 }
