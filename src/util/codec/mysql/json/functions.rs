@@ -16,7 +16,7 @@
 
 use std::{u32, char, str};
 use super::super::Result;
-use super::json::Json;
+use super::Json;
 use super::path_expr::{PathLeg, PathExpression, PATH_EXPR_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK};
 
 const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
