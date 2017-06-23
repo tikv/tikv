@@ -31,6 +31,7 @@ struct Conn {
     _client: TikvClient,
     stream: UnboundedSender<(RaftMessage, WriteFlags)>,
     _close: Sender<()>,
+    active: bool,
 }
 
 impl Conn {
@@ -57,6 +58,7 @@ impl Conn {
             _client: client,
             stream: tx,
             _close: tx_close,
+            active: false,
         }
     }
 }
@@ -65,6 +67,7 @@ impl Conn {
 pub struct RaftClient {
     env: Arc<Environment>,
     conns: HashMap<(SocketAddr, usize), Conn>,
+    pub addrs: HashMap<u64, SocketAddr>,
     cfg: Config,
 }
 
@@ -73,11 +76,12 @@ impl RaftClient {
         RaftClient {
             env: env,
             conns: HashMap::default(),
+            addrs: HashMap::default(),
             cfg: cfg,
         }
     }
 
-    fn get_conn(&mut self, addr: SocketAddr, index: usize) -> &Conn {
+    fn get_conn(&mut self, addr: SocketAddr, index: usize) -> &mut Conn {
         let env = self.env.clone();
         let cfg = self.cfg.clone();
         self.conns
@@ -85,7 +89,7 @@ impl RaftClient {
             .or_insert_with(|| Conn::new(env, addr, &cfg))
     }
 
-    pub fn send(&mut self, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
+    pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
         let index = msg.get_region_id() as usize % self.cfg.grpc_raft_conn_num;
         let res = {
             let conn = self.get_conn(addr, index);
@@ -96,9 +100,23 @@ impl RaftClient {
                   addr,
                   e);
             self.conns.remove(&(addr, index));
+            self.addrs.remove(&store_id);
             return Err(box_err!(e));
         }
         Ok(())
+    }
+
+
+    pub fn flush(&mut self) {
+        for conn in self.conns.values_mut() {
+            if conn.active {
+                conn.active = false;
+                if let Err(e) = UnboundedSender::send(&conn.stream,
+                                                      (RaftMessage::new(), WriteFlags::default())) {
+                    error!("flush conn error {:?}", e);
+                }
+            }
+        }
     }
 }
 

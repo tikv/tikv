@@ -11,14 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
+use std::thread;
+
+use kvproto::eraftpb::MessageType;
+
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::transport_simulate::*;
 use super::node::new_node_cluster;
 use super::server::new_server_cluster;
-use kvproto::eraftpb::MessageType;
-use std::time::Duration;
-use std::thread;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
@@ -31,10 +33,15 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let mut region = cluster.get_region(b"k3");
 
+    // ensure follower has latest entries before transfer leader.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
     // check if transfer leader is fast enough.
+    let leader = cluster.leader_of_region(1).unwrap();
     let admin_req = new_transfer_leader_cmd(new_peer(3, 3));
     let mut req = new_admin_request(1, region.get_region_epoch(), admin_req);
-    req.mut_header().set_peer(new_peer(2, 2));
+    req.mut_header().set_peer(leader);
     cluster.call_command(req, Duration::from_secs(3)).unwrap();
     thread::sleep(reserved_time);
     assert_eq!(cluster.query_leader(3, 1), Some(new_peer(3, 3)));
