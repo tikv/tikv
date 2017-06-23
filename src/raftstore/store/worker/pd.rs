@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Display};
 
-use uuid::Uuid;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
@@ -344,7 +343,6 @@ fn send_admin_request(ch: SendCh<Msg>,
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(region.take_region_epoch());
     req.mut_header().set_peer(peer);
-    req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
     req.set_admin_request(request);
 
