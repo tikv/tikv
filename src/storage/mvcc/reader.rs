@@ -180,7 +180,6 @@ impl<'a> MvccReader<'a> {
 
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
-        // if self.isolation_level == IsolationLevel::SI
         match self.isolation_level {
             IsolationLevel::SI => {
                 if let Some(lock) = try!(self.load_lock(key)) {
