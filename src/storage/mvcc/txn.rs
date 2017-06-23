@@ -324,21 +324,41 @@ mod tests {
         must_get_none(engine.as_ref(), k, 1);
 
         must_prewrite_put(engine.as_ref(), k, v, k, 5);
+
         must_get_none(engine.as_ref(), k, 3);
+        must_get_ru_none(engine.as_ref(), k, 3);
         must_get_err(engine.as_ref(), k, 7);
+        must_get_ru(engine.as_ref(), k, 7, v);
 
         must_commit(engine.as_ref(), k, 5, 10);
+
         must_get_none(engine.as_ref(), k, 3);
+        must_get_ru_none(engine.as_ref(), k, 3);
+
         must_get_none(engine.as_ref(), k, 7);
+        must_get_ru_none(engine.as_ref(), k, 7);
+
         must_get(engine.as_ref(), k, 13, v);
+        must_get_ru(engine.as_ref(), k, 13, v);
 
         must_prewrite_delete(engine.as_ref(), k, k, 15);
+        must_get_ru_none(engine.as_ref(), k, 17);
         must_commit(engine.as_ref(), k, 15, 20);
+
         must_get_none(engine.as_ref(), k, 3);
+        must_get_ru_none(engine.as_ref(), k, 3);
+
         must_get_none(engine.as_ref(), k, 7);
+        must_get_ru_none(engine.as_ref(), k, 7);
+
         must_get(engine.as_ref(), k, 13, v);
+        must_get_ru(engine.as_ref(), k, 13, v);
+
         must_get(engine.as_ref(), k, 17, v);
+        must_get_ru(engine.as_ref(), k, 17, v);
+
         must_get_none(engine.as_ref(), k, 23);
+        must_get_ru_none(engine.as_ref(), k, 23);
     }
 
     #[test]
@@ -773,6 +793,19 @@ mod tests {
             .is_ok());
     }
 
+    #[test]
+    fn test_read_uncommit() {
+        let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+        let (key, v1, v2) = (b"key", b"v1", b"v2");
+
+        must_prewrite_put(engine.as_ref(), key, v1, key, 5);
+        must_commit(engine.as_ref(), key, 5, 10);
+        must_prewrite_put(engine.as_ref(), key, v2, key, 15);
+        must_get_err(engine.as_ref(), key, 20);
+        must_get_ru(engine.as_ref(), key, 12, v1);
+        must_get_ru(engine.as_ref(), key, 20, v2);
+    }
+
     fn must_get(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -785,6 +818,18 @@ mod tests {
         assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect);
     }
 
+    fn must_get_ru(engine: &Engine, key: &[u8], ts: u64, expect: &[u8]) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut statistics = Statistics::default();
+        let mut txn = MvccTxn::new(snapshot.as_ref(),
+                                   &mut statistics,
+                                   ts,
+                                   None,
+                                   IsolationLevel::RU);
+        assert_eq!(txn.get(&make_key(key)).unwrap().unwrap(), expect)
+    }
+
     fn must_get_none(engine: &Engine, key: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -794,6 +839,18 @@ mod tests {
                                    ts,
                                    None,
                                    IsolationLevel::SI);
+        assert!(txn.get(&make_key(key)).unwrap().is_none());
+    }
+
+    fn must_get_ru_none(engine: &Engine, key: &[u8], ts: u64) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut statistics = Statistics::default();
+        let mut txn = MvccTxn::new(snapshot.as_ref(),
+                                   &mut statistics,
+                                   ts,
+                                   None,
+                                   IsolationLevel::RU);
         assert!(txn.get(&make_key(key)).unwrap().is_none());
     }
 
