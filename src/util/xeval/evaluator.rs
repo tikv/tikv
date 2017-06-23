@@ -21,7 +21,7 @@ use tipb::select::SelectRequest;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
 use util::codec::mysql::DecimalDecoder;
-use util::codec::mysql::{MAX_FSP, Duration};
+use util::codec::mysql::{MAX_FSP, Duration, JsonDecoder, Json};
 use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
@@ -137,6 +137,13 @@ impl Evaluator {
             ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
+            ExprType::JsonType => self.eval_json_type(expr),
+            ExprType::JsonMerge => self.eval_json_merge(expr),
+            ExprType::JsonUnquote => self.eval_json_unquote(expr),
+            // ExprType::JsonExtract => self.eval_json_extract(expr),
+            // ExprType::JsonSet => self.eval_json_set(expr),
+            // ExprType::JsonInsert => self.eval_json_insert(expr),
+            // ExprType::JsonReplace => self.eval_json_replace(expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -385,6 +392,51 @@ impl Evaluator {
             Ok(left)
         }
     }
+
+    fn eval_json_type(&mut self, expr: &Expr) -> Result<Datum> {
+        let f = try!(expr.get_val().decode_json());
+        let json_type = f.json_type();
+        Ok(Datum::Bytes(json_type.to_vec()))
+    }
+
+    fn eval_json_merge(&mut self, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() < 2 {
+            return Err(Error::Expr(format!("expect more than operands, got {}", children.len())));
+        }
+        let first = try!(children[0].get_val().decode_json());
+        let suffixes: Vec<Json> = try!(children.iter()
+            .skip(1)
+            .map(|item| item.get_val().decode_json())
+            .collect());
+        Ok(Datum::Json(first.merge(suffixes)))
+    }
+
+    fn eval_json_unquote(&mut self, expr: &Expr) -> Result<Datum> {
+        let f = try!(expr.get_val().decode_json());
+        let unquote_data = try!(f.unquote());
+        Ok(Datum::Bytes(unquote_data.into_bytes()))
+    }
+
+    // fn eval_json_extract(&mut self, expr: &Expr) -> Result<Datum> {
+    //     //TODO
+    //     Ok(Datum::Null)
+    // }
+
+    // fn eval_json_set(&mut self, expr: &Expr) -> Result<Datum> {
+    //     // TODO
+    //     Ok(Datum::Null)
+    // }
+
+    // fn eval_json_insert(&mut self, expr: &Expr) -> Result<Datum> {
+    //      // TODO
+    //      Ok(Datum::Null)
+    // }
+
+    // fn eval_json_replace(&mut self, expr: &Expr) -> Result<Datum> {
+    //      // TODO
+    //      Ok(Datum::Null)
+    // }
 
     fn eval_logic<F>(&mut self,
                      ctx: &EvalContext,
