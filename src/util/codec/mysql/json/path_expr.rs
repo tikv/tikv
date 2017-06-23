@@ -94,11 +94,13 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
 
     let expr = path_expr.index(dollar_index + 1..).trim_left();
 
-    let re = Regex::new(PATH_EXPR_LEG_RE_STR).unwrap();
+    lazy_static! {
+        static ref RE: Regex = Regex::new(PATH_EXPR_LEG_RE_STR).unwrap();
+    }
     let mut legs = vec![];
     let mut flags = PathExpressionFlag::default();
     let mut last_end = 0;
-    for (start, end) in re.find_iter(expr) {
+    for (start, end) in RE.find_iter(expr) {
         // Check all characters between two legs are blank.
         if expr.index(last_end..start).char_indices().any(|(_, c)| !c.is_ascii_whitespace()) {
             return Err(box_err!("Invalid JSON path: {}", path_expr));
