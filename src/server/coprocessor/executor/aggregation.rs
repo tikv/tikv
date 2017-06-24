@@ -140,10 +140,12 @@ impl<'a> Executor for AggregationExecutor<'a> {
         let mut value = Vec::with_capacity(value_size);
         let mut meta = HashMap::with_capacity(1 + 2 * aggr_cols.len());
         let (mut id, mut offset) = (0, 0);
+        /// push gk col
         value.extend_from_slice(gk);
         meta.insert(id, RowColMeta::new(offset, (value.len() - offset)));
         id = id + 1;
         offset = value.len();
+        /// push aggr col
         for i in 0..aggr_cols.len() {
             box_try!(value.encode(&aggr_cols[i..i + 1], false));
             meta.insert(id, RowColMeta::new(offset, (value.len() - offset)));
@@ -155,5 +157,118 @@ impl<'a> Executor for AggregationExecutor<'a> {
             handle: 0,
             data: RowColsDict::new(meta, value),
         }))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::i64;
+    use super::super::table_scan::TableScanExecutor;
+    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::topn::test::gen_table_data;
+    use util::codec::datum::{Datum, DatumDecoder};
+    use util::codec::number::NumberEncoder;
+    use util::codec::mysql::decimal::Decimal;
+    use util::codec::mysql::types;
+    use storage::Statistics;
+
+    use tipb::executor::TableScan;
+    use tipb::expression::{Expr, ExprType};
+
+    use protobuf::RepeatedField;
+
+    #[inline]
+    fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(tp);
+        if tp == ExprType::ColumnRef {
+            expr.mut_val().encode_i64(id.unwrap()).unwrap();
+        } else {
+            expr.mut_children().push(child.unwrap());
+        }
+        expr
+    }
+
+    fn build_group_by(col_ids: &[i64]) -> Vec<Expr> {
+        let mut group_by = Vec::with_capacity(col_ids.len());
+        for id in col_ids {
+            group_by.push(build_expr(ExprType::ColumnRef, Some(*id), None));
+        }
+        group_by
+    }
+
+    fn build_aggr_func(aggrs: &[(ExprType, i64)]) -> Vec<Expr> {
+        let mut aggr_func = Vec::with_capacity(aggrs.len());
+        for aggr in aggrs {
+            let &(tp, id) = aggr;
+            let col_ref = build_expr(ExprType::ColumnRef, Some(id), None);
+            aggr_func.push(build_expr(tp, None, Some(col_ref)));
+        }
+        aggr_func
+    }
+
+    #[test]
+    fn test_aggregation() {
+        // prepare data and store
+        let tid = 1;
+        let cis = vec![new_col_info(1, types::LONG_LONG),
+                       new_col_info(2, types::VARCHAR),
+                       new_col_info(3, types::NEW_DECIMAL)];
+        let raw_data = vec![vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
+                            vec![Datum::I64(2), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
+                            vec![Datum::I64(3), Datum::Bytes(b"b".to_vec()), Datum::Dec(8.into())],
+                            vec![Datum::I64(4), Datum::Bytes(b"a".to_vec()), Datum::Dec(7.into())],
+                            vec![Datum::I64(5), Datum::Bytes(b"f".to_vec()), Datum::Dec(5.into())],
+                            vec![Datum::I64(6), Datum::Bytes(b"b".to_vec()), Datum::Dec(8.into())],
+                            vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::Dec(6.into())]];
+        let table_data = gen_table_data(tid, &cis, &raw_data);
+        let mut test_store = TestStore::new(&table_data);
+        // init table scan meta
+        let mut table_scan = TableScan::new();
+        table_scan.set_table_id(tid);
+        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+        // init TableScan Exectutor
+        let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let mut statistics = Statistics::default();
+        let mut ts_ect =
+            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+
+        // init aggregation meta
+        let mut aggregation = Aggregation::default();
+        let group_by_cols = vec![2, 3];
+        let group_by = build_group_by(&group_by_cols);
+        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        let aggr_funcs = vec![(ExprType::Avg, 1), (ExprType::Count, 3)];
+        let aggr_funcs = build_aggr_func(&aggr_funcs);
+        aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
+        // init Aggregation Executor
+        let mut aggr_ect =
+            AggregationExecutor::new(aggregation, EvalContext::default(), &cis, &mut ts_ect)
+                .unwrap();
+        let expect_row_cnt = 4;
+        let mut row_data = Vec::with_capacity(expect_row_cnt);
+        while let Some(row) = aggr_ect.next().unwrap() {
+            row_data.push(row.data);
+        }
+        assert_eq!(row_data.len(), expect_row_cnt);
+        let expect_row_data = vec![(b"a", Decimal::from(7), 3 as u64, Decimal::from(7), 3 as u64),
+                                   (b"b", Decimal::from(8), 2 as u64, Decimal::from(9), 2 as u64),
+                                   (b"f", Decimal::from(5), 1 as u64, Decimal::from(5), 1 as u64),
+                                   (b"f", Decimal::from(6), 1 as u64, Decimal::from(7), 1 as u64)];
+        let expect_col_cnt = 4;
+        for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
+            assert_eq!(row.len(), expect_col_cnt);
+            let gk = row.get(0).unwrap().decode().unwrap();
+            assert_eq!(gk[0], Datum::from(expect_cols.0.as_ref()));
+            assert_eq!(gk[1], Datum::from(expect_cols.1));
+            assert_eq!(row.get(1).unwrap().decode_datum().unwrap(),
+                       Datum::from(expect_cols.2));
+            assert_eq!(row.get(2).unwrap().decode_datum().unwrap(),
+                       Datum::from(expect_cols.3));
+            assert_eq!(row.get(3).unwrap().decode_datum().unwrap(),
+                       Datum::from(expect_cols.4));
+        }
     }
 }
