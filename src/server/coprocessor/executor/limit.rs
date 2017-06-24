@@ -14,9 +14,9 @@
 // remove later
 #![allow(dead_code)]
 
-use tipb::executor::Limit;
 use super::{Row, Executor};
 use super::super::Result;
+use tipb::executor::Limit;
 
 struct LimitExecutor<'a> {
     limit: u64,

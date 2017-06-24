@@ -11,8 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
+use util::codec::number::NumberDecoder;
+
+use tipb::expression::{Expr, ExprType};
 
 mod scanner;
 pub mod table_scan;
@@ -20,6 +24,36 @@ pub mod index_scan;
 pub mod topn;
 pub mod limit;
 pub mod aggregation;
+
+#[allow(dead_code)]
+pub struct ExprColumnRefVisitor {
+    pub col_ids: HashSet<i64>,
+}
+
+#[allow(dead_code)]
+impl ExprColumnRefVisitor {
+    pub fn new() -> ExprColumnRefVisitor {
+        ExprColumnRefVisitor { col_ids: HashSet::new() }
+    }
+
+    pub fn visit(&mut self, expr: &Expr) -> Result<()> {
+        if expr.get_tp() == ExprType::ColumnRef {
+            self.col_ids.insert(box_try!(expr.get_val().decode_i64()));
+        } else {
+            for sub_expr in expr.get_children() {
+                try!(self.visit(sub_expr));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn batch_visit(&mut self, exprs: &[Expr]) -> Result<()> {
+        for expr in exprs {
+            try!(self.visit(expr));
+        }
+        Ok(())
+    }
+}
 
 #[allow(dead_code)] //TODO:remove it
 pub struct Row {

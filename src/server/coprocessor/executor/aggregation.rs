@@ -16,8 +16,7 @@
 
 use util::collections::{HashMap, HashMapEntry as Entry};
 
-use super::{Executor, Row};
-use super::topn::ExprColumnRefVisitor;
+use super::{Executor, Row, ExprColumnRefVisitor};
 use super::super::Result;
 use super::super::endpoint::{inflate_with_col, SINGLE_GROUP};
 use super::super::aggregate::{self, AggrFunc};
