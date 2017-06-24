@@ -18,6 +18,7 @@ mod serde;
 mod json_type;
 mod json_merge;
 mod functions;
+mod path_expr;
 
 pub use self::binary::{JsonEncoder, JsonDecoder};
 
