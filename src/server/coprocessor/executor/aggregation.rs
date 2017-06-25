@@ -142,13 +142,13 @@ impl<'a> Executor for AggregationExecutor<'a> {
         /// push gk col
         value.extend_from_slice(gk);
         meta.insert(id, RowColMeta::new(offset, (value.len() - offset)));
-        id = id + 1;
+        id += 1;
         offset = value.len();
         /// push aggr col
         for i in 0..aggr_cols.len() {
             box_try!(value.encode(&aggr_cols[i..i + 1], false));
             meta.insert(id, RowColMeta::new(offset, (value.len() - offset)));
-            id = id + 1;
+            id += 1;
             offset = value.len();
         }
         self.cursor += 1;
