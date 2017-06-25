@@ -27,14 +27,14 @@ use super::DEFAULT_CLUSTER_ID as CLUSTER_ID;
 #[derive(Debug)]
 pub struct Service {
     id_allocator: AtomicUsize,
-    member_resp: GetMembersResponse,
+    members_resp: Mutex<Option<GetMembersResponse>>,
     storage: Mutex<HashMap<String, Vec<u8>>>,
 }
 
 impl Service {
-    pub fn new(eps: Vec<String>) -> Service {
+    pub fn new() -> Service {
         Service {
-            member_resp: Self::get_members_response(eps),
+            members_resp: Mutex::new(None),
             id_allocator: AtomicUsize::new(1), // start from 1.
             storage: Mutex::new(HashMap::new()),
         }
@@ -45,36 +45,35 @@ impl Service {
         header.set_cluster_id(CLUSTER_ID);
         header
     }
+}
 
-    fn get_members_response(eps: Vec<String>) -> GetMembersResponse {
-        let mut members = Vec::with_capacity(eps.len());
-        for (i, ep) in (&eps).into_iter().enumerate() {
-            let mut m = Member::new();
-            m.set_name(format!("pd{}", i));
-            m.set_member_id(100 + i as u64);
-            m.set_client_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
-            m.set_peer_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
-            members.push(m);
-        }
-
-        let mut member_resp = GetMembersResponse::new();
-        member_resp.set_members(RepeatedField::from_vec(members.clone()));
-        member_resp.set_leader(members.pop().unwrap());
-        member_resp.set_header(Self::header());
-
-        info!("[Service] member_resp {:?}", member_resp);
-        member_resp
+fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
+    let mut members = Vec::with_capacity(eps.len());
+    for (i, ep) in (&eps).into_iter().enumerate() {
+        let mut m = Member::new();
+        m.set_name(format!("pd{}", i));
+        m.set_member_id(100 + i as u64);
+        m.set_client_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
+        m.set_peer_urls(RepeatedField::from_vec(vec![ep.to_owned()]));
+        members.push(m);
     }
+
+    let mut members_resp = GetMembersResponse::new();
+    members_resp.set_members(RepeatedField::from_vec(members.clone()));
+    members_resp.set_leader(members.pop().unwrap());
+    members_resp.set_header(Service::header());
+
+    members_resp
 }
 
 // TODO: Check cluster ID.
 // TODO: Support more rpc.
 impl Mocker for Service {
-    fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
-        Some(Ok(self.member_resp.clone()))
+    fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
+        Some(Ok(self.members_resp.lock().unwrap().clone().unwrap()))
     }
 
-    fn Bootstrap(&self, req: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
+    fn bootstrap(&self, req: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
         let store = req.get_store();
         let store_path = make_region_key(store.get_id());
         let store_value = store.write_to_bytes().unwrap();
@@ -104,7 +103,7 @@ impl Mocker for Service {
         Some(Ok(resp))
     }
 
-    fn IsBootstrapped(&self, _: &IsBootstrappedRequest) -> Option<Result<IsBootstrappedResponse>> {
+    fn is_bootstrapped(&self, _: &IsBootstrappedRequest) -> Option<Result<IsBootstrappedResponse>> {
         let mut resp = IsBootstrappedResponse::new();
         let header = Service::header();
         resp.set_header(header);
@@ -114,7 +113,7 @@ impl Mocker for Service {
         Some(Ok(resp))
     }
 
-    fn AllocID(&self, _: &AllocIDRequest) -> Option<Result<AllocIDResponse>> {
+    fn alloc_id(&self, _: &AllocIDRequest) -> Option<Result<AllocIDResponse>> {
         let mut resp = AllocIDResponse::new();
         resp.set_header(Service::header());
 
@@ -124,7 +123,7 @@ impl Mocker for Service {
     }
 
     // TODO: not bootstrapped error.
-    fn GetStore(&self, req: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
+    fn get_store(&self, req: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
         let mut resp = GetStoreResponse::new();
         let mut store = Store::new();
         let store_path = make_region_key(req.get_store_id());
@@ -149,7 +148,7 @@ impl Mocker for Service {
         }
     }
 
-    fn GetRegionByID(&self, req: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+    fn get_region_by_id(&self, req: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         let mut resp = GetRegionResponse::new();
         let mut region = Region::new();
         let region_path = make_region_key(req.region_id);
@@ -174,34 +173,41 @@ impl Mocker for Service {
         }
     }
 
-    fn RegionHeartbeat(&self,
-                       _: &RegionHeartbeatRequest)
-                       -> Option<Result<RegionHeartbeatResponse>> {
+    fn region_heartbeat(&self,
+                        _: &RegionHeartbeatRequest)
+                        -> Option<Result<RegionHeartbeatResponse>> {
         let mut resp = RegionHeartbeatResponse::new();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
-    fn StoreHeartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
+    fn store_heartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
         let mut resp = StoreHeartbeatResponse::new();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
-    fn AskSplit(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
+    fn ask_split(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
         let mut resp = AskSplitResponse::new();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
-    fn ReportSplit(&self, _: &ReportSplitRequest) -> Option<Result<ReportSplitResponse>> {
+    fn report_split(&self, _: &ReportSplitRequest) -> Option<Result<ReportSplitResponse>> {
         let mut resp = ReportSplitResponse::new();
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
+    }
+
+    fn set_endpoints(&self, eps: Vec<String>) {
+        let members_resp = make_members_response(eps);
+        info!("[Service] members_resp {:?}", members_resp);
+        let mut resp = self.members_resp.lock().unwrap();
+        *resp = Some(members_resp);
     }
 }
 
