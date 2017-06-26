@@ -17,6 +17,7 @@ use server::coprocessor::Result;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::KeyRange;
+use kvproto::kvrpcpb::IsolationLevel;
 use storage::{Snapshot, Statistics};
 use util::codec::{table, datum, mysql};
 use byteorder::{BigEndian, ReadBytesExt};
@@ -38,7 +39,8 @@ impl<'a> IndexScanExec<'a> {
                key_ranges: Vec<KeyRange>,
                snapshot: &'a Snapshot,
                statistics: &'a mut Statistics,
-               start_ts: u64)
+               start_ts: u64,
+               isolation_level: IsolationLevel)
                -> IndexScanExec<'a> {
         let mut pk_col = None;
         let desc = meta.get_desc();
@@ -49,7 +51,7 @@ impl<'a> IndexScanExec<'a> {
         let col_ids = cols.iter()
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = Scanner::new(desc, false, snapshot, statistics, start_ts);
+        let scanner = Scanner::new(desc, false, snapshot, statistics, start_ts, isolation_level);
         IndexScanExec {
             desc: desc,
             col_ids: col_ids,
@@ -240,7 +242,8 @@ mod test {
                                              wrapper.ranges,
                                              snapshot,
                                              &mut statistics,
-                                             start_ts);
+                                             start_ts,
+                                             IsolationLevel::SI);
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap();
@@ -266,7 +269,8 @@ mod test {
                                              wrapper.ranges,
                                              snapshot,
                                              &mut statistics,
-                                             start_ts);
+                                             start_ts,
+                                             IsolationLevel::SI);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -292,7 +296,8 @@ mod test {
                                              wrapper.ranges,
                                              snapshot,
                                              &mut statistics,
-                                             start_ts);
+                                             start_ts,
+                                             IsolationLevel::SI);
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap();
