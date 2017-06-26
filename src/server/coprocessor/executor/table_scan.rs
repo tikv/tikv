@@ -22,7 +22,7 @@ use storage::{Snapshot, Statistics};
 use super::{Executor, Row};
 use super::scanner::Scanner;
 
-struct TableScanExecutor<'a> {
+pub struct TableScanExecutor<'a> {
     meta: TableScan,
     col_ids: HashSet<i64>,
     cursor: usize,

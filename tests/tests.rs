@@ -37,7 +37,6 @@ extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate uuid;
 extern crate mio;
 extern crate kvproto;
 extern crate tipb;
@@ -53,8 +52,7 @@ mod raftstore;
 mod coprocessor;
 mod storage;
 mod util;
-// Enable it once grpc-rs Server is ready.
-// mod pd;
+mod pd;
 
 use std::env;
 

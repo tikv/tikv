@@ -34,10 +34,12 @@
 use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
+use std::thread;
 
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
-use kvproto::kvrpcpb::{Context, LockInfo};
+use kvproto::kvrpcpb::{Context, LockInfo, CommandPri};
 
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode, Statistics};
@@ -240,6 +242,9 @@ pub struct Scheduler {
     // worker pool
     worker_pool: ThreadPool,
 
+    // high priority commands will be delivered to this pool
+    high_priority_pool: ThreadPool,
+
     has_gc_command: bool,
 
     // used to control write flow
@@ -263,6 +268,7 @@ impl Scheduler {
             sched_too_busy_threshold: sched_too_busy_threshold,
             worker_pool: ThreadPool::new_with_name(thd_name!("sched-worker-pool"),
                                                    worker_pool_size),
+            high_priority_pool: ThreadPool::new_with_name(thd_name!("sched-high-pri-pool"), 1),
             has_gc_command: false,
             running_write_count: 0,
         }
@@ -433,6 +439,10 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Ok(val) => ProcessResult::Value { value: val },
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
             }
+        }
+        Command::Pause { duration, .. } => {
+            thread::sleep(Duration::from_millis(duration));
+            ProcessResult::Res
         }
         _ => panic!("unsupported read command"),
     };
@@ -652,6 +662,13 @@ impl Scheduler {
         ctx.tag
     }
 
+    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool {
+        match priority {
+            CommandPri::Low | CommandPri::Normal => &self.worker_pool,
+            CommandPri::High => &self.high_priority_pool,
+        }
+    }
+
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "process"]).inc();
@@ -666,10 +683,11 @@ impl Scheduler {
         }
         let ch = self.schedch.clone();
         let readcmd = cmd.readonly();
+        let worker_pool = self.fetch_worker_pool(cmd.priority());
         if readcmd {
-            self.worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
+            worker_pool.execute(move || process_read(cid, cmd, ch, snapshot));
         } else {
-            self.worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
+            worker_pool.execute(move || process_write(cid, cmd, ch, snapshot));
         }
     }
 
@@ -705,6 +723,7 @@ impl Scheduler {
     /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
     fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();
+        SCHED_COMMANDS_PRI_COUNTER_VEC.with_label_values(&[cmd.priority_tag()]).inc();
         let cid = self.gen_id();
         debug!("received new command, cid={}, cmd={}", cid, cmd);
         let lock = gen_command_lock(&self.latches, &cmd);
@@ -719,7 +738,7 @@ impl Scheduler {
 
     fn on_receive_new_cmd(&mut self, cmd: Command, callback: StorageCb) {
         // write flow control
-        if !cmd.readonly() && self.too_busy() {
+        if cmd.need_flow_control() && self.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.with_label_values(&[cmd.tag()]).inc();
             execute_callback(callback,
                              ProcessResult::Failed { err: StorageError::SchedTooBusy });

@@ -13,11 +13,8 @@
 
 use std::option::Option;
 
-use uuid::Uuid;
-
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
-use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{Result, Error};
 
@@ -46,10 +43,6 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
     peer
-}
-
-pub fn get_uuid_from_req(cmd: &RaftCmdRequest) -> Option<Uuid> {
-    Uuid::from_bytes(cmd.get_header().get_uuid()).ok()
 }
 
 /// Check if key in region range [`start_key`, `end_key`].

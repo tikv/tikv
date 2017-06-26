@@ -37,7 +37,6 @@ byteorder = "0.5"
 rand = "0.3"
 quick-error = "0.2"
 tempdir = "0.3"
-uuid = { version = "0.3", features = ["v4"] }
 time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"

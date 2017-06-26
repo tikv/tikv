@@ -26,7 +26,6 @@ use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
-use uuid::Uuid;
 use time::{self, Timespec};
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
@@ -57,10 +56,10 @@ use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
-use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState, ReadyContext};
+use super::peer::{self, Peer, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::ApplySnapResult;
 use super::msg::Callback;
-use super::cmd_resp::{bind_uuid, bind_term, bind_error};
+use super::cmd_resp::{bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::engine_metrics::*;
@@ -959,6 +958,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.process_ready.observe(duration_to_sec(dur) as f64);
 
+        self.trans.flush();
+
         slow_log!(t, "{} on {} regions raft ready", self.tag, pending_count);
     }
 
@@ -1222,16 +1223,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
         let mut resp = RaftCmdResponse::new();
-        let uuid: Uuid = match util::get_uuid_from_req(&msg) {
-            None => {
-                bind_error(&mut resp, Error::Other("missing request uuid".into()));
-                return cb.call_box((resp,));
-            }
-            Some(uuid) => {
-                bind_uuid(&mut resp, uuid);
-                uuid
-            }
-        };
 
         if let Err(e) = self.validate_store_id(&msg) {
             bind_error(&mut resp, e);
@@ -1261,12 +1252,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut peer = self.region_peers.get_mut(&region_id).unwrap();
         let term = peer.term();
         bind_term(&mut resp, term);
-        let meta = ProposalMeta {
-            uuid: uuid,
-            term: term,
-            renew_lease_time: None,
-        };
-        if peer.propose(meta, cb, msg, resp, &mut self.raft_metrics.propose) {
+        if peer.propose(cb, msg, resp, &mut self.raft_metrics.propose) {
             peer.mark_to_be_checked(&mut self.pending_raft_groups);
         }
 
@@ -1952,7 +1938,6 @@ fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
     let mut request = RaftCmdRequest::new();
     request.mut_header().set_region_id(region_id);
     request.mut_header().set_peer(peer);
-    request.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
     request
 }
 
