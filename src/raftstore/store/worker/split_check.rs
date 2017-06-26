@@ -143,20 +143,20 @@ impl Display for Task {
 }
 
 pub struct Runner<C> {
-    engine: Arc<DB>,
+    kv_engine: Arc<DB>,
     ch: RetryableSendCh<Msg, C>,
     region_max_size: u64,
     split_size: u64,
 }
 
 impl<C> Runner<C> {
-    pub fn new(engine: Arc<DB>,
+    pub fn new(kv_engine: Arc<DB>,
                ch: RetryableSendCh<Msg, C>,
                region_max_size: u64,
                split_size: u64)
                -> Runner<C> {
         Runner {
-            engine: engine,
+            kv_engine: kv_engine,
             ch: ch,
             region_max_size: region_max_size,
             split_size: split_size,
@@ -175,7 +175,7 @@ impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
         let mut size = 0;
         let mut split_key = vec![];
         let timer = CHECK_SPILT_HISTOGRAM.start_timer();
-        let res = MergedIterator::new(self.engine.as_ref(),
+        let res = MergedIterator::new(self.kv_engine.as_ref(),
                                       LARGE_CFS,
                                       &task.start_key,
                                       &task.end_key,

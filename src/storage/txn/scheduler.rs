@@ -224,7 +224,7 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SyncSendCh<Msg>) -> EngineCal
 
 /// Scheduler which schedules the execution of `storage::Command`s.
 pub struct Scheduler {
-    engine: Box<Engine>,
+    kv_engine: Box<Engine>,
 
     // cid -> context
     cmd_ctxs: HashMap<u64, RunningCtx>,
@@ -253,14 +253,14 @@ pub struct Scheduler {
 
 impl Scheduler {
     /// Creates a scheduler.
-    pub fn new(engine: Box<Engine>,
+    pub fn new(kv_engine: Box<Engine>,
                schedch: SyncSendCh<Msg>,
                concurrency: usize,
                worker_pool_size: usize,
                sched_too_busy_threshold: usize)
                -> Scheduler {
         Scheduler {
-            engine: engine,
+            kv_engine: kv_engine,
             cmd_ctxs: Default::default(),
             schedch: schedch,
             id_alloc: 0,
@@ -755,7 +755,7 @@ impl Scheduler {
             }
         };
 
-        if let Err(e) = self.engine.async_snapshot(self.extract_context(cid), cb) {
+        if let Err(e) = self.kv_engine.async_snapshot(self.extract_context(cid), cb) {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
                 .inc();
             self.finish_with_err(cid, Error::from(e));
@@ -828,7 +828,7 @@ impl Scheduler {
             return self.on_write_finished(cid, pr, Ok(()));
         }
         let engine_cb = make_engine_cb(cid, pr, self.schedch.clone());
-        if let Err(e) = self.engine.async_write(cmd.get_context(), to_be_write, engine_cb) {
+        if let Err(e) = self.kv_engine.async_write(cmd.get_context(), to_be_write, engine_cb) {
             SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
                 .inc();
             self.finish_with_err(cid, Error::from(e));

@@ -132,7 +132,7 @@ impl SnapshotStatistics {
 }
 
 pub struct ApplyOptions {
-    pub db: Arc<DB>,
+    pub kv_db: Arc<DB>,
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
@@ -226,18 +226,18 @@ mod v1 {
     const DEFAULT_READ_BUFFER_SIZE: usize = 4096;
 
     pub fn build_plain_cf_file<E: BytesEncoder>(encoder: &mut E,
-                                                snap: &DbSnapshot,
+                                                kv_snap: &DbSnapshot,
                                                 cf: &str,
                                                 start_key: &[u8],
                                                 end_key: &[u8])
                                                 -> RaftStoreResult<(usize, usize)> {
         let mut cf_key_count = 0;
         let mut cf_size = 0;
-        try!(snap.scan_cf(cf,
-                          start_key,
-                          end_key,
-                          false,
-                          &mut |key, value| {
+        try!(kv_snap.scan_cf(cf,
+                             start_key,
+                             end_key,
+                             false,
+                             &mut |key, value| {
             cf_key_count += 1;
             cf_size += key.len() + value.len();
             try!(encoder.encode_compact_bytes(key));
@@ -260,7 +260,7 @@ mod v1 {
             let key = box_try!(decoder.decode_compact_bytes());
             if key.is_empty() {
                 if batch_size > 0 {
-                    box_try!(options.db.write(wb));
+                    box_try!(options.kv_db.write(wb));
                 }
                 break;
             }
@@ -270,7 +270,7 @@ mod v1 {
             batch_size += value.len();
             box_try!(wb.put_cf(handle, &key, &value));
             if batch_size >= options.write_batch_size {
-                box_try!(options.db.write(wb));
+                box_try!(options.kv_db.write(wb));
                 wb = WriteBatch::new();
                 batch_size = 0;
             }
@@ -509,7 +509,7 @@ mod v1 {
                 if cf.is_empty() {
                     break;
                 }
-                let handle = box_try!(rocksdb::get_cf_handle(&options.db, unsafe {
+                let handle = box_try!(rocksdb::get_cf_handle(&options.kv_db, unsafe {
                     str::from_utf8_unchecked(&cf)
                 }));
                 try!(apply_plain_cf_file(&mut reader, &options, handle));
@@ -914,12 +914,12 @@ mod v2 {
 
         pub fn new_for_building<T: Into<PathBuf>>(dir: T,
                                                   key: &SnapKey,
-                                                  snap: &DbSnapshot,
+                                                  kv_snap: &DbSnapshot,
                                                   size_track: Arc<RwLock<u64>>,
                                                   deleter: Box<SnapshotDeleter>)
                                                   -> RaftStoreResult<Snap> {
             let mut s = try!(Snap::new(dir, key, size_track, true, true, deleter));
-            try!(s.init_for_building(snap));
+            try!(s.init_for_building(kv_snap));
             Ok(s)
         }
 
@@ -982,7 +982,7 @@ mod v2 {
             Ok(s)
         }
 
-        fn init_for_building(&mut self, snap: &DbSnapshot) -> RaftStoreResult<()> {
+        fn init_for_building(&mut self, kv_snap: &DbSnapshot) -> RaftStoreResult<()> {
             if self.exists() {
                 return Ok(());
             }
@@ -997,8 +997,8 @@ mod v2 {
                     cf_file.file = Some(f);
                 } else {
                     // initialize sst file writer
-                    let handle = try!(snap.cf_handle(cf_file.cf));
-                    let io_options = snap.get_db().get_options_cf(handle);
+                    let handle = try!(kv_snap.cf_handle(cf_file.cf));
+                    let io_options = kv_snap.get_db().get_options_cf(handle);
                     let mut writer = SstFileWriter::new(&env_opt, &io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
@@ -1142,7 +1142,7 @@ mod v2 {
         }
 
         fn do_build(&mut self,
-                    snap: &DbSnapshot,
+                    kv_snap: &DbSnapshot,
                     region: &Region,
                     stat: &mut SnapshotStatistics,
                     deleter: Box<SnapshotDeleter>)
@@ -1161,7 +1161,7 @@ mod v2 {
                                    self.path());
                             return Err(e);
                         }
-                        try!(self.init_for_building(snap));
+                        try!(self.init_for_building(kv_snap));
                     }
                 }
             }
@@ -1172,20 +1172,20 @@ mod v2 {
                 try!(self.switch_to_cf_file(cf));
                 let (cf_key_count, cf_size) = if plain_file_used(cf) {
                     let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
-                    try!(build_plain_cf_file(file, snap, cf, &begin_key, &end_key))
+                    try!(build_plain_cf_file(file, kv_snap, cf, &begin_key, &end_key))
                 } else {
                     let mut key_count = 0;
                     let mut size = 0;
-                    try!(snap.scan_cf(cf,
-                                      &begin_key,
-                                      &end_key,
-                                      false,
-                                      &mut |key, value| {
-                                          key_count += 1;
-                                          size += key.len() + value.len();
-                                          try!(self.add_kv(key, value));
-                                          Ok(true)
-                                      }));
+                    try!(kv_snap.scan_cf(cf,
+                                         &begin_key,
+                                         &end_key,
+                                         false,
+                                         &mut |key, value| {
+                                             key_count += 1;
+                                             size += key.len() + value.len();
+                                             try!(self.add_kv(key, value));
+                                             Ok(true)
+                                         }));
                     (key_count, size)
                 };
                 snap_key_count += cf_key_count;
@@ -1212,14 +1212,14 @@ mod v2 {
 
     impl Snapshot for Snap {
         fn build(&mut self,
-                 snap: &DbSnapshot,
+                 kv_snap: &DbSnapshot,
                  region: &Region,
                  snap_data: &mut RaftSnapshotData,
                  stat: &mut SnapshotStatistics,
                  deleter: Box<SnapshotDeleter>)
                  -> RaftStoreResult<()> {
             let t = Instant::now();
-            try!(self.do_build(snap, region, stat, deleter));
+            try!(self.do_build(kv_snap, region, stat, deleter));
 
             let total_size = try!(self.total_size());
             stat.size = total_size;
@@ -1327,14 +1327,14 @@ mod v2 {
                 }
 
                 try!(check_abort(&options.abort));
-                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
+                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.kv_db, cf_file.cf));
                 if plain_file_used(cf_file.cf) {
                     let mut file = box_try!(File::open(&cf_file.path));
                     try!(apply_plain_cf_file(&mut file, &options, cf_handle));
                 } else {
                     let ingest_opt = IngestExternalFileOptions::new();
                     let path = cf_file.path.as_path().to_str().unwrap();
-                    box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
+                    box_try!(options.kv_db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
                 }
             }
             Ok(())
@@ -1683,7 +1683,7 @@ mod v2 {
             let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
             let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs).unwrap());
             let options = ApplyOptions {
-                db: dst_db.clone(),
+                kv_db: dst_db.clone(),
                 region: region.clone(),
                 abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
                 write_batch_size: TEST_WRITE_BATCH_SIZE,
@@ -1932,7 +1932,7 @@ mod v2 {
             let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
             let dst_db = get_test_empty_db(&dst_db_dir).unwrap();
             let options = ApplyOptions {
-                db: dst_db.clone(),
+                kv_db: dst_db.clone(),
                 region: region.clone(),
                 abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
                 write_batch_size: TEST_WRITE_BATCH_SIZE,
@@ -2166,7 +2166,7 @@ impl SnapManager {
 
     pub fn get_snapshot_for_building(&self,
                                      key: &SnapKey,
-                                     snap: &DbSnapshot)
+                                     kv_snap: &DbSnapshot)
                                      -> RaftStoreResult<Box<Snapshot>> {
         let (use_sst_file_snapshot, dir, snap_size) = {
             let core = self.core.rl();
@@ -2174,7 +2174,7 @@ impl SnapManager {
         };
         if use_sst_file_snapshot {
             let f =
-                try!(v2::Snap::new_for_building(dir, key, snap, snap_size, Box::new(self.clone())));
+                try!(v2::Snap::new_for_building(dir, key, kv_snap, snap_size, Box::new(self.clone())));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(dir, snap_size, true, key));
@@ -2530,7 +2530,7 @@ mod test {
         let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS)
             .unwrap());
         let options = ApplyOptions {
-            db: dst_db.clone(),
+            kv_db: dst_db.clone(),
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: 10 * 1024 * 1024,

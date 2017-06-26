@@ -44,7 +44,7 @@ impl SyncStorage {
     }
 
     pub fn get_engine(&self) -> Box<Engine> {
-        self.store.get_engine()
+        self.store.get_kv_engine()
     }
 
     pub fn get(&self, ctx: Context, key: &Key, start_ts: u64) -> Result<Option<Value>> {

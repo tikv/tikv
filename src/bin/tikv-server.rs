@@ -393,6 +393,13 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     opts
 }
 
+fn get_concurrent_write_option(opts: &mut RocksdbOptions, config: &toml::Value) {
+    let concurrent_write = get_toml_boolean(config,
+                                            "rocksdb.allow-concurrent-memtable-write",
+                                            Some(false));
+    opts.allow_concurrent_memtable_write(concurrent_write);
+}
+
 struct CfOptValues {
     pub block_size: i64,
     pub block_cache_size: i64,
@@ -840,21 +847,18 @@ fn run_raft_server(pd_client: RpcClient,
     let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
     // Create engine, storage.
-    let db_opts = get_rocksdb_db_option(config);
-    let cfs_opts =
+    let kv_db_opts = get_rocksdb_db_option(config);
+    let kv_cfs_opts =
         vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
                                           get_rocksdb_default_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_WRITE,
-                                          get_rocksdb_write_cf_option(config, total_mem)),
-             rocksdb_util::CFOptions::new(CF_RAFT,
-                                          get_rocksdb_raftlog_cf_option(config, total_mem))];
-    let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
-                                                           .unwrap(),
-                                                       db_opts,
-                                                       cfs_opts)
+                                          get_rocksdb_write_cf_option(config, total_mem))];
+    let kv_engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str().unwrap(),
+                                                          kv_db_opts,
+                                                          kv_cfs_opts)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
-    let mut storage = create_raft_storage(raft_router.clone(), engine.clone(), &cfg)
+    let mut storage = create_raft_storage(raft_router.clone(), kv_engine.clone(), &cfg)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 
     // Create pd client, snapshot manager, server.
@@ -873,10 +877,25 @@ fn run_raft_server(pd_client: RpcClient,
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let trans = server.transport();
 
+    // Create raft_cf engine.
+    let mut raft_db_opts = get_rocksdb_db_option(config);
+    get_concurrent_write_option(&mut raft_db_opts, config);
+    let raft_db_path = store_path.join(Path::new("db_raft"));
+    let raft_cf_opts =
+        vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
+                                          get_rocksdb_default_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_RAFT,
+                                          get_rocksdb_raftlog_cf_option(config, total_mem))];
+    let raft_engine = Arc::new(rocksdb_util::new_engine_opt(raft_db_path.to_str().unwrap(),
+                                                            raft_db_opts,
+                                                            raft_cf_opts)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
+
     // Create node.
     let mut node = Node::new(&mut event_loop, &cfg, pd_client);
     node.start(event_loop,
-               engine.clone(),
+               raft_engine.clone(),
+               kv_engine.clone(),
                trans,
                snap_mgr,
                snap_status_receiver)
@@ -891,7 +910,7 @@ fn run_raft_server(pd_client: RpcClient,
 
     // Run server.
     server.start(&cfg).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    signal_handler::handle_signal(engine, backup_path);
+    signal_handler::handle_signal(kv_engine, backup_path);
 
     // Stop.
     server.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));

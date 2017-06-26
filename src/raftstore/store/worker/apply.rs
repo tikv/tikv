@@ -261,7 +261,7 @@ impl ApplyDelegate {
 
     fn from_peer(peer: &Peer) -> ApplyDelegate {
         let reg = Registration::new(peer);
-        ApplyDelegate::from_registration(peer.engine(), reg)
+        ApplyDelegate::from_registration(peer.kv_engine(), reg)
     }
 
     fn from_registration(db: Arc<DB>, reg: Registration) -> ApplyDelegate {
@@ -316,9 +316,9 @@ impl ApplyDelegate {
             }
         }
 
-        if !self.pending_remove {
-            self.write_apply_state(apply_ctx.wb_mut());
-        }
+        // if !self.pending_remove {
+        //     self.write_apply_state(apply_ctx.raft_wb_mut());
+        // }
 
         self.update_metrics(apply_ctx);
         apply_ctx.mark_last_bytes_and_keys();
@@ -335,20 +335,20 @@ impl ApplyDelegate {
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, wb: &WriteBatch) {
-        rocksdb::get_cf_handle(&self.engine, CF_RAFT)
-            .map_err(From::from)
-            .and_then(|handle| {
-                wb.put_msg_cf(handle,
-                              &keys::apply_state_key(self.region.get_id()),
-                              &self.apply_state)
-            })
-            .unwrap_or_else(|e| {
-                panic!("{} failed to save apply state to write batch, error: {:?}",
-                       self.tag,
-                       e);
-            });
-    }
+    // fn write_apply_state(&self, raft_wb: &WriteBatch) {
+    //     rocksdb::get_cf_handle(&self.raft_engine, CF_RAFT)
+    //         .map_err(From::from)
+    //         .and_then(|handle| {
+    //             raft_wb.put_msg_cf(handle,
+    //                                &keys::apply_state_key(self.region.get_id()),
+    //                                &self.apply_state)
+    //         })
+    //         .unwrap_or_else(|e| {
+    //             panic!("{} failed to save apply state to write batch, error: {:?}",
+    //                    self.tag,
+    //                    e);
+    //         });
+    // }
 
     fn handle_raft_entry_normal(&mut self,
                                 apply_ctx: &mut ApplyContext,
@@ -362,7 +362,7 @@ impl ApplyDelegate {
             let cmd = parse_data_at(data, index, &self.tag);
 
             if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
-                self.write_apply_state(apply_ctx.wb_mut());
+                //self.write_apply_state(apply_ctx.raft_wb_mut());
 
                 self.update_metrics(apply_ctx);
 
@@ -460,7 +460,13 @@ impl ApplyDelegate {
 
         let cmd_cb = self.find_cb(index, term, &cmd);
         apply_ctx.host.pre_apply(&self.region, &mut cmd);
-        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
+
+        apply_ctx.wb_mut().set_save_point();
+        let (mut resp, exec_result, is_ok) =
+            self.apply_raft_cmd(apply_ctx.wb_ref(), index, term, &cmd);
+        if is_ok == false {
+            apply_ctx.wb_mut().rollback_to_save_point().unwrap();
+        }
 
         debug!("{} applied command at log index {}", self.tag, index);
 
@@ -485,19 +491,19 @@ impl ApplyDelegate {
     // we should try to apply the entry again or panic. Considering that this
     // usually due to disk operation fail, which is rare, so just panic is ok.
     fn apply_raft_cmd(&mut self,
-                      wb: &mut WriteBatch,
+                      wb: &WriteBatch,
                       index: u64,
                       term: u64,
                       req: &RaftCmdRequest)
-                      -> (RaftCmdResponse, Option<ExecResult>) {
+                      -> (RaftCmdResponse, Option<ExecResult>, bool) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
+        let mut is_ok = true;
         let mut ctx = self.new_ctx(wb, index, term, req);
-        ctx.wb.set_save_point();
         let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
             // clear dirty values.
-            ctx.wb.rollback_to_save_point().unwrap();
+            is_ok = false;
             match e {
                 Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
                 _ => error!("{} execute raft command err: {:?}", self.tag, e),
@@ -530,7 +536,7 @@ impl ApplyDelegate {
             }
         }
 
-        (resp, exec_result)
+        (resp, exec_result, is_ok)
     }
 
     /// Clear all the pending commands.
@@ -571,7 +577,7 @@ impl ApplyDelegate {
     }
 
     fn new_ctx<'a>(&self,
-                   wb: &'a mut WriteBatch,
+                   wb: &'a WriteBatch,
                    index: u64,
                    term: u64,
                    req: &'a RaftCmdRequest)
@@ -590,7 +596,7 @@ impl ApplyDelegate {
 struct ExecContext<'a> {
     snap: Snapshot,
     apply_state: RaftApplyState,
-    wb: &'a mut WriteBatch,
+    wb: &'a WriteBatch,
     req: &'a RaftCmdRequest,
     index: u64,
     term: u64,
@@ -623,8 +629,8 @@ impl ApplyDelegate {
               ctx.index);
 
         let (mut response, exec_result) = try!(match cmd_type {
-            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
-            AdminCmdType::Split => self.exec_split(ctx, request),
+            AdminCmdType::ChangePeer => self.exec_change_peer(request),
+            AdminCmdType::Split => self.exec_split(request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
@@ -639,7 +645,6 @@ impl ApplyDelegate {
     }
 
     fn exec_change_peer(&mut self,
-                        ctx: &ExecContext,
                         request: &AdminRequest)
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
@@ -714,14 +719,14 @@ impl ApplyDelegate {
             }
         }
 
-        let state = if self.pending_remove {
-            PeerState::Tombstone
-        } else {
-            PeerState::Normal
-        };
-        if let Err(e) = write_peer_state(ctx.wb, &region, state) {
-            panic!("{} failed to update region state: {:?}", self.tag, e);
-        }
+        // let state = if self.pending_remove {
+        //     PeerState::Tombstone
+        // } else {
+        //     PeerState::Normal
+        // };
+        // if let Err(e) = write_peer_state(raft_wb, &region, state) {
+        //     panic!("{} failed to update region state: {:?}", self.tag, e);
+        // }
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -735,7 +740,6 @@ impl ApplyDelegate {
     }
 
     fn exec_split(&mut self,
-                  ctx: &ExecContext,
                   req: &AdminRequest)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
@@ -790,15 +794,15 @@ impl ApplyDelegate {
         let region_ver = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_ver);
         new_region.mut_region_epoch().set_version(region_ver);
-        write_peer_state(ctx.wb, &region, PeerState::Normal)
-            .and_then(|_| write_peer_state(ctx.wb, &new_region, PeerState::Normal))
-            .and_then(|_| write_initial_state(self.engine.as_ref(), ctx.wb, new_region.get_id()))
-            .unwrap_or_else(|e| {
-                panic!("{} failed to save split region {:?}: {:?}",
-                       self.tag,
-                       new_region,
-                       e)
-            });
+        // write_peer_state(raft_wb, &region, PeerState::Normal)
+        //     .and_then(|_| write_peer_state(raft_wb, &new_region, PeerState::Normal))
+        //     .and_then(|_| write_initial_state(self.raft_engine.as_ref(), raft_wb, new_region.get_id()))
+        //     .unwrap_or_else(|e| {
+        //         panic!("{} failed to save split region {:?}: {:?}",
+        //                self.tag,
+        //                new_region,
+        //                e)
+        //     });
 
         let mut resp = AdminResponse::new();
         if right_derive {
@@ -1205,7 +1209,7 @@ impl Runner {
             delegates.insert(region_id, ApplyDelegate::from_peer(p));
         }
         Runner {
-            db: store.engine(),
+            db: store.kv_engine(),
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,

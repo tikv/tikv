@@ -192,7 +192,8 @@ pub struct PeerStat {
 }
 
 pub struct Peer {
-    engine: Arc<DB>,
+    raft_engine: Arc<DB>,
+    kv_engine: Arc<DB>,
     cfg: Rc<Config>,
     peer_cache: RefCell<FlatMap<u64, metapb::Peer>>,
     pub peer: metapb::Peer,
@@ -292,7 +293,7 @@ impl Peer {
         let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
-        let ps = try!(PeerStorage::new(store.engine(), region, sched, tag.clone()));
+        let ps = try!(PeerStorage::new(store.raft_engine(), region, sched, tag.clone()));
 
         let applied_index = ps.applied_index();
 
@@ -312,7 +313,8 @@ impl Peer {
         let raft_group = try!(RawNode::new(&raft_cfg, ps, &[]));
 
         let mut peer = Peer {
-            engine: store.engine(),
+            raft_engine: store.raft_engine(),
+            kv_engine: store.kv_engine(),
             peer: util::new_peer(store_id, peer_id),
             region_id: region.get_id(),
             raft_group: raft_group,
@@ -372,7 +374,7 @@ impl Peer {
         let wb = WriteBatch::new();
         try!(self.get_store().clear_meta(&wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
-        try!(self.engine.write(wb));
+        try!(self.raft_engine.write(wb));
 
         if self.get_store().is_initialized() {
             // If we meet panic when deleting data and raft log, the dirty data
@@ -397,8 +399,12 @@ impl Peer {
         self.get_store().is_initialized()
     }
 
-    pub fn engine(&self) -> Arc<DB> {
-        self.engine.clone()
+    pub fn raft_engine(&self) -> Arc<DB> {
+        self.raft_engine.clone()
+    }
+
+    pub fn kv_engine(&self) -> Arc<DB> {
+        self.kv_engine.clone()
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -1491,7 +1497,7 @@ impl Peer {
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
         try!(check_epoch(self.region(), req));
-        let snap = Snapshot::new(self.engine.clone());
+        let snap = Snapshot::new(self.kv_engine.clone());
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 

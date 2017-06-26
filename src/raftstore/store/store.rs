@@ -99,7 +99,8 @@ impl Default for StoreStat {
 
 pub struct Store<T, C: 'static> {
     cfg: Rc<Config>,
-    engine: Arc<DB>,
+    raft_engine: Arc<DB>,
+    kv_engine: Arc<DB>,
     store: metapb::Store,
     sendch: SendCh<Msg>,
 
@@ -155,14 +156,14 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     Ok(event_loop)
 }
 
-pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+pub fn delete_file_in_range(kv_db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
     if start_key >= end_key {
         return Ok(());
     }
 
-    for cf in db.cf_names() {
-        let handle = try!(rocksdb::get_cf_handle(db, cf));
-        try!(db.delete_file_in_range_cf(handle, start_key, end_key));
+    for cf in kv_db.cf_names() {
+        let handle = try!(rocksdb::get_cf_handle(kv_db, cf));
+        try!(kv_db.delete_file_in_range_cf(handle, start_key, end_key));
     }
 
     Ok(())
@@ -172,7 +173,8 @@ impl<T, C> Store<T, C> {
     pub fn new(ch: StoreChannel,
                meta: metapb::Store,
                cfg: Config,
-               engine: Arc<DB>,
+               raft_engine: Arc<DB>,
+               kv_engine: Arc<DB>,
                trans: T,
                pd_client: Arc<C>,
                mgr: SnapManager)
@@ -190,7 +192,8 @@ impl<T, C> Store<T, C> {
         let mut s = Store {
             cfg: Rc::new(cfg),
             store: meta,
-            engine: engine,
+            raft_engine: raft_engine,
+            kv_engine: kv_engine,
             sendch: sendch,
             sent_snapshot_count: 0,
             snapshot_status_receiver: ch.snapshot_status_receiver,
@@ -228,16 +231,16 @@ impl<T, C> Store<T, C> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
-        let engine = self.engine.clone();
+        let raft_engine = self.raft_engine.clone();
         let mut total_count = 0;
         let mut tomebstone_count = 0;
         let mut applying_count = 0;
 
         let t = Instant::now();
-        try!(engine.scan(start_key,
-                         end_key,
-                         false,
-                         &mut |key, value| {
+        try!(raft_engine.scan(start_key,
+                              end_key,
+                              false,
+                              &mut |key, value| {
             let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -292,12 +295,12 @@ impl<T, C> Store<T, C> {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
             // TODO: use delete_range once #1250 is resolved.
-            try!(delete_file_in_range(&self.engine, &last_start_key, &start_key));
+            try!(delete_file_in_range(&self.kv_engine, &last_start_key, &start_key));
             last_start_key = keys::enc_end_key(region);
         }
 
         // TODO: use delete_range once #1250 is resolved.
-        try!(delete_file_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
+        try!(delete_file_in_range(&self.kv_engine, &last_start_key, keys::DATA_MAX_KEY));
 
         info!("{} cleans up garbage data, takes {:?}",
               self.tag,
@@ -322,8 +325,12 @@ impl<T, C> Store<T, C> {
         self.apply_worker.scheduler()
     }
 
-    pub fn engine(&self) -> Arc<DB> {
-        self.engine.clone()
+    pub fn raft_engine(&self) -> Arc<DB> {
+        self.raft_engine.clone()
+    }
+
+    pub fn kv_engine(&self) -> Arc<DB> {
+        self.kv_engine.clone()
     }
 
     pub fn store_id(&self) -> u64 {
@@ -402,13 +409,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_consistency_check_tick(event_loop);
         self.register_report_region_flow_tick(event_loop);
 
-        let split_check_runner = SplitCheckRunner::new(self.engine.clone(),
+        let split_check_runner = SplitCheckRunner::new(self.kv_engine.clone(),
                                                        self.sendch.clone(),
                                                        self.cfg.region_max_size,
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        let runner = RegionRunner::new(self.engine.clone(),
+        let runner = RegionRunner::new(self.raft_engine.clone(),
+                                       self.kv_engine.clone(),
                                        self.snap_mgr.clone(),
                                        self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
@@ -416,7 +424,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(self.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(self.engine.clone());
+        let compact_runner = CompactRunner::new(self.kv_engine.clone());
         box_try!(self.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
@@ -737,7 +745,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // no exist, check with tombstone key.
         let state_key = keys::region_state_key(region_id);
-        if let Some(local_state) = try!(self.engine.get_msg::<RegionLocalState>(&state_key)) {
+        if let Some(local_state) = try!(self.raft_engine.get_msg::<RegionLocalState>(&state_key)) {
             if local_state.get_state() != PeerState::Tombstone {
                 // Maybe split, but not registered yet.
                 if util::is_first_vote_msg(msg) {
@@ -901,7 +909,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if !wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log);
-            self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
+            self.raft_engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
                 panic!("{} failed to save append result: {:?}", self.tag, e);
             });
         }
@@ -1052,7 +1060,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let remain_cnt = peer.last_applying_idx - state.get_index() - 1;
         peer.raft_log_size_hint = peer.raft_log_size_hint * remain_cnt / total_cnt;
         let task = RaftlogGcTask {
-            engine: peer.get_store().get_engine().clone(),
+            raft_engine: peer.get_store().get_raft_engine().clone(),
             region_id: peer.get_store().get_region_id(),
             start_idx: peer.last_compacted_idx,
             end_idx: state.get_index() + 1,
@@ -1573,11 +1581,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
-        let disk_stats = match fs2::statvfs(self.engine.path()) {
+        let disk_stats = match fs2::statvfs(self.raft_engine.path()) {
             Err(e) => {
                 error!("{} get disk stat for rocksdb {} failed: {}",
                        self.tag,
-                       self.engine.path(),
+                       self.raft_engine.path(),
                        e);
                 return;
             }
@@ -1592,7 +1600,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
-        let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
+        let mut used_size = flush_engine_properties_and_get_used_size(self.raft_engine.clone(),
+                                                                      self.kv_engine.clone());
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);
@@ -1640,13 +1649,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_start_time(self.start_time.sec as u32);
 
         // report store write flow to pd
-        let engine_total_bytes_written = self.engine
+        let engine_total_bytes_written = self.raft_engine
             .get_statistics_ticker_count(TickerType::BytesWritten);
         let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
         self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
         stats.set_bytes_written(delta);
 
-        let engine_total_keys_written = self.engine
+        let engine_total_keys_written = self.raft_engine
             .get_statistics_ticker_count(TickerType::NumberKeysWritten);
         let delta = engine_total_keys_written - self.store_stat.engine_total_keys_written;
         self.store_stat.engine_total_keys_written = engine_total_keys_written;
@@ -1668,12 +1677,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn flush_engine_statistics(&mut self) {
         for t in ENGINE_TICKER_TYPES {
-            let v = self.engine.get_statistics_ticker_count(*t);
+            let v = self.raft_engine.get_statistics_ticker_count(*t);
             flush_engine_ticker_metrics(*t, v);
         }
 
         for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.engine.get_statistics_histogram(*t) {
+            if let Some(v) = self.raft_engine.get_statistics_histogram(*t) {
                 flush_engine_histogram_metrics(*t, v);
             }
         }

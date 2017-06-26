@@ -347,19 +347,19 @@ struct StorageHandle {
 }
 
 pub struct Storage {
-    engine: Box<Engine>,
+    kv_engine: Box<Engine>,
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
 }
 
 impl Storage {
-    pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
+    pub fn from_engine(kv_engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let (tx, rx) = mpsc::sync_channel(config.sched_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
 
-        info!("storage {:?} started.", engine);
+        info!("storage {:?} started.", kv_engine);
         Ok(Storage {
-            engine: engine,
+            kv_engine: kv_engine,
             sendch: sendch,
             handle: Arc::new(Mutex::new(StorageHandle {
                 handle: None,
@@ -369,8 +369,8 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
-        Storage::from_engine(engine, config)
+        let kv_engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
+        Storage::from_engine(kv_engine, config)
     }
 
     pub fn start(&mut self, config: &Config) -> Result<()> {
@@ -379,7 +379,7 @@ impl Storage {
             return Err(box_err!("scheduler is already running"));
         }
 
-        let engine = self.engine.clone();
+        let kv_engine = self.kv_engine.clone();
         let builder = thread::Builder::new().name(thd_name!("storage-scheduler"));
         let rx = handle.receiver.take().unwrap();
         let sched_concurrency = config.sched_concurrency;
@@ -387,7 +387,7 @@ impl Storage {
         let sched_too_busy_threshold = config.sched_too_busy_threshold;
         let ch = self.sendch.clone();
         let h = try!(builder.spawn(move || {
-            let mut sched = Scheduler::new(engine,
+            let mut sched = Scheduler::new(kv_engine,
                                            ch,
                                            sched_concurrency,
                                            sched_worker_pool_size,
@@ -418,12 +418,12 @@ impl Storage {
             return Err(box_err!("failed to join sched_handle, err:{:?}", e));
         }
 
-        info!("storage {:?} closed.", self.engine);
+        info!("storage {:?} closed.", self.kv_engine);
         Ok(())
     }
 
-    pub fn get_engine(&self) -> Box<Engine> {
-        self.engine.clone()
+    pub fn get_kv_engine(&self) -> Box<Engine> {
+        self.kv_engine.clone()
     }
 
     fn send(&self, cmd: Command, cb: StorageCb) -> Result<()> {
@@ -636,7 +636,7 @@ impl Storage {
                          value: Vec<u8>,
                          callback: Callback<()>)
                          -> Result<()> {
-        try!(self.engine
+        try!(self.kv_engine
             .async_write(&ctx,
                          vec![Modify::Put(CF_DEFAULT, Key::from_encoded(key), value)],
                          box |(_, res): (_, engine::Result<_>)| {
@@ -651,7 +651,7 @@ impl Storage {
                             key: Vec<u8>,
                             callback: Callback<()>)
                             -> Result<()> {
-        try!(self.engine
+        try!(self.kv_engine
             .async_write(&ctx,
                          vec![Modify::Delete(CF_DEFAULT, Key::from_encoded(key))],
                          box |(_, res): (_, engine::Result<_>)| {
@@ -665,7 +665,7 @@ impl Storage {
 impl Clone for Storage {
     fn clone(&self) -> Storage {
         Storage {
-            engine: self.engine.clone(),
+            kv_engine: self.kv_engine.clone(),
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
         }

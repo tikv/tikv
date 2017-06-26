@@ -101,7 +101,8 @@ impl Simulator for ServerCluster {
         // Create storage.
         let mut store = create_raft_storage(sim_router.clone(), engine.clone(), &cfg).unwrap();
         store.start(&cfg.storage).unwrap();
-        self.storages.insert(node_id, store.get_engine());
+        // TODO(lishuai): split raft and kv engine
+        self.storages.insert(node_id, store.get_kv_engine());
 
         // Create pd client, snapshot manager, server.
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
@@ -123,6 +124,8 @@ impl Simulator for ServerCluster {
         // Create node.
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
         node.start(event_loop,
+                   // TODO(lishuai): split raft and kv engine
+                   engine.clone(),
                    engine,
                    simulate_trans.clone(),
                    snap_mgr.clone(),
