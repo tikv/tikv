@@ -13,7 +13,7 @@
 
 use super::Json;
 use super::super::Result;
-use super::path_expr::{PathLeg, PathExpression, contains_any_asterisk};
+use super::path_expr::{PathLeg, PathExpression};
 use std::mem;
 
 /// `ModifyType` is for modify a JSON.
@@ -40,7 +40,7 @@ impl Json {
             return Err(box_err!("Incorrect parameter count"));
         }
         for expr in path_expr_list {
-            if contains_any_asterisk(expr.flags) {
+            if expr.contains_any_asterisk() {
                 return Err(box_err!("Invalid path expression"));
             }
         }
@@ -55,7 +55,6 @@ impl Json {
         if path_legs.is_empty() {
             match *mt {
                 ModifyType::Replace | ModifyType::Set => {
-                    println!("set value:{:?}", value);
                     *self = value;
                 }
                 _ => {}
