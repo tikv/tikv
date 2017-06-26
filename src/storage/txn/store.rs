@@ -14,22 +14,33 @@
 use storage::{Key, Value, KvPair, Snapshot, ScanMode, Statistics};
 use storage::mvcc::{MvccReader, Error as MvccError};
 use super::{Error, Result};
+use kvproto::kvrpcpb::IsolationLevel;
 
 pub struct SnapshotStore<'a> {
     snapshot: &'a Snapshot,
     start_ts: u64,
+    isolation_level: IsolationLevel,
 }
 
 impl<'a> SnapshotStore<'a> {
-    pub fn new(snapshot: &'a Snapshot, start_ts: u64) -> SnapshotStore {
+    pub fn new(snapshot: &'a Snapshot,
+               start_ts: u64,
+               isolation_level: IsolationLevel)
+               -> SnapshotStore {
         SnapshotStore {
             snapshot: snapshot,
             start_ts: start_ts,
+            isolation_level: isolation_level,
         }
     }
 
     pub fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
-        let mut reader = MvccReader::new(self.snapshot, statistics, None, true, None);
+        let mut reader = MvccReader::new(self.snapshot,
+                                         statistics,
+                                         None,
+                                         true,
+                                         None,
+                                         self.isolation_level);
         let v = try!(reader.get(key, self.start_ts));
         Ok(v)
     }
@@ -39,7 +50,12 @@ impl<'a> SnapshotStore<'a> {
                      statistics: &mut Statistics)
                      -> Result<Vec<Result<Option<Value>>>> {
         // TODO: sort the keys and use ScanMode::Forward
-        let mut reader = MvccReader::new(self.snapshot, statistics, None, true, None);
+        let mut reader = MvccReader::new(self.snapshot,
+                                         statistics,
+                                         None,
+                                         true,
+                                         None,
+                                         self.isolation_level);
         let mut results = Vec::with_capacity(keys.len());
         for k in keys {
             results.push(reader.get(k, self.start_ts).map_err(Error::from));
@@ -55,7 +71,12 @@ impl<'a> SnapshotStore<'a> {
                    upper_bound: Option<Vec<u8>>,
                    statistics: &'a mut Statistics)
                    -> Result<StoreScanner> {
-        let mut reader = MvccReader::new(self.snapshot, statistics, Some(mode), true, upper_bound);
+        let mut reader = MvccReader::new(self.snapshot,
+                                         statistics,
+                                         Some(mode),
+                                         true,
+                                         upper_bound,
+                                         self.isolation_level);
         reader.set_key_only(key_only);
         Ok(StoreScanner {
             reader: reader,
@@ -130,7 +151,7 @@ impl<'a> StoreScanner<'a> {
 
 #[cfg(test)]
 mod test {
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use super::SnapshotStore;
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, ScanMode, KvPair, Value};
@@ -172,7 +193,11 @@ mod test {
             let mut statistics = Statistics::default();
             // do prewrite.
             {
-                let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
+                let mut txn = MvccTxn::new(self.snapshot.as_ref(),
+                                           &mut statistics,
+                                           START_TS,
+                                           None,
+                                           IsolationLevel::SI);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(Mutation::Put((make_key(key), key.to_vec())),
@@ -185,7 +210,11 @@ mod test {
             self.refresh_snapshot();
             // do commit
             {
-                let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
+                let mut txn = MvccTxn::new(self.snapshot.as_ref(),
+                                           &mut statistics,
+                                           START_TS,
+                                           None,
+                                           IsolationLevel::SI);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
@@ -202,7 +231,7 @@ mod test {
         }
 
         fn store(&self) -> SnapshotStore {
-            SnapshotStore::new(self.snapshot.as_ref(), COMMIT_TS + 1)
+            SnapshotStore::new(self.snapshot.as_ref(), COMMIT_TS + 1, IsolationLevel::SI)
         }
     }
 

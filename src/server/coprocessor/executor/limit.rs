@@ -59,6 +59,7 @@ mod test {
     use storage::Statistics;
     use tipb::executor::TableScan;
     use protobuf::RepeatedField;
+    use kvproto::kvrpcpb::IsolationLevel;
 
     #[test]
     fn test_limit_executor() {
@@ -85,8 +86,12 @@ mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut statistics = Statistics::default();
-        let ts_ect =
-            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+        let ts_ect = TableScanExecutor::new(table_scan,
+                                            key_ranges,
+                                            snapshot,
+                                            &mut statistics,
+                                            start_ts,
+                                            IsolationLevel::SI);
 
         // init Limit meta
         let mut limit_meta = Limit::default();
