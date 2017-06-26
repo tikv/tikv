@@ -13,8 +13,6 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use grpc::error::GrpcError;
-
 use kvproto::pdpb::*;
 
 use super::Mocker;
@@ -38,14 +36,14 @@ impl Retry {
 }
 
 impl Mocker for Retry {
-    fn GetRegionByID(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+    fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         let count = self.count.fetch_add(1, Ordering::SeqCst);
         if count != 0 && count % self.retry == 0 {
             info!("[Retry] return Ok(_)");
             Some(Ok(GetRegionResponse::new()))
         } else {
             info!("[Retry] return Err(_)");
-            Some(Err(GrpcError::Other("Please retry")))
+            Some(Err("please retry".to_owned()))
         }
     }
 }
