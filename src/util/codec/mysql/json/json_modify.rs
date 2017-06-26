@@ -14,9 +14,10 @@
 use super::Json;
 use super::super::Result;
 use super::path_expr::{PathLeg, PathExpression, contains_any_asterisk};
+use std::mem;
 
 /// `ModifyType` is for modify a JSON.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ModifyType {
     /// `Insert` is for inserting a new element into a JSON.
     Insert,
@@ -30,91 +31,78 @@ impl Json {
     // Modifies a Json object by insert, replace or set.
     // All path expressions cannot contain * or ** wildcard.
     // If any error occurs, the input won't be changed.
-    pub fn modify(self,
+    pub fn modify(&mut self,
                   path_expr_list: &[PathExpression],
                   mut values: Vec<Json>,
                   mt: ModifyType)
-                  -> (Json, Result<()>) {
+                  -> Result<()> {
         if path_expr_list.len() != values.len() {
-            return (self, Err(box_err!("Incorrect parameter count")));
+            return Err(box_err!("Incorrect parameter count"));
         }
         for expr in path_expr_list {
             if contains_any_asterisk(expr.flags) {
-                return (self, Err(box_err!("Invalid path expression")));
+                return Err(box_err!("Invalid path expression"));
             }
         }
-        let mut j = self;
         for (expr, value) in path_expr_list.iter().zip(values.drain(..)) {
-            j = set_json(j, &expr.legs, value, mt.clone());
+            self.set_json(&expr.legs, value, &mt);
         }
-        (j, Ok(()))
+        Ok(())
     }
-}
 
-// `set_json` is used in Json::modify().
-fn set_json(j: Json, path_legs: &[PathLeg], value: Json, mt: ModifyType) -> Json {
-    if path_legs.is_empty() {
-        match mt {
-            ModifyType::Replace | ModifyType::Set => return value,
-            _ => return j,
+    // `set_json` is used in Json::modify().
+    fn set_json(&mut self, path_legs: &[PathLeg], value: Json, mt: &ModifyType) {
+        if path_legs.is_empty() {
+            match *mt {
+                ModifyType::Replace | ModifyType::Set => {
+                    println!("set value:{:?}", value);
+                    *self = value;
+                }
+                _ => {}
+            }
+            return;
         }
-    }
-    let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
-    match *current_leg {
-        PathLeg::Index(i) => {
+
+        let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
+        let base_data = mem::replace(self, Json::None);
+
+        if let PathLeg::Index(i) = *current_leg {
             let index = i as usize;
             // If `j` is not an array, we should autowrap it to be an array.
             // Then if the length of result array equals to 1, it's unwraped.
-            let (mut array, wrapped) = match j {
+            let (mut array, wrapped) = match base_data {
                 Json::Array(array) => (array, false),
-                _ => (vec![j], true),
+                _ => (vec![base_data], true),
             };
             if array.len() > index {
-                // e.g. json_replace('[1, 2, 3]', '$[0]', "x") => '["x", 2, 3]'
-                if index == (array.len() - 1) {
-                    let chosen = array.pop().unwrap();
-                    array.push(set_json(chosen, sub_path_legs, value, mt));
-                } else {
-                    let mut right = array.split_off(index + 1);
-                    let chosen = array.pop().unwrap();
-                    array.push(set_json(chosen, sub_path_legs, value, mt));
-                    array.append(&mut right);
-                }
-            } else if sub_path_legs.is_empty() {
-                match mt {
-                    ModifyType::Insert | ModifyType::Set => {
-                        // e.g. json_insert('[1, 2, 3]', '$[3]', "x") => '[1, 2, 3, "x"]'
-                        array.push(value)
-                    }
-                    _ => {}
-                }
+                let mut chosen = &mut array[index];
+                chosen.set_json(sub_path_legs, value, mt);
+            } else if sub_path_legs.is_empty() && *mt != ModifyType::Replace {
+                // e.g. json_insert('[1, 2, 3]', '$[3]', "x") => '[1, 2, 3, "x"]'
+                array.push(value);
             }
             if (array.len() == 1) && wrapped {
-                return array.pop().unwrap();
+                *self = array.pop().unwrap();
+            } else {
+                *self = Json::Array(array);
             }
-            return Json::Array(array);
+            return;
         }
-        PathLeg::Key(ref key) => {
-            if let Json::Object(mut map) = j {
-                let r = map.remove(key);
-                if let Some(v) = r {
+
+        if let PathLeg::Key(ref key) = *current_leg {
+            if let Json::Object(mut map) = base_data {
+                if map.contains_key(key) {
                     // e.g. json_replace('{"a": 1}', '$.a', 2) => '{"a": 2}'
-                    map.insert(key.clone(), set_json(v, sub_path_legs, value, mt));
-                } else if sub_path_legs.is_empty() {
-                    match mt {
-                        ModifyType::Insert | ModifyType::Set => {
-                            // e.g. json_insert('{"a": 1}', '$.b', 2) => '{"a": 1, "b": 2}'
-                            map.insert(key.clone(), value);
-                        }
-                        _ => {}
-                    }
+                    let mut v = map.get_mut(key).unwrap();
+                    v.set_json(sub_path_legs, value, mt);
+                } else if sub_path_legs.is_empty() && *mt != ModifyType::Replace {
+                    // e.g. json_insert('{"a": 1}', '$.b', 2) => '{"a": 1, "b": 2}'
+                    map.insert(key.clone(), value);
                 }
-                return Json::Object(map);
+                *self = Json::Object(map);
             }
         }
-        _ => {}
     }
-    j
 }
 
 #[cfg(test)]
@@ -130,7 +118,9 @@ mod test {
             (r#"{"a": 3}"#, "$.a", r#"[]"#, ModifyType::Replace, r#"{"a": []}"#, true),
             (r#"{"a": []}"#, "$.a[0]", r#"3"#, ModifyType::Set, r#"{"a": [3]}"#, true),
             (r#"{"a": [3]}"#, "$.a[1]", r#"4"#, ModifyType::Insert, r#"{"a": [3, 4]}"#, true),
+
             (r#"{"a": [3]}"#, "$[0]", r#"4"#, ModifyType::Set, r#"4"#, true),
+
             (r#"{"a": [3]}"#, "$[1]", r#"4"#, ModifyType::Set, r#"[{"a": [3]}, 4]"#, true),
 
             // Nothing changed because the path is empty and we want to insert.
@@ -162,14 +152,14 @@ mod test {
                     "#{} expect expected value parse ok but got {:?}",
                     i,
                     e);
-            let (j, p, v, e) = (j.unwrap(), p.unwrap(), v.unwrap(), e.unwrap());
-            let (m, r) = j.modify(vec![p].as_slice(), vec![v], mt);
+            let (mut j, p, v, e) = (j.unwrap(), p.unwrap(), v.unwrap(), e.unwrap());
+            let r = j.modify(vec![p].as_slice(), vec![v], mt);
             if success {
                 assert!(r.is_ok(), "#{} expect modify ok but got {:?}", i, r);
             } else {
                 assert!(r.is_err(), "#{} expect modify error but got {:?}", i, r);
             }
-            assert_eq!(e, m, "#{} expect modified json {:?} == {:?}", i, m, e);
+            assert_eq!(e, j, "#{} expect modified json {:?} == {:?}", i, j, e);
         }
     }
 }
