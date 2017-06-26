@@ -178,27 +178,34 @@ impl<'a> MvccReader<'a> {
         Ok(Some((commit_ts, write)))
     }
 
+    fn check_lock(&mut self, key: &Key, mut ts: u64) -> Result<Option<u64>> {
+        if let Some(lock) = try!(self.load_lock(key)) {
+            if lock.ts <= ts {
+                if ts == u64::MAX && try!(key.raw()) == lock.primary {
+                    // when ts==u64::MAX(which means to get latest committed version for
+                    // primary key),and current key is the primary key, returns the latest
+                    // commit version's value
+                    ts = lock.ts - 1;
+                } else {
+                    // There is a pending lock. Client should wait or clean it.
+                    return Err(Error::KeyIsLocked {
+                        key: try!(key.raw()),
+                        primary: lock.primary,
+                        ts: lock.ts,
+                        ttl: lock.ttl,
+                    });
+                }
+            }
+        }
+        Ok(Some(ts))
+    }
+
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
             IsolationLevel::SI => {
-                if let Some(lock) = try!(self.load_lock(key)) {
-                    if lock.ts <= ts {
-                        if ts == u64::MAX && try!(key.raw()) == lock.primary {
-                            // when ts==u64::MAX(which means to get latest committed version for
-                            // primary key),and current key is the primary key, returns the latest
-                            // commit version's value
-                            ts = lock.ts - 1;
-                        } else {
-                            // There is a pending lock. Client should wait or clean it.
-                            return Err(Error::KeyIsLocked {
-                                key: try!(key.raw()),
-                                primary: lock.primary,
-                                ts: lock.ts,
-                                ttl: lock.ttl,
-                            });
-                        }
-                    }
+                if let Some(new_ts) = try!(self.check_lock(key, ts)) {
+                    ts = new_ts;
                 }
             }
             IsolationLevel::RC => {}
