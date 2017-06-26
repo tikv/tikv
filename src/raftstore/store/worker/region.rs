@@ -269,7 +269,7 @@ impl Runner {
                 db: db,
                 mgr: mgr,
                 batch_size: batch_size,
-            }
+            },
         }
     }
 }
@@ -282,7 +282,7 @@ impl Runnable<Task> for Runner {
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
                 self.pool.execute(move || ctx.handle_gen(region_id, notifier))
-            },
+            }
             Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
             Task::Destroy { region_id, start_key, end_key } => {
                 self.ctx.handle_destroy(region_id, start_key, end_key)
