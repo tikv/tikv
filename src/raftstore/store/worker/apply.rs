@@ -577,7 +577,6 @@ impl ApplyDelegate {
                    req: &'a RaftCmdRequest)
                    -> ExecContext<'a> {
         ExecContext {
-            snap: Snapshot::new(self.engine.clone()),
             apply_state: self.apply_state.clone(),
             wb: wb,
             req: req,
@@ -588,7 +587,6 @@ impl ApplyDelegate {
 }
 
 struct ExecContext<'a> {
-    snap: Snapshot,
     apply_state: RaftApplyState,
     wb: &'a mut WriteBatch,
     req: &'a RaftCmdRequest,
@@ -875,10 +873,13 @@ impl ApplyDelegate {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                CmdType::Get => self.handle_get(ctx, req),
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::Snap => self.handle_snap(ctx, req),
+                // Readonly command are handled in raftstore directly.
+                // Don't panic here in case there are old entries need to be applied.
+                // It's also safe to skip them here, because a restart must have happened,
+                // hence there is no callback to be called.
+                CmdType::Snap | CmdType::Get => continue,
                 CmdType::Prewrite | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
@@ -892,10 +893,6 @@ impl ApplyDelegate {
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(RepeatedField::from_vec(responses));
         Ok(resp)
-    }
-
-    fn handle_get(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
-        do_get(&self.tag, &self.region, &ctx.snap, req)
     }
 
     fn handle_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
@@ -967,10 +964,6 @@ impl ApplyDelegate {
         }
 
         Ok(resp)
-    }
-
-    fn handle_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
-        do_snap(self.region.clone())
     }
 }
 
