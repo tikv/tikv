@@ -13,6 +13,7 @@
 
 use std::cmp::Ordering;
 use std::ascii::AsciiExt;
+use std::str;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType};
@@ -21,7 +22,8 @@ use tipb::select::SelectRequest;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
 use util::codec::mysql::DecimalDecoder;
-use util::codec::mysql::{MAX_FSP, Duration, JsonDecoder, Json};
+use util::codec::mysql::{MAX_FSP, Duration, JsonDecoder, Json, parse_json_path_expr,
+                         PathExpression};
 use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
@@ -140,7 +142,7 @@ impl Evaluator {
             ExprType::JsonType => self.eval_json_type(expr),
             ExprType::JsonMerge => self.eval_json_merge(expr),
             ExprType::JsonUnquote => self.eval_json_unquote(expr),
-            // ExprType::JsonExtract => self.eval_json_extract(expr),
+            ExprType::JsonExtract => self.eval_json_extract(expr),
             // ExprType::JsonSet => self.eval_json_set(expr),
             // ExprType::JsonInsert => self.eval_json_insert(expr),
             // ExprType::JsonReplace => self.eval_json_replace(expr),
@@ -402,7 +404,7 @@ impl Evaluator {
     fn eval_json_merge(&mut self, expr: &Expr) -> Result<Datum> {
         let children = expr.get_children();
         if children.len() < 2 {
-            return Err(Error::Expr(format!("expect more than operands, got {}", children.len())));
+            return Err(Error::Expr(format!("expect more than 2 operands, got {}", children.len())));
         }
         let first = try!(children[0].get_val().decode_json());
         let suffixes: Vec<Json> = try!(children.iter()
@@ -418,10 +420,25 @@ impl Evaluator {
         Ok(Datum::Bytes(unquote_data.into_bytes()))
     }
 
-    // fn eval_json_extract(&mut self, expr: &Expr) -> Result<Datum> {
-    //     //TODO
-    //     Ok(Datum::Null)
-    // }
+    fn eval_json_extract(&mut self, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() < 2 {
+            return Err(Error::Expr(format!("expect more than 2 operands, got {}", children.len())));
+        }
+        let json = try!(children[0].get_val().decode_json());
+        let path_extrs: Vec<PathExpression> = try!(children.iter()
+            .skip(1)
+            .map(|item| {
+                let v = try!(str::from_utf8(item.get_val()));
+                parse_json_path_expr(v)
+            })
+            .collect());
+        if let Some(data) = json.extract(&path_extrs) {
+            Ok(Datum::Json(data))
+        } else {
+            Ok(Datum::Null)
+        }
+    }
 
     // fn eval_json_set(&mut self, expr: &Expr) -> Result<Datum> {
     //     // TODO

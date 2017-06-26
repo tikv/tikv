@@ -21,6 +21,7 @@ mod functions;
 mod path_expr;
 
 pub use self::binary::{JsonEncoder, JsonDecoder};
+pub use self::path_expr::{PathExpression, parse_json_path_expr};
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
