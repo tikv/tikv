@@ -17,7 +17,6 @@ use std::time::Duration;
 use std::thread;
 
 use rocksdb::DB;
-use uuid::Uuid;
 use protobuf;
 use time::Duration as TimeDuration;
 
@@ -101,7 +100,12 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
         cluster_id: cluster_id,
         addr: "127.0.0.1:0".to_owned(),
         raft_store: store_cfg,
-        storage: StorageConfig::default(),
+        storage: StorageConfig { sched_worker_pool_size: 1, ..StorageConfig::default() },
+        grpc_concurrency: 1,
+        // Considering connection selection algo is involved, maybe
+        // use 2 or larger value here?
+        grpc_raft_conn_num: 1,
+        end_point_concurrency: 1,
         ..ServerConfig::default()
     }
 }
@@ -111,7 +115,6 @@ pub fn new_base_request(region_id: u64, epoch: RegionEpoch, read_quorum: bool) -
     let mut req = RaftCmdRequest::new();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);
-    req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
     req.mut_header().set_read_quorum(read_quorum);
     req
 }

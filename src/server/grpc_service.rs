@@ -39,6 +39,8 @@ use super::snap::Task as SnapTask;
 use super::metrics::*;
 use super::Error;
 
+const SCHEDULER_IS_BUSY: &'static str = "scheduler is busy";
+
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static> {
     // For handling KV requests.
@@ -611,8 +613,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let ch = self.ch.clone();
         ctx.spawn(stream.map_err(Error::from)
             .for_each(move |msg| {
-                RAFT_MESSAGE_RECV_COUNTER.inc();
-                future::result(ch.send_raft_msg(msg)).map_err(Error::from)
+                let res = match msg.get_region_id() {
+                    0 => Ok(()),
+                    _ => {
+                        RAFT_MESSAGE_RECV_COUNTER.inc();
+                        ch.send_raft_msg(msg)
+                    }
+                };
+                future::result(res).map_err(Error::from)
             })
             .map_err(|e| error!("send raft msg to raft store fail: {}", e))
             .then(|_| future::ok::<_, ()>(())));
@@ -666,7 +674,9 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         }
         Err(Error::SchedTooBusy) => {
             let mut err = RegionError::new();
-            err.set_server_is_busy(ServerIsBusy::new());
+            let mut server_is_busy_err = ServerIsBusy::new();
+            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
         _ => None,

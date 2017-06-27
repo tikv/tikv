@@ -18,6 +18,7 @@ use super::lock::Lock;
 use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
+use kvproto::kvrpcpb::IsolationLevel;
 
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
@@ -32,6 +33,7 @@ pub struct MvccReader<'a> {
 
     fill_cache: bool,
     upper_bound: Option<Vec<u8>>,
+    isolation_level: IsolationLevel,
 }
 
 impl<'a> MvccReader<'a> {
@@ -39,7 +41,8 @@ impl<'a> MvccReader<'a> {
                statistics: &'a mut Statistics,
                scan_mode: Option<ScanMode>,
                fill_cache: bool,
-               upper_bound: Option<Vec<u8>>)
+               upper_bound: Option<Vec<u8>>,
+               isolation_level: IsolationLevel)
                -> MvccReader<'a> {
         MvccReader {
             snapshot: snapshot,
@@ -48,6 +51,7 @@ impl<'a> MvccReader<'a> {
             lock_cursor: None,
             write_cursor: None,
             scan_mode: scan_mode,
+            isolation_level: isolation_level,
             key_only: false,
             fill_cache: fill_cache,
             upper_bound: upper_bound,
@@ -149,10 +153,8 @@ impl<'a> MvccReader<'a> {
                 self.write_cursor = Some(iter);
             }
         } else {
-            let upper_bound_key = key.append_ts(0u64);
-            let upper_bound = upper_bound_key.encoded().clone();
             // use prefix bloom filter
-            let iter_opt = IterOption::new(Some(upper_bound), true).use_prefix_seek();
+            let iter_opt = IterOption::default().use_prefix_seek().set_prefix_same_as_start(true);
             let iter = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed));
             self.write_cursor = Some(iter);
         }
@@ -176,8 +178,7 @@ impl<'a> MvccReader<'a> {
         Ok(Some((commit_ts, write)))
     }
 
-    pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
-        // Check for locks that signal concurrent writes.
+    fn check_lock(&mut self, key: &Key, mut ts: u64) -> Result<Option<u64>> {
         if let Some(lock) = try!(self.load_lock(key)) {
             if lock.ts <= ts {
                 if ts == u64::MAX && try!(key.raw()) == lock.primary {
@@ -195,6 +196,19 @@ impl<'a> MvccReader<'a> {
                     });
                 }
             }
+        }
+        Ok(Some(ts))
+    }
+
+    pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
+        // Check for locks that signal concurrent writes.
+        match self.isolation_level {
+            IsolationLevel::SI => {
+                if let Some(new_ts) = try!(self.check_lock(key, ts)) {
+                    ts = new_ts;
+                }
+            }
+            IsolationLevel::RC => {}
         }
         loop {
             match try!(self.seek_write(key, ts)) {
@@ -222,10 +236,12 @@ impl<'a> MvccReader<'a> {
                                key: &Key,
                                start_ts: u64)
                                -> Result<Option<(u64, WriteType)>> {
-        if let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, start_ts)) {
+        let mut seek_ts = start_ts;
+        while let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, seek_ts)) {
             if write.start_ts == start_ts {
                 return Ok(Some((commit_ts, write.write_type)));
             }
+            seek_ts = commit_ts + 1;
         }
         Ok(None)
     }

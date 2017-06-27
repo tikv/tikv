@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// `now_monotonic_raw` returns the monotonic raw clocktime corresponding to "now".
+// `raw_now` returns the monotonic time since some unspecified starting point.
 pub use self::inner::raw_now;
 
 #[cfg(not(target_os = "linux"))]
@@ -59,6 +59,9 @@ mod tests {
         let early_time = raw_now();
         let late_time = raw_now();
         // The monotonic raw clocktime must be strictly monotonic increasing.
-        assert!(late_time > early_time);
+        assert!(late_time >= early_time,
+                "expect late time {:?} >= early time {:?}",
+                late_time,
+                early_time);
     }
 }

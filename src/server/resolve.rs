@@ -32,7 +32,7 @@ const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 pub type Callback = Box<FnBox(Result<SocketAddr>) + Send>;
 
 // StoreAddrResolver resolves the store address.
-pub trait StoreAddrResolver {
+pub trait StoreAddrResolver: Send {
     // Resolve resolves the store address asynchronously.
     fn resolve(&self, store_id: u64, cb: Callback) -> Result<()>;
 }

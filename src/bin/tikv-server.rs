@@ -41,37 +41,35 @@ extern crate futures;
 extern crate tokio_core;
 #[cfg(test)]
 extern crate tempdir;
+extern crate grpc;
 
 mod signal_handler;
 mod profiling;
 
 use std::process;
-use std::thread;
 use std::fs::{self, File};
 use std::usize;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::io::Read;
 use std::time::Duration;
 use std::env;
 
 use clap::{Arg, App, ArgMatches};
-use rocksdb::{DB, Options as RocksdbOptions, BlockBasedOptions};
-use mio::EventLoop;
+use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
-use tikv::storage::{Storage, TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+use tikv::storage::{TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
-use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, ServerChannel, Server, Node,
-                   Config, create_event_loop, create_raft_storage, Msg};
-use tikv::server::{ServerTransport, ServerRaftStoreRouter};
-use tikv::server::transport::RaftStoreRouter;
-use tikv::server::{PdStoreAddrResolver, StoreAddrResolver};
+use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
+                   create_raft_storage};
+use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::PdStoreAddrResolver;
 use tikv::raftstore::store::{self, SnapManager};
 use tikv::pd::{RpcClient, PdClient};
 use tikv::raftstore::store::keys::region_raft_prefix_len;
@@ -82,7 +80,10 @@ const MB: u64 = 1024 * KB;
 const GB: u64 = 1024 * MB;
 const RAFTCF_MIN_MEM: u64 = 256 * MB;
 const RAFTCF_MAX_MEM: u64 = 2 * GB;
-const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.4, 0.15, 0.01];
+const LOCKCF_MIN_MEM: u64 = 256 * MB;
+const LOCKCF_MAX_MEM: u64 = GB;
+// [default cf, write cf, raft cf, lock cf]
+const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.25, 0.15, 0.02, 0.02];
 const SEC_TO_MS: i64 = 1000;
 
 fn sanitize_memory_usage() -> bool {
@@ -555,18 +556,10 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
-    let mut block_cache_size =
-        align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
-    if block_cache_size < RAFTCF_MIN_MEM {
-        block_cache_size = RAFTCF_MIN_MEM;
-    }
-    if block_cache_size > RAFTCF_MAX_MEM {
-        block_cache_size = RAFTCF_MAX_MEM;
-    }
+    let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
+    let block_cache_size = adjust_block_cache_size(cache_size, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size = block_cache_size as i64;
-    default_values.use_bloom_filter = true;
-    default_values.whole_key_filtering = true;
 
     let mut opts = get_rocksdb_cf_option(config, "raftcf", default_values);
     opts.set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform",
@@ -575,8 +568,11 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     opts
 }
 
-fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
+fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+    let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[3]) as u64);
+    let block_cache_size = adjust_block_cache_size(cache_size, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
+    default_values.block_cache_size = block_cache_size as i64;
     default_values.block_size = 16 * KB as i64;
     default_values.use_bloom_filter = true;
     default_values.whole_key_filtering = true;
@@ -591,6 +587,16 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
     opts
+}
+
+fn adjust_block_cache_size(cache_size: u64, min_limit: u64, max_limit: u64) -> u64 {
+    if cache_size < min_limit {
+        return min_limit;
+    }
+    if cache_size > max_limit {
+        return max_limit;
+    }
+    cache_size
 }
 
 fn adjust_end_points_by_cpu_num(total_cpu_num: usize) -> usize {
@@ -623,6 +629,12 @@ fn build_cfg(matches: &ArgMatches,
     cfg_usize(&mut cfg.grpc_concurrent_stream,
               config,
               "server.grpc-concurrent-stream");
+    cfg_usize(&mut cfg.grpc_raft_conn_num,
+              config,
+              "server.grpc-raft-conn-num");
+    cfg_usize(&mut cfg.grpc_stream_initial_window_size,
+              config,
+              "server.grpc-stream-initial-window-size");
     if !cfg_usize(&mut cfg.end_point_concurrency,
                   config,
                   "server.end-point-concurrency") {
@@ -709,9 +721,9 @@ fn build_cfg(matches: &ArgMatches,
     cfg_u64(&mut cfg.raft_store.lock_cf_compact_interval,
             config,
             "raftstore.lock-cf-compact-interval");
-    cfg_u64(&mut cfg.raft_store.lock_cf_compact_threshold,
+    cfg_u64(&mut cfg.raft_store.lock_cf_compact_bytes_threshold,
             config,
-            "raftstore.lock-cf-compact-threshold");
+            "raftstore.lock-cf-compact-bytes-threshold");
     cfg_u64(&mut cfg.raft_store.raft_entry_max_size,
             config,
             "raftstore.raft-entry-max-size");
@@ -728,7 +740,7 @@ fn build_cfg(matches: &ArgMatches,
             config,
             "raftstore.consistency-check-interval");
     cfg.raft_store.use_sst_file_snapshot =
-        get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(false));
+        get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(true));
     cfg_usize(&mut cfg.storage.sched_notify_capacity,
               config,
               "storage.scheduler-notify-capacity");
@@ -748,54 +760,6 @@ fn build_cfg(matches: &ArgMatches,
               "storage.scheduler-too-busy-threshold");
 
     cfg
-}
-
-fn build_raftkv(config: &toml::Value,
-                ch: SendCh<Msg>,
-                pd_client: Arc<RpcClient>,
-                cfg: &Config,
-                total_mem: u64)
-                -> (Node<RpcClient>, Storage, ServerRaftStoreRouter, SnapManager, Arc<DB>) {
-    let trans = ServerTransport::new(ch);
-    let path = Path::new(&cfg.storage.path).to_path_buf();
-    let db_opts = get_rocksdb_db_option(config);
-    let cfs_opts =
-        vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
-                                          get_rocksdb_default_cf_option(config, total_mem)),
-             rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config)),
-             rocksdb_util::CFOptions::new(CF_WRITE,
-                                          get_rocksdb_write_cf_option(config, total_mem)),
-             rocksdb_util::CFOptions::new(CF_RAFT,
-                                          get_rocksdb_raftlog_cf_option(config, total_mem))];
-    let mut db_path = path.clone();
-    db_path.push("db");
-    let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
-                                                           .unwrap(),
-                                                       db_opts,
-                                                       cfs_opts)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
-
-    let mut event_loop = store::create_event_loop(&cfg.raft_store)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let mut node = Node::new(&mut event_loop, cfg, pd_client);
-
-    let mut snap_path = path.clone();
-    snap_path.push("snap");
-    let snap_path = snap_path.to_str().unwrap().to_owned();
-    let snap_mgr = SnapManager::new(snap_path,
-                                    Some(node.get_sendch()),
-                                    cfg.raft_store.use_sst_file_snapshot);
-
-    node.start(event_loop, engine.clone(), trans, snap_mgr.clone())
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
-
-    (node,
-     create_raft_storage(router.clone(), engine.clone(), cfg)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))),
-     router,
-     snap_mgr,
-     engine)
 }
 
 fn canonicalize_path(path: &str) -> String {
@@ -850,68 +814,87 @@ fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<Strin
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
 }
 
-fn start_server<T, S>(mut server: Server<T, S>,
-                      mut el: EventLoop<Server<T, S>>,
-                      engine: Arc<DB>,
-                      backup_path: &str)
-    where T: RaftStoreRouter,
-          S: StoreAddrResolver + Send + 'static
-{
-    let ch = server.get_sendch();
-    let h = thread::Builder::new()
-        .name("tikv-eventloop".to_owned())
-        .spawn(move || {
-            server.run(&mut el).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-        })
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    signal_handler::handle_signal(ch, engine, backup_path);
-    h.join().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-}
-
 fn run_raft_server(pd_client: RpcClient,
                    cfg: Config,
                    backup_path: &str,
                    config: &toml::Value,
                    total_mem: u64) {
-    let mut event_loop = create_event_loop(&cfg)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let ch = SendCh::new(event_loop.channel(), "raft-server");
-    let pd_client = Arc::new(pd_client);
-    let resolver = PdStoreAddrResolver::new(pd_client.clone())
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    info!("tikv server config: {:?}", cfg);
 
-    let store_path = &cfg.storage.path;
-    let mut lock_path = Path::new(store_path).to_path_buf();
-    lock_path.push("LOCK");
+    let store_path = Path::new(&cfg.storage.path);
+    let lock_path = store_path.join(Path::new("LOCK"));
+    let db_path = store_path.join(Path::new("db"));
+    let snap_path = store_path.join(Path::new("snap"));
+
     let f = File::create(lock_path).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     if f.try_lock_exclusive().is_err() {
-        panic!("lock {} failed, maybe another instance is using this directory.",
+        panic!("lock {:?} failed, maybe another instance is using this directory.",
                store_path);
     }
 
-    let (mut node, mut store, raft_router, snap_mgr, engine) =
-        build_raftkv(config, ch.clone(), pd_client, &cfg, total_mem);
-    info!("tikv server config: {:?}", cfg);
+    // Initialize raftstore channels.
+    let mut event_loop = store::create_event_loop(&cfg.raft_store)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
+    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
+    let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
+    // Create engine, storage.
+    let db_opts = get_rocksdb_db_option(config);
+    let cfs_opts =
+        vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
+                                          get_rocksdb_default_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_WRITE,
+                                          get_rocksdb_write_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_RAFT,
+                                          get_rocksdb_raftlog_cf_option(config, total_mem))];
+    let engine = Arc::new(rocksdb_util::new_engine_opt(db_path.to_str()
+                                                           .unwrap(),
+                                                       db_opts,
+                                                       cfs_opts)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err))));
+    let mut storage = create_raft_storage(raft_router.clone(), engine.clone(), &cfg)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+
+    // Create pd client, snapshot manager, server.
+    let pd_client = Arc::new(pd_client);
+    let resolver = PdStoreAddrResolver::new(pd_client.clone())
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
+                                    Some(store_sendch),
+                                    cfg.raft_store.use_sst_file_snapshot);
+    let mut server = Server::new(&cfg,
+                                 storage.clone(),
+                                 raft_router,
+                                 snap_status_sender,
+                                 resolver,
+                                 snap_mgr.clone())
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let trans = server.transport();
+
+    // Create node.
+    let mut node = Node::new(&mut event_loop, &cfg, pd_client);
+    node.start(event_loop,
+               engine.clone(),
+               trans,
+               snap_mgr,
+               snap_status_receiver)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     initial_metric(config, Some(node.id()));
 
+    // Start storage.
     info!("start storage");
-    if let Err(e) = store.start(&cfg.storage) {
+    if let Err(e) = storage.start(&cfg.storage) {
         panic!("failed to start storage, error = {:?}", e);
     }
 
-    let server_chan = ServerChannel {
-        raft_router: raft_router,
-        snapshot_status_sender: node.get_snapshot_status_sender(),
-    };
-    let svr = Server::new(&mut event_loop,
-                          &cfg,
-                          store,
-                          server_chan,
-                          resolver,
-                          snap_mgr)
-        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    start_server(svr, event_loop, engine, backup_path);
+    // Run server.
+    server.start(&cfg).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    signal_handler::handle_signal(engine, backup_path);
+
+    // Stop.
+    server.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     node.stop().unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
 }
 

@@ -32,7 +32,7 @@ use rand::{self, Rng};
 
 use kvproto::pdpb::{ResponseHeader, ErrorType, GetMembersRequest, GetMembersResponse, Member,
                     RegionHeartbeatRequest, RegionHeartbeatResponse};
-use kvproto::pdpb_grpc::PDClient;
+use kvproto::pdpb_grpc::PdClient;
 
 use util::{HandyRwLock, Either};
 
@@ -44,7 +44,7 @@ pub struct Inner {
     pub hb_sender: Either<Option<ClientDuplexSender<RegionHeartbeatRequest>>,
                           UnboundedSender<RegionHeartbeatRequest>>,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
-    pub client: PDClient,
+    pub client: PdClient,
     members: GetMembersResponse,
 
     last_update: Instant,
@@ -95,7 +95,7 @@ pub struct LeaderClient {
 
 impl LeaderClient {
     pub fn new(env: Arc<Environment>,
-               client: PDClient,
+               client: PdClient,
                members: GetMembersResponse)
                -> LeaderClient {
         let (tx, rx) = client.region_heartbeat();
@@ -280,7 +280,7 @@ impl<Req, Resp, F> Request<Req, Resp, F>
 
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
-    where F: Fn(&PDClient) -> GrpcResult<R>
+    where F: Fn(&PdClient) -> GrpcResult<R>
 {
     for _ in 0..retry {
         let r = {
@@ -306,7 +306,7 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
 
 pub fn validate_endpoints(env: Arc<Environment>,
                           endpoints: &[String])
-                          -> Result<(PDClient, GetMembersResponse)> {
+                          -> Result<(PdClient, GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
     }
@@ -358,11 +358,11 @@ pub fn validate_endpoints(env: Arc<Environment>,
     }
 }
 
-fn connect(env: Arc<Environment>, addr: &str) -> Result<(PDClient, GetMembersResponse)> {
+fn connect(env: Arc<Environment>, addr: &str) -> Result<(PdClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
     let addr = addr.trim_left_matches("http://");
     let channel = ChannelBuilder::new(env).connect(addr);
-    let client = PDClient::new(channel);
+    let client = PdClient::new(channel);
     match client.get_members(GetMembersRequest::new()) {
         Ok(resp) => Ok((client, resp)),
         Err(e) => Err(Error::Grpc(e)),
@@ -371,7 +371,7 @@ fn connect(env: Arc<Environment>, addr: &str) -> Result<(PDClient, GetMembersRes
 
 pub fn try_connect_leader(env: Arc<Environment>,
                           previous: &GetMembersResponse)
-                          -> Result<(PDClient, GetMembersResponse)> {
+                          -> Result<(PdClient, GetMembersResponse)> {
     // Try to connect other members.
     // Randomize endpoints.
     let members = previous.get_members();

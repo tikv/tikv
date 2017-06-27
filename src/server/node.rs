@@ -13,7 +13,7 @@
 
 use std::thread;
 use std::sync::{Arc, mpsc};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::process;
 
@@ -67,7 +67,6 @@ pub struct Node<C: PdClient + 'static> {
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
     ch: SendCh<Msg>,
-    snapshot_status_sender: Option<Sender<SnapshotStatusMsg>>,
 
     pd_client: Arc<C>,
 }
@@ -106,7 +105,6 @@ impl<C> Node<C>
             store_handle: None,
             pd_client: pd_client,
             ch: ch,
-            snapshot_status_sender: None,
         }
     }
 
@@ -114,7 +112,8 @@ impl<C> Node<C>
                     event_loop: EventLoop<Store<T, C>>,
                     engine: Arc<DB>,
                     trans: T,
-                    snap_mgr: SnapManager)
+                    snap_mgr: SnapManager,
+                    snap_status_receiver: Receiver<SnapshotStatusMsg>)
                     -> Result<()>
         where T: Transport + 'static
     {
@@ -141,7 +140,12 @@ impl<C> Node<C>
         }
 
         // inform pd.
-        try!(self.start_store(event_loop, store_id, engine, trans, snap_mgr));
+        try!(self.start_store(event_loop,
+                              store_id,
+                              engine,
+                              trans,
+                              snap_mgr,
+                              snap_status_receiver));
         try!(self.pd_client
             .put_store(self.store.clone()));
         Ok(())
@@ -153,10 +157,6 @@ impl<C> Node<C>
 
     pub fn get_sendch(&self) -> SendCh<Msg> {
         self.ch.clone()
-    }
-
-    pub fn get_snapshot_status_sender(&self) -> Sender<SnapshotStatusMsg> {
-        self.snapshot_status_sender.clone().unwrap()
     }
 
     // check store, return store id for the engine.
@@ -227,7 +227,7 @@ impl<C> Node<C>
                         try!(check_region_epoch(&region, &first_region));
                         try!(store::clear_prepare_bootstrap_state(engine));
                     } else {
-                        try!(store::clear_prepare_bootstrap(engine, region.get_id()));
+                        try!(store::clear_prepare_bootstrap(engine, first_region.get_id()));
                     }
                     return Ok(());
                 }
@@ -277,7 +277,8 @@ impl<C> Node<C>
                       store_id: u64,
                       db: Arc<DB>,
                       trans: T,
-                      snap_mgr: SnapManager)
+                      snap_mgr: SnapManager,
+                      snapshot_status_receiver: Receiver<SnapshotStatusMsg>)
                       -> Result<()>
         where T: Transport + 'static
     {
@@ -293,13 +294,11 @@ impl<C> Node<C>
         let sender = event_loop.channel();
 
         let (tx, rx) = mpsc::channel();
-        let (snapshot_tx, snapshot_rx) = mpsc::channel();
-        self.snapshot_status_sender = Some(snapshot_tx);
         let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
         let h = try!(builder.spawn(move || {
             let ch = StoreChannel {
                 sender: sender,
-                snapshot_status_receiver: snapshot_rx,
+                snapshot_status_receiver: snapshot_status_receiver,
             };
             let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),

@@ -37,7 +37,6 @@ byteorder = "0.5"
 rand = "0.3"
 quick-error = "0.2"
 tempdir = "0.3"
-uuid = { version = "0.3", features = ["v4"] }
 time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
@@ -63,6 +62,8 @@ mio = "0.5"
 futures = "0.1"
 tokio-core = "0.1"
 tokio-timer = "0.1"
+serde = "1.0"
+serde_json = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -72,7 +73,6 @@ git = "https://github.com/pingcap/rust-rocksdb.git"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch = "ov/stream"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
@@ -84,7 +84,6 @@ features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
 git = "https://github.com/pingcap/grpc-rs.git"
-features = ["static-link"]
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"

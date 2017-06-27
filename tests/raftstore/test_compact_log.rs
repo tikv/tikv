@@ -12,18 +12,18 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tikv::raftstore::store::*;
 use tikv::storage::CF_RAFT;
 use tikv::util::rocksdb::get_cf_handle;
 use rocksdb::DB;
 use protobuf;
-use kvproto::raft_serverpb::RaftApplyState;
+use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
 use super::util::*;
 use super::cluster::{Cluster, Simulator};
 use super::node::new_node_cluster;
-use super::server::new_server_cluster;
 
 fn get_msg_cf_or_default<M>(engine: &DB, cf: &str, key: &[u8]) -> M
     where M: protobuf::Message + protobuf::MessageStatic
@@ -47,35 +47,59 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         let key = k.as_bytes();
         let value = v.as_bytes();
         cluster.must_put(key, value);
-        let v = cluster.get(key);
-        assert_eq!(v, Some(value.to_vec()));
+
+        if i > 100 && check_compacted(&cluster.engines, &before_states, 1) {
+            return;
+        }
     }
 
-    // wait log gc.
-    sleep_ms(500);
+    panic!("after inserting 1000 entries, compaction is still not finished.");
+}
 
+fn check_compacted(engines: &HashMap<u64, Arc<DB>>,
+                   before_states: &HashMap<u64, RaftTruncatedState>,
+                   compact_count: u64)
+                   -> bool {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
-    for (&id, engine) in &cluster.engines {
+    let mut compacted_idx = HashMap::new();
+
+    for (&id, engine) in engines {
         let mut state: RaftApplyState =
             get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
         let idx = after_state.get_index();
-        assert!(idx > before_state.get_index());
-        assert!(after_state.get_term() > before_state.get_term());
+        let term = after_state.get_term();
+        if idx == before_state.get_index() || term == before_state.get_term() {
+            return false;
+        }
+        if idx - before_state.get_index() < compact_count {
+            return false;
+        }
+        assert!(term > before_state.get_term());
+        compacted_idx.insert(id, idx);
+    }
 
+    // wait for actual deletion.
+    sleep_ms(100);
+
+    for (id, engine) in engines {
         let handle = get_cf_handle(engine, CF_RAFT).unwrap();
-        for i in 0..idx {
+        for i in 0..compacted_idx[id] {
             let key = keys::raft_log_key(1, i);
+            if engine.get_cf(handle, &key).unwrap().is_none() {
+                break;
+            }
             assert!(engine.get_cf(handle, &key).unwrap().is_none());
         }
     }
+    true
 }
 
 fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_threshold = 2000;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 500;
     cluster.cfg.raft_store.raft_log_gc_size_limit = 20 * 1024 * 1024;
     cluster.run();
 
@@ -94,12 +118,10 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         before_states.insert(id, state);
     }
 
-    for i in 1..600 {
+    for i in 1..60 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
-        let v2 = cluster.get(&k);
-        assert_eq!(v2, Some(v));
     }
 
     // wait log gc.
@@ -116,38 +138,24 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(idx, before_state.get_index());
     }
 
-    for i in 600..1200 {
+    for i in 60..200 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
-    }
 
-    sleep_ms(500);
-
-    // Every peer must have compacted logs, so the truncate log state index/term must > than before.
-    for (&id, engine) in &cluster.engines {
-        let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
-        let after_state = state.take_truncated_state();
-
-        let before_state = &before_states[&id];
-        let idx = after_state.get_index();
-        assert!(idx > before_state.get_index());
-
-        let handle = get_cf_handle(engine, CF_RAFT).unwrap();
-        for i in 0..idx {
-            let key = keys::raft_log_key(1, i);
-            assert!(engine.get_cf(handle, &key).unwrap().is_none());
+        if i > 100 && check_compacted(&cluster.engines, &before_states, 1) {
+            return;
         }
     }
+    panic!("cluster is not compacted after inserting 200 entries.");
 }
 
 fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     let gc_limit: u64 = 100;
     cluster.cfg.raft_store.raft_log_gc_count_limit = gc_limit;
-    cluster.cfg.raft_store.raft_log_gc_threshold = 50;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 500;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 100; // 100 ms
     cluster.run();
 
@@ -172,41 +180,19 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put(&k, &v);
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
-    }
 
-    // wait log gc.
-    sleep_ms(1000);
-
-    // Every peer must have compacted logs, so the truncate log state index/term must > than before.
-    for (&id, engine) in &cluster.engines {
-        let mut state: RaftApplyState =
-            get_msg_cf_or_default(engine, CF_RAFT, &keys::apply_state_key(1));
-        let after_state = state.take_truncated_state();
-
-        let before_state = &before_states[&id];
-        let idx = after_state.get_index();
-        // Compact raft log at least 2 times.
-        assert!(idx - before_state.get_index() >= gc_limit * 2);
-
-        let handle = get_cf_handle(engine, CF_RAFT).unwrap();
-        for i in 0..idx {
-            let key = keys::raft_log_key(1, i);
-            assert!(engine.get_cf(handle, &key).unwrap().is_none());
+        if i >= 200 && check_compacted(&cluster.engines, &before_states, gc_limit * 2) {
+            return;
         }
     }
+
+    panic!("compact is expected to be executed multiple times");
 }
 
 #[test]
 fn test_node_compact_log() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_compact_log(&mut cluster);
-}
-
-#[test]
-fn test_server_compact_log() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
     test_compact_log(&mut cluster);
 }
 
@@ -218,23 +204,9 @@ fn test_node_compact_count_limit() {
 }
 
 #[test]
-fn test_server_compact_count_limit() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    test_compact_count_limit(&mut cluster);
-}
-
-#[test]
 fn test_node_compact_many_times() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_compact_many_times(&mut cluster);
-}
-
-#[test]
-fn test_server_compact_many_times() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
     test_compact_many_times(&mut cluster);
 }
 
@@ -324,12 +296,5 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_node_compact_size_limit() {
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
-    test_compact_size_limit(&mut cluster);
-}
-
-#[test]
-fn test_server_compact_size_limit() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
     test_compact_size_limit(&mut cluster);
 }

@@ -21,6 +21,7 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![recursion_limit="100"]
+#![feature(ascii_ctype)]
 
 #![allow(module_inception)]
 #![allow(should_implement_trait)]
@@ -40,7 +41,6 @@ extern crate rand;
 extern crate mio;
 extern crate tempdir;
 extern crate rocksdb;
-extern crate uuid;
 extern crate kvproto;
 extern crate time;
 extern crate tipb;
@@ -67,6 +67,8 @@ extern crate flat_map;
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_timer;
+extern crate serde_json;
+extern crate serde;
 
 #[macro_use]
 pub mod util;

@@ -22,9 +22,13 @@ notify-capacity = 40960
 messages-per-tick = 4096
 
 # size of thread pool for grpc server.
-# grpc-concurrency = 2
+# grpc-concurrency = 4
 # The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
+# The number of connections with each tikv server to send raft messages.
+# grpc-raft-conn-num = 10
+# Amount to read ahead on individual grpc streams.
+# grpc-stream-initial-window-size = "2MB"
 
 # size of thread pool for endpoint task, should less than total cpu cores.
 # end-point-concurrency = 8
@@ -104,7 +108,7 @@ max-peer-down-duration = "5m"
 # if written bytes reach lock-cf-compact-threshold for lock column family, will fire
 # a manual compaction for lock column family.
 # lock-cf-compact-interval = "10m"
-# lock-cf-compact-threshold = "256MB"
+# lock-cf-compact-bytes-threshold = "256MB"
 
 # Interval (s) to check region whether the data are consistent.
 # consistency-check-interval = 0

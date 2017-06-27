@@ -1,28 +1,61 @@
-FROM ubuntu:14.04
+# centos: 2017-06-05
+FROM centos:7@sha256:aebf12af704307dfa0079b3babdca8d7e8ff6564696882bcb5d11f1d461f9ee9
 
-MAINTAINER siddontang
+MAINTAINER Liu Yin <liuy@pingcap.com>
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    file \
-    make \
-    build-essential \
-    checkinstall \
-    libgflags-dev \
-    libsnappy-dev \
-    liblz4-dev \
-    zlib1g-dev \
-    libbz2-dev \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/* && apt-get clean
+RUN yum install -y epel-release
 
-RUN cd / && \
-    curl -L https://github.com/facebook/rocksdb/archive/v5.1.2.tar.gz -o rocksdb.tar.gz && \
-    tar xzf rocksdb.tar.gz && \
-    cd rocksdb-5.1.2 && \
-    PORTABLE=1 make shared_lib && \
-    make install && \
-    cd / && \
-    rm -rf /rocksdb-5.1.2 /rocksdb.tar.gz
+RUN yum makecache \
+	&& yum update -y \
+	&& yum install -y tar wget git which file unzip python-pip \
+	&& yum install -y make cmake gcc gcc-c++ libstdc++-static pkg-config psmisc \
+	&& yum install -y libzstd-devel lz4-devel zlib-devel bzip2-devel snappy-devel libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
+	&& yum install -y openssl-devel \
+	&& yum clean all
 
-RUN curl -sSf https://static.rust-lang.org/rustup.sh | sh -s  -- --date=2017-05-29 --disable-sudo -y --channel=nightly
+RUN curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz \
+	&& tar xf gflags.tar.gz \
+	&& cd gflags-2.1.2 \
+	&& cmake . \
+	&& make -j \
+	&& make install \
+	&& rm -rf /gflags.tar.gz /gflags-2.1.2
+
+RUN curl -L https://github.com/facebook/rocksdb/archive/v5.4.5.tar.gz -o rocksdb.tar.gz \
+	&& tar xf rocksdb.tar.gz \
+	&& cd rocksdb-5.4.5 \
+	&& make -j install-shared \
+	&& rm -rf /rocksdb.tar.gz /rocksdb-5.4.5
+
+ENV GOLANG_VERSION 1.8
+ENV GOLANG_DOWNLOAD_URL https://golang.org/dl/go$GOLANG_VERSION.linux-amd64.tar.gz
+ENV GOLANG_DOWNLOAD_SHA256 53ab94104ee3923e228a2cb2116e5e462ad3ebaeea06ff04463479d7f12d27ca
+
+RUN curl -fsSL "$GOLANG_DOWNLOAD_URL" -o golang.tar.gz \
+	&& echo "$GOLANG_DOWNLOAD_SHA256  golang.tar.gz" | sha256sum -c - \
+	&& tar -C /usr/local -xzf golang.tar.gz \
+	&& rm golang.tar.gz
+
+ENV GOPATH /go
+ENV GOROOT /usr/local/go
+ENV PATH $GOPATH/bin:$GOROOT/bin:$PATH
+
+RUN go get golang.org/x/tools/go/gcimporter15 \
+	&& go get github.com/golang/lint/golint
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2017-05-29 -y \
+	&& /root/.cargo/bin/rustup default nightly-2017-05-29
+
+# cache dep package
+RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \
+	&& curl -L http://download.pingcap.org/rustfmt-v0.6.0-linux-amd64.tar.gz -o /root/rustfmt-v0.6.0-linux-amd64.tar.gz \
+	&& cd /root && tar xf master.tar.gz && cd tikv-master && /root/.cargo/bin/cargo fetch \
+	&& cd /root && tar xzf rustfmt-v0.6.0-linux-amd64.tar.gz -C /root/.cargo/bin --strip-components=1 \
+	&& cd /root && rm -rf master.tar.gz tikv-master rustfmt-v0.6.0-linux-amd64.tar.gz
+
+ENV PATH /root/.cargo/bin/:$PATH
+ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
+ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
+
+CMD ["/bin/bash"]
+
