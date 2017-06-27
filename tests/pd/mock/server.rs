@@ -78,8 +78,10 @@ fn hijack_unary<F, R, C: PdMocker>(mock: &PdMock<C>, ctx: RpcContext, sink: Unar
     where R: Send + 'static,
           F: Fn(&PdMocker) -> Option<Result<R>>
 {
-    let resp =
-        mock.case.as_ref().and_then(|case| f(case.as_ref())).or_else(|| f(mock.default_handler.as_ref()));
+    let resp = mock.case
+        .as_ref()
+        .and_then(|case| f(case.as_ref()))
+        .or_else(|| f(mock.default_handler.as_ref()));
 
     match resp {
         Some(Ok(resp)) => {
