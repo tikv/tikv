@@ -39,7 +39,7 @@ impl ExprColumnRefVisitor {
 
     pub fn visit_expr<'e>(&mut self, expr: &'e Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
-            self.column_ids.insert(try!(expr.get_val().decode_i64()));
+            self.column_ids.insert(box_try!(expr.get_val().decode_i64()));
         } else {
             for sub_expr in expr.get_children() {
                 try!(self.visit_expr(sub_expr));
@@ -63,20 +63,15 @@ impl<'a> SelectionExecutor<'a> {
                src: Box<Executor + 'a>)
                -> Result<SelectionExecutor<'a>> {
         let conditions = meta.take_conditions().into_vec();
-
         let mut visitor = ExprColumnRefVisitor::new();
         for cond in &conditions {
             try!(visitor.visit_expr(cond));
         }
 
-        // FIXME(andelf): assume all items in columns_info are unique.
         let columns = columns_info.iter()
             .filter(|col| visitor.column_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect::<Vec<ColumnInfo>>();
-
-        assert_eq!(columns.len(), visitor.column_ids.len());
-
         Ok(SelectionExecutor {
             conditions: conditions,
             columns: columns,
@@ -97,9 +92,8 @@ impl<'a> Executor for SelectionExecutor<'a> {
                                   &self.columns,
                                   row.handle));
             for expr in &self.conditions {
-                let val = try!(evaluator.eval(&self.ctx, expr));
-                let is_selected = try!(val.into_bool(&self.ctx));
-                if !is_selected.unwrap_or(false) {
+                let val = box_try!(evaluator.eval(&self.ctx, expr));
+                if !box_try!(val.into_bool(&self.ctx)).unwrap_or(false) {
                     continue 'next;
                 }
             }
@@ -117,12 +111,13 @@ mod tests {
     use protobuf::RepeatedField;
     use util::codec::number::NumberEncoder;
     use tipb::expression::{Expr, ExprType};
-    use util::codec::table;
+
     use util::codec::mysql::types;
     use util::codec::datum::Datum;
     use tipb::executor::TableScan;
 
     use super::*;
+    use super::super::topn::test::gen_table_data;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
     use super::super::table_scan::TableScanExecutor;
 
@@ -135,9 +130,9 @@ mod tests {
             lhs
         });
         expr.mut_children().push({
-            let mut lhs = Expr::new();
-            lhs.set_tp(ExprType::Null);
-            lhs
+            let mut rhs = Expr::new();
+            rhs.set_tp(ExprType::Null);
+            rhs
         });
         expr
     }
@@ -152,30 +147,12 @@ mod tests {
             lhs
         });
         expr.mut_children().push({
-            let mut lhs = Expr::new();
-            lhs.set_tp(ExprType::Uint64);
-            lhs.mut_val().encode_u64(val).unwrap();
-            lhs
+            let mut rhs = Expr::new();
+            rhs.set_tp(ExprType::Uint64);
+            rhs.mut_val().encode_u64(val).unwrap();
+            rhs
         });
         expr
-    }
-
-    // the first column should be i64 since it will be used as row handle
-    pub fn gen_table_data(tid: i64,
-                          cis: &[ColumnInfo],
-                          rows: &[Vec<Datum>])
-                          -> Vec<(Vec<u8>, Vec<u8>)> {
-        let mut kv_data = Vec::new();
-        let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
-        for cols in rows.iter() {
-            let col_values = cols.to_vec();
-            let value = table::encode_row(col_values, &col_ids).unwrap();
-            let mut buf = vec![];
-            buf.encode_i64(cols[0].i64()).unwrap();
-            let key = table::encode_row_key(tid, &buf);
-            kv_data.push((key, value));
-        }
-        kv_data
     }
 
     #[test]

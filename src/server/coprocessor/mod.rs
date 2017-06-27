@@ -24,8 +24,6 @@ use std::time::Instant;
 use std::error;
 
 use storage::{txn, engine, mvcc};
-use util::xeval;
-use util::codec;
 
 quick_error! {
     #[derive(Debug)]
@@ -61,18 +59,6 @@ impl From<engine::Error> for Error {
             engine::Error::Request(e) => Error::Region(e),
             _ => Error::Other(box e),
         }
-    }
-}
-
-impl From<xeval::Error> for Error {
-    fn from(e: xeval::Error) -> Self {
-        Error::Other(box e)
-    }
-}
-
-impl From<codec::Error> for Error {
-    fn from(e: codec::Error) -> Self {
-        Error::Other(box e)
     }
 }
 
