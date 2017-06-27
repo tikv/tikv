@@ -875,11 +875,14 @@ impl ApplyDelegate {
             let mut resp = try!(match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                // Readonly command are handled in raftstore directly.
+                // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
                 // hence there is no callback to be called.
-                CmdType::Snap | CmdType::Get => continue,
+                CmdType::Snap | CmdType::Get => {
+                    warn!("{} skip readonly command: {:?}", self.tag, req);
+                    continue;
+                }
                 CmdType::Prewrite | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
