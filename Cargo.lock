@@ -413,7 +413,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=busyjay/delete-range-fix#e8acdba65a722fd78411cec2b46852be02e97e3c"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=busyjay/delete-range-fix#542f6e3aa95fe2f96fe00b2c4ef2f942781f16c4"
 dependencies = [
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -702,7 +702,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=busyjay/delete-range-fix#e8acdba65a722fd78411cec2b46852be02e97e3c"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=busyjay/delete-range-fix#542f6e3aa95fe2f96fe00b2c4ef2f942781f16c4"
 dependencies = [
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=busyjay/delete-range-fix)",
