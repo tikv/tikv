@@ -45,15 +45,15 @@ impl Json {
             }
         }
         for (expr, value) in path_expr_list.iter().zip(values.drain(..)) {
-            self.set_json(&expr.legs, value, &mt);
+            self.set_json(&expr.legs, value, mt.clone());
         }
         Ok(())
     }
 
     // `set_json` is used in Json::modify().
-    fn set_json(&mut self, path_legs: &[PathLeg], value: Json, mt: &ModifyType) {
+    fn set_json(&mut self, path_legs: &[PathLeg], value: Json, mt: ModifyType) {
         if path_legs.is_empty() {
-            match *mt {
+            match mt {
                 ModifyType::Replace | ModifyType::Set => {
                     *self = value;
                 }
@@ -67,7 +67,7 @@ impl Json {
 
         if let PathLeg::Index(i) = *current_leg {
             let index = i as usize;
-            // If `j` is not an array, we should autowrap it to be an array.
+            // If `base_data` is not an array, we should autowrap it to be an array.
             // Then if the length of result array equals to 1, it's unwraped.
             let (mut array, wrapped) = match base_data {
                 Json::Array(array) => (array, false),
@@ -76,7 +76,7 @@ impl Json {
             if array.len() > index {
                 let mut chosen = &mut array[index];
                 chosen.set_json(sub_path_legs, value, mt);
-            } else if sub_path_legs.is_empty() && *mt != ModifyType::Replace {
+            } else if sub_path_legs.is_empty() && mt != ModifyType::Replace {
                 // e.g. json_insert('[1, 2, 3]', '$[3]', "x") => '[1, 2, 3, "x"]'
                 array.push(value);
             }
@@ -94,7 +94,7 @@ impl Json {
                     // e.g. json_replace('{"a": 1}', '$.a', 2) => '{"a": 2}'
                     let mut v = map.get_mut(key).unwrap();
                     v.set_json(sub_path_legs, value, mt);
-                } else if sub_path_legs.is_empty() && *mt != ModifyType::Replace {
+                } else if sub_path_legs.is_empty() && mt != ModifyType::Replace {
                     // e.g. json_insert('{"a": 1}', '$.b', 2) => '{"a": 1, "b": 2}'
                     map.insert(key.clone(), value);
                 }
