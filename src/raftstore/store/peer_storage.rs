@@ -248,16 +248,6 @@ impl PeerStorage {
                region_sched: Scheduler<RegionTask>,
                tag: String)
                -> Result<PeerStorage> {
-        let wb = WriteBatch::new();
-        write_peer_state(&wb, &region, PeerState::Normal)
-            .and_then(|_| write_initial_state(raft_engine.as_ref(), &wb, region.get_id()))
-            .unwrap_or_else(|e| {
-                panic!("PeerStorage new failed to save split region {:?}: {:?}",
-                       region,
-                       e)
-            });
-        raft_engine.write(wb);
-    
         debug!("creating storage on {} for {:?}", raft_engine.path(), region);
         let raft_state = try!(init_raft_state(&raft_engine, region));
         let apply_state = try!(init_apply_state(&raft_engine, region));
