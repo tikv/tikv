@@ -63,9 +63,9 @@ impl Json {
         }
 
         let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
-        let base_data = mem::replace(self, Json::None);
 
         if let PathLeg::Index(i) = *current_leg {
+            let base_data = mem::replace(self, Json::None);
             let index = i as usize;
             // If `base_data` is not an array, we should autowrap it to be an array.
             // Then if the length of result array equals to 1, it's unwraped.
@@ -74,8 +74,7 @@ impl Json {
                 _ => (vec![base_data], true),
             };
             if array.len() > index {
-                let mut chosen = &mut array[index];
-                chosen.set_json(sub_path_legs, value, mt);
+                array[index].set_json(sub_path_legs, value, mt);
             } else if sub_path_legs.is_empty() && mt != ModifyType::Replace {
                 // e.g. json_insert('[1, 2, 3]', '$[3]', "x") => '[1, 2, 3, "x"]'
                 array.push(value);
@@ -89,7 +88,7 @@ impl Json {
         }
 
         if let PathLeg::Key(ref key) = *current_leg {
-            if let Json::Object(mut map) = base_data {
+            if let Json::Object(ref mut map) = *self {
                 if map.contains_key(key) {
                     // e.g. json_replace('{"a": 1}', '$.a', 2) => '{"a": 2}'
                     let mut v = map.get_mut(key).unwrap();
@@ -98,7 +97,6 @@ impl Json {
                     // e.g. json_insert('{"a": 1}', '$.b', 2) => '{"a": 1, "b": 2}'
                     map.insert(key.clone(), value);
                 }
-                *self = Json::Object(map);
             }
         }
     }
