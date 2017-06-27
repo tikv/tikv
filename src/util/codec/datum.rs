@@ -399,6 +399,27 @@ impl Datum {
         }
     }
 
+    pub fn into_json(self) -> Result<Json> {
+        match self {
+            Datum::Bytes(ref bs) => {
+                let s = box_try!(str::from_utf8(bs));
+                let json: Json = try!(s.parse());
+                Ok(json)
+            }
+            Datum::I64(d) => Ok(Json::I64(d)),
+            Datum::F64(d) => Ok(Json::Double(d)),
+            Datum::Dec(d) => {
+                let ff = try!(d.as_f64());
+                Ok(Json::Double(ff))
+            }
+            Datum::Json(d) => Ok(d),
+            _ => {
+                let s = try!(self.into_string());
+                Ok(Json::String(s))
+            }
+        }
+    }
+
     /// Try its best effort to convert into a decimal datum.
     /// source function name is `ConvertDatumToDecimal`.
     fn coerce_to_dec(self) -> Result<Datum> {
@@ -1339,6 +1360,30 @@ mod test {
             let (res_x, res_y) = Datum::coerce(x, y).unwrap();
             assert_eq!(res_x, exp_x);
             assert_eq!(res_y, exp_y);
+        }
+    }
+
+    #[test]
+    fn test_datum_to_json() {
+        let tests = vec![
+            (Datum::I64(1), "1.0"),
+            (Datum::F64(3.3),"3.3"),
+            (Datum::Bytes(br#""Hello,world""#.to_vec()), r#""Hello,world""#),
+            (Datum::Bytes(b"[1, 2, 3]".to_vec()), "[1, 2, 3]"),
+            (Datum::Bytes(b"{}".to_vec()), "{}"),
+            (Datum::I64(1), "true"),
+        ];
+
+        for (d, json) in tests {
+            assert_eq!(d.into_json().unwrap(), json.parse().unwrap());
+        }
+
+        let illegal_cases = vec![
+            Datum::Bytes(b"hello,world".to_vec()),
+        ];
+
+        for d in illegal_cases {
+            assert!(d.into_json().is_err());
         }
     }
 }
