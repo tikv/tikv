@@ -62,6 +62,8 @@ dependencies:
         INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared;
       fi
   post:
+    # check format first
+    - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
     # cargo test also use debug
     - cargo build:
         timeout: 1800
@@ -71,6 +73,5 @@ dependencies:
 
 test:
   override:
-    - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a pr!; exit 1)
     - cargo test --features "default" -- --nocapture
     - cargo test --features "default" --bench benches -- --nocapture
