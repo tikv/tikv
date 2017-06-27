@@ -82,8 +82,9 @@ fn test_rpc_client() {
     poller.spawn(f).forget();
     // Only check if it works.
     poller.spawn(client.region_heartbeat(metapb::Region::new(),
-                          metapb::Peer::new(),
-                          RegionStat::default())).forget();
+                                       metapb::Peer::new(),
+                                       RegionStat::default()))
+        .forget();
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();
     client.ask_split(metapb::Region::new()).wait().unwrap();

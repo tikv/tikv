@@ -164,14 +164,21 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                         stream: RequestStream<RegionHeartbeatRequest>,
                         sink: DuplexSink<RegionHeartbeatResponse>) {
         let mock = self.clone();
-        let f = sink.sink_map_err(PdError::from).send_all(stream.map_err(PdError::from).and_then(move |req| {
-            match mock.case.as_ref().map_or_else(|| mock.default_handler.region_heartbeat(&req),
-            |s| s.region_heartbeat(&req)) {
-                None => Ok(None),
-                Some(Ok(resp)) => Ok(Some((resp, WriteFlags::default()))),
-                Some(Err(e)) => Err(box_err!("{:?}", e)),
-            }
-        }).filter_map(|o| o)).map(|_| ()).map_err(|e| error!("failed to handle heartbeat: {:?}", e));
+        let f = sink.sink_map_err(PdError::from)
+            .send_all(stream.map_err(PdError::from)
+                .and_then(move |req| {
+                    match mock.case
+                        .as_ref()
+                        .map_or_else(|| mock.default_handler.region_heartbeat(&req),
+                                     |s| s.region_heartbeat(&req)) {
+                        None => Ok(None),
+                        Some(Ok(resp)) => Ok(Some((resp, WriteFlags::default()))),
+                        Some(Err(e)) => Err(box_err!("{:?}", e)),
+                    }
+                })
+                .filter_map(|o| o))
+            .map(|_| ())
+            .map_err(|e| error!("failed to handle heartbeat: {:?}", e));
         ctx.spawn(f)
     }
 
