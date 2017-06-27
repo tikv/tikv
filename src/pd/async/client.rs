@@ -18,11 +18,10 @@ use protobuf::RepeatedField;
 use futures::{Future, future, Sink, Stream};
 use futures::sync::mpsc::{self, UnboundedSender};
 use grpc::{EnvBuilder, WriteFlags};
-
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 
-use util::Either;
+use util::{Either, HandyRwLock};
 use pd::PdFuture;
 use super::super::{Result, Error, PdClient, RegionStat};
 use super::util::{validate_endpoints, sync_request, check_resp_header, LeaderClient, Inner};
@@ -175,7 +174,7 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::GetRegionByIDRequest| {
-            let handler = client.read().unwrap().client.get_region_by_id_async(req);
+            let handler = client.rl().client.get_region_by_id_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|mut resp| {
                     try!(check_resp_header(resp.get_header()));
@@ -208,7 +207,7 @@ impl PdClient for RpcClient {
         req.set_keys_written(region_stat.written_keys);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
-            let mut inner = client.write().unwrap();
+            let mut inner = client.wl();
             let sender = match inner.hb_sender {
                 Either::Left(ref mut sender) => sender.take(),
                 Either::Right(ref sender) => {
@@ -252,7 +251,7 @@ impl PdClient for RpcClient {
         req.set_region(region);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
-            let handler = client.read().unwrap().client.ask_split_async(req);
+            let handler = client.rl().client.ask_split_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|resp| {
                     try!(check_resp_header(resp.get_header()));
@@ -272,7 +271,7 @@ impl PdClient for RpcClient {
         req.set_stats(stats);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
-            let handler = client.read().unwrap().client.store_heartbeat_async(req);
+            let handler = client.rl().client.store_heartbeat_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|resp| {
                     try!(check_resp_header(resp.get_header()));
@@ -293,7 +292,7 @@ impl PdClient for RpcClient {
         req.set_right(right);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::ReportSplitRequest| {
-            let handler = client.read().unwrap().client.report_split_async(req);
+            let handler = client.rl().client.report_split_async(req);
             handler.map_err(Error::Grpc)
                 .and_then(|resp| {
                     try!(check_resp_header(resp.get_header()));

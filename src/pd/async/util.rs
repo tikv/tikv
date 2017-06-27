@@ -72,7 +72,7 @@ impl Stream for HeartbeatReceiver {
 
             self.receiver.take();
 
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.wl();
             let mut receiver = None;
             if let Either::Left(ref mut recv) = inner.hb_receiver {
                 receiver = recv.take();
