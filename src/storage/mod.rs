@@ -45,6 +45,7 @@ pub const CF_RAFT: CfName = "raft";
 // Cfs that should be very large generally.
 pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
+pub const DATA_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -138,6 +139,11 @@ pub enum Command {
         keys: Vec<Key>,
     },
     RawGet { ctx: Context, key: Key },
+    DeleteRange {
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+    },
     Pause { ctx: Context, duration: u64 },
 }
 
@@ -207,6 +213,13 @@ impl Display for Command {
             Command::RawGet { ref ctx, ref key } => {
                 write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
             }
+            Command::DeleteRange { ref ctx, ref start_key, ref end_key } => {
+                write!(f,
+                       "kv::command::delete range [{:?}, {:?}) | {:?}",
+                       start_key,
+                       end_key,
+                       ctx)
+            }
             Command::Pause { ref ctx, duration } => {
                 write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
             }
@@ -224,12 +237,16 @@ pub const CMD_TAG_GC: &'static str = "gc";
 
 impl Command {
     pub fn readonly(&self) -> bool {
+        // DeleteRange only called by DDL bg thread after table is dropped and
+        // must guarantee that there is no other read or write these keys, so
+        // we can treat DeleteRange as readonly Command.
         match *self {
             Command::Get { .. } |
             Command::BatchGet { .. } |
             Command::Scan { .. } |
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
+            Command::DeleteRange { .. } |
             Command::Pause { .. } => true,
             Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
@@ -266,6 +283,7 @@ impl Command {
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
+            Command::DeleteRange { .. } => "delete_range",
             Command::Pause { .. } => "pause",
         }
     }
@@ -283,6 +301,7 @@ impl Command {
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
             Command::RawGet { .. } |
+            Command::DeleteRange { .. } |
             Command::Pause { .. } => 0,
         }
     }
@@ -300,6 +319,7 @@ impl Command {
             Command::ResolveLock { ref ctx, .. } |
             Command::Gc { ref ctx, .. } |
             Command::RawGet { ref ctx, .. } |
+            Command::DeleteRange { ref ctx, .. } |
             Command::Pause { ref ctx, .. } => ctx,
         }
     }
@@ -317,6 +337,7 @@ impl Command {
             Command::ResolveLock { ref mut ctx, .. } |
             Command::Gc { ref mut ctx, .. } |
             Command::RawGet { ref mut ctx, .. } |
+            Command::DeleteRange { ref mut ctx, .. } |
             Command::Pause { ref mut ctx, .. } => ctx,
         }
     }
@@ -658,6 +679,28 @@ impl Storage {
                              callback(res.map_err(Error::from))
                          }));
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["delete"]).inc();
+        Ok(())
+    }
+
+    pub fn async_delete_range(&self,
+                              ctx: Context,
+                              start_key: Vec<u8>,
+                              end_key: Vec<u8>,
+                              callback: Callback<()>)
+                              -> Result<()> {
+        let mut modifies = vec![];
+        for cf in DATA_CFS {
+            modifies.push(Modify::DeleteRange(cf,
+                                              Key::from_encoded(start_key.clone()),
+                                              Key::from_encoded(end_key.clone())));
+        }
+
+        try!(self.engine.async_write(&ctx,
+                                     modifies,
+                                     box |(_, res): (_, engine::Result<_>)| {
+                                         callback(res.map_err(Error::from))
+                                     }));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&["delete_range"]).inc();
         Ok(())
     }
 }

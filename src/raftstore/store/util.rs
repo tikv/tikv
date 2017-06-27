@@ -67,6 +67,20 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
     }
 }
 
+/// Check if range [`start_key`, `end_key`) in region range [`region_start_key`, `region_end_key`).
+pub fn check_range_in_region(star_key: &[u8],
+                             end_key: &[u8],
+                             region: &metapb::Region)
+                             -> Result<()> {
+    let region_end_key = region.get_end_key();
+    let region_start_key = region.get_start_key();
+    if star_key >= region_start_key && (end_key.is_empty() || end_key <= region_end_key) {
+        Ok(())
+    } else {
+        Err(Error::RangeNotInRegion(star_key.to_vec(), end_key.to_vec(), region.clone()))
+    }
+}
+
 #[inline]
 pub fn is_first_vote_msg(msg: &RaftMessage) -> bool {
     msg.get_message().get_msg_type() == MessageType::MsgRequestVote &&

@@ -18,7 +18,7 @@ use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
 use storage;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response,
-                          CmdType, DeleteRequest, PutRequest};
+                          CmdType, DeleteRequest, PutRequest, DeleteRangeRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 
@@ -224,6 +224,14 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     }
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
+                }
+                Modify::DeleteRange(cf, start_key, end_key) => {
+                    let mut delete_range = DeleteRangeRequest::new();
+                    delete_range.set_cf(cf.to_string());
+                    delete_range.set_start_key(start_key.encoded().to_owned());
+                    delete_range.set_end_key(end_key.encoded().to_owned());
+                    req.set_cmd_type(CmdType::DeleteRange);
+                    req.set_delete_range(delete_range);
                 }
             }
             reqs.push(req);

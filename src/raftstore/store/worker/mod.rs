@@ -61,4 +61,4 @@ pub use self::raftlog_gc::{Task as RaftlogGcTask, Runner as RaftlogGcRunner};
 pub use self::pd::{Task as PdTask, Runner as PdRunner};
 pub use self::consistency_check::{Task as ConsistencyCheckTask, Runner as ConsistencyCheckRunner};
 pub use self::apply::{Task as ApplyTask, Runner as ApplyRunner, TaskRes as ApplyTaskRes, ApplyRes,
-                      ApplyMetrics, Registration, Apply};
+                      ApplyMetrics, Registration, Apply, CompactRange};

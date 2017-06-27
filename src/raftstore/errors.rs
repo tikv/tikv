@@ -61,6 +61,15 @@ quick_error!{
                     escape(region.get_end_key()),
                     region.get_id())
         }
+        RangeNotInRegion(start_key: Vec<u8>, end_key: Vec<u8>, region: metapb::Region) {
+            description("range is not in region")
+            display("range [{}, {}) is not in region key range [{}, {}) for region {}",
+                    escape(start_key),
+                    escape(end_key),
+                    escape(region.get_start_key()),
+                    escape(region.get_end_key()),
+                    region.get_id())
+        }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -166,6 +175,13 @@ impl Into<errorpb::Error> for Error {
                 errorpb.mut_key_not_in_region().set_region_id(region.get_id());
                 errorpb.mut_key_not_in_region().set_start_key(region.get_start_key().to_vec());
                 errorpb.mut_key_not_in_region().set_end_key(region.get_end_key().to_vec());
+            }
+            Error::RangeNotInRegion(start_key, end_key, region) => {
+                errorpb.mut_range_not_in_region().set_start_key(start_key);
+                errorpb.mut_range_not_in_region().set_end_key(end_key);
+                errorpb.mut_range_not_in_region().set_region_id(region.get_id());
+                errorpb.mut_range_not_in_region().set_region_skey(region.get_start_key().to_vec());
+                errorpb.mut_range_not_in_region().set_region_ekey(region.get_end_key().to_vec());
             }
             Error::StaleEpoch(_, new_regions) => {
                 let mut e = errorpb::StaleEpoch::new();

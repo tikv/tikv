@@ -119,6 +119,23 @@ pub struct ChangePeer {
 }
 
 #[derive(Debug)]
+pub struct CompactRange {
+    pub cf: String,
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
+}
+
+impl CompactRange {
+    fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> CompactRange {
+        CompactRange {
+            cf: cf,
+            start_key: start_key,
+            end_key: end_key,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum ExecResult {
     ChangePeer(ChangePeer),
     CompactLog {
@@ -136,6 +153,7 @@ pub enum ExecResult {
         snap: Snapshot,
     },
     VerifyHash { index: u64, hash: Vec<u8> },
+    CompactRanges { ranges: Vec<CompactRange> },
 }
 
 struct ApplyContext<'a> {
@@ -517,7 +535,8 @@ impl ApplyDelegate {
                 }
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
-                ExecResult::CompactLog { .. } => {}
+                ExecResult::CompactLog { .. } |
+                ExecResult::CompactRanges { .. } => {}
                 ExecResult::SplitRegion { ref left, ref right, right_derive } => {
                     if right_derive {
                         self.region = right.clone();
@@ -606,8 +625,7 @@ impl ApplyDelegate {
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx)
         } else {
-            // Now we don't care write command outer, so use None.
-            self.exec_write_cmd(ctx).and_then(|v| Ok((v, None)))
+            self.exec_write_cmd(ctx)
         }
     }
 
@@ -868,10 +886,13 @@ impl ApplyDelegate {
         })))
     }
 
-    fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
+    fn exec_write_cmd(&mut self,
+                      ctx: &ExecContext)
+                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
         let requests = ctx.req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
+        let mut compact_ranges = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
@@ -879,6 +900,7 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
                 CmdType::Snap => self.handle_snap(ctx, req),
+                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut compact_ranges),
                 CmdType::Prewrite | CmdType::Invalid => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
@@ -891,7 +913,14 @@ impl ApplyDelegate {
 
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(RepeatedField::from_vec(responses));
-        Ok(resp)
+
+        let exec_res = if !compact_ranges.is_empty() {
+            Some(ExecResult::CompactRanges { ranges: compact_ranges })
+        } else {
+            None
+        };
+
+        Ok((resp, exec_res))
     }
 
     fn handle_get(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
@@ -969,6 +998,34 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
+    fn handle_delete_range(&mut self,
+                           ctx: &ExecContext,
+                           req: &Request,
+                           compact_ranges: &mut Vec<CompactRange>)
+                           -> Result<Response> {
+        let start_key = req.get_delete_range().get_start_key();
+        let end_key = req.get_delete_range().get_end_key();
+        try!(check_data_range(start_key, end_key, &self.region));
+
+        let resp = Response::new();
+
+        let start_key = keys::data_key(start_key);
+        let end_key = keys::data_key(end_key);
+        let cf = req.get_delete_range().get_cf();
+        rocksdb::get_cf_handle(&self.engine, cf)
+            .and_then(|handle| ctx.wb.delete_range_cf(handle, &start_key, &end_key))
+            .unwrap_or_else(|e| {
+                panic!("{} failed to delete range [{}, {}): {:?}",
+                       self.tag,
+                       escape(&start_key),
+                       escape(&end_key),
+                       e)
+            });
+        compact_ranges.push(CompactRange::new(String::from(cf), start_key, end_key));
+
+        Ok(resp)
+    }
+
     fn handle_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
         do_snap(self.region.clone())
     }
@@ -989,6 +1046,12 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
     // region key range has no data prefix, so we must use origin key to check.
     try!(util::check_key_in_region(key, region));
+
+    Ok(())
+}
+
+fn check_data_range(start_key: &[u8], end_key: &[u8], region: &Region) -> Result<()> {
+    try!(util::check_range_in_region(start_key, end_key, region));
 
     Ok(())
 }

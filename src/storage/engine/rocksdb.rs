@@ -125,6 +125,14 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     wb.put_cf(handle, k.encoded(), &v)
                 }
             }
+            Modify::DeleteRange(cf, start_key, end_key) => {
+                trace!("EngineRocksdb: delete_range_cf {}, {}, {}",
+                       cf,
+                       escape(start_key.encoded()),
+                       escape(end_key.encoded()));
+                let handle = try!(rocksdb::get_cf_handle(db, cf));
+                wb.delete_range_cf(handle, start_key.encoded(), end_key.encoded())
+            }
         };
         if let Err(msg) = res {
             return Err(Error::RocksDb(msg));
