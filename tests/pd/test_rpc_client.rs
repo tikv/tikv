@@ -12,11 +12,12 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use grpc::EnvBuilder;
 use futures::Future;
+use futures_cpupool::Builder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
@@ -73,12 +74,17 @@ fn test_rpc_client() {
         prev_id = alloc_id;
     }
 
+    let poller = Builder::new().pool_size(1).name_prefix(thd_name!("poller")).create();
+    let (tx, rx) = mpsc::channel();
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
+        let _ = tx.send(resp);
+    });
+    poller.spawn(f).forget();
     // Only check if it works.
-    client.region_heartbeat(metapb::Region::new(),
+    poller.spawn(client.region_heartbeat(metapb::Region::new(),
                           metapb::Peer::new(),
-                          RegionStat::default())
-        .wait()
-        .unwrap();
+                          RegionStat::default())).forget();
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
     client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();
     client.ask_split(metapb::Region::new()).wait().unwrap();
     client.report_split(metapb::Region::new(), metapb::Region::new()).wait().unwrap();
