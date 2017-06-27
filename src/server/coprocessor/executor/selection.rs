@@ -111,10 +111,10 @@ mod tests {
     use protobuf::RepeatedField;
     use util::codec::number::NumberEncoder;
     use tipb::expression::{Expr, ExprType};
-
     use util::codec::mysql::types;
     use util::codec::datum::Datum;
     use tipb::executor::TableScan;
+    use kvproto::kvrpcpb::IsolationLevel;
 
     use super::*;
     use super::super::topn::test::gen_table_data;
@@ -181,8 +181,12 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut statistics = Statistics::default();
 
-        let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+        let inner_table_scan = TableScanExecutor::new(table_scan,
+                                                      key_ranges,
+                                                      snapshot,
+                                                      &mut statistics,
+                                                      start_ts,
+                                                      IsolationLevel::SI);
 
         // selection executor
         let mut selection = Selection::new();
@@ -232,8 +236,12 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut statistics = Statistics::default();
 
-        let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+        let inner_table_scan = TableScanExecutor::new(table_scan,
+                                                      key_ranges,
+                                                      snapshot,
+                                                      &mut statistics,
+                                                      start_ts,
+                                                      IsolationLevel::SI);
 
         // selection executor
         let mut selection = Selection::new();
