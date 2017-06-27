@@ -373,7 +373,9 @@ impl TiDbEndPoint {
                 return Err(err);
             }
         };
-        let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
+        let snap = SnapshotStore::new(self.snap.as_ref(),
+                                      sel.get_start_ts(),
+                                      t.req.get_context().get_isolation_level());
         let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let mut range = t.req.get_ranges().to_vec();
         debug!("scanning range: {:?}", range);
