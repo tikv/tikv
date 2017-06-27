@@ -137,7 +137,7 @@ impl<'a> Executor for AggregationExecutor<'a> {
         // construct row data
         let value_size = gk.len() + approximate_size(&aggr_cols, false);
         let mut value = Vec::with_capacity(value_size);
-        let mut meta = HashMap::with_capacity(1 + 2 * aggr_cols.len());
+        let mut meta = HashMap::with_capacity(1 + aggr_cols.len());
         let (mut id, mut offset) = (0, 0);
         /// push gk col
         value.extend_from_slice(gk);
@@ -161,21 +161,22 @@ impl<'a> Executor for AggregationExecutor<'a> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::i64;
-    use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{TestStore, get_range, new_col_info};
-    use super::super::topn::test::gen_table_data;
+    use protobuf::RepeatedField;
+
+    use tipb::executor::TableScan;
+    use tipb::expression::{Expr, ExprType};
+    use kvproto::kvrpcpb::IsolationLevel;
+
+    use super::*;
+    use storage::Statistics;
     use util::codec::datum::{Datum, DatumDecoder};
     use util::codec::number::NumberEncoder;
     use util::codec::mysql::decimal::Decimal;
     use util::codec::mysql::types;
-    use storage::Statistics;
-
-    use tipb::executor::TableScan;
-    use tipb::expression::{Expr, ExprType};
-
-    use protobuf::RepeatedField;
+    use super::super::table_scan::TableScanExecutor;
+    use super::super::scanner::test::{TestStore, get_range, new_col_info};
+    use super::super::topn::test::gen_table_data;
 
     #[inline]
     fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
@@ -231,8 +232,12 @@ mod test {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut statistics = Statistics::default();
-        let mut ts_ect =
-            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+        let mut ts_ect = TableScanExecutor::new(table_scan,
+                                                key_ranges,
+                                                snapshot,
+                                                &mut statistics,
+                                                start_ts,
+                                                IsolationLevel::SI);
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
