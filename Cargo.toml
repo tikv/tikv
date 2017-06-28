@@ -45,7 +45,7 @@ libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
-protobuf = "1.2.1"
+protobuf = "1.4"
 nix = "0.6.0"
 utime = "0.1"
 chrono = "0.2"
