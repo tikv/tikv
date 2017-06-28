@@ -17,6 +17,7 @@ mod comparison;
 mod serde;
 mod json_type;
 mod json_merge;
+mod json_modify;
 mod functions;
 mod path_expr;
 
