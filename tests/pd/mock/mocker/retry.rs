@@ -15,8 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kvproto::pdpb::*;
 
-use super::Mocker;
-use super::Result;
+use super::*;
 
 #[derive(Debug)]
 pub struct Retry {
@@ -35,7 +34,7 @@ impl Retry {
     }
 }
 
-impl Mocker for Retry {
+impl PdMocker for Retry {
     fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         let count = self.count.fetch_add(1, Ordering::SeqCst);
         if count != 0 && count % self.retry == 0 {

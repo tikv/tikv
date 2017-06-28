@@ -115,7 +115,13 @@ pub trait PdClient: Send + Sync {
                         region: metapb::Region,
                         leader: metapb::Peer,
                         region_stat: RegionStat)
-                        -> PdFuture<pdpb::RegionHeartbeatResponse>;
+                        -> PdFuture<()>;
+
+    // Get a stream of region heartbeat response.
+    //
+    // Please note that this method should only be called once.
+    fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
+        where F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static;
 
     // Ask pd for split, pd will returns the new split region id.
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;

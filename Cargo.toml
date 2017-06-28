@@ -84,13 +84,15 @@ features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
 git = "https://github.com/pingcap/grpc-rs.git"
-features = ["static-link"]
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"
 branch = "dev"
 features = ["profiling"]
 optional = true
+
+[dev-dependencies]
+futures-cpupool = "0.1"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

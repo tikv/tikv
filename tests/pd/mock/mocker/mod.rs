@@ -31,7 +31,7 @@ pub const DEFAULT_CLUSTER_ID: u64 = 42;
 
 pub type Result<T> = result::Result<T, String>;
 
-pub trait Mocker {
+pub trait PdMocker {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         None
     }
