@@ -17,7 +17,7 @@ use super::path_expr::{PathLeg, PathExpression};
 use std::mem;
 
 /// `ModifyType` is for modify a JSON.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ModifyType {
     /// `Insert` is for inserting a new element into a JSON.
     Insert,
@@ -45,7 +45,7 @@ impl Json {
             }
         }
         for (expr, value) in path_expr_list.iter().zip(values.drain(..)) {
-            self.set_json(&expr.legs, value, mt.clone());
+            self.set_json(&expr.legs, value, mt);
         }
         Ok(())
     }
