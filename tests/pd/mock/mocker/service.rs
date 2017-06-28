@@ -20,9 +20,7 @@ use kvproto::pdpb::*;
 
 use protobuf::{RepeatedField, Message};
 
-use super::Mocker;
-use super::Result;
-use super::DEFAULT_CLUSTER_ID as CLUSTER_ID;
+use super::*;
 
 #[derive(Debug)]
 pub struct Service {
@@ -42,7 +40,7 @@ impl Service {
 
     fn header() -> ResponseHeader {
         let mut header = ResponseHeader::new();
-        header.set_cluster_id(CLUSTER_ID);
+        header.set_cluster_id(DEFAULT_CLUSTER_ID);
         header
     }
 }
@@ -68,7 +66,7 @@ fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
 
 // TODO: Check cluster ID.
 // TODO: Support more rpc.
-impl Mocker for Service {
+impl PdMocker for Service {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         Some(Ok(self.members_resp.lock().unwrap().clone().unwrap()))
     }

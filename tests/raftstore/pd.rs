@@ -18,8 +18,9 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::Future;
+use futures::{Future, Stream};
 use futures::future::{ok, err};
+use futures::sync::mpsc::{self, UnboundedSender, UnboundedReceiver};
 
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -38,10 +39,23 @@ use super::util::*;
 pub type Rule =
     Box<Fn(&metapb::Region, &metapb::Peer) -> Option<pdpb::RegionHeartbeatResponse> + Send + Sync>;
 
-#[derive(Default)]
 struct Store {
     store: metapb::Store,
     region_ids: HashSet<u64>,
+    sender: UnboundedSender<pdpb::RegionHeartbeatResponse>,
+    receiver: Option<UnboundedReceiver<pdpb::RegionHeartbeatResponse>>,
+}
+
+impl Default for Store {
+    fn default() -> Store {
+        let (tx, rx) = mpsc::unbounded();
+        Store {
+            store: Default::default(),
+            region_ids: Default::default(),
+            sender: tx,
+            receiver: Some(rx),
+        }
+    }
 }
 
 struct Cluster {
@@ -87,10 +101,8 @@ impl Cluster {
         // TODO: enable this check later.
         // assert_eq!(region.get_peers().len(), 1);
         let store_id = store.get_id();
-        let mut s = Store {
-            store: store,
-            region_ids: HashSet::new(),
-        };
+        let mut s = Store::default();
+        s.store = store;;
 
 
         s.region_ids.insert(region.get_id());
@@ -111,8 +123,10 @@ impl Cluster {
     }
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
-        let mut s = self.stores.entry(store.get_id()).or_insert_with(Store::default);
+        let mut s = Store::default();
+        let store_id = store.get_id();
         s.store = store;
+        self.stores.insert(store_id, s);
         Ok(())
     }
 
@@ -253,9 +267,19 @@ impl Cluster {
         }
 
         let mut resp = pdpb::RegionHeartbeatResponse::new();
+        resp.set_region_id(region.get_id());
+        resp.set_region_epoch(region.get_region_epoch().clone());
+        resp.set_target_peer(leader.clone());
 
         if let Some(ref rule) = self.rule {
-            return Ok(rule(&region, &leader).unwrap_or(resp));
+            return Ok(rule(&region, &leader)
+                .map(|mut resp| {
+                    resp.set_region_id(region.get_id());
+                    resp.set_region_epoch(region.get_region_epoch().clone());
+                    resp.set_target_peer(leader.clone());
+                    resp
+                })
+                .unwrap_or(resp));
         }
 
         // If no rule, use default max_peer_count check.
@@ -600,16 +624,35 @@ impl PdClient for TestPdClient {
                         region: metapb::Region,
                         leader: metapb::Peer,
                         region_stat: RegionStat)
-                        -> PdFuture<pdpb::RegionHeartbeatResponse> {
+                        -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return err(e).boxed();
         }
-        match self.cluster
-            .wl()
-            .region_heartbeat(region, leader, region_stat) {
-            Ok(resp) => ok(resp).boxed(),
+        let resp = self.cluster.wl().region_heartbeat(region, leader.clone(), region_stat);
+        match resp {
+            Ok(resp) => {
+                let store_id = leader.get_store_id();
+                if let Some(store) = self.cluster.wl().stores.get(&store_id) {
+                    store.sender.send(resp).unwrap();
+                }
+                ok(()).boxed()
+            }
             Err(e) => err(e).boxed(),
         }
+    }
+
+    fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
+        where F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static
+    {
+        let mut cluster = self.cluster.wl();
+        let store = cluster.stores.get_mut(&store_id).unwrap();
+        let rx = store.receiver.take().unwrap();
+        rx.for_each(move |resp| {
+                f(resp);
+                Ok(())
+            })
+            .map_err(|e| box_err!("failed to receive next heartbeat response: {:?}", e))
+            .boxed()
     }
 
     fn ask_split(&self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
