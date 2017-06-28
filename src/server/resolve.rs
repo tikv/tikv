@@ -205,9 +205,16 @@ mod tests {
                             _: metapb::Region,
                             _: metapb::Peer,
                             _: RegionStat)
-                            -> PdFuture<pdpb::RegionHeartbeatResponse> {
+                            -> PdFuture<()> {
             unimplemented!();
         }
+
+        fn handle_region_heartbeat_response<F>(&self, _: u64, _: F) -> PdFuture<()>
+            where F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static
+        {
+            unimplemented!()
+        }
+
         fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
             unimplemented!();
         }
