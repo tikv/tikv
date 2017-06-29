@@ -22,7 +22,7 @@ use tipb::expression::Expr;
 
 use util::collections::{HashMap, HashMapEntry as Entry};
 use util::codec::datum::{self, DatumEncoder, approximate_size};
-use util::codec::table::{RowColMeta, RowColsDict};
+use util::codec::table::RowColsDict;
 use util::xeval::{Evaluator, EvalContext};
 
 use super::super::Result;
@@ -116,7 +116,6 @@ impl<'a> AggregationExecutor<'a> {
     }
 }
 
-
 impl<'a> Executor for AggregationExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         if !self.executed {
@@ -138,24 +137,14 @@ impl<'a> Executor for AggregationExecutor<'a> {
         // construct row data
         let value_size = group_key.len() + approximate_size(&aggr_cols, false);
         let mut value = Vec::with_capacity(value_size);
-        let mut meta = HashMap::with_capacity(1 + aggr_cols.len());
-        let (mut id, mut offset) = (0, 0);
-        /// push group_key col
-        value.extend_from_slice(group_key);
-        meta.insert(id, RowColMeta::new(offset, (value.len() - offset)));
-        id += 1;
-        offset = value.len();
-        /// push aggr col
         for i in 0..aggr_cols.len() {
             box_try!(value.encode(&aggr_cols[i..i + 1], false));
-            meta.insert(id, RowColMeta::new(offset, (value.len() - offset)));
-            id += 1;
-            offset = value.len();
         }
+        value.extend_from_slice(group_key);
         self.cursor += 1;
         Ok(Some(Row {
             handle: 0,
-            data: RowColsDict::new(meta, value),
+            data: RowColsDict::new(map![], value),
         }))
     }
 }
@@ -258,22 +247,20 @@ mod test {
             row_data.push(row.data);
         }
         assert_eq!(row_data.len(), expect_row_cnt);
-        let expect_row_data = vec![(b"a", Decimal::from(7), 3 as u64, Decimal::from(7), 3 as u64),
-                                   (b"b", Decimal::from(8), 2 as u64, Decimal::from(9), 2 as u64),
-                                   (b"f", Decimal::from(5), 1 as u64, Decimal::from(5), 1 as u64),
-                                   (b"f", Decimal::from(6), 1 as u64, Decimal::from(7), 1 as u64)];
-        let expect_col_cnt = 4;
+        let expect_row_data =
+            vec![(3 as u64, Decimal::from(7), 3 as u64, b"a".as_ref(), Decimal::from(7)),
+                 (2 as u64, Decimal::from(9), 2 as u64, b"b".as_ref(), Decimal::from(8)),
+                 (1 as u64, Decimal::from(5), 1 as u64, b"f".as_ref(), Decimal::from(5)),
+                 (1 as u64, Decimal::from(7), 1 as u64, b"f".as_ref(), Decimal::from(6))];
+        let expect_col_cnt = 5;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
-            assert_eq!(row.len(), expect_col_cnt);
-            let group_key = row.get(0).unwrap().decode().unwrap();
-            assert_eq!(group_key[0], Datum::from(expect_cols.0.as_ref()));
-            assert_eq!(group_key[1], Datum::from(expect_cols.1));
-            assert_eq!(row.get(1).unwrap().decode_datum().unwrap(),
-                       Datum::from(expect_cols.2));
-            assert_eq!(row.get(2).unwrap().decode_datum().unwrap(),
-                       Datum::from(expect_cols.3));
-            assert_eq!(row.get(3).unwrap().decode_datum().unwrap(),
-                       Datum::from(expect_cols.4));
+            let ds = row.value.as_slice().decode().unwrap();
+            assert_eq!(ds.len(), expect_col_cnt);
+            assert_eq!(ds[0], Datum::from(expect_cols.0));
+            assert_eq!(ds[1], Datum::from(expect_cols.1));
+            assert_eq!(ds[2], Datum::from(expect_cols.2));
+            assert_eq!(ds[3], Datum::from(expect_cols.3));
+            assert_eq!(ds[4], Datum::from(expect_cols.4));
         }
     }
 }
