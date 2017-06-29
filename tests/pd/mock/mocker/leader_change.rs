@@ -17,8 +17,7 @@ use std::time::{Duration, Instant};
 use protobuf::RepeatedField;
 use kvproto::pdpb::*;
 
-use super::Mocker;
-use super::Result;
+use super::*;
 
 pub const LEADER_INTERVAL_SEC: u64 = 2;
 
@@ -61,7 +60,7 @@ const DEAD_ID: u64 = 1000;
 const DEAD_NAME: &'static str = "walking_dead";
 const DEAD_URL: &'static str = "http://127.0.0.1:65534";
 
-impl Mocker for LeaderChange {
+impl PdMocker for LeaderChange {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut inner = self.inner.lock().unwrap();
         let now = Instant::now();

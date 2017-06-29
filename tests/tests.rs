@@ -45,6 +45,7 @@ extern crate fnv;
 extern crate test;
 extern crate grpc;
 extern crate futures;
+extern crate futures_cpupool;
 extern crate tokio_core;
 
 mod raft;
