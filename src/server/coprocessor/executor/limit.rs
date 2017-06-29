@@ -18,14 +18,14 @@ use tipb::executor::Limit;
 use super::{Row, Executor};
 use super::super::Result;
 
-struct LimitExecutor<'a> {
+pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
     src: Box<Executor + 'a>,
 }
 
 impl<'a> LimitExecutor<'a> {
-    fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+    pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,

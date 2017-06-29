@@ -18,18 +18,20 @@ use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::{self, Ordering as CmpOrdering};
 use std::cell::RefCell;
-use tipb::select::{self, SelectRequest, SelectResponse, Chunk, RowMeta};
+use tipb::select::{self, SelectRequest, SelectResponse, DAGRequest, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType, ByItem};
 use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
+use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
 use util::codec::table::{RowColsDict, TableDecoder};
 use util::codec::number::NumberDecoder;
 use util::codec::{Datum, table, datum, mysql};
+use util::codec::datum::DatumEncoder;
 use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either};
 use util::worker::{BatchRunnable, Scheduler};
@@ -39,10 +41,13 @@ use server::OnResponse;
 
 use super::{Error, Result};
 use super::aggregate::{self, AggrFunc};
+use super::dag::DAGContext;
 use super::metrics::*;
+use super::executor::Row;
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
+pub const REQ_TYPE_DAG: i64 = 103;
 pub const BATCH_ROW_COUNT: usize = 64;
 
 // If a request has been handled for more than 60 seconds, the client should
@@ -106,6 +111,11 @@ impl Display for Task {
     }
 }
 
+enum CopRequest {
+    Select(SelectRequest),
+    DAG(DAGRequest),
+}
+
 pub struct RequestTask {
     req: Request,
     start_ts: Option<u64>,
@@ -115,7 +125,7 @@ pub struct RequestTask {
     deadline: Instant,
     statistics: Statistics,
     on_resp: OnResponse,
-    sel_req: Option<Result<SelectRequest>>,
+    cop_req: Option<Result<CopRequest>>,
 }
 
 impl RequestTask {
@@ -124,14 +134,23 @@ impl RequestTask {
         let deadline = timer + Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
         let mut start_ts = None;
         let tp = req.get_tp();
-        let sel_req = match tp {
+        let cop_req = match tp {
             REQ_TYPE_SELECT | REQ_TYPE_INDEX => {
                 let mut sel = SelectRequest::new();
                 if let Err(e) = sel.merge_from_bytes(req.get_data()) {
                     Err(box_err!(e))
                 } else {
                     start_ts = Some(sel.get_start_ts());
-                    Ok(sel)
+                    Ok(CopRequest::Select(sel))
+                }
+            }
+            REQ_TYPE_DAG => {
+                let mut dag = DAGRequest::new();
+                if let Err(e) = dag.merge_from_bytes(req.get_data()) {
+                    Err(box_err!(e))
+                } else {
+                    start_ts = Some(dag.get_start_ts());
+                    Ok(CopRequest::DAG(dag))
                 }
             }
             _ => Err(box_err!("unsupported tp {}", tp)),
@@ -144,7 +163,7 @@ impl RequestTask {
             deadline: deadline,
             statistics: Default::default(),
             on_resp: on_resp,
-            sel_req: Some(sel_req),
+            cop_req: Some(cop_req),
         }
     }
 
@@ -290,10 +309,6 @@ fn err_resp(e: Error) -> Response {
             resp.set_locked(info);
             COPR_REQ_ERROR.with_label_values(&["select", "lock"]).inc();
         }
-        Error::Other(_) => {
-            resp.set_other_error(format!("{}", e));
-            COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
-        }
         Error::Outdated(deadline, now, tp) => {
             let t = get_req_type_str(tp);
             let elapsed = now.duration_since(deadline) +
@@ -312,6 +327,10 @@ fn err_resp(e: Error) -> Response {
             server_is_busy_err.set_reason(ENDPOINT_IS_BUSY.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
+        }
+        Error::Other(_) => {
+            resp.set_other_error(format!("{}", e));
+            COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
         }
     }
     resp
@@ -360,54 +379,98 @@ impl TiDbEndPoint {
             on_error(e, t);
             return;
         }
-        match self.handle_select(&mut t) {
+        let res = match t.cop_req.take().unwrap() {
+            Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
+            Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
+            Err(err) => Err(err),
+        };
+        match res {
             Ok(r) => respond(r, t),
             Err(e) => on_error(e, t),
         }
     }
 
-    pub fn handle_select(&self, t: &mut RequestTask) -> Result<Response> {
-        let sel = match t.sel_req.take().unwrap() {
-            Ok(sel) => sel,
-            Err(err) => {
-                return Err(err);
-            }
-        };
-        let snap = SnapshotStore::new(self.snap.as_ref(),
-                                      sel.get_start_ts(),
-                                      t.req.get_context().get_isolation_level());
+    pub fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
+        let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts(), IsolationLevel::SI);
         let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let mut range = t.req.get_ranges().to_vec();
         debug!("scanning range: {:?}", range);
         if ctx.core.desc_scan {
             range.reverse();
         }
-        let res = if t.req.get_tp() == REQ_TYPE_SELECT {
-            ctx.get_rows_from_sel(range)
-        } else {
-            ctx.get_rows_from_idx(range)
+        let res = match t.req.get_tp() {
+            REQ_TYPE_SELECT => ctx.get_rows_from_sel(range),
+            REQ_TYPE_INDEX => ctx.get_rows_from_idx(range),
+            _ => unreachable!(),
         };
-
-        let mut resp = Response::new();
-        let mut sel_resp = SelectResponse::new();
         match res {
-            Ok(()) => sel_resp.set_chunks(RepeatedField::from_vec(ctx.core.chunks)),
+            Ok(()) => {
+                let mut resp = Response::new();
+                let mut sel_resp = SelectResponse::new();
+                sel_resp.set_chunks(RepeatedField::from_vec(ctx.core.chunks));
+                let data = box_try!(sel_resp.write_to_bytes());
+                resp.set_data(data);
+                Ok(resp)
+            }
             Err(e) => {
                 if let Error::Other(_) = e {
-                    // should we handle locked here too?
+                    let mut resp = Response::new();
+                    let mut sel_resp = SelectResponse::new();
                     sel_resp.set_error(to_pb_error(&e));
-                    // TODO add detail error
-                    resp.set_other_error(format!("{}", e));
+                    resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                    Ok(resp)
                 } else {
-                    // other error should be handle by ti client.
-                    return Err(e);
+                    Err(e)
                 }
             }
         }
-        let data = box_try!(sel_resp.write_to_bytes());
-        resp.set_data(data);
+    }
 
-        Ok(resp)
+    pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
+        let ranges = t.req.get_ranges().to_vec();
+        let eval_ctx = Rc::new(box_try!(EvalContext::new(dag.get_time_zone_offset(),
+                                                         dag.get_flags())));
+        let mut ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone());
+        try!(ctx.validate_dag());
+        let mut exec = try!(ctx.build_dag(&mut t.statistics));
+        let mut chunks = vec![];
+        loop {
+            match exec.next() {
+                Ok(Some(row)) => {
+                    let mut chunk = get_chunk(&mut chunks);
+                    let length = chunk.get_rows_data().len();
+                    if ctx.has_aggr {
+                        chunk.mut_rows_data().extend_from_slice(&row.data.value);
+                    } else {
+                        let value = try!(inflate_cols(&row, &ctx.columns));
+                        chunk.mut_rows_data().extend_from_slice(&value);
+                    }
+                    let mut meta = RowMeta::new();
+                    meta.set_handle(row.handle);
+                    meta.set_length((chunk.get_rows_data().len() - length) as i64);
+                    chunk.mut_rows_meta().push(meta);
+                }
+                Ok(None) => {
+                    let mut resp = Response::new();
+                    let mut sel_resp = SelectResponse::new();
+                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    let data = box_try!(sel_resp.write_to_bytes());
+                    resp.set_data(data);
+                    return Ok(resp);
+                }
+                Err(e) => {
+                    if let Error::Other(_) = e {
+                        let mut resp = Response::new();
+                        let mut sel_resp = SelectResponse::new();
+                        sel_resp.set_error(to_pb_error(&e));
+                        resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                        return Ok(resp);
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -488,6 +551,35 @@ pub fn inflate_with_col<'a, T>(eval: &mut Evaluator,
         }
     }
     Ok(())
+}
+
+// TODO(performance), there are too much decoding logic.
+// we could do it only once when getting RowColsDict in cut_row.
+#[inline]
+fn inflate_cols(row: &Row, cols: &[ColumnInfo]) -> Result<Vec<u8>> {
+    let data = &row.data;
+    // TODO capacity is not enough
+    let mut values = Vec::with_capacity(data.value.len());
+    for col in cols {
+        let col_id = col.get_column_id();
+        match data.get(col_id) {
+            Some(value) => values.extend_from_slice(value),
+            None if col.get_pk_handle() => {
+                let pk = get_pk(col, row.handle);
+                box_try!(values.encode(&[pk], false));
+            }
+            None if col.has_default_val() => {
+                values.extend_from_slice(col.get_default_val());
+            }
+            None if mysql::has_not_null_flag(col.get_flag() as u64) => {
+                return Err(box_err!("column {} of {} is missing", col_id, row.handle));
+            }
+            None => {
+                box_try!(values.encode(&[Datum::Null], false));
+            }
+        }
+    }
+    Ok(values)
 }
 
 #[inline]
@@ -739,7 +831,7 @@ impl SelectContextCore {
         };
 
         Ok(SelectContextCore {
-            ctx: Rc::new(box_try!(EvalContext::new(&sel))),
+            ctx: Rc::new(box_try!(EvalContext::new(sel.get_time_zone_offset(), sel.get_flags()))),
             aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
             aggr_cols: aggr_cols,
             topn_cols: topn_cols,
@@ -1147,6 +1239,7 @@ impl<'a> SelectContext<'a> {
 
 pub const STR_REQ_TYPE_SELECT: &'static str = "select";
 pub const STR_REQ_TYPE_INDEX: &'static str = "index";
+pub const STR_REQ_TYPE_DAG: &'static str = "dag";
 pub const STR_REQ_TYPE_UNKNOWN: &'static str = "unknown";
 
 #[inline]
@@ -1154,6 +1247,7 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
     match tp {
         REQ_TYPE_SELECT => STR_REQ_TYPE_SELECT,
         REQ_TYPE_INDEX => STR_REQ_TYPE_INDEX,
+        REQ_TYPE_DAG => STR_REQ_TYPE_DAG,
         _ => STR_REQ_TYPE_UNKNOWN,
     }
 }
@@ -1184,6 +1278,7 @@ mod tests {
     fn test_get_req_type_str() {
         assert_eq!(get_req_type_str(REQ_TYPE_SELECT), STR_REQ_TYPE_SELECT);
         assert_eq!(get_req_type_str(REQ_TYPE_INDEX), STR_REQ_TYPE_INDEX);
+        assert_eq!(get_req_type_str(REQ_TYPE_DAG), STR_REQ_TYPE_DAG);
         assert_eq!(get_req_type_str(0), STR_REQ_TYPE_UNKNOWN);
     }
 
