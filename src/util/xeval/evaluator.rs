@@ -21,8 +21,7 @@ use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
-use util::codec::mysql::DecimalDecoder;
-use util::codec::mysql::{MAX_FSP, Duration, Json, parse_json_path_expr, PathExpression};
+use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression, ModifyType};
 use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
@@ -142,9 +141,9 @@ impl Evaluator {
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
             ExprType::JsonUnquote => self.eval_json_unquote(ctx, expr),
             ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
-            // ExprType::JsonSet => self.eval_json_set(expr),
-            // ExprType::JsonInsert => self.eval_json_insert(expr),
-            // ExprType::JsonReplace => self.eval_json_replace(expr),
+            ExprType::JsonSet => self.eval_json_modify(ctx, expr, ModifyType::Set),
+            ExprType::JsonInsert => self.eval_json_modify(ctx, expr, ModifyType::Insert),
+            ExprType::JsonReplace => self.eval_json_modify(ctx, expr, ModifyType::Replace),
             _ => Ok(Datum::Null),
         }
     }
@@ -426,7 +425,7 @@ impl Evaluator {
         if Datum::Null == child {
             return Ok(Datum::Null);
         }
-        let json = try!(child.into_json());
+        let json = try!(child.cast_as_json());
         let json_type = json.json_type().to_vec();
         Ok(Datum::Bytes(json_type))
     }
@@ -437,8 +436,8 @@ impl Evaluator {
             return Ok(Datum::Null);
         }
         let mut children = children.into_iter();
-        let first = try!(children.next().unwrap().into_json());
-        let suffixes: Vec<Json> = try!(children.map(|item| item.into_json())
+        let first = try!(children.next().unwrap().cast_as_json());
+        let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json())
             .collect());
         Ok(Datum::Json(first.merge(suffixes)))
     }
@@ -448,6 +447,13 @@ impl Evaluator {
         if child == Datum::Null {
             return Ok(Datum::Null);
         }
+        // here Datum::Byte(bs) should be converted into Json::String(bs)
+        // select JSON_UNQUOTE('{"a":   "b"}');
+        // +------------------------------+
+        // | JSON_UNQUOTE('{"a":   "b"}') |
+        // +------------------------------+
+        // | {"a":   "b"}                 |
+        // +------------------------------+
         let json = try!(child.into_json());
         let unquote_data = try!(json.unquote());
         Ok(Datum::Bytes(unquote_data.into_bytes()))
@@ -459,20 +465,39 @@ impl Evaluator {
             return Ok(Datum::Null);
         }
         let mut children = children.into_iter();
-        let json = try!(children.next().unwrap().into_json());
-        let path_extrs: Vec<PathExpression> = try!(children.map(|item| {
-                let v = match item {
-                    Datum::Bytes(bs) => try!(String::from_utf8(bs)),
-                    _ => String::default(),
-                };
-                parse_json_path_expr(&v)
-            })
+        let json = try!(children.next().unwrap().cast_as_json());
+        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.into_json_path_expr())
             .collect());
         if let Some(data) = json.extract(&path_extrs) {
             Ok(Datum::Json(data))
         } else {
             Ok(Datum::Null)
         }
+    }
+
+    fn eval_json_modify(&mut self,
+                        ctx: &EvalContext,
+                        expr: &Expr,
+                        mt: ModifyType)
+                        -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2));
+        if children.iter().any(|item| *item == Datum::Null) {
+            return Ok(Datum::Null);
+        }
+        let kv_len = children.len() / 2;
+        let mut children = children.into_iter();
+        let mut json = try!(children.next().unwrap().into_json());
+        let mut keys = Vec::with_capacity(kv_len);
+        let mut values = Vec::with_capacity(kv_len);
+        while let Some(item) = children.next() {
+            let key = try!(item.into_json_path_expr());
+            let value = try!(children.next().unwrap().into_json());
+            keys.push(key);
+            values.push(value);
+        }
+
+        try!(json.modify(&keys, values, mt));
+        Ok(Datum::Json(json))
     }
 
     fn eval_logic<F>(&mut self,
@@ -1134,13 +1159,13 @@ mod test {
                vec![
             (build_expr(vec![Datum::Null], ExprType::JsonUnquote),
                         Datum::Null),
-            (build_byte_datums_expr(vec![br#""a""#], ExprType::JsonUnquote),
+            (build_byte_datums_expr(vec![b"a"], ExprType::JsonUnquote),
                         Datum::Bytes(b"a".to_vec())),
-            (build_byte_datums_expr(vec![br#"3"#], ExprType::JsonUnquote),
-                        Datum::Bytes(b"3".to_vec())),
-            (build_byte_datums_expr(vec![br#"{"a":"b"}"#], ExprType::JsonUnquote),
-                        Datum::Bytes(br#"{"a":"b"}"#.to_vec())),
-            (build_byte_datums_expr(vec![br#""hello,\"quoted string\",world""#],
+            (build_byte_datums_expr(vec![br#"\"3\""#], ExprType::JsonUnquote),
+                        Datum::Bytes(br#""3""#.to_vec())),
+            (build_byte_datums_expr(vec![br#"{"a":  "b"}"#], ExprType::JsonUnquote),
+                        Datum::Bytes(br#"{"a":  "b"}"#.to_vec())),
+            (build_byte_datums_expr(vec![br#"hello,\"quoted string\",world"#],
                                     ExprType::JsonUnquote),
                         Datum::Bytes(br#"hello,"quoted string",world"#.to_vec())),
     ]);

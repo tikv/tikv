@@ -66,7 +66,8 @@ pub use self::duration::Duration;
 pub use self::decimal::{Decimal, Res, DecimalEncoder, DecimalDecoder, dec_encoded_len};
 pub use self::types::{has_unsigned_flag, has_not_null_flag};
 pub use self::time::Time;
-pub use self::json::{Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr};
+pub use self::json::{Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr,
+                     ModifyType};
 
 #[cfg(test)]
 mod test {
