@@ -11,12 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::{self, Ordering};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::u64;
 
 use storage::CF_DEFAULT;
-use rocksdb::{DB, Options, SliceTransform, DBCompressionType};
+use storage::types;
+use raftstore::store::keys;
+use rocksdb::{DB, Options, SliceTransform, DBCompressionType, DBEntryType,
+              TablePropertiesCollector, TablePropertiesCollectorFactory};
 use rocksdb::rocksdb::supported_compression;
+use util::codec;
+use util::codec::number::{NumberEncoder, NumberDecoder};
 
 pub use rocksdb::CFHandle;
 
@@ -235,6 +243,170 @@ impl SliceTransform for NoopSliceTransform {
 
     fn in_range(&mut self, _: &[u8]) -> bool {
         true
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UserProperties {
+    pub min_ts: u64,
+    pub max_ts: u64,
+    pub num_keys: u64,
+    pub num_puts: u64,
+    pub num_merges: u64,
+    pub num_deletes: u64,
+    pub num_corrupts: u64,
+}
+
+impl UserProperties {
+    pub fn new() -> UserProperties {
+        UserProperties {
+            min_ts: u64::MAX,
+            max_ts: u64::MIN,
+            num_keys: 0,
+            num_puts: 0,
+            num_merges: 0,
+            num_deletes: 0,
+            num_corrupts: 0,
+        }
+    }
+
+    pub fn num_versions(&self) -> u64 {
+        self.num_puts + self.num_merges + self.num_deletes
+    }
+
+    pub fn add(&mut self, other: &UserProperties) {
+        self.min_ts = cmp::min(self.min_ts, other.min_ts);
+        self.max_ts = cmp::max(self.max_ts, other.max_ts);
+        self.num_keys += other.num_keys;
+        self.num_puts += other.num_puts;
+        self.num_merges += other.num_merges;
+        self.num_deletes += other.num_deletes;
+        self.num_corrupts += other.num_corrupts;
+    }
+
+    pub fn encode(&self) -> HashMap<Vec<u8>, Vec<u8>> {
+        let items = [("tikv.min_ts", self.min_ts),
+                     ("tikv.max_ts", self.max_ts),
+                     ("tikv.num_keys", self.num_keys),
+                     ("tikv.num_puts", self.num_puts),
+                     ("tikv.num_merges", self.num_merges),
+                     ("tikv.num_deletes", self.num_deletes),
+                     ("tikv.num_corrupts", self.num_corrupts)];
+        let mut map = HashMap::new();
+        for &(k, v) in items.iter() {
+            let mut buf = Vec::new();
+            buf.encode_u64(v).unwrap();
+            map.insert(k.as_bytes().to_owned(), buf);
+        }
+        map
+    }
+
+    pub fn decode(map: &HashMap<Vec<u8>, Vec<u8>>) -> Result<UserProperties, codec::Error> {
+        let mut props = UserProperties::new();
+        props.min_ts = try!(Self::decode_u64(map, "tikv.min_ts"));
+        props.max_ts = try!(Self::decode_u64(map, "tikv.max_ts"));
+        props.num_keys = try!(Self::decode_u64(map, "tikv.num_keys"));
+        props.num_puts = try!(Self::decode_u64(map, "tikv.num_puts"));
+        props.num_merges = try!(Self::decode_u64(map, "tikv.num_merges"));
+        props.num_deletes = try!(Self::decode_u64(map, "tikv.num_deletes"));
+        props.num_corrupts = try!(Self::decode_u64(map, "tikv.num_corrupts"));
+        Ok(props)
+    }
+
+    fn decode_u64(map: &HashMap<Vec<u8>, Vec<u8>>, name: &str) -> Result<u64, codec::Error> {
+        let v = try!(map.get(name.as_bytes()).ok_or(codec::Error::KeyNotFound));
+        v.as_slice().decode_u64()
+    }
+}
+
+pub struct UserPropertiesCollector {
+    props: UserProperties,
+    last_key: Vec<u8>,
+}
+
+impl UserPropertiesCollector {
+    fn new() -> UserPropertiesCollector {
+        UserPropertiesCollector {
+            props: UserProperties::new(),
+            last_key: Vec::new(),
+        }
+    }
+}
+
+impl TablePropertiesCollector for UserPropertiesCollector {
+    fn name(&self) -> &str {
+        "tikv.user-properties-collector"
+    }
+
+    fn add_userkey(&mut self, key: &[u8], _: &[u8], entry_type: DBEntryType) {
+        if !keys::validate_data_key(key) {
+            return;
+        }
+        let (k, ts) = match types::split_encoded_key_on_ts(key) {
+            Ok((k, ts)) => (k, ts),
+            Err(_) => {
+                // Should we ignore this or panic?
+                self.props.num_corrupts += 1;
+                return;
+            }
+        };
+        self.props.min_ts = cmp::min(self.props.min_ts, ts);
+        self.props.max_ts = cmp::max(self.props.max_ts, ts);
+        if k.cmp(&self.last_key) != Ordering::Equal {
+            self.props.num_keys += 1;
+            self.last_key.clear();
+            self.last_key.extend_from_slice(k);
+        }
+        match entry_type {
+            DBEntryType::Put => self.props.num_puts += 1,
+            DBEntryType::Merge => self.props.num_merges += 1,
+            DBEntryType::Delete |
+            DBEntryType::SingleDelete => self.props.num_deletes += 1,
+            _ => {}
+        }
+    }
+
+    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        self.props.encode()
+    }
+}
+
+pub struct NoopPropertiesCollector {}
+
+impl TablePropertiesCollector for NoopPropertiesCollector {
+    fn name(&self) -> &str {
+        "tikv.noop-properties-collector"
+    }
+
+    fn add_userkey(&mut self, _: &[u8], _: &[u8], _: DBEntryType) {}
+
+    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        HashMap::new()
+    }
+}
+
+pub struct UserPropertiesCollectorFactory {
+    write_cf: u32,
+}
+
+impl UserPropertiesCollectorFactory {
+    pub fn new() -> UserPropertiesCollectorFactory {
+        // TODO: How do I get the column family id here?
+        UserPropertiesCollectorFactory { write_cf: 0 }
+    }
+}
+
+impl TablePropertiesCollectorFactory for UserPropertiesCollectorFactory {
+    fn name(&self) -> &str {
+        "tikv.user-properties-collector-factory"
+    }
+
+    fn create_table_properties_collector(&mut self, cf: u32) -> Box<TablePropertiesCollector> {
+        if cf == self.write_cf {
+            Box::new(UserPropertiesCollector::new())
+        } else {
+            Box::new(NoopPropertiesCollector {})
+        }
     }
 }
 

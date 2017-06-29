@@ -50,6 +50,10 @@ impl RegionSnapshot {
         }
     }
 
+    pub fn get_db(&self) -> Arc<DB> {
+        self.snap.get_db().clone()
+    }
+
     pub fn get_region(&self) -> &Region {
         &self.region
     }

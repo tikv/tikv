@@ -414,26 +414,32 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              ctx.get_isolation_level());
             // scan_key is used as start_key here,and Range start gc with scan_key=none.
             let is_range_start_key = scan_key.is_none();
-            let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
-                .map_err(Error::from)
-                .and_then(|(keys, next_start)| {
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
-                        .observe(keys.len() as f64);
-                    if keys.is_empty() {
-                        // empty range
-                        if is_range_start_key {
-                            KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+            let res = if !reader.need_gc(safe_point) {
+                // This is an optimization to skip gc before scanning all data.
+                KV_COMMAND_GC_SKIPPED_COUNTER.inc();
+                Ok(None)
+            } else {
+                reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
+                    .map_err(Error::from)
+                    .and_then(|(keys, next_start)| {
+                        KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                            .observe(keys.len() as f64);
+                        if keys.is_empty() {
+                            // empty range
+                            if is_range_start_key {
+                                KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+                            }
+                            Ok(None)
+                        } else {
+                            Ok(Some(Command::Gc {
+                                ctx: ctx.clone(),
+                                safe_point: safe_point,
+                                scan_key: next_start,
+                                keys: keys,
+                            }))
                         }
-                        Ok(None)
-                    } else {
-                        Ok(Some(Command::Gc {
-                            ctx: ctx.clone(),
-                            safe_point: safe_point,
-                            scan_key: next_start,
-                            keys: keys,
-                        }))
-                    }
-                });
+                    })
+            };
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,

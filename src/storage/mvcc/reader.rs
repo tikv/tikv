@@ -12,13 +12,14 @@
 // limitations under the License.
 
 use storage::engine::{Snapshot, Cursor, ScanMode, Statistics};
-use storage::{Key, Value, CF_LOCK, CF_WRITE};
+use storage::{Key, Value, CfName, CF_LOCK, CF_WRITE};
 use super::{Error, Result};
 use super::lock::Lock;
 use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
 use kvproto::kvrpcpb::IsolationLevel;
+use util::rocksdb::UserProperties;
 
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
@@ -425,4 +426,29 @@ impl<'a> MvccReader<'a> {
             keys.push(key);
         }
     }
+
+    // Returns true if it need gc.
+    // This is for optimization purpose, does not mean to be accurate.
+    pub fn need_gc(&self, safe_point: u64) -> bool {
+        let props = match collect_properties_cf(self.snapshot, CF_WRITE) {
+            Ok(props) => props,
+            Err(_) => return true,
+        };
+        // We don't need gc if:
+        // 1. min_ts > safe_point:
+        //    no data older than safe_point to gc
+        // 2. num_keys == num_versions:
+        //    each key has only one version
+        !(props.min_ts > safe_point || props.num_keys == props.num_versions())
+    }
+}
+
+fn collect_properties_cf(snap: &Snapshot, cf: CfName) -> Result<UserProperties> {
+    let mut res = UserProperties::new();
+    let props = try!(snap.get_properties_cf(cf));
+    for (_, v) in props {
+        let other = try!(UserProperties::decode(&v));
+        res.add(&other);
+    }
+    Ok(res)
 }

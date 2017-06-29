@@ -27,12 +27,12 @@ use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
 use std::time::Duration;
 use std::result;
-use rocksdb::DB;
+use rocksdb::{DB, Range};
 use protobuf::RepeatedField;
 
 use storage::engine;
 use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback,
-            Iterator as EngineIterator};
+            Iterator as EngineIterator, Properties};
 use storage::{Key, Value, CfName, CF_DEFAULT};
 use super::metrics::*;
 use raftstore::store::engine::IterOption;
@@ -322,6 +322,19 @@ impl Snapshot for RegionSnapshot {
                    mode: ScanMode)
                    -> engine::Result<Cursor<'b>> {
         Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, iter_opt)), mode))
+    }
+
+    fn get_properties_cf(&self, cf: CfName) -> engine::Result<Properties> {
+        let db = self.get_db();
+        let cf = try!(db.cf_handle(cf)
+            .ok_or(engine::Error::RocksDb(format!("cf {} not found.", cf))));
+        let range = Range::new(self.get_start_key(), self.get_end_key());
+        let props = try!(db.get_properties_of_tables_in_range(cf, &[range]));
+        let mut res = Properties::new();
+        for (k, v) in props {
+            res.insert(k, v.user_collected_properties);
+        }
+        Ok(res)
     }
 
     fn clone(&self) -> Box<Snapshot> {

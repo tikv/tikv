@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::cmp::Ordering;
 use std::boxed::FnBox;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -43,6 +44,7 @@ const STAT_SEEK: &'static str = "seek";
 const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
+pub type Properties = HashMap<String, HashMap<Vec<u8>, Vec<u8>>>;
 
 pub struct CbContext {
     pub term: Option<u64>,
@@ -111,6 +113,12 @@ pub trait Snapshot: Send {
                    iter_opt: IterOption,
                    mode: ScanMode)
                    -> Result<Cursor<'a>>;
+    fn get_properties(&self) -> Result<Properties> {
+        self.get_properties_cf(CF_DEFAULT)
+    }
+    fn get_properties_cf(&self, _: CfName) -> Result<Properties> {
+        Ok(HashMap::new())
+    }
     fn clone(&self) -> Box<Snapshot>;
 }
 
