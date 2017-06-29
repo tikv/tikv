@@ -1094,24 +1094,39 @@ impl Registration {
     }
 }
 
-pub struct Propose {
-    id: u64,
-    region_id: u64,
+pub struct Proposal {
     is_conf_change: bool,
     index: u64,
     term: u64,
-    cb: Callback,
+    pub cb: Callback,
+}
+
+impl Proposal {
+    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback) -> Proposal {
+        Proposal {
+            is_conf_change: is_conf_change,
+            index: index,
+            term: term,
+            cb: cb,
+        }
+    }
 }
 
 pub struct Destroy {
     region_id: u64,
 }
 
+pub struct Proposals {
+    id: u64,
+    region_id: u64,
+    props: Vec<Proposal>,
+}
+
 /// region related task.
 pub enum Task {
     Applies(Vec<Apply>),
     Registration(Registration),
-    Propose(Propose),
+    Proposals(Proposals),
     Destroy(Destroy),
 }
 
@@ -1124,20 +1139,11 @@ impl Task {
         Task::Registration(Registration::new(peer))
     }
 
-    pub fn propose(id: u64,
-                   region_id: u64,
-                   is_conf_change: bool,
-                   index: u64,
-                   term: u64,
-                   cb: Callback)
-                   -> Task {
-        Task::Propose(Propose {
+    pub fn proposals(id: u64, region_id: u64, props: Vec<Proposal>) -> Task {
+        Task::Proposals(Proposals {
             id: id,
             region_id: region_id,
-            index: index,
-            term: term,
-            is_conf_change: is_conf_change,
-            cb: cb,
+            props: props,
         })
     }
 
@@ -1150,7 +1156,7 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Task::Applies(ref a) => write!(f, "async applys count {}", a.len()),
-            Task::Propose(ref p) => write!(f, "[region {}] propose", p.region_id),
+            Task::Proposals(ref p) => write!(f, "[region {}] proposals", p.region_id),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
@@ -1262,27 +1268,32 @@ impl Runner {
         }
     }
 
-    fn handle_propose(&mut self, p: Propose) {
-        let cmd = PendingCmd::new(p.index, p.term, p.cb);
-        let delegate = match self.delegates.get_mut(&p.region_id) {
+    fn handle_proposals(&mut self, proposals: Proposals) {
+        let delegate = match self.delegates.get_mut(&proposals.region_id) {
             Some(d) => d,
             None => {
-                notify_region_removed(p.region_id, p.id, cmd);
+                for p in proposals.props {
+                    let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                    notify_region_removed(proposals.region_id, proposals.id, cmd);
+                }
                 return;
             }
         };
-        assert_eq!(delegate.id, p.id);
-        if p.is_conf_change {
-            if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
-                // if it loses leadership before conf change is replicated, there may be
-                // a stale pending conf change before next conf change is applied. If it
-                // becomes leader again with the stale pending conf change, will enter
-                // this block, so we notify leadership may have been changed.
-                notify_stale_command(&delegate.tag, delegate.term, cmd);
+        assert_eq!(delegate.id, proposals.id);
+        for p in proposals.props {
+            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            if p.is_conf_change {
+                if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
+                    // if it loses leadership before conf change is replicated, there may be
+                    // a stale pending conf change before next conf change is applied. If it
+                    // becomes leader again with the stale pending conf change, will enter
+                    // this block, so we notify leadership may have been changed.
+                    notify_stale_command(&delegate.tag, delegate.term, cmd);
+                }
+                delegate.pending_cmds.set_conf_change(cmd);
+            } else {
+                delegate.pending_cmds.append_normal(cmd);
             }
-            delegate.pending_cmds.set_conf_change(cmd);
-        } else {
-            delegate.pending_cmds.append_normal(cmd);
         }
     }
 
@@ -1322,7 +1333,7 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
             Task::Applies(a) => self.handle_applies(a),
-            Task::Propose(p) => self.handle_propose(p),
+            Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
         }
@@ -1424,42 +1435,39 @@ mod tests {
         }
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        runner.run(Task::propose(1,
-                                 1,
-                                 false,
-                                 1,
-                                 0,
-                                 box move |resp| {
-                                     resp_tx.send(resp).unwrap();
-                                 }));
+        let p = Proposal::new(false,
+                              1,
+                              0,
+                              box move |resp| {
+                                  resp_tx.send(resp).unwrap();
+                              });
+        runner.run(Task::proposals(1, 1, vec![p]));
         // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_region_not_found());
 
-        runner.run(Task::propose(1, 2, false, 2, 0, box |_| {}));
+        let (cc_tx, cc_rx) = mpsc::channel();
+        let t = Task::proposals(1,
+                                2,
+                                vec![
+            Proposal::new(false, 2, 0, box |_| {}),
+            Proposal::new(true, 3, 0, box move |resp| { cc_tx.send(resp).unwrap(); }),
+        ]);
+        runner.run(t);
         assert!(rx.try_recv().is_err());
         {
             let normals = &runner.delegates[&2].pending_cmds.normals;
             assert_eq!(normals.back().map(|c| c.index), Some(2));
         }
-
-        let (cc_tx, cc_rx) = mpsc::channel();
-        runner.run(Task::propose(1,
-                                 2,
-                                 true,
-                                 3,
-                                 0,
-                                 box move |resp| {
-                                     cc_tx.send(resp).unwrap();
-                                 }));
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2].pending_cmds.conf_change;
             assert_eq!(cc.as_ref().map(|c| c.index), Some(3));
         }
 
-        runner.run(Task::propose(1, 2, true, 4, 0, box move |_| {}));
+        let p = Proposal::new(true, 4, 0, box move |_| {});
+        runner.run(Task::proposals(1, 2, vec![p]));
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2].pending_cmds.conf_change;
