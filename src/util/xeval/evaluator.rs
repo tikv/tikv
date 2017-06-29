@@ -481,9 +481,14 @@ impl Evaluator {
                         mt: ModifyType)
                         -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 2));
+        if children.len() & 1 == 0 {
+            return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
+        }
+
         if children.iter().any(|item| *item == Datum::Null) {
             return Ok(Datum::Null);
         }
+
         let kv_len = children.len() / 2;
         let mut children = children.into_iter();
         let mut json = try!(children.next().unwrap().into_json());
@@ -1190,6 +1195,21 @@ mod test {
                     Datum::Json(r#"[{}, 3, "4"]"#.parse().unwrap())),
     ]);
 
+    test_eval!(test_eval_json_modify,
+               vec![
+        (build_expr(vec![Datum::Null, Datum::Null, Datum::Null], ExprType::JsonSet),
+                    Datum::Null),
+        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                         ExprType::JsonSet),
+                    Datum::Json(r#"[9,3]"#.parse().unwrap())),
+        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                         ExprType::JsonInsert),
+                    Datum::Json(r#"[9,3]"#.parse().unwrap())),
+        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                         ExprType::JsonReplace),
+                    Datum::Json(r#"9"#.parse().unwrap())),
+    ]);
+
     test_eval_err!(test_eval_json_err,
                    vec![
           build_expr(vec![], ExprType::JsonType),
@@ -1203,6 +1223,8 @@ mod test {
                                 ExprType::JsonExtract),
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
+          build_byte_datums_expr(vec![b"{}", b"$invalidPath",b"3",], ExprType::JsonReplace),
+          build_byte_datums_expr(vec![b"{}", b"$.a", b"3", b"$.c"], ExprType::JsonReplace),
      ]);
 
 }
