@@ -14,26 +14,27 @@
 // FIXME: remove later
 #![allow(dead_code)]
 
-use util::collections::{HashMap, HashMapEntry as Entry};
-
-use super::{Executor, Row, ExprColumnRefVisitor};
-use super::super::Result;
-use super::super::endpoint::{inflate_with_col, SINGLE_GROUP};
-use super::super::aggregate::{self, AggrFunc};
+use std::rc::Rc;
 
 use tipb::schema::ColumnInfo;
 use tipb::executor::Aggregation;
 use tipb::expression::Expr;
+
+use util::collections::{HashMap, HashMapEntry as Entry};
 use util::codec::datum::{self, DatumEncoder, approximate_size};
 use util::codec::table::{RowColMeta, RowColsDict};
 use util::xeval::{Evaluator, EvalContext};
 
+use super::super::Result;
+use super::{Executor, Row, ExprColumnRefVisitor};
+use super::super::endpoint::{inflate_with_col, SINGLE_GROUP};
+use super::super::aggregate::{self, AggrFunc};
 
 struct AggregationExecutor<'a> {
     group_by: Vec<Expr>,
     aggr_func: Vec<Expr>,
-    gks: Vec<Vec<u8>>,
-    gk_aggrs: HashMap<Vec<u8>, Vec<Box<AggrFunc>>>,
+    group_keys: Vec<Rc<Vec<u8>>>,
+    group_key_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
     cursor: usize,
     executed: bool,
     ctx: EvalContext,
@@ -62,8 +63,8 @@ impl<'a> AggregationExecutor<'a> {
         Ok(AggregationExecutor {
             group_by: group_by,
             aggr_func: aggr_func,
-            gks: vec![],
-            gk_aggrs: map![],
+            group_keys: vec![],
+            group_key_aggrs: map![],
             cursor: 0,
             executed: false,
             ctx: ctx,
@@ -89,8 +90,8 @@ impl<'a> AggregationExecutor<'a> {
         while let Some(row) = try!(self.src.next()) {
             let mut eval = Evaluator::default();
             try!(inflate_with_col(&mut eval, &self.ctx, &row.data, &self.cols, row.handle));
-            let gk = try!(self.get_group_key(&mut eval));
-            match self.gk_aggrs.entry(gk.clone()) {
+            let group_key = Rc::new(try!(self.get_group_key(&mut eval)));
+            match self.group_key_aggrs.entry(group_key.clone()) {
                 Entry::Vacant(e) => {
                     let mut aggrs = Vec::with_capacity(self.aggr_func.len());
                     for expr in &self.aggr_func {
@@ -99,7 +100,7 @@ impl<'a> AggregationExecutor<'a> {
                         try!(aggr.update(&self.ctx, vals));
                         aggrs.push(aggr);
                     }
-                    self.gks.push(gk);
+                    self.group_keys.push(group_key);
                     e.insert(aggrs);
                 }
                 Entry::Occupied(e) => {
@@ -121,26 +122,26 @@ impl<'a> Executor for AggregationExecutor<'a> {
         if !self.executed {
             try!(self.aggregate());
             self.executed = true;
-            assert_eq!(self.gks.len(), self.gk_aggrs.len());
+            assert_eq!(self.group_keys.len(), self.group_key_aggrs.len());
         }
 
-        if self.cursor >= self.gks.len() {
+        if self.cursor >= self.group_keys.len() {
             return Ok(None);
         }
         // calc all aggr func
         let mut aggr_cols = Vec::with_capacity(2 * self.aggr_func.len());
-        let gk = &self.gks[self.cursor];
-        let mut aggrs = self.gk_aggrs.remove(gk).unwrap();
+        let group_key = &self.group_keys[self.cursor];
+        let mut aggrs = self.group_key_aggrs.remove(group_key).unwrap();
         for aggr in &mut aggrs {
             try!(aggr.calc(&mut aggr_cols));
         }
         // construct row data
-        let value_size = gk.len() + approximate_size(&aggr_cols, false);
+        let value_size = group_key.len() + approximate_size(&aggr_cols, false);
         let mut value = Vec::with_capacity(value_size);
         let mut meta = HashMap::with_capacity(1 + aggr_cols.len());
         let (mut id, mut offset) = (0, 0);
-        /// push gk col
-        value.extend_from_slice(gk);
+        /// push group_key col
+        value.extend_from_slice(group_key);
         meta.insert(id, RowColMeta::new(offset, (value.len() - offset)));
         id += 1;
         offset = value.len();
@@ -264,9 +265,9 @@ mod test {
         let expect_col_cnt = 4;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
             assert_eq!(row.len(), expect_col_cnt);
-            let gk = row.get(0).unwrap().decode().unwrap();
-            assert_eq!(gk[0], Datum::from(expect_cols.0.as_ref()));
-            assert_eq!(gk[1], Datum::from(expect_cols.1));
+            let group_key = row.get(0).unwrap().decode().unwrap();
+            assert_eq!(group_key[0], Datum::from(expect_cols.0.as_ref()));
+            assert_eq!(group_key[1], Datum::from(expect_cols.1));
             assert_eq!(row.get(1).unwrap().decode_datum().unwrap(),
                        Datum::from(expect_cols.2));
             assert_eq!(row.get(2).unwrap().decode_datum().unwrap(),
