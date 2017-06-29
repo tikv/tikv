@@ -434,6 +434,10 @@ impl<'a> MvccReader<'a> {
             Ok(props) => props,
             Err(_) => return true,
         };
+        if props.num_keys == 0 {
+            // For compatibility, just return true if no properties.
+            return true;
+        }
         // We don't need gc if:
         // 1. min_ts > safe_point:
         //    no data older than safe_point to gc

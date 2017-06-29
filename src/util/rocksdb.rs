@@ -371,28 +371,11 @@ impl TablePropertiesCollector for UserPropertiesCollector {
     }
 }
 
-pub struct NoopPropertiesCollector {}
-
-impl TablePropertiesCollector for NoopPropertiesCollector {
-    fn name(&self) -> &str {
-        "tikv.noop-properties-collector"
-    }
-
-    fn add_userkey(&mut self, _: &[u8], _: &[u8], _: DBEntryType) {}
-
-    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        HashMap::new()
-    }
-}
-
-pub struct UserPropertiesCollectorFactory {
-    write_cf: u32,
-}
+pub struct UserPropertiesCollectorFactory {}
 
 impl UserPropertiesCollectorFactory {
     pub fn new() -> UserPropertiesCollectorFactory {
-        // TODO: How do I get the column family id here?
-        UserPropertiesCollectorFactory { write_cf: 0 }
+        UserPropertiesCollectorFactory {}
     }
 }
 
@@ -401,21 +384,18 @@ impl TablePropertiesCollectorFactory for UserPropertiesCollectorFactory {
         "tikv.user-properties-collector-factory"
     }
 
-    fn create_table_properties_collector(&mut self, cf: u32) -> Box<TablePropertiesCollector> {
-        if cf == self.write_cf {
-            Box::new(UserPropertiesCollector::new())
-        } else {
-            Box::new(NoopPropertiesCollector {})
-        }
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+        Box::new(UserPropertiesCollector::new())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{DB, Options};
+    use rocksdb::{DB, Options, DBEntryType, TablePropertiesCollector};
     use tempdir::TempDir;
-    use storage::CF_DEFAULT;
-    use super::{check_and_open, CFOptions};
+    use storage::{Key, CF_DEFAULT};
+    use raftstore::store::keys;
+    use super::{check_and_open, CFOptions, UserProperties, UserPropertiesCollector};
 
     #[test]
     fn test_check_and_open() {
@@ -453,5 +433,30 @@ mod tests {
         cfs_existed.sort();
         cfs_excepted.sort();
         assert_eq!(cfs_existed, cfs_excepted);
+    }
+
+    #[test]
+    fn test_user_properties() {
+        let cases = [("ab", 2, DBEntryType::Put),
+                     ("ab", 1, DBEntryType::Merge),
+                     ("ab", 0, DBEntryType::Delete),
+                     ("cd", 4, DBEntryType::Delete),
+                     ("cd", 3, DBEntryType::Put),
+                     ("ef", 6, DBEntryType::Put),
+                     ("ef", 5, DBEntryType::Merge),
+                     ("gh", 7, DBEntryType::Delete)];
+        let mut collector = UserPropertiesCollector::new();
+        for &(key, ts, entry_type) in cases.iter() {
+            let k = Key::from_raw(key.as_bytes()).append_ts(ts);
+            let data_key = keys::data_key(k.encoded());
+            collector.add_userkey(&data_key, &[0], entry_type);
+        }
+        let props = UserProperties::decode(&collector.finish()).unwrap();
+        assert_eq!(props.min_ts, 0);
+        assert_eq!(props.max_ts, 7);
+        assert_eq!(props.num_keys, 4);
+        assert_eq!(props.num_puts, 3);
+        assert_eq!(props.num_merges, 2);
+        assert_eq!(props.num_deletes, 3);
     }
 }
