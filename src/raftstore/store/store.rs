@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{DB, DBStatisticsTickerType as TickerType, WriteBatch, Writable};
+use rocksdb::{DB, DBStatisticsTickerType as TickerType};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -55,7 +55,7 @@ use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, 
 use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
-use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot, IterOption};
+use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, ProposalMeta, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::ApplySnapResult;
@@ -156,32 +156,14 @@ pub fn create_event_loop<T, C>(cfg: &Config) -> Result<EventLoop<Store<T, C>>>
     Ok(event_loop)
 }
 
-pub fn delete_all_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+pub fn delete_file_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
     if start_key >= end_key {
         return Ok(());
     }
 
-    let wb = WriteBatch::new();
     for cf in db.cf_names() {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
-        let mut it = try!(db.new_iterator_cf(cf, iter_opt));
-        it.seek(start_key.into());
-        if it.valid() {
-            let handle = try!(rocksdb::get_cf_handle(db, cf));
-            if cf == CF_WRITE {
-                // We enable memtable prefix bloom for CF_WRITE, for delete_range operation RocksDB
-                // will add start key to bloom, and the start key will go through function
-                // prefix_extractor->Transform, in our case the prefix_extractor is FixedSuffixSliceTransform,
-                // if the length of start key less than 8, we will encounter index out of range error.
-                box_try!(wb.delete_range_cf(handle, it.key(), end_key));
-            } else {
-                box_try!(wb.delete_range_cf(handle, start_key, end_key));
-            }
-        }
-    }
-
-    if wb.count() > 0 {
-        try!(db.write(wb));
+        let handle = try!(rocksdb::get_cf_handle(db, cf));
+        box_try!(db.delete_file_in_range_cf(handle, start_key, end_key));
     }
 
     Ok(())
@@ -310,11 +292,11 @@ impl<T, C> Store<T, C> {
         for region_id in self.region_ranges.values() {
             let region = self.region_peers[region_id].region();
             let start_key = keys::enc_start_key(region);
-            try!(delete_all_in_range(&self.engine, &last_start_key, &start_key));
+            try!(delete_file_in_range(&self.engine, &last_start_key, &start_key));
             last_start_key = keys::enc_end_key(region);
         }
 
-        try!(delete_all_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
+        try!(delete_file_in_range(&self.engine, &last_start_key, keys::DATA_MAX_KEY));
 
         info!("{} cleans up garbage data, takes {:?}",
               self.tag,

@@ -134,10 +134,11 @@ impl Runner {
             if it.valid() {
                 let handle = box_try!(rocksdb::get_cf_handle(&self.db, cf));
                 if cf == CF_WRITE {
-                    // We enable memtable prefix bloom for CF_WRITE, for delete_range operation RocksDB
-                    // will add start key to bloom, and the start key will go through function
-                    // prefix_extractor->Transform, in our case the prefix_extractor is FixedSuffixSliceTransform,
-                    // if the length of start key less than 8, we will encounter index out of range error.
+                    // We enable memtable prefix bloom for CF_WRITE, for delete_range operation
+                    // RocksDB will add start key to bloom, and the start key will go through
+                    // function prefix_extractor->Transform, in our case the prefix_extractor is
+                    // FixedSuffixSliceTransform, if the length of start key less than 8, we
+                    // will encounter index out of range error.
                     box_try!(wb.delete_range_cf(handle, it.key(), end_key));
                 } else {
                     box_try!(wb.delete_range_cf(handle, start_key, end_key));
