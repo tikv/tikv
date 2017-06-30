@@ -1136,7 +1136,7 @@ mod test {
         }
     }
 
-    fn build_byte_datums_expr(data: Vec<&[u8]>, tp: ExprType) -> Expr {
+    fn build_byte_datums_expr(data: &[&[u8]], tp: ExprType) -> Expr {
         let datums = data.into_iter().map(|item| Datum::Bytes(item.to_vec())).collect();
         build_expr(datums, tp)
     }
@@ -1145,17 +1145,17 @@ mod test {
                vec![
             (build_expr(vec![Datum::Null], ExprType::JsonType),
                         Datum::Null),
-            (build_byte_datums_expr(vec![br#"true"#], ExprType::JsonType),
+            (build_byte_datums_expr(&[br#"true"#], ExprType::JsonType),
                         Datum::Bytes(b"BOOLEAN".to_vec())),
-            (build_byte_datums_expr(vec![br#"null"#], ExprType::JsonType),
+            (build_byte_datums_expr(&[br#"null"#], ExprType::JsonType),
                         Datum::Bytes(b"NULL".to_vec())),
-            (build_byte_datums_expr(vec![br#"3"#], ExprType::JsonType),
+            (build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
                         Datum::Bytes(b"INTEGER".to_vec())),
-            (build_byte_datums_expr(vec![br#"3.14"#], ExprType::JsonType),
+            (build_byte_datums_expr(&[br#"3.14"#], ExprType::JsonType),
                         Datum::Bytes(b"DOUBLE".to_vec())),
-            (build_byte_datums_expr(vec![br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
+            (build_byte_datums_expr(&[br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
                         Datum::Bytes(b"OBJECT".to_vec())),
-            (build_byte_datums_expr(vec![br#"[1,2,3]"#], ExprType::JsonType),
+            (build_byte_datums_expr(&[br#"[1,2,3]"#], ExprType::JsonType),
                         Datum::Bytes(b"ARRAY".to_vec())),
     ]);
 
@@ -1164,13 +1164,13 @@ mod test {
                vec![
             (build_expr(vec![Datum::Null], ExprType::JsonUnquote),
                         Datum::Null),
-            (build_byte_datums_expr(vec![b"a"], ExprType::JsonUnquote),
+            (build_byte_datums_expr(&[b"a"], ExprType::JsonUnquote),
                         Datum::Bytes(b"a".to_vec())),
-            (build_byte_datums_expr(vec![br#"\"3\""#], ExprType::JsonUnquote),
+            (build_byte_datums_expr(&[br#"\"3\""#], ExprType::JsonUnquote),
                         Datum::Bytes(br#""3""#.to_vec())),
-            (build_byte_datums_expr(vec![br#"{"a":  "b"}"#], ExprType::JsonUnquote),
+            (build_byte_datums_expr(&[br#"{"a":  "b"}"#], ExprType::JsonUnquote),
                         Datum::Bytes(br#"{"a":  "b"}"#.to_vec())),
-            (build_byte_datums_expr(vec![br#"hello,\"quoted string\",world"#],
+            (build_byte_datums_expr(&[br#"hello,\"quoted string\",world"#],
                                     ExprType::JsonUnquote),
                         Datum::Bytes(br#"hello,"quoted string",world"#.to_vec())),
     ]);
@@ -1179,7 +1179,7 @@ mod test {
                vec![
         (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonExtract),
                     Datum::Null),
-        (build_byte_datums_expr(vec![br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#,
+        (build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#,
                                      b"$.a[0].aa[0].aaa", b"$.aaa"],
                              ExprType::JsonExtract),
                     Datum::Json("[1,2]".parse().unwrap())),
@@ -1189,9 +1189,9 @@ mod test {
                vec![
         (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonMerge),
                     Datum::Null),
-        (build_byte_datums_expr(vec![b"{}", b"[]"], ExprType::JsonMerge),
+        (build_byte_datums_expr(&[b"{}", b"[]"], ExprType::JsonMerge),
                     Datum::Json("[{}]".parse().unwrap())),
-        (build_byte_datums_expr(vec![b"{}", b"[]", b"3", br#""4""#], ExprType::JsonMerge),
+        (build_byte_datums_expr(&[b"{}", b"[]", b"3", br#""4""#], ExprType::JsonMerge),
                     Datum::Json(r#"[{}, 3, "4"]"#.parse().unwrap())),
     ]);
 
@@ -1213,18 +1213,18 @@ mod test {
     test_eval_err!(test_eval_json_err,
                    vec![
           build_expr(vec![], ExprType::JsonType),
-          build_byte_datums_expr(vec![br#"true"#,br#"444"#], ExprType::JsonType),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
           build_expr(vec![], ExprType::JsonUnquote),
-          build_byte_datums_expr(vec![br#"true"#,br#"444"#], ExprType::JsonUnquote),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonUnquote),
           build_expr(vec![], ExprType::JsonExtract),
-          build_byte_datums_expr(vec![br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#],
+          build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#],
                                 ExprType::JsonExtract),
-          build_byte_datums_expr(vec![br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#, b"aaa"],
+          build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#, b"aaa"],
                                 ExprType::JsonExtract),
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
-          build_byte_datums_expr(vec![b"{}", b"$invalidPath",b"3",], ExprType::JsonReplace),
-          build_byte_datums_expr(vec![b"{}", b"$.a", b"3", b"$.c"], ExprType::JsonReplace),
+          build_byte_datums_expr(&[b"{}", b"$invalidPath", b"3",], ExprType::JsonReplace),
+          build_byte_datums_expr(&[b"{}", b"$.a", b"3", b"$.c"], ExprType::JsonReplace),
      ]);
 
 }
