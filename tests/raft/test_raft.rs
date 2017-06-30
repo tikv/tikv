@@ -90,12 +90,12 @@ pub fn new_test_raft(id: u64,
 }
 
 pub fn new_test_raft_with_prevote(id: u64,
-                                 peers: Vec<u64>,
-                                 election: usize,
-                                 heartbeat: usize,
-                                 storage: MemStorage,
-                                 pre_vote: bool)
-                                 -> Interface {
+                                  peers: Vec<u64>,
+                                  election: usize,
+                                  heartbeat: usize,
+                                  storage: MemStorage,
+                                  pre_vote: bool)
+                                  -> Interface {
     let mut config = new_test_config(id, peers, election, heartbeat);
     config.pre_vote = pre_vote;
     new_test_raft_with_config(&config, storage)
