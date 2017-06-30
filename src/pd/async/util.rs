@@ -232,11 +232,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         let r = self.req.clone();
 
         ok(self)
-            .map(|mut ctx| {
-                ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_timer());
-                ctx
-            })
             .and_then(|mut ctx| {
+                ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_timer());
                 let req = (ctx.func)(&ctx.client.inner, r);
                 req.then(|resp| {
                     // Observe on dropping, schedule time will be recorded too.
