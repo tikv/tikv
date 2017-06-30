@@ -18,7 +18,7 @@ matrix:
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
-            packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
+            packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev', 'libcurl4-openssl-dev', 'libiberty-dev']
     - os: osx
       rust: nightly-2017-05-29
       env: COMPILER=clang++ SKIP_FORMAT_CHECK=true CXX=clang++
