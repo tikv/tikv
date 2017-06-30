@@ -466,7 +466,7 @@ impl Evaluator {
         }
         let mut children = children.into_iter();
         let json = try!(children.next().unwrap().cast_as_json());
-        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.into_json_path_expr())
+        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.as_json_path_expr())
             .collect());
         if let Some(data) = json.extract(&path_extrs) {
             Ok(Datum::Json(data))
@@ -495,7 +495,7 @@ impl Evaluator {
         let mut keys = Vec::with_capacity(kv_len);
         let mut values = Vec::with_capacity(kv_len);
         while let Some(item) = children.next() {
-            let key = try!(item.into_json_path_expr());
+            let key = try!(item.as_json_path_expr());
             let value = try!(children.next().unwrap().into_json());
             keys.push(key);
             values.push(value);

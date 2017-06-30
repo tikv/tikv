@@ -453,12 +453,12 @@ impl Datum {
         }
     }
 
-    pub fn into_json_path_expr(self) -> Result<PathExpression> {
-        let v = match self {
-            Datum::Bytes(bs) => try!(String::from_utf8(bs)),
-            _ => String::default(),
+    pub fn as_json_path_expr(&self) -> Result<PathExpression> {
+        let v = match *self {
+            Datum::Bytes(ref bs) => try!(str::from_utf8(bs)),
+            _ => "",
         };
-        parse_json_path_expr(&v)
+        parse_json_path_expr(v)
     }
 
     /// Try its best effort to convert into a decimal datum.
