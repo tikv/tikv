@@ -39,6 +39,8 @@ use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state
 use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
 use raftstore::store::metrics::*;
 
+use super::metrics::*;
+
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 
@@ -1269,6 +1271,7 @@ impl Runner {
     }
 
     fn handle_proposals(&mut self, proposals: Proposals) {
+        APPLY_PROPOSAL.observe(proposals.props.len() as f64);
         let delegate = match self.delegates.get_mut(&proposals.region_id) {
             Some(d) => d,
             None => {
