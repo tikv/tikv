@@ -48,8 +48,8 @@ use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
-                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
+use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionTaskRes, RegionRunner,
+                    CompactTask, CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
@@ -115,7 +115,10 @@ pub struct Store<T, C: 'static> {
     // the regions with pending snapshots between two mio ticks.
     pending_snapshot_regions: Vec<metapb::Region>,
     split_check_worker: Worker<SplitCheckTask>,
+
     region_worker: Worker<RegionTask>,
+    region_res_receiver: Option<StdReceiver<RegionTaskRes>>,
+
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
     pd_worker: FutureWorker<PdTask>,
@@ -199,6 +202,7 @@ impl<T, C> Store<T, C> {
             pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
+            region_res_receiver: None,
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: FutureWorker::new("pd worker"),
@@ -407,9 +411,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
+        let (tx, rx) = mpsc::channel();
         let runner = RegionRunner::new(self.engine.clone(),
                                        self.snap_mgr.clone(),
-                                       self.cfg.snap_apply_batch_size);
+                                       self.cfg.snap_apply_batch_size,
+                                       tx);
+        self.region_res_receiver = Some(rx);
         box_try!(self.region_worker.start(runner));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
@@ -545,6 +552,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
                     self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(e) => panic!("unexpected error {:?}", e),
+            }
+        }
+    }
+
+    fn poll_region(&mut self) {
+        loop {
+            match self.region_res_receiver.as_ref().unwrap().try_recv() {
+                Ok(RegionTaskRes::NeedCompactRange { cf, start_key, end_key }) => {
+                    self.compact_worker
+                        .schedule(CompactTask {
+                            cf_name: cf,
+                            start_key: Some(start_key),
+                            end_key: Some(end_key),
+                        })
+                        .unwrap();
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -2077,6 +2102,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
         }
 
         self.poll_apply();
+        self.poll_region();
 
         self.pending_snapshot_regions.clear();
     }
