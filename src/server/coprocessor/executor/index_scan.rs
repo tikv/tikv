@@ -238,7 +238,7 @@ mod test {
         r2.set_end(end_key.clone());
         wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExecutor::new(&mut wrapper.scan,
+        let mut scanner = IndexScanExecutor::new(wrapper.scan,
                                                  wrapper.ranges,
                                                  snapshot,
                                                  &mut statistics,
@@ -265,7 +265,7 @@ mod test {
         let mut wrapper = IndexTestWrapper::default();;
         wrapper.scan.set_desc(true);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExecutor::new(&mut wrapper.scan,
+        let mut scanner = IndexScanExecutor::new(wrapper.scan,
                                                  wrapper.ranges,
                                                  snapshot,
                                                  &mut statistics,
@@ -292,7 +292,7 @@ mod test {
         let mut statistics = Statistics::default();
         let mut wrapper = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let mut scanner = IndexScanExecutor::new(&mut wrapper.scan,
+        let mut scanner = IndexScanExecutor::new(wrapper.scan,
                                                  wrapper.ranges,
                                                  snapshot,
                                                  &mut statistics,

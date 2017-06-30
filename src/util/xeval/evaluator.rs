@@ -962,10 +962,10 @@ mod test {
     fn test_context() {
         let mut req = SelectRequest::new();
         req.set_time_zone_offset(i32::MAX as i64 + 1);
-        let ctx = EvalContext::new(&req);
+        let ctx = EvalContext::new(req.get_time_zone_offset(), req.get_flags());
         assert!(ctx.is_err());
         req.set_time_zone_offset(3600);
-        EvalContext::new(&req).unwrap();
+        EvalContext::new(req.get_time_zone_offset(), req.get_flags()).unwrap();
     }
 
     #[test]
