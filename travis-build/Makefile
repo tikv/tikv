@@ -47,7 +47,7 @@ prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so.5.4.5 ${LOCAL_DIR}/bin/kcov  prepa
 
 prepare_brew:
 	brew update && \
-	brew install gflags snappy rocksdb
+	brew install gflags snappy gperftools rocksdb
 
 prepare_osx: prepare_brew ${LOCAL_DIR}/bin/kcov
 
