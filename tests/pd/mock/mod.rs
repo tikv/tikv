@@ -15,4 +15,4 @@ mod server;
 pub mod mocker;
 
 pub use self::server::Server;
-pub use self::mocker::Mocker;
+pub use self::mocker::PdMocker;

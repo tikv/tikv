@@ -17,8 +17,7 @@ use protobuf::RepeatedField;
 
 use kvproto::pdpb::{Member, GetMembersRequest, GetMembersResponse, ResponseHeader};
 
-use super::Mocker;
-use super::Result;
+use super::*;
 
 #[derive(Debug)]
 struct Inner {
@@ -37,7 +36,7 @@ impl Split {
     }
 }
 
-impl Mocker for Split {
+impl PdMocker for Split {
     fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         let mut holder = self.inner.lock().unwrap();
         let mut inner = holder.as_mut().unwrap();
