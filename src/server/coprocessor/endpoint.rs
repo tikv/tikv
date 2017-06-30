@@ -379,12 +379,12 @@ impl TiDbEndPoint {
             on_error(e, t);
             return;
         }
-        let res = match t.cop_req.take().unwrap() {
+        let resp = match t.cop_req.take().unwrap() {
             Ok(CopRequest::Select(sel)) => self.handle_select(sel, &mut t),
             Ok(CopRequest::DAG(dag)) => self.handle_dag(dag, &mut t),
             Err(err) => Err(err),
         };
-        match res {
+        match resp {
             Ok(r) => respond(r, t),
             Err(e) => on_error(e, t),
         }

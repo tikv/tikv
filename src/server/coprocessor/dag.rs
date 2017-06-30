@@ -21,7 +21,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::{Snapshot, Statistics};
 use util::xeval::EvalContext;
-use super::Result;
+use super::{Result, Error};
 use super::executor::Executor as DAGExecutor;
 use super::executor::table_scan::TableScanExecutor;
 use super::executor::index_scan::IndexScanExecutor;
@@ -59,11 +59,9 @@ impl<'s> DAGContext<'s> {
 
     pub fn validate_dag(&mut self) -> Result<()> {
         let execs = self.req.get_executors();
-        if execs.is_empty() {
-            return Err(box_err!("dag copr has not executor"));
-        }
+        let first = try!(execs.first()
+            .ok_or_else(|| Error::Other(box_err!("dag copr has not executor"))));
         // check whether first exec is *scan and get the column info
-        let first = &execs[0];
         match first.get_tp() {
             ExecType::TypeTableScan => {
                 self.columns = first.get_tbl_scan().get_columns().to_vec();
@@ -77,7 +75,7 @@ impl<'s> DAGContext<'s> {
             }
         }
         // check whether dag has a aggregation action and take a flag
-        if execs.iter().rfind(|&exec| exec.get_tp() == ExecType::TypeAggregation).is_some() {
+        if execs.iter().rev().find(|&exec| exec.get_tp() == ExecType::TypeAggregation).is_some() {
             self.has_aggr = true;
         }
         Ok(())
