@@ -481,7 +481,7 @@ impl Evaluator {
                         mt: ModifyType)
                         -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 2));
-        if children.len() & 1 == 0 {
+        if is_even(children.len() as i64) {
             return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
         }
 
@@ -577,6 +577,10 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
         return Err(e.into());
     }
     Ok(pos.is_ok())
+}
+
+fn is_even(n: i64) -> bool {
+    n & 1 == 0
 }
 
 #[cfg(test)]
