@@ -89,7 +89,7 @@ pub fn new_test_raft(id: u64,
     Interface::new(Raft::new(&new_test_config(id, peers, election, heartbeat), storage))
 }
 
-pub fn new_test_raft_with_config(id: u64,
+pub fn new_test_raft_with_prevote(id: u64,
                                  peers: Vec<u64>,
                                  election: usize,
                                  heartbeat: usize,
@@ -98,7 +98,11 @@ pub fn new_test_raft_with_config(id: u64,
                                  -> Interface {
     let mut config = new_test_config(id, peers, election, heartbeat);
     config.pre_vote = pre_vote;
-    Interface::new(Raft::new(&config, storage))
+    new_test_raft_with_config(&config, storage)
+}
+
+pub fn new_test_raft_with_config(config: &Config, storage: MemStorage) -> Interface {
+    Interface::new(Raft::new(config, storage))
 }
 
 
@@ -114,7 +118,7 @@ fn ents_with_config(terms: Vec<u64>, pre_vote: bool) -> Interface {
         e.set_term(*term);
         store.wl().append(&[e]).expect("");
     }
-    let mut raft = new_test_raft_with_config(1, vec![], 5, 1, store, pre_vote);
+    let mut raft = new_test_raft_with_prevote(1, vec![], 5, 1, store, pre_vote);
     raft.reset(terms[terms.len() - 1]);
     raft
 }
@@ -128,7 +132,7 @@ fn voted_with_config(vote: u64, term: u64, pre_vote: bool) -> Interface {
     hard_state.set_term(term);
     let store = MemStorage::new();
     store.wl().set_hardstate(hard_state);
-    let mut raft = new_test_raft_with_config(1, vec![], 5, 1, store, pre_vote);
+    let mut raft = new_test_raft_with_prevote(1, vec![], 5, 1, store, pre_vote);
     raft.reset(term);
     raft
 }
@@ -295,12 +299,12 @@ impl Network {
             match p {
                 None => {
                     nstorage.insert(id, new_storage());
-                    let r = new_test_raft_with_config(id,
-                                                      peer_addrs.clone(),
-                                                      10,
-                                                      1,
-                                                      nstorage[&id].clone(),
-                                                      pre_vote);
+                    let r = new_test_raft_with_prevote(id,
+                                                       peer_addrs.clone(),
+                                                       10,
+                                                       1,
+                                                       nstorage[&id].clone(),
+                                                       pre_vote);
                     npeers.insert(id, r);
                 }
                 Some(mut p) => {
@@ -1024,9 +1028,9 @@ fn test_dueling_candidates() {
 
 #[test]
 fn test_dueling_pre_candidates() {
-    let a = new_test_raft_with_config(1, vec![1, 2, 3], 10, 1, new_storage(), true);
-    let b = new_test_raft_with_config(2, vec![1, 2, 3], 10, 1, new_storage(), true);
-    let c = new_test_raft_with_config(3, vec![1, 2, 3], 10, 1, new_storage(), true);
+    let a = new_test_raft_with_prevote(1, vec![1, 2, 3], 10, 1, new_storage(), true);
+    let b = new_test_raft_with_prevote(2, vec![1, 2, 3], 10, 1, new_storage(), true);
+    let c = new_test_raft_with_prevote(3, vec![1, 2, 3], 10, 1, new_storage(), true);
 
     let mut nt = Network::new_with_config(vec![Some(a), Some(b), Some(c)], true);
     nt.cut(1, 3);
@@ -2679,7 +2683,7 @@ fn test_pre_campaign_while_leader() {
 
 
 fn test_campaign_while_leader_with_pre_vote(pre_vote: bool) {
-    let mut r = new_test_raft_with_config(1, vec![1], 5, 1, new_storage(), pre_vote);
+    let mut r = new_test_raft_with_prevote(1, vec![1], 5, 1, new_storage(), pre_vote);
     assert_eq!(r.state, StateRole::Follower);
     // We don't call campaign() directly because it comes after the check
     // for our current state.
