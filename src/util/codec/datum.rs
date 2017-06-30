@@ -441,7 +441,7 @@ impl Datum {
 
     /// into_json would convert Datum::Bytes(bs) into Json::String(bs)
     /// and convert Datum::Null into Json::None.
-    /// This func would be used in json_unquote && json_modify
+    /// This func would be used in json_unquote and json_modify
     pub fn into_json(self) -> Result<Json> {
         match self {
             Datum::Null => Ok(Json::None),
@@ -1267,12 +1267,12 @@ mod test {
              Ordering::Equal),
             (Datum::I64(18), Datum::Json(Json::I64(18)), Ordering::Equal),
             (Datum::U64(18), Datum::Json(Json::I64(20)), Ordering::Less),
-            (Datum::F64(1.2),Datum::Json(Json::Double(1.0)), Ordering::Greater),
+            (Datum::F64(1.2), Datum::Json(Json::Double(1.0)), Ordering::Greater),
             (Datum::Dec(i32::MIN.into()),
              Datum::Json(Json::Double(i32::MIN as f64)), Ordering::Equal),
             (b"hi".as_ref().into(), Datum::Json(Json::from_str(r#""hi""#).unwrap()),
              Ordering::Equal),
-            (Datum::Max,Datum::Json(Json::from_str(r#""MAX""#).unwrap()),Ordering::Less),
+            (Datum::Max, Datum::Json(Json::from_str(r#""MAX""#).unwrap()),Ordering::Less),
         ];
 
         for (lhs, rhs, ret) in tests {

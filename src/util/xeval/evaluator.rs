@@ -256,7 +256,7 @@ impl Evaluator {
                           num: usize)
                           -> Result<Vec<Datum>> {
         let children = expr.get_children();
-        if children.len() < 2 {
+        if children.len() < num {
             return Err(Error::Expr(format!("expect more than {} operands, got {}",
                                            num,
                                            children.len())));
