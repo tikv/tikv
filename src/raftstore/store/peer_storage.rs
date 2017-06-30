@@ -1213,8 +1213,8 @@ mod test {
             SnapState::Generating(ref rx) => {
                 rx.recv_timeout(Duration::from_secs(3)).unwrap();
                 worker.stop().unwrap().join().unwrap();
-                match rx.try_recv() {
-                    Err(TryRecvError::Disconnected) => {}
+                match rx.recv_timeout(Duration::from_secs(3)) {
+                    Err(RecvTimeoutError::Disconnected) => {}
                     res => panic!("unexpected result: {:?}", res),
                 }
             }
