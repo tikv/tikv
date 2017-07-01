@@ -140,7 +140,7 @@ pub fn dec_encoded_len(encoded: &[u8]) -> Result<usize> {
     Ok(int_len + frac_len + 2)
 }
 
-/// `count_leading_zeroes` returns the number of leading zeroes that can be removed from int.
+/// `count_leading_zeroes` returns the number of leading zeros that can be removed from int.
 fn count_leading_zeroes(i: u8, word: u32) -> u8 {
     let (mut c, mut i) = (0, i as usize);
     while TEN_POW[i] > word {
@@ -150,7 +150,7 @@ fn count_leading_zeroes(i: u8, word: u32) -> u8 {
     c
 }
 
-/// `count_trailing_zeroes` returns the number of trailing zeroes that can be removed from fraction.
+/// `count_trailing_zeroes` returns the number of trailing zeros that can be removed from fraction.
 fn count_trailing_zeroes(i: u8, word: u32) -> u8 {
     let (mut c, mut i) = (0, i as usize);
     while word % TEN_POW[i] == 0 {
@@ -1345,7 +1345,7 @@ impl Decimal {
 
     /// Convert the decimal to float value.
     ///
-    /// Please note that this convertion may lose precision.
+    /// Please note that this conversion may lose precision.
     pub fn as_f64(&self) -> Result<f64> {
         let s = format!("{}", self);
         // Can this line really return error?
@@ -1601,7 +1601,7 @@ macro_rules! read_word {
 }
 
 pub trait DecimalEncoder: Write {
-    /// Encode decimal to compareable bytes.
+    /// Encode decimal to comparaable bytes.
     // TODO: resolve following warnings.
     #[allow(cyclomatic_complexity)]
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
