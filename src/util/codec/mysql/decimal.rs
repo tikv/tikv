@@ -1601,7 +1601,7 @@ macro_rules! read_word {
 }
 
 pub trait DecimalEncoder: Write {
-    /// Encode decimal to comparaable bytes.
+    /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     #[allow(cyclomatic_complexity)]
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
