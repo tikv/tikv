@@ -419,7 +419,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let compact_runner = CompactRunner::new(self.engine.clone());
         box_try!(self.compact_worker.start(compact_runner));
 
-        let pd_runner = PdRunner::new(self.pd_client.clone(), self.sendch.clone());
+        let pd_runner = PdRunner::new(self.store_id(), self.pd_client.clone(), self.sendch.clone());
         box_try!(self.pd_worker.start(pd_runner));
 
         let consistency_check_runner = ConsistencyCheckRunner::new(self.sendch.clone());

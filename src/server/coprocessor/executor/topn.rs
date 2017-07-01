@@ -142,6 +142,7 @@ pub mod test {
     use tipb::expression::{Expr, ExprType};
 
     use protobuf::RepeatedField;
+    use kvproto::kvrpcpb::IsolationLevel;
 
     fn new_order_by(col_id: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
@@ -286,8 +287,12 @@ pub mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut statistics = Statistics::default();
-        let ts_ect =
-            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+        let ts_ect = TableScanExecutor::new(table_scan,
+                                            key_ranges,
+                                            snapshot,
+                                            &mut statistics,
+                                            start_ts,
+                                            IsolationLevel::SI);
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
