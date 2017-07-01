@@ -15,8 +15,9 @@ use std::sync::{self, Arc};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
-use std::error;
+use std::{error, cmp};
 use std::time::Instant;
+use std::collections::VecDeque;
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::Message;
@@ -26,7 +27,7 @@ use kvproto::eraftpb::{Entry, Snapshot, ConfState, HardState};
 use kvproto::raft_serverpb::{RaftSnapshotData, RaftLocalState, RegionLocalState, RaftApplyState,
                              PeerState};
 use util::worker::Scheduler;
-use util::rocksdb;
+use util::{self, rocksdb};
 use raft::{self, Storage, RaftState, StorageError, Error as RaftError, Ready};
 use raftstore::{Result, Error};
 use super::worker::RegionTask;
@@ -43,6 +44,10 @@ pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
+
+// One extra slot for VecDeque internal usage.
+const MAX_CACHE_CAPACITY: usize = 1024 * 3 - 1;
+const SHRINK_CACHE_CAPACITY: usize = 64;
 
 pub const JOB_STATUS_PENDING: usize = 0;
 pub const JOB_STATUS_RUNNING: usize = 1;
@@ -116,6 +121,7 @@ pub struct PeerStorage {
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
+    cache: VecDeque<Entry>,
 
     pub tag: String,
 }
@@ -264,6 +270,7 @@ impl PeerStorage {
             tag: tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
             last_term: last_term,
+            cache: VecDeque::new(),
         })
     }
 
@@ -316,10 +323,52 @@ impl PeerStorage {
         if low == high {
             return Ok(ents);
         }
+        let cache_low = self.cache.front().map_or(0, |e| e.get_index());
+        if self.cache.is_empty() || high <= cache_low {
+            // not overlap
+            try!(self.fetch_entries_to(low, high, max_size, &mut ents));
+            return Ok(ents);
+        }
+        let mut fetched_size = 0;
+        let begin_idx = if low < cache_low {
+            fetched_size = try!(self.fetch_entries_to(low, cache_low, max_size, &mut ents));
+            if fetched_size > max_size {
+                // max_size exceed.
+                return Ok(ents);
+            }
+            0
+        } else {
+            (low - cache_low) as usize
+        };
+        let mut end_idx = begin_idx;
+        self.cache.iter().skip(begin_idx).take_while(|e| {
+            let cur_idx = end_idx as u64 + cache_low;
+            assert_eq!(e.get_index(), cur_idx);
+            let m = e.compute_size() as u64;
+            fetched_size += m;
+            if fetched_size == m {
+                end_idx += 1;
+                fetched_size <= max_size && cur_idx + 1 < high
+            } else if fetched_size <= max_size {
+                end_idx += 1;
+                cur_idx + 1 < high
+            } else {
+                false
+            }
+        }).count();
+        let (first, second) = util::slices_in_range(&self.cache, begin_idx, end_idx);
+        ents.extend_from_slice(first);
+        ents.extend_from_slice(second);
+        // Cache either is empty or contains latest log. Hence we don't need to fetch log
+        // from rocksdb anymore.
+        assert!(fetched_size > max_size || ents.len() as u64 == high - low);
+        Ok(ents)
+    }
+    
+    fn fetch_entries_to(&self, low: u64, high: u64, max_size: u64, buf: &mut Vec<Entry>) -> raft::Result<u64> {
         let mut total_size: u64 = 0;
         let mut next_index = low;
         let mut exceeded_max_size = false;
-
         if high - low <= RAFT_LOG_MULTI_GET_CNT {
             // If election happens in inactive regions, they will just try
             // to fetch one empty log.
@@ -333,14 +382,16 @@ impl PeerStorage {
                         box_try!(entry.merge_from_bytes(&v));
                         assert_eq!(entry.get_index(), i);
                         total_size += v.len() as u64;
-                        if !ents.is_empty() && total_size > max_size {
+                        if buf.is_empty() || total_size <= max_size {
+                            buf.push(entry);
+                        }
+                        if total_size > max_size {
                             break;
                         }
-                        ents.push(entry);
                     }
                 }
             }
-            return Ok(ents);
+            return Ok(total_size);
         }
 
         let start_key = keys::raft_log_key(self.get_region_id(), low);
@@ -361,16 +412,16 @@ impl PeerStorage {
 
             total_size += value.len() as u64;
             exceeded_max_size = total_size > max_size;
-            if !exceeded_max_size || ents.is_empty() {
-                ents.push(entry);
+            if !exceeded_max_size || buf.is_empty() {
+                buf.push(entry);
             }
             Ok(!exceeded_max_size)
         }));
 
         // If we get the correct number of entries, returns,
         // or the total size almost exceeds max_size, returns.
-        if ents.len() == (high - low) as usize || exceeded_max_size {
-            return Ok(ents);
+        if buf.len() == (high - low) as usize || exceeded_max_size {
+            return Ok(total_size);
         }
 
         // Here means we don't fetch enough entries.
@@ -385,11 +436,8 @@ impl PeerStorage {
         if self.truncated_term() == self.last_term || idx == self.last_index() {
             return Ok(self.last_term);
         }
-        let key = keys::raft_log_key(self.get_region_id(), idx);
-        match try!(self.engine.get_msg_cf::<Entry>(CF_RAFT, &key)) {
-            Some(entry) => Ok(entry.get_term()),
-            None => Err(RaftError::Store(StorageError::Unavailable)),
-        }
+        let entries = try!(self.entries(idx, idx + 1, raft::NO_LIMIT));
+        Ok(entries[0].get_term())
     }
 
     #[inline]
@@ -529,7 +577,7 @@ impl PeerStorage {
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
-    pub fn append(&self,
+    pub fn append(&mut self,
                   ctx: &mut InvokeContext,
                   entries: &[Entry],
                   wb: &mut WriteBatch)
@@ -560,11 +608,59 @@ impl PeerStorage {
         ctx.raft_state.set_last_index(last_index);
         ctx.last_term = last_term;
 
+        // TODO: if the writebatch is failed to commit, the cache will be wrong.
+        if let Some(cache_last_index) = self.cache.back().map(|e| e.get_index()) {
+            let first_index = entries[0].get_index();
+            if cache_last_index >= first_index {
+                if self.cache.front().unwrap().get_index() >= first_index {
+                    self.cache.clear();
+                } else {
+                    let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
+                    self.cache.truncate(left);
+                }
+                if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY {
+                    self.cache.shrink_to_fit();
+                }
+            } else if cache_last_index + 1 < first_index {
+                panic!("{} unexpected hole: {} < {}", self.tag, cache_last_index, first_index);
+            }
+        }
+        let mut start_idx = 0;
+        if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
+            if len < self.cache.len() {
+                self.cache.drain(..len);
+            } else {
+                start_idx = len - self.cache.len();
+                self.cache.clear();
+            }
+        }
+        for e in &entries[start_idx..] {
+            self.cache.push_back(e.to_owned());
+        }
+
         Ok(last_index)
     }
 
+    pub fn compact_to(&mut self, idx: u64) {
+        let cache_first_idx = match self.cache.front() {
+            None => return,
+            Some(e) => e.get_index(),
+        };
+
+        if cache_first_idx > idx {
+            return;
+        }
+        let cache_last_idx = self.cache.back().unwrap().get_index();
+        self.cache.drain(..(cmp::min(cache_last_idx, idx) - cache_first_idx) as usize);
+        if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY {
+            // So the peer storage doesn't have much writes since the proposal of compaction,
+            // we can consider this peer is going to be inactive.
+            self.cache.shrink_to_fit();
+        }
+    }
+
     // Apply the peer with given snapshot.
-    pub fn apply_snapshot(&self,
+    pub fn apply_snapshot(&mut self,
                           ctx: &mut InvokeContext,
                           snap: &Snapshot,
                           wb: &mut WriteBatch)
@@ -609,7 +705,7 @@ impl PeerStorage {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&self, wb: &WriteBatch) -> Result<()> {
+    pub fn clear_meta(&mut self, wb: &WriteBatch) -> Result<()> {
         let t = Instant::now();
         let mut meta_count = 0;
         let mut raft_count = 0;
@@ -637,6 +733,7 @@ impl PeerStorage {
                                      raft_count += 1;
                                      Ok(true)
                                  }));
+        self.cache = VecDeque::new();
         info!("{} clear peer {} meta keys and {} raft keys, takes {:?}",
               self.tag,
               meta_count,
@@ -1289,6 +1386,135 @@ mod test {
     }
 
     #[test]
+    fn test_storage_cache_fetch() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let td = TempDir::new("tikv-store-test").unwrap();
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut store = new_storage_from_ents(sched, &td, &ents);
+        store.cache.clear();
+        // empty cache should fetch data from rocksdb directly.
+        let mut res = store.entries(4, 6, u64::max_value()).unwrap();
+        assert_eq!(*res, ents[1..]);
+
+        let entries = vec![new_entry(6, 5), new_entry(7, 5)];
+        let mut ctx = InvokeContext::new(&store);
+        let mut wb = WriteBatch::new();
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        ctx.save_raft_to(&store.engine, &mut wb).unwrap();
+        store.engine.write(wb).unwrap();
+        store.raft_state = ctx.raft_state;
+        // direct cache access
+        res = store.entries(6, 8, u64::max_value()).unwrap();
+        assert_eq!(res, entries);
+
+        // size limit should be supported correctly.
+        res = store.entries(4, 8, 0).unwrap();
+        assert_eq!(res, vec![new_entry(4, 4)]);
+        let mut size = ents[1..].iter().map(|e| e.compute_size() as u64).sum();
+        res = store.entries(4, 8, size).unwrap();
+        let mut exp_res = ents[1..].to_vec();
+        assert_eq!(res, exp_res);
+        for e in &entries {
+            size += e.compute_size() as u64;
+            exp_res.push(e.clone());
+            res = store.entries(4, 8, size).unwrap();
+            assert_eq!(res, exp_res);
+        }
+        
+        // range limit should be supported correctly.
+        for low in 4..9 {
+            for high in low..9 {
+                let res = store.entries(low, high, u64::max_value()).unwrap();
+                assert_eq!(*res, exp_res[low as usize - 4..high as usize - 4]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_storage_cache_update() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let td = TempDir::new("tikv-store-test").unwrap();
+        let worker = Worker::new("snap_manager");
+        let sched = worker.scheduler();
+        let mut store = new_storage_from_ents(sched, &td, &ents);
+        store.cache.clear();
+
+        // initial cache
+        let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
+        let mut ctx = InvokeContext::new(&store);
+        let mut wb = WriteBatch::new();
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        assert_eq!(store.cache, entries);
+
+        // rewrite
+        entries = vec![new_entry(6, 6), new_entry(7, 6)];
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        assert_eq!(store.cache, entries);
+
+        // rewrite old entry
+        entries = vec![new_entry(5, 6), new_entry(6, 6)];
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        assert_eq!(store.cache, entries);
+
+        // partial rewrite
+        entries = vec![new_entry(6, 7), new_entry(7, 7)];
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        let mut exp_res = vec![new_entry(5, 6), new_entry(6, 7), new_entry(7, 7)];
+        assert_eq!(store.cache, exp_res);
+
+        // direct append
+        entries = vec![new_entry(8, 7), new_entry(9, 7)];
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        exp_res.extend_from_slice(&entries);
+        assert_eq!(store.cache, exp_res);
+
+        // rewrite middle
+        entries = vec![new_entry(7, 8)];
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        exp_res.truncate(2);
+        exp_res.push(new_entry(7, 8));
+        assert_eq!(store.cache, exp_res);
+
+        let cap = MAX_CACHE_CAPACITY as u64;
+
+        // result overflow
+        entries = (3..cap + 1).map(|i| new_entry(i + 5, 8)).collect();
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        exp_res.remove(0);
+        exp_res.extend_from_slice(&entries);
+        assert_eq!(store.cache, exp_res);
+
+        // input overflow
+        entries = (0..cap + 1).map(|i| new_entry(i + cap + 6, 8)).collect();
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        exp_res = entries[entries.len() - cap as usize..].to_vec();
+        assert_eq!(store.cache, exp_res);
+
+        // compact
+        store.compact_to(cap + 10);
+        exp_res = (cap + 10..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
+        assert_eq!(store.cache, exp_res);
+
+        // compact shrink
+        assert!(store.cache.capacity() > cap as usize);
+        store.compact_to(cap * 2);
+        exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
+        assert_eq!(store.cache, exp_res);
+        assert!(store.cache.capacity() < cap as usize);
+
+        // append shrink
+        entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
+        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        assert!(store.cache.capacity() > cap as usize);
+        store.append(&mut ctx, &[new_entry(6, 8)], &mut wb).unwrap();
+        exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
+        assert_eq!(store.cache, exp_res);
+        assert!(store.cache.capacity() < cap as usize);
+    }
+
+
+    #[test]
     fn test_storage_apply_snapshot_with_old_format() {
         test_storage_apply_snapshot(false);
     }
@@ -1327,7 +1553,7 @@ mod test {
         copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
-        let s2 = new_storage(sched, &td2);
+        let mut s2 = new_storage(sched, &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());

@@ -370,7 +370,7 @@ impl Peer {
 
         // Set Tombstone state explicitly
         let wb = WriteBatch::new();
-        try!(self.get_store().clear_meta(&wb));
+        try!(self.mut_store().clear_meta(&wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
         try!(self.engine.write(wb));
 
