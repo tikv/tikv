@@ -13,9 +13,9 @@ dependencies = [
  "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git)",
+ "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue)",
  "jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)",
- "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=ov/grpc/alarm-queue)",
  "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -214,6 +214,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "dbghelp-sys"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -269,10 +274,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "grpc"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/grpc-rs.git#50b2f7c7bfe18ea1532f3b396d5092f65fd7f333"
+source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue#9c5ab8a19f5f6a9d0974a2b5308bc91f1caeb90a"
 dependencies = [
+ "crossbeam 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git)",
+ "grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -280,7 +286,7 @@ dependencies = [
 [[package]]
 name = "grpc-sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/grpc-rs.git#50b2f7c7bfe18ea1532f3b396d5092f65fd7f333"
+source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue#9c5ab8a19f5f6a9d0974a2b5308bc91f1caeb90a"
 dependencies = [
  "cmake 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -382,10 +388,10 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git#2012694b0e5b6c68320377f648b7e93403b84e0f"
+source = "git+https://github.com/pingcap/kvproto.git?branch=ov/grpc/alarm-queue#6e3c631df809acdbf9c2d3f6304931fd3efbfe17"
 dependencies = [
  "futures 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
- "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git)",
+ "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue)",
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1089,6 +1095,7 @@ dependencies = [
 "checksum cmake 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)" = "d18d68987ed4c516dcc3e7913659bfa4076f5182eea4a7e0038bb060953e76ac"
 "checksum cookie 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)" = "0e3d6405328b6edb412158b3b7710e2634e23f3614b9bb1c412df7952489a626"
 "checksum crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "541a7a4936092a4dac8b3a1dc1abc264372e0ce1e7ab712dfe0484374f5a2b7b"
+"checksum crossbeam 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)" = "0c5ea215664ca264da8a9d9c3be80d2eaf30923c259d03e870388eb927508f97"
 "checksum dbghelp-sys 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "97590ba53bcb8ac28279161ca943a924d1fd4a8fb3fa63302591647c4fc5b850"
 "checksum dtoa 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "80c8b71fd71146990a9742fc06dcbbde19161a267e0ad4e572c35162f4578c90"
 "checksum flat_map 0.0.4 (registry+https://github.com/rust-lang/crates.io-index)" = "fc16c081affe2ded9d62cd239a9ef1b4801fa98037b59523014f661c7bee182c"
@@ -1097,8 +1104,8 @@ dependencies = [
 "checksum futures 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)" = "4b63a4792d4f8f686defe3b39b92127fea6344de5d38202b2ee5a11bbbf29d6a"
 "checksum futures-cpupool 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "a283c84501e92cade5ea673a2a7ca44f71f209ccdd302a3e0896f50083d2c5ff"
 "checksum gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)" = "91ecd03771effb0c968fd6950b37e89476a578aaf1c70297d8e92b6516ec3312"
-"checksum grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git)" = "<none>"
-"checksum grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git)" = "<none>"
+"checksum grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue)" = "<none>"
+"checksum grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue)" = "<none>"
 "checksum hpack 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3d2da7d3a34cf6406d9d700111b8eafafe9a251de41ae71d8052748259343b58"
 "checksum httparse 1.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "46534074dbb80b070d60a5cb8ecadd8963a00a438ae1a95268850a7ef73b67ae"
 "checksum hyper 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)" = "eb27e8a3e8f17ac43ffa41bbda9cf5ad3f9f13ef66fa4873409d4902310275f7"
@@ -1109,7 +1116,7 @@ dependencies = [
 "checksum jemallocator 0.1.0 (git+https://github.com/busyjay/jemallocator.git?branch=dev)" = "<none>"
 "checksum kernel32-sys 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "e014dab1082fd9d80ea1fa6fcb261b47ed3eb511612a14198bb507701add083e"
 "checksum kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
-"checksum kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)" = "<none>"
+"checksum kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=ov/grpc/alarm-queue)" = "<none>"
 "checksum language-tags 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a91d884b6667cd606bb5a69aa0c99ba811a115fc68915e7056ec08a46e93199a"
 "checksum lazy_static 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)" = "cf186d1a8aa5f5bee5fd662bc9c1b949e0259e1bcc379d1f006847b0080c7417"
 "checksum lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "3b37545ab726dd833ec6420aaba8231c5b320814b9029ad585555d2a03e94fbf"
