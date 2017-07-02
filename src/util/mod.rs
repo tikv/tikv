@@ -86,7 +86,7 @@ pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
 /// ### Panic
 ///
 /// if [low, high) is out of bound.
-pub fn slices_in_range<'a, T>(entry: &'a VecDeque<T>, low: usize, high: usize) -> (&'a [T], &'a [T]) {
+pub fn slices_in_range<T>(entry: &VecDeque<T>, low: usize, high: usize) -> (&[T], &[T]) {
     let (first, second) = entry.as_slices();
     if low >= first.len() {
         (&second[low - first.len()..high - first.len()], &[])
@@ -653,7 +653,13 @@ mod tests {
                         res.extend_from_slice(p1);
                         res.extend_from_slice(p2);
                         let exp: Vec<_> = (low..high).collect();
-                        assert_eq!(res, exp, "[{}, {}) in {:?} with first: {}", low, high, v, first);
+                        assert_eq!(res,
+                                   exp,
+                                   "[{}, {}) in {:?} with first: {}",
+                                   low,
+                                   high,
+                                   v,
+                                   first);
                     }
                 }
             }

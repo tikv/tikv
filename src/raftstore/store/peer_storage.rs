@@ -341,21 +341,25 @@ impl PeerStorage {
             (low - cache_low) as usize
         };
         let mut end_idx = begin_idx;
-        self.cache.iter().skip(begin_idx).take_while(|e| {
-            let cur_idx = end_idx as u64 + cache_low;
-            assert_eq!(e.get_index(), cur_idx);
-            let m = e.compute_size() as u64;
-            fetched_size += m;
-            if fetched_size == m {
-                end_idx += 1;
-                fetched_size <= max_size && cur_idx + 1 < high
-            } else if fetched_size <= max_size {
-                end_idx += 1;
-                cur_idx + 1 < high
-            } else {
-                false
-            }
-        }).count();
+        self.cache
+            .iter()
+            .skip(begin_idx)
+            .take_while(|e| {
+                let cur_idx = end_idx as u64 + cache_low;
+                assert_eq!(e.get_index(), cur_idx);
+                let m = e.compute_size() as u64;
+                fetched_size += m;
+                if fetched_size == m {
+                    end_idx += 1;
+                    fetched_size <= max_size && cur_idx + 1 < high
+                } else if fetched_size <= max_size {
+                    end_idx += 1;
+                    cur_idx + 1 < high
+                } else {
+                    false
+                }
+            })
+            .count();
         let (first, second) = util::slices_in_range(&self.cache, begin_idx, end_idx);
         ents.extend_from_slice(first);
         ents.extend_from_slice(second);
@@ -364,8 +368,13 @@ impl PeerStorage {
         assert!(fetched_size > max_size || ents.len() as u64 == high - low);
         Ok(ents)
     }
-    
-    fn fetch_entries_to(&self, low: u64, high: u64, max_size: u64, buf: &mut Vec<Entry>) -> raft::Result<u64> {
+
+    fn fetch_entries_to(&self,
+                        low: u64,
+                        high: u64,
+                        max_size: u64,
+                        buf: &mut Vec<Entry>)
+                        -> raft::Result<u64> {
         let mut total_size: u64 = 0;
         let mut next_index = low;
         let mut exceeded_max_size = false;
@@ -618,11 +627,15 @@ impl PeerStorage {
                     let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
                     self.cache.truncate(left);
                 }
-                if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY {
+                if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY &&
+                   self.cache.capacity() > SHRINK_CACHE_CAPACITY {
                     self.cache.shrink_to_fit();
                 }
             } else if cache_last_index + 1 < first_index {
-                panic!("{} unexpected hole: {} < {}", self.tag, cache_last_index, first_index);
+                panic!("{} unexpected hole: {} < {}",
+                       self.tag,
+                       cache_last_index,
+                       first_index);
             }
         }
         let mut start_idx = 0;
@@ -652,7 +665,8 @@ impl PeerStorage {
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
         self.cache.drain(..(cmp::min(cache_last_idx, idx) - cache_first_idx) as usize);
-        if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY {
+        if self.cache.len() < SHRINK_CACHE_CAPACITY &&
+           self.cache.capacity() > SHRINK_CACHE_CAPACITY {
             // So the peer storage doesn't have much writes since the proposal of compaction,
             // we can consider this peer is going to be inactive.
             self.cache.shrink_to_fit();
@@ -1119,7 +1133,7 @@ mod test {
     }
 
     fn append_ents(store: &mut PeerStorage, ents: &[Entry]) {
-        let mut ctx = InvokeContext::new(&store);
+        let mut ctx = InvokeContext::new(store);
         let mut wb = WriteBatch::new();
         store.append(&mut ctx, ents, &mut wb).unwrap();
         ctx.save_raft_to(&store.engine, &mut wb).unwrap();
@@ -1138,7 +1152,7 @@ mod test {
             assert_eq!(entry, *e);
         }
     }
-            
+
     fn new_entry(index: u64, term: u64) -> Entry {
         let mut e = Entry::new();
         e.set_index(index);
@@ -1416,7 +1430,7 @@ mod test {
         let entries = vec![new_entry(6, 5), new_entry(7, 5)];
         append_ents(&mut store, &entries);
         validate_cache(&store, &entries);
-        
+
         // direct cache access
         res = store.entries(6, 8, u64::max_value()).unwrap();
         assert_eq!(res, entries);
@@ -1434,7 +1448,7 @@ mod test {
             res = store.entries(4, 8, size).unwrap();
             assert_eq!(res, exp_res);
         }
-        
+
         // range limit should be supported correctly.
         for low in 4..9 {
             for high in low..9 {
