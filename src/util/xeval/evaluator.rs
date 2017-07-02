@@ -579,6 +579,7 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
     Ok(pos.is_ok())
 }
 
+#[inline]
 fn is_even(n: i64) -> bool {
     n & 1 == 0
 }
