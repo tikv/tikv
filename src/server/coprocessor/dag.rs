@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::rc::Rc;
+use std::time::Instant;
 
 use tipb::executor::{Executor, ExecType};
 use tipb::schema::ColumnInfo;
@@ -32,6 +33,7 @@ use super::executor::limit::LimitExecutor;
 
 pub struct DAGContext<'s> {
     req: DAGRequest,
+    pub deadline: Instance,
     pub columns: Vec<ColumnInfo>,
     ranges: Vec<KeyRange>,
     snap: &'s Snapshot,
@@ -42,12 +44,14 @@ pub struct DAGContext<'s> {
 
 impl<'s> DAGContext<'s> {
     pub fn new(req: DAGRequest,
+               deadline: Instant,
                ranges: Vec<KeyRange>,
                snap: &'s Snapshot,
                eval_ctx: Rc<EvalContext>)
                -> DAGContext<'s> {
         DAGContext {
             req: req,
+            deadline: deadline,
             columns: vec![],
             ranges: ranges,
             snap: snap,

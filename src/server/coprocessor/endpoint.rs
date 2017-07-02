@@ -430,13 +430,14 @@ impl TiDbEndPoint {
         let ranges = t.req.get_ranges().to_vec();
         let eval_ctx = Rc::new(box_try!(EvalContext::new(dag.get_time_zone_offset(),
                                                          dag.get_flags())));
-        let mut ctx = DAGContext::new(dag, ranges, self.snap.as_ref(), eval_ctx.clone());
+        let mut ctx = DAGContext::new(dag, t.deadline, ranges, self.snap.as_ref(), eval_ctx.clone());
         try!(ctx.validate_dag());
         let mut exec = try!(ctx.build_dag(&mut t.statistics));
         let mut chunks = vec![];
         loop {
             match exec.next() {
                 Ok(Some(row)) => {
+                    try!(check_if_outdated(ctx.deadline, REQ_TYPE_DAG));
                     let mut chunk = get_chunk(&mut chunks);
                     let length = chunk.get_rows_data().len();
                     if ctx.has_aggr {
