@@ -1118,6 +1118,27 @@ mod test {
         store
     }
 
+    fn append_ents(store: &mut PeerStorage, ents: &[Entry]) {
+        let mut ctx = InvokeContext::new(&store);
+        let mut wb = WriteBatch::new();
+        store.append(&mut ctx, ents, &mut wb).unwrap();
+        ctx.save_raft_to(&store.engine, &mut wb).unwrap();
+        store.engine.write(wb).expect("");
+        store.raft_state = ctx.raft_state;
+    }
+
+    fn validate_cache(store: &PeerStorage, exp_ents: &[Entry]) {
+        assert_eq!(store.cache, exp_ents);
+        let handle = rocksdb::get_cf_handle(&store.engine, CF_RAFT).unwrap();
+        for e in exp_ents {
+            let key = keys::raft_log_key(store.get_region_id(), e.get_index());
+            let bytes = store.engine.get_cf(handle, &key).unwrap().unwrap();
+            let mut entry = Entry::new();
+            entry.merge_from_bytes(&bytes).unwrap();
+            assert_eq!(entry, *e);
+        }
+    }
+            
     fn new_entry(index: u64, term: u64) -> Entry {
         let mut e = Entry::new();
         e.set_index(index);
@@ -1371,12 +1392,7 @@ mod test {
             let worker = Worker::new("snap_manager");
             let sched = worker.scheduler();
             let mut store = new_storage_from_ents(sched, &td, &ents);
-            let mut ctx = InvokeContext::new(&store);
-            let mut wb = WriteBatch::new();
-            store.append(&mut ctx, &entries, &mut wb).unwrap();
-            ctx.save_raft_to(&store.engine, &mut wb).unwrap();
-            store.engine.write(wb).expect("");
-            store.raft_state = ctx.raft_state;
+            append_ents(&mut store, &entries);
             let li = store.last_index();
             let actual_entries = store.entries(4, li + 1, u64::max_value()).expect("");
             if actual_entries != wentries {
@@ -1398,12 +1414,9 @@ mod test {
         assert_eq!(*res, ents[1..]);
 
         let entries = vec![new_entry(6, 5), new_entry(7, 5)];
-        let mut ctx = InvokeContext::new(&store);
-        let mut wb = WriteBatch::new();
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
-        ctx.save_raft_to(&store.engine, &mut wb).unwrap();
-        store.engine.write(wb).unwrap();
-        store.raft_state = ctx.raft_state;
+        append_ents(&mut store, &entries);
+        validate_cache(&store, &entries);
+        
         // direct cache access
         res = store.entries(6, 8, u64::max_value()).unwrap();
         assert_eq!(res, entries);
@@ -1442,74 +1455,72 @@ mod test {
 
         // initial cache
         let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
-        let mut ctx = InvokeContext::new(&store);
-        let mut wb = WriteBatch::new();
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
-        assert_eq!(store.cache, entries);
+        append_ents(&mut store, &entries);
+        validate_cache(&store, &entries);
 
         // rewrite
         entries = vec![new_entry(6, 6), new_entry(7, 6)];
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
-        assert_eq!(store.cache, entries);
+        append_ents(&mut store, &entries);
+        validate_cache(&store, &entries);
 
         // rewrite old entry
         entries = vec![new_entry(5, 6), new_entry(6, 6)];
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
-        assert_eq!(store.cache, entries);
+        append_ents(&mut store, &entries);
+        validate_cache(&store, &entries);
 
         // partial rewrite
         entries = vec![new_entry(6, 7), new_entry(7, 7)];
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        append_ents(&mut store, &entries);
         let mut exp_res = vec![new_entry(5, 6), new_entry(6, 7), new_entry(7, 7)];
-        assert_eq!(store.cache, exp_res);
+        validate_cache(&store, &exp_res);
 
         // direct append
         entries = vec![new_entry(8, 7), new_entry(9, 7)];
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        append_ents(&mut store, &entries);
         exp_res.extend_from_slice(&entries);
-        assert_eq!(store.cache, exp_res);
+        validate_cache(&store, &exp_res);
 
         // rewrite middle
         entries = vec![new_entry(7, 8)];
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        append_ents(&mut store, &entries);
         exp_res.truncate(2);
         exp_res.push(new_entry(7, 8));
-        assert_eq!(store.cache, exp_res);
+        validate_cache(&store, &exp_res);
 
         let cap = MAX_CACHE_CAPACITY as u64;
 
         // result overflow
         entries = (3..cap + 1).map(|i| new_entry(i + 5, 8)).collect();
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        append_ents(&mut store, &entries);
         exp_res.remove(0);
         exp_res.extend_from_slice(&entries);
-        assert_eq!(store.cache, exp_res);
+        validate_cache(&store, &exp_res);
 
         // input overflow
         entries = (0..cap + 1).map(|i| new_entry(i + cap + 6, 8)).collect();
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        append_ents(&mut store, &entries);
         exp_res = entries[entries.len() - cap as usize..].to_vec();
-        assert_eq!(store.cache, exp_res);
+        validate_cache(&store, &exp_res);
 
         // compact
         store.compact_to(cap + 10);
         exp_res = (cap + 10..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
-        assert_eq!(store.cache, exp_res);
+        validate_cache(&store, &exp_res);
 
         // compact shrink
         assert!(store.cache.capacity() > cap as usize);
         store.compact_to(cap * 2);
         exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
-        assert_eq!(store.cache, exp_res);
+        validate_cache(&store, &exp_res);
         assert!(store.cache.capacity() < cap as usize);
 
         // append shrink
         entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
-        store.append(&mut ctx, &entries, &mut wb).unwrap();
+        append_ents(&mut store, &entries);
         assert!(store.cache.capacity() > cap as usize);
-        store.append(&mut ctx, &[new_entry(6, 8)], &mut wb).unwrap();
+        append_ents(&mut store, &[new_entry(6, 8)]);
         exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
-        assert_eq!(store.cache, exp_res);
+        validate_cache(&store, &exp_res);
         assert!(store.cache.capacity() < cap as usize);
     }
 
@@ -1553,7 +1564,7 @@ mod test {
         copy_snapshot(from, to).unwrap();
 
         let td2 = TempDir::new("tikv-store-test").unwrap();
-        let mut s2 = new_storage(sched, &td2);
+        let mut s2 = new_storage(sched.clone(), &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut ctx = InvokeContext::new(&s2);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
@@ -1565,6 +1576,22 @@ mod test {
         assert_eq!(ctx.apply_state.get_truncated_state().get_index(), 6);
         assert_eq!(ctx.apply_state.get_truncated_state().get_term(), 6);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
+        validate_cache(&s2, &[]);
+
+        let td3 = TempDir::new("tikv-store-test").unwrap();
+        let ents = &[new_entry(3, 3), new_entry(4, 3)];
+        let mut s3 = new_storage_from_ents(sched, &td3, ents);
+        validate_cache(&s3, &ents[1..]);
+        let mut ctx = InvokeContext::new(&s3);
+        assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
+        let mut wb = WriteBatch::new();
+        s3.apply_snapshot(&mut ctx, &snap1, &mut wb).unwrap();
+        assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
+        assert_eq!(ctx.apply_state.get_applied_index(), 6);
+        assert_eq!(ctx.raft_state.get_last_index(), 6);
+        assert_eq!(ctx.apply_state.get_truncated_state().get_index(), 6);
+        assert_eq!(ctx.apply_state.get_truncated_state().get_term(), 6);
+        validate_cache(&s3, &[]);
     }
 
     #[test]
