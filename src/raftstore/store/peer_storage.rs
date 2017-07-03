@@ -47,7 +47,7 @@ const MAX_SNAP_TRY_CNT: usize = 5;
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
 // One extra slot for VecDeque internal usage.
-const MAX_CACHE_CAPACITY: usize = 1024 * 3 - 1;
+const MAX_CACHE_CAPACITY: usize = 1024 - 1;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 pub const JOB_STATUS_PENDING: usize = 0;
