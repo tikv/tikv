@@ -307,6 +307,7 @@ impl Peer {
             applied: applied_index,
             check_quorum: true,
             tag: tag.clone(),
+            skip_bcast_commit: true,
             ..Default::default()
         };
 
