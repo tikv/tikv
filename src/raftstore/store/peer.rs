@@ -292,7 +292,11 @@ impl Peer {
         let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
-        let ps = try!(PeerStorage::new(store.engine(), region, sched, tag.clone()));
+        let ps = try!(PeerStorage::new(store.engine(),
+                                       region,
+                                       sched,
+                                       tag.clone(),
+                                       store.entry_cache_metries.clone()));
 
         let applied_index = ps.applied_index();
 

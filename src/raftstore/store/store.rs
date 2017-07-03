@@ -14,6 +14,7 @@
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::boxed::Box;
 use std::collections::Bound::{Included, Excluded, Unbounded};
@@ -57,7 +58,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, StaleState, ConsistencyState, ReadyContext};
-use super::peer_storage::ApplySnapResult;
+use super::peer_storage::{ApplySnapResult, CacheQueryStats};
 use super::msg::Callback;
 use super::cmd_resp::{bind_term, bind_error};
 use super::transport::Transport;
@@ -131,6 +132,7 @@ pub struct Store<T, C: 'static> {
     snap_mgr: SnapManager,
 
     raft_metrics: RaftMetrics,
+    pub entry_cache_metries: Rc<RefCell<CacheQueryStats>>,
 
     tag: String,
 
@@ -211,6 +213,7 @@ impl<T, C> Store<T, C> {
             coprocessor_host: Arc::new(coprocessor_host),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
+            entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
             pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
             tag: tag,
             start_time: time::get_time(),
@@ -526,6 +529,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         timer.observe_duration();
 
         self.raft_metrics.flush();
+        self.entry_cache_metries.borrow_mut().flush();
 
         self.register_raft_base_tick(event_loop);
     }

@@ -14,6 +14,7 @@
 use std::sync::{self, Arc};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::rc::Rc;
 use std::cell::RefCell;
 use std::{error, cmp, u64};
 use std::time::Instant;
@@ -119,7 +120,12 @@ impl EntryCache {
         self.cache.front().map_or(u64::MAX, |e| e.get_index())
     }
 
-    fn fetch_entries_to(&self, begin: u64, end: u64, mut fetched_size: u64, max_size: u64, ents: &mut Vec<Entry>) {
+    fn fetch_entries_to(&self,
+                        begin: u64,
+                        end: u64,
+                        mut fetched_size: u64,
+                        max_size: u64,
+                        ents: &mut Vec<Entry>) {
         if begin >= end {
             return;
         }
@@ -127,7 +133,7 @@ impl EntryCache {
         let cache_low = self.cache.front().unwrap().get_index();
         let start_idx = begin.checked_sub(cache_low).unwrap() as usize;
         let limit_idx = end.checked_sub(cache_low).unwrap() as usize;
-        
+
         let mut end_idx = start_idx;
         self.cache
             .iter()
@@ -214,6 +220,21 @@ impl EntryCache {
     }
 }
 
+#[derive(Default)]
+pub struct CacheQueryStats {
+    pub hit: u64,
+    pub miss: u64,
+}
+
+impl CacheQueryStats {
+    pub fn flush(&mut self) {
+        RAFT_ENTRY_FETCHES.with_label_values(&["hit"]).inc_by(self.hit as f64).unwrap();
+        RAFT_ENTRY_FETCHES.with_label_values(&["miss"]).inc_by(self.miss as f64).unwrap();
+        self.hit = 0;
+        self.miss = 0;
+    }
+}
+
 pub struct PeerStorage {
     pub engine: Arc<DB>,
 
@@ -226,7 +247,9 @@ pub struct PeerStorage {
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
+
     cache: EntryCache,
+    stats: Rc<RefCell<CacheQueryStats>>,
 
     pub tag: String,
 }
@@ -357,7 +380,8 @@ impl PeerStorage {
     pub fn new(engine: Arc<DB>,
                region: &metapb::Region,
                region_sched: Scheduler<RegionTask>,
-               tag: String)
+               tag: String,
+               stats: Rc<RefCell<CacheQueryStats>>)
                -> Result<PeerStorage> {
         debug!("creating storage on {} for {:?}", engine.path(), region);
         let raft_state = try!(init_raft_state(&engine, region));
@@ -376,6 +400,7 @@ impl PeerStorage {
             applied_index_term: RAFT_INIT_LOG_TERM,
             last_term: last_term,
             cache: EntryCache::default(),
+            stats: stats,
         })
     }
 
@@ -431,11 +456,13 @@ impl PeerStorage {
         let cache_low = self.cache.first_index();
         if high <= cache_low {
             // not overlap
+            self.stats.borrow_mut().miss += 1;
             try!(self.fetch_entries_to(low, high, max_size, &mut ents));
             return Ok(ents);
         }
         let mut fetched_size = 0;
         let begin_idx = if low < cache_low {
+            self.stats.borrow_mut().miss += 1;
             fetched_size = try!(self.fetch_entries_to(low, cache_low, max_size, &mut ents));
             if fetched_size > max_size {
                 // max_size exceed.
@@ -446,6 +473,7 @@ impl PeerStorage {
             low
         };
 
+        self.stats.borrow_mut().hit += 1;
         self.cache.fetch_entries_to(begin_idx, high, fetched_size, max_size, &mut ents);
         Ok(ents)
     }
@@ -1122,6 +1150,7 @@ mod test {
     use std::sync::*;
     use std::sync::atomic::*;
     use std::sync::mpsc::*;
+    use std::rc::Rc;
     use std::cell::RefCell;
     use std::time::Duration;
     use kvproto::eraftpb::{Entry, ConfState};
@@ -1145,7 +1174,8 @@ mod test {
         let db = Arc::new(db);
         bootstrap::bootstrap_store(&db, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&db, 1, 1, 1).expect("");
-        PeerStorage::new(db, &region, sched, "".to_owned()).unwrap()
+        let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
+        PeerStorage::new(db, &region, sched, "".to_owned(), metrics).unwrap()
     }
 
     fn new_storage_from_ents(sched: Scheduler<RegionTask>,
