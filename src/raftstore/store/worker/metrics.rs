@@ -74,4 +74,10 @@ lazy_static! {
             "tikv_raftstore_hash_duration_seconds",
             "Bucketed histogram of raftstore hash compution duration"
         ).unwrap();
+
+    pub static ref APPLY_PROPOSAL: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_proposal",
+            "Proposal count of every region in a mio tick"
+        ).unwrap();
 }

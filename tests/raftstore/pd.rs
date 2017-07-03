@@ -483,6 +483,10 @@ impl TestPdClient {
 
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
+            debug!("[region {}] trying add {:?} to {:?}",
+                   region_id,
+                   peer,
+                   region);
             if region.get_id() != region_id {
                 return None;
             }
