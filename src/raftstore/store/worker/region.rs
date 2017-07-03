@@ -97,7 +97,7 @@ struct SnapContext {
     db: Arc<DB>,
     batch_size: usize,
     mgr: SnapManager,
-    notifier: Sender<TaskRes>,
+    res_notifier: Option<Sender<TaskRes>>,
 }
 
 impl SnapContext {
@@ -165,9 +165,9 @@ impl SnapContext {
             box_try!(self.db.write(wb));
         }
 
-        if !post_delete.is_empty() {
+        if !post_delete.is_empty() && self.res_notifier.is_some() {
             for res in post_delete.drain(..) {
-                self.notifier.send(res).unwrap();
+                self.res_notifier.as_ref().unwrap().send(res).unwrap();
             }
         }
 
@@ -274,7 +274,7 @@ impl Runner {
     pub fn new(db: Arc<DB>,
                mgr: SnapManager,
                batch_size: usize,
-               notifier: Sender<TaskRes>)
+               res_notifier: Option<Sender<TaskRes>>)
                -> Runner {
         Runner {
             pool: ThreadPool::new_with_name(thd_name!("snap generator"), GENERATE_POOL_SIZE),
@@ -282,7 +282,7 @@ impl Runner {
                 db: db,
                 mgr: mgr,
                 batch_size: batch_size,
-                notifier: notifier,
+                res_notifier: res_notifier,
             },
         }
     }

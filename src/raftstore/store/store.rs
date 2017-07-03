@@ -414,7 +414,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let runner = RegionRunner::new(self.engine.clone(),
                                        self.snap_mgr.clone(),
                                        self.cfg.snap_apply_batch_size,
-                                       tx);
+                                       Some(tx));
         self.region_res_receiver = Some(rx);
         box_try!(self.region_worker.start(runner));
 
