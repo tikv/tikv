@@ -140,14 +140,14 @@ impl<C> Node<C>
         }
 
         // inform pd.
+        try!(self.pd_client
+            .put_store(self.store.clone()));
         try!(self.start_store(event_loop,
                               store_id,
                               engine,
                               trans,
                               snap_mgr,
                               snap_status_receiver));
-        try!(self.pd_client
-            .put_store(self.store.clone()));
         Ok(())
     }
 
