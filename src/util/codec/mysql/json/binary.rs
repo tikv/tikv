@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-use byteorder::{ReadBytesExt, WriteBytesExt};
-use std::{str, f64};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::{str, f64};
+
+use byteorder::{ReadBytesExt, WriteBytesExt};
 use util::codec::number::{NumberDecoder, NumberEncoder};
 
 use super::super::Result;

@@ -41,7 +41,7 @@ use std::ops::Index;
 use std::ascii::AsciiExt;
 use regex::Regex;
 use super::super::Result;
-use super::functions::unquote_string;
+use super::json_unquote::unquote_string;
 
 pub const PATH_EXPR_ASTERISK: &'static str = "*";
 
@@ -155,7 +155,6 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
         flags: flags,
     })
 }
-
 
 #[cfg(test)]
 mod test {
