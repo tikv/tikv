@@ -1586,7 +1586,7 @@ mod test {
         validate_cache(&store, &exp_res);
 
         // compact shrink
-        assert!(store.cache.cache.capacity() > cap as usize);
+        assert!(store.cache.cache.capacity() >= cap as usize);
         store.compact_to(cap * 2);
         exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
@@ -1595,7 +1595,7 @@ mod test {
         // append shrink
         entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
         append_ents(&mut store, &entries);
-        assert!(store.cache.cache.capacity() > cap as usize);
+        assert!(store.cache.cache.capacity() >= cap as usize);
         append_ents(&mut store, &[new_entry(6, 8)]);
         exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
