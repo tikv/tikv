@@ -11,23 +11,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use protobuf::RepeatedField;
 
 use kvproto::pdpb::{Member, GetMembersRequest, GetMembersResponse, ResponseHeader};
 
-use super::Mocker;
-use super::Result;
+use super::*;
+
+#[derive(Debug)]
+struct Inner {
+    resps: Vec<GetMembersResponse>,
+    idx: usize,
+}
 
 #[derive(Debug)]
 pub struct Split {
-    resps: Vec<GetMembersResponse>,
-    idx: AtomicUsize,
+    inner: Mutex<Option<Inner>>,
 }
 
 impl Split {
-    pub fn new(eps: Vec<String>) -> Split {
+    pub fn new() -> Split {
+        Split { inner: Mutex::new(None) }
+    }
+}
+
+impl PdMocker for Split {
+    fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
+        let mut holder = self.inner.lock().unwrap();
+        let mut inner = holder.as_mut().unwrap();
+        inner.idx += 1;
+        info!("[Split] get_member: {:?}",
+              inner.resps[inner.idx % inner.resps.len()]);
+        Some(Ok(inner.resps[inner.idx % inner.resps.len()].clone()))
+    }
+
+    fn set_endpoints(&self, eps: Vec<String>) {
         let mut members = Vec::with_capacity(eps.len());
         for (i, ep) in (&eps).into_iter().enumerate() {
             let mut m = Member::new();
@@ -51,18 +70,10 @@ impl Split {
 
         info!("[Split] resps {:?}", resps);
 
-        Split {
+        let mut inner = self.inner.lock().unwrap();
+        *inner = Some(Inner {
             resps: resps,
-            idx: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl Mocker for Split {
-    fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
-        let idx = self.idx.fetch_add(1, Ordering::SeqCst);
-        info!("[Split] GetMembers: {:?}",
-              self.resps[idx % self.resps.len()]);
-        Some(Ok(self.resps[idx % self.resps.len()].clone()))
+            idx: 0,
+        })
     }
 }

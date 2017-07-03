@@ -1,3 +1,4 @@
+dist: trusty
 sudo: false
 language: rust
 cache:
@@ -12,14 +13,14 @@ before_cache:
 matrix:
   include:
     - os: linux
-      rust: nightly-2017-03-28
+      rust: nightly-2017-05-29
       env: COMPILER=g++-4.8 RUSTFMT_VERSION=v0.6.0 CXX=g++-4.8
       addons:
          apt:
             sources: ['ubuntu-toolchain-r-test']
-            packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev']
+            packages: ['g++-4.8', 'zlib1g-dev', 'libbz2-dev', 'libsnappy-dev', 'curl', 'libdw-dev', 'libelf-dev', 'elfutils', 'binutils-dev', 'libcurl4-openssl-dev', 'libiberty-dev']
     - os: osx
-      rust: nightly-2017-03-28
+      rust: nightly-2017-05-29
       env: COMPILER=clang++ SKIP_FORMAT_CHECK=true CXX=clang++
 
 install:
@@ -29,7 +30,7 @@ install:
   - export LIBRARY_PATH=${LIBRARY_PATH}:$LOCAL_DIR/lib
   - export DYLD_LIBRARY_PATH=${DY_LIBRARY_PATH}:$LOCAL_DIR/lib
   - export CXXFLAGS=-I$LOCAL_DIR/include
-  - make -f travis-build/Makefile prepare_${TRAVIS_OS_NAME}
+  - travis_wait 30 make -f travis-build/Makefile prepare_${TRAVIS_OS_NAME}
 
 script:
   - make -f travis-build/Makefile test_${TRAVIS_OS_NAME}

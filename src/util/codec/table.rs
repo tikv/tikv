@@ -230,11 +230,13 @@ pub trait TableDecoder: DatumDecoder {
 
 impl<T: BytesDecoder> TableDecoder for T {}
 
+#[derive(Debug)]
 pub struct RowColMeta {
     offset: usize,
     length: usize,
 }
 
+#[derive(Debug)]
 pub struct RowColsDict {
     // data of current row
     value: Vec<u8>,
@@ -273,6 +275,13 @@ impl RowColsDict {
             return Some(&self.value[meta.offset..(meta.offset + meta.length)]);
         }
         None
+    }
+
+    pub fn append(&mut self, cid: i64, value: &mut Vec<u8>) {
+        let offset = self.value.len();
+        let length = value.len();
+        self.value.append(value);
+        self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 }
 

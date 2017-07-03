@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::path::Path;
 use std::result;
 use std::str;
+use std::time;
+use std::thread;
 
 use protobuf::Message;
 use rocksdb::DB;
@@ -48,6 +50,9 @@ const SNAP_REV_PREFIX: &'static str = "rev";
 const TMP_FILE_SUFFIX: &'static str = ".tmp";
 const SNAP_FILE_SUFFIX: &'static str = ".snap";
 const SST_FILE_SUFFIX: &'static str = ".sst";
+
+const DELETE_RETRY_MAX_TIMES: u32 = 6;
+const DELETE_RETRY_TIME_MILLIS: u64 = 500;
 
 quick_error! {
     #[derive(Debug)]
@@ -145,7 +150,8 @@ pub trait Snapshot: Read + Write + Send {
              snap: &DbSnapshot,
              region: &Region,
              snap_data: &mut RaftSnapshotData,
-             stat: &mut SnapshotStatistics)
+             stat: &mut SnapshotStatistics,
+             deleter: Box<SnapshotDeleter>)
              -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
@@ -166,6 +172,29 @@ pub fn copy_snapshot(mut from: Box<Snapshot>, mut to: Box<Snapshot>) -> io::Resu
     Ok(())
 }
 
+/// `SnapshotDeleter` is a trait for deleting snapshot.
+/// It's used to ensure that the snapshot deletion happens under the protection of locking
+/// to avoid race case for concurrent read/write.
+pub trait SnapshotDeleter {
+    // Return true if it successfully delete the specified snapshot.
+    fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool;
+}
+
+// Try to delete the specified snapshot using deleter, return true if the deletion is done.
+pub fn retry_delete_snapshot(deleter: Box<SnapshotDeleter>,
+                             key: &SnapKey,
+                             snap: &Snapshot)
+                             -> bool {
+    let d = time::Duration::from_millis(DELETE_RETRY_TIME_MILLIS);
+    for _ in 0..DELETE_RETRY_MAX_TIMES {
+        if deleter.delete_snapshot(key, snap, true) {
+            return true;
+        }
+        thread::sleep(d);
+    }
+    false
+}
+
 mod v1 {
     use std::cmp;
     use std::io::{self, Read, Write, ErrorKind};
@@ -181,7 +210,7 @@ mod v1 {
     use kvproto::raft_serverpb::RaftSnapshotData;
     use util::{HandyRwLock, rocksdb, duration_to_sec};
     use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
-    use raftstore::Result as RaftStoreResult;
+    use raftstore::{Result as RaftStoreResult, Error as RaftStoreError};
 
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
     use super::super::keys::{self, enc_start_key, enc_end_key};
@@ -189,7 +218,8 @@ mod v1 {
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SNAP_FILE_SUFFIX,
-                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort};
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort,
+                SnapshotDeleter, retry_delete_snapshot};
 
     pub const SNAPSHOT_VERSION: u64 = 1;
     pub const CRC32_BYTES_COUNT: usize = 4;
@@ -254,6 +284,7 @@ mod v1 {
     /// `save` method to make them persistent. When saving a crc32 checksum
     /// will be appended to the file end automatically.
     pub struct Snap {
+        key: SnapKey,
         file: PathBuf,
         digest: Option<Digest>,
         size_track: Arc<RwLock<u64>>,
@@ -273,6 +304,7 @@ mod v1 {
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
             let mut f = Snap {
+                key: key.clone(),
                 file: path,
                 digest: Some(Digest::new(crc32::IEEE)),
                 size_track: size_track,
@@ -292,6 +324,7 @@ mod v1 {
             try!(Snap::prepare_path(&mut path, is_sending, key));
 
             let f = Snap {
+                key: key.clone(),
                 file: path,
                 digest: None,
                 size_track: size_track,
@@ -367,17 +400,23 @@ mod v1 {
         fn do_build(&mut self,
                     snap: &DbSnapshot,
                     region: &Region,
-                    stat: &mut SnapshotStatistics)
+                    stat: &mut SnapshotStatistics,
+                    deleter: Box<SnapshotDeleter>)
                     -> RaftStoreResult<()> {
             if self.exists() {
                 match self.get_validation_reader().and_then(|r| r.validate()) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
-                        error!("[region {}] file {} is invalid, will rebuild: {:?}",
+                        error!("[region {}] file {} is corrupted, will rebuild: {:?}",
                                region.get_id(),
                                self.path(),
                                e);
-                        try!(self.try_delete());
+                        if !retry_delete_snapshot(deleter, &self.key, self) {
+                            error!("[region {}] failed to delete corrupted snapshot {}",
+                                   region.get_id(),
+                                   self.path());
+                            return Err(RaftStoreError::from(e));
+                        }
                         try!(self.init_for_writing());
                     }
                 }
@@ -412,10 +451,11 @@ mod v1 {
                  snap: &DbSnapshot,
                  region: &Region,
                  snap_data: &mut RaftSnapshotData,
-                 stat: &mut SnapshotStatistics)
+                 stat: &mut SnapshotStatistics,
+                 deleter: Box<SnapshotDeleter>)
                  -> RaftStoreResult<()> {
             let t = Instant::now();
-            try!(self.do_build(snap, region, stat));
+            try!(self.do_build(snap, region, stat, deleter));
             let size = try!(self.total_size());
             snap_data.set_file_size(size);
             snap_data.set_version(SNAPSHOT_VERSION);
@@ -687,7 +727,8 @@ mod v2 {
     use super::super::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
                                 SNAPSHOT_BUILD_TIME_HISTOGRAM};
     use super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SNAP_REV_PREFIX, TMP_FILE_SUFFIX, SST_FILE_SUFFIX,
-                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort};
+                Result, SnapKey, Snapshot, SnapshotStatistics, ApplyOptions, check_abort,
+                SnapshotDeleter, retry_delete_snapshot};
     use super::v1::{build_plain_cf_file, apply_plain_cf_file};
 
     pub const SNAPSHOT_VERSION: u64 = 2;
@@ -748,7 +789,7 @@ mod v2 {
     }
 
     fn check_file_checksum(path: &PathBuf, expected_checksum: u32) -> RaftStoreResult<()> {
-        let checksum = try!(calc_crc32(&path));
+        let checksum = try!(calc_crc32(path));
         if checksum != expected_checksum {
             return Err(box_err!("invalid checksum {} for snapshot cf file {}, expected {}",
                                 checksum,
@@ -791,6 +832,7 @@ mod v2 {
     }
 
     pub struct Snap {
+        key: SnapKey,
         display_path: String,
         cf_files: Vec<CfFile>,
         cf_index: usize,
@@ -802,14 +844,15 @@ mod v2 {
         fn new<T: Into<PathBuf>>(dir: T,
                                  key: &SnapKey,
                                  size_track: Arc<RwLock<u64>>,
-                                 sending: bool,
-                                 to_build: bool)
+                                 is_sending: bool,
+                                 to_build: bool,
+                                 deleter: Box<SnapshotDeleter>)
                                  -> RaftStoreResult<Snap> {
             let dir_path = dir.into();
             if !dir_path.exists() {
                 try!(fs::create_dir_all(dir_path.as_path()));
             }
-            let snap_prefix = if sending {
+            let snap_prefix = if is_sending {
                 SNAP_GEN_PREFIX
             } else {
                 SNAP_REV_PREFIX
@@ -841,6 +884,7 @@ mod v2 {
             };
 
             let mut s = Snap {
+                key: key.clone(),
                 display_path: display_path,
                 cf_files: cf_files,
                 cf_index: 0,
@@ -857,7 +901,12 @@ mod v2 {
                     warn!("failed to load existent snapshot meta when try to build {}: {:?}",
                           s.path(),
                           e);
-                    s.delete();
+                    if !retry_delete_snapshot(deleter, key, &s) {
+                        warn!("failed to delete snapshot {} because it's already registered \
+                               elsewhere",
+                              s.path());
+                        return Err(e);
+                    }
                 }
             }
             Ok(s)
@@ -866,18 +915,20 @@ mod v2 {
         pub fn new_for_building<T: Into<PathBuf>>(dir: T,
                                                   key: &SnapKey,
                                                   snap: &DbSnapshot,
-                                                  size_track: Arc<RwLock<u64>>)
+                                                  size_track: Arc<RwLock<u64>>,
+                                                  deleter: Box<SnapshotDeleter>)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, true, true));
+            let mut s = try!(Snap::new(dir, key, size_track, true, true, deleter));
             try!(s.init_for_building(snap));
             Ok(s)
         }
 
         pub fn new_for_sending<T: Into<PathBuf>>(dir: T,
                                                  key: &SnapKey,
-                                                 size_track: Arc<RwLock<u64>>)
+                                                 size_track: Arc<RwLock<u64>>,
+                                                 deleter: Box<SnapshotDeleter>)
                                                  -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, true, false));
+            let mut s = try!(Snap::new(dir, key, size_track, true, false, deleter));
 
             if !s.exists() {
                 // Skip the initialization below if it doesn't exists.
@@ -896,9 +947,10 @@ mod v2 {
         pub fn new_for_receiving<T: Into<PathBuf>>(dir: T,
                                                    key: &SnapKey,
                                                    snapshot_meta: SnapshotMeta,
-                                                   size_track: Arc<RwLock<u64>>)
+                                                   size_track: Arc<RwLock<u64>>,
+                                                   deleter: Box<SnapshotDeleter>)
                                                    -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, false, false));
+            let mut s = try!(Snap::new(dir, key, size_track, false, false, deleter));
             try!(s.set_snapshot_meta(snapshot_meta));
 
             if s.exists() {
@@ -923,9 +975,10 @@ mod v2 {
 
         pub fn new_for_applying<T: Into<PathBuf>>(dir: T,
                                                   key: &SnapKey,
-                                                  size_track: Arc<RwLock<u64>>)
+                                                  size_track: Arc<RwLock<u64>>,
+                                                  deleter: Box<SnapshotDeleter>)
                                                   -> RaftStoreResult<Snap> {
-            let s = try!(Snap::new(dir, key, size_track, false, false));
+            let s = try!(Snap::new(dir, key, size_track, false, false, deleter));
             Ok(s)
         }
 
@@ -944,7 +997,7 @@ mod v2 {
                     cf_file.file = Some(f);
                 } else {
                     // initialize sst file writer
-                    let handle = try!(snap.cf_handle(&cf_file.cf));
+                    let handle = try!(snap.cf_handle(cf_file.cf));
                     let io_options = snap.get_db().get_options_cf(handle);
                     let mut writer = SstFileWriter::new(&env_opt, &io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
@@ -1091,17 +1144,23 @@ mod v2 {
         fn do_build(&mut self,
                     snap: &DbSnapshot,
                     region: &Region,
-                    stat: &mut SnapshotStatistics)
+                    stat: &mut SnapshotStatistics,
+                    deleter: Box<SnapshotDeleter>)
                     -> RaftStoreResult<()> {
             if self.exists() {
                 match self.validate() {
                     Ok(()) => return Ok(()),
                     Err(e) => {
-                        warn!("[region {}] file {} is invalid, will rebuild: {:?}",
-                              region.get_id(),
-                              self.path(),
-                              e);
-                        self.delete();
+                        error!("[region {}] file {} is corrupted, will rebuild: {:?}",
+                               region.get_id(),
+                               self.path(),
+                               e);
+                        if !retry_delete_snapshot(deleter, &self.key, self) {
+                            error!("[region {}] failed to delete corrupted snapshot because it's \
+                                    already registered elsewhere",
+                                   self.path());
+                            return Err(e);
+                        }
                         try!(self.init_for_building(snap));
                     }
                 }
@@ -1156,10 +1215,11 @@ mod v2 {
                  snap: &DbSnapshot,
                  region: &Region,
                  snap_data: &mut RaftSnapshotData,
-                 stat: &mut SnapshotStatistics)
+                 stat: &mut SnapshotStatistics,
+                 deleter: Box<SnapshotDeleter>)
                  -> RaftStoreResult<()> {
             let t = Instant::now();
-            try!(self.do_build(snap, region, stat));
+            try!(self.do_build(snap, region, stat, deleter));
 
             let total_size = try!(self.total_size());
             stat.size = total_size;
@@ -1267,7 +1327,7 @@ mod v2 {
                 }
 
                 try!(check_abort(&options.abort));
-                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, &cf_file.cf));
+                let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
                 if plain_file_used(cf_file.cf) {
                     let mut file = box_try!(File::open(&cf_file.path));
                     try!(apply_plain_cf_file(&mut file, &options, cf_handle));
@@ -1391,7 +1451,7 @@ mod v2 {
         use raftstore::store::keys;
         use raftstore::store::engine::{Snapshot as DbSnapshot, Mutable, Peekable, Iterable};
         use raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-        use super::super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SnapKey, Snapshot};
+        use super::super::{SNAPSHOT_CFS, SNAP_GEN_PREFIX, SnapKey, Snapshot, SnapshotDeleter};
         use super::{META_FILE_SUFFIX, Snap, SnapshotStatistics, ApplyOptions};
 
         const TEST_STORE_ID: u64 = 1;
@@ -1399,6 +1459,16 @@ mod v2 {
         const TEST_WRITE_BATCH_SIZE: usize = 10 * 1024 * 1024;
         const TEST_META_FILE_BUFFER_SIZE: usize = 1000;
         const BYTE_SIZE: usize = 1;
+
+        #[derive(Clone)]
+        struct DummyDeleter;
+
+        impl SnapshotDeleter for DummyDeleter {
+            fn delete_snapshot(&self, _: &SnapKey, snap: &Snapshot, _: bool) -> bool {
+                snap.delete();
+                true
+            }
+        }
 
         pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
             let p = path.path().to_str().unwrap();
@@ -1537,9 +1607,13 @@ mod v2 {
             let src_dir = TempDir::new("test-snap-file-src").unwrap();
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 =
-                Snap::new_for_building(src_dir.path(), &key, &snapshot, size_track.clone())
-                    .unwrap();
+            let deleter = Box::new(DummyDeleter {});
+            let mut s1 = Snap::new_for_building(src_dir.path(),
+                                                &key,
+                                                &snapshot,
+                                                size_track.clone(),
+                                                deleter.clone())
+                .unwrap();
             // Ensure that this snapshot file doesn't exist before being built.
             assert!(!s1.exists());
             assert_eq!(*size_track.rl(), 0);
@@ -1547,7 +1621,12 @@ mod v2 {
             let mut snap_data = RaftSnapshotData::new();
             snap_data.set_region(region.clone());
             let mut stat = SnapshotStatistics::new();
-            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            s1.build(&snapshot,
+                       &region,
+                       &mut snap_data,
+                       &mut stat,
+                       deleter.clone())
+                .unwrap();
 
             // Ensure that this snapshot file does exist after being built.
             assert!(s1.exists());
@@ -1559,7 +1638,9 @@ mod v2 {
             assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
             // Ensure this snapshot could be read for sending.
-            let mut s2 = Snap::new_for_sending(src_dir.path(), &key, size_track.clone()).unwrap();
+            let mut s2 =
+                Snap::new_for_sending(src_dir.path(), &key, size_track.clone(), deleter.clone())
+                    .unwrap();
             assert!(s2.exists());
 
             // TODO check meta data correct.
@@ -1570,7 +1651,8 @@ mod v2 {
             let mut s3 = Snap::new_for_receiving(dst_dir.path(),
                                                  &key,
                                                  snap_data.take_meta(),
-                                                 size_track.clone())
+                                                 size_track.clone(),
+                                                 deleter.clone())
                 .unwrap();
             assert!(!s3.exists());
 
@@ -1591,7 +1673,8 @@ mod v2 {
             assert_eq!(*size_track.rl(), size);
 
             // Ensure a snapshot could be applied to DB.
-            let mut s4 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).unwrap();
+            let mut s4 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter)
+                .unwrap();
             assert!(s4.exists());
 
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
@@ -1638,21 +1721,35 @@ mod v2 {
             let dir = TempDir::new("test-snap-validation").unwrap();
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let deleter = Box::new(DummyDeleter {});
+            let mut s1 = Snap::new_for_building(dir.path(),
+                                                &key,
+                                                &snapshot,
+                                                size_track.clone(),
+                                                deleter.clone())
                 .unwrap();
             assert!(!s1.exists());
 
             let mut snap_data = RaftSnapshotData::new();
             snap_data.set_region(region.clone());
             let mut stat = SnapshotStatistics::new();
-            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            s1.build(&snapshot,
+                       &region,
+                       &mut snap_data,
+                       &mut stat,
+                       deleter.clone())
+                .unwrap();
             assert!(s1.exists());
 
-            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let mut s2 = Snap::new_for_building(dir.path(),
+                                                &key,
+                                                &snapshot,
+                                                size_track.clone(),
+                                                deleter.clone())
                 .unwrap();
             assert!(s2.exists());
 
-            s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            s2.build(&snapshot, &region, &mut snap_data, &mut stat, deleter).unwrap();
             assert!(s2.exists());
         }
 
@@ -1744,13 +1841,19 @@ mod v2 {
                          to_dir: &TempDir,
                          key: &SnapKey,
                          size_track: Arc<RwLock<u64>>,
-                         snapshot_meta: SnapshotMeta) {
-            let mut from = Snap::new_for_sending(from_dir.path(), key, size_track.clone()).unwrap();
+                         snapshot_meta: SnapshotMeta,
+                         deleter: Box<DummyDeleter>) {
+            let mut from =
+                Snap::new_for_sending(from_dir.path(), key, size_track.clone(), deleter.clone())
+                    .unwrap();
             assert!(from.exists());
 
-            let mut to =
-                Snap::new_for_receiving(to_dir.path(), key, snapshot_meta, size_track.clone())
-                    .unwrap();
+            let mut to = Snap::new_for_receiving(to_dir.path(),
+                                                 key,
+                                                 snapshot_meta,
+                                                 size_track.clone(),
+                                                 deleter)
+                .unwrap();
 
             assert!(!to.exists());
             let _ = io::copy(&mut from, &mut to).unwrap();
@@ -1769,24 +1872,44 @@ mod v2 {
             let dir = TempDir::new("test-snap-corruption").unwrap();
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let deleter = Box::new(DummyDeleter {});
+            let mut s1 = Snap::new_for_building(dir.path(),
+                                                &key,
+                                                &snapshot,
+                                                size_track.clone(),
+                                                deleter.clone())
                 .unwrap();
             assert!(!s1.exists());
 
             let mut snap_data = RaftSnapshotData::new();
             snap_data.set_region(region.clone());
             let mut stat = SnapshotStatistics::new();
-            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            s1.build(&snapshot,
+                       &region,
+                       &mut snap_data,
+                       &mut stat,
+                       deleter.clone())
+                .unwrap();
             assert!(s1.exists());
 
             corrupt_snapshot_size_in(dir.path());
 
-            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone(), deleter.clone())
+                .is_err());
 
-            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let mut s2 = Snap::new_for_building(dir.path(),
+                                                &key,
+                                                &snapshot,
+                                                size_track.clone(),
+                                                deleter.clone())
                 .unwrap();
             assert!(!s2.exists());
-            s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            s2.build(&snapshot,
+                       &region,
+                       &mut snap_data,
+                       &mut stat,
+                       deleter.clone())
+                .unwrap();
             assert!(s2.exists());
 
             let dst_dir = TempDir::new("test-snap-corruption-dst").unwrap();
@@ -1794,13 +1917,16 @@ mod v2 {
                           &dst_dir,
                           &key,
                           size_track.clone(),
-                          snap_data.get_meta().clone());
+                          snap_data.get_meta().clone(),
+                          deleter.clone());
 
             let mut metas = corrupt_snapshot_checksum_in(dst_dir.path());
             assert_eq!(1, metas.len());
             let snap_meta = metas.pop().unwrap();
 
-            let mut s5 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).unwrap();
+            let mut s5 =
+                Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter.clone())
+                    .unwrap();
             assert!(s5.exists());
 
             let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
@@ -1814,9 +1940,17 @@ mod v2 {
             assert!(s5.apply(options).is_err());
 
             corrupt_snapshot_size_in(dst_dir.path());
-            assert!(Snap::new_for_receiving(dst_dir.path(), &key, snap_meta, size_track.clone())
+            assert!(Snap::new_for_receiving(dst_dir.path(),
+                                            &key,
+                                            snap_meta,
+                                            size_track.clone(),
+                                            deleter.clone())
                 .is_err());
-            assert!(Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_applying(dst_dir.path(),
+                                           &key,
+                                           size_track.clone(),
+                                           deleter.clone())
+                .is_err());
         }
 
         #[test]
@@ -1830,24 +1964,43 @@ mod v2 {
             let dir = TempDir::new("test-snap-corruption-meta").unwrap();
             let key = SnapKey::new(region_id, 1, 1);
             let size_track = Arc::new(RwLock::new(0));
-            let mut s1 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            let deleter = Box::new(DummyDeleter {});
+            let mut s1 = Snap::new_for_building(dir.path(),
+                                                &key,
+                                                &snapshot,
+                                                size_track.clone(),
+                                                deleter.clone())
                 .unwrap();
             assert!(!s1.exists());
 
             let mut snap_data = RaftSnapshotData::new();
             snap_data.set_region(region.clone());
             let mut stat = SnapshotStatistics::new();
-            s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            s1.build(&snapshot,
+                       &region,
+                       &mut snap_data,
+                       &mut stat,
+                       deleter.clone())
+                .unwrap();
             assert!(s1.exists());
 
             assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone()).is_err());
-            let mut s2 = Snap::new_for_building(dir.path(), &key, &snapshot, size_track.clone())
+            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone(), deleter.clone())
+                .is_err());
+            let mut s2 = Snap::new_for_building(dir.path(),
+                                                &key,
+                                                &snapshot,
+                                                size_track.clone(),
+                                                deleter.clone())
                 .unwrap();
-
             assert!(!s2.exists());
-            s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+            s2.build(&snapshot,
+                       &region,
+                       &mut snap_data,
+                       &mut stat,
+                       deleter.clone())
+                .unwrap();
             assert!(s2.exists());
 
             let dst_dir = TempDir::new("test-snap-corruption-meta-dst").unwrap();
@@ -1855,15 +2008,21 @@ mod v2 {
                           &dst_dir,
                           &key,
                           size_track.clone(),
-                          snap_data.get_meta().clone());
+                          snap_data.get_meta().clone(),
+                          deleter.clone());
 
             assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-            assert!(Snap::new_for_applying(dst_dir.path(), &key, size_track.clone()).is_err());
+            assert!(Snap::new_for_applying(dst_dir.path(),
+                                           &key,
+                                           size_track.clone(),
+                                           deleter.clone())
+                .is_err());
             assert!(Snap::new_for_receiving(dst_dir.path(),
                                             &key,
                                             snap_data.take_meta(),
-                                            size_track.clone())
+                                            size_track.clone(),
+                                            deleter.clone())
                 .is_err());
         }
     }
@@ -1951,11 +2110,13 @@ impl SnapManager {
         Ok(())
     }
 
-    pub fn list_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
+    // Return all snapshots which is idle not being used.
+    pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         let core = self.core.rl();
         let path = Path::new(&core.base);
         let read_dir = try!(fs::read_dir(path));
-        Ok(read_dir.filter_map(|p| {
+        // Remove the duplicate snap keys.
+        let mut v: Vec<_> = read_dir.filter_map(|p| {
                 let p = match p {
                     Err(e) => {
                         error!("failed to list content of {}: {:?}", core.base, e);
@@ -1985,9 +2146,17 @@ impl SnapManager {
                     error!("failed to parse snapkey from {}", name);
                     return None;
                 }
-                Some((SnapKey::new(numbers[0], numbers[1], numbers[2]), is_sending))
+                let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
+                if core.registry.contains_key(&snap_key) {
+                    // Skip those registered snapshot.
+                    return None;
+                }
+                Some((snap_key, is_sending))
             })
-            .collect())
+            .collect();
+        v.sort();
+        v.dedup();
+        Ok(v)
     }
 
     #[inline]
@@ -1999,12 +2168,16 @@ impl SnapManager {
                                      key: &SnapKey,
                                      snap: &DbSnapshot)
                                      -> RaftStoreResult<Box<Snapshot>> {
-        let core = self.core.rl();
-        if core.use_sst_file_snapshot {
-            let f = try!(v2::Snap::new_for_building(&core.base, key, snap, core.snap_size.clone()));
+        let (use_sst_file_snapshot, dir, snap_size) = {
+            let core = self.core.rl();
+            (core.use_sst_file_snapshot, core.base.clone(), core.snap_size.clone())
+        };
+        if use_sst_file_snapshot {
+            let f =
+                try!(v2::Snap::new_for_building(dir, key, snap, snap_size, Box::new(self.clone())));
             Ok(Box::new(f))
         } else {
-            let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), true, key));
+            let f = try!(v1::Snap::new_for_writing(dir, snap_size, true, key));
             Ok(Box::new(f))
         }
     }
@@ -2016,7 +2189,10 @@ impl SnapManager {
                 return Ok(Box::new(s));
             }
         }
-        let s = try!(v2::Snap::new_for_sending(&core.base, key, core.snap_size.clone()));
+        let s = try!(v2::Snap::new_for_sending(&core.base,
+                                               key,
+                                               core.snap_size.clone(),
+                                               Box::new(self.clone())));
         Ok(Box::new(s))
     }
 
@@ -2031,7 +2207,8 @@ impl SnapManager {
             let f = try!(v2::Snap::new_for_receiving(&core.base,
                                                      key,
                                                      snapshot_data.take_meta(),
-                                                     core.snap_size.clone()));
+                                                     core.snap_size.clone(),
+                                                     Box::new(self.clone())));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), false, key));
@@ -2041,7 +2218,10 @@ impl SnapManager {
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
-        if let Ok(s) = v2::Snap::new_for_applying(&core.base, key, core.snap_size.clone()) {
+        if let Ok(s) = v2::Snap::new_for_applying(&core.base,
+                                                  key,
+                                                  core.snap_size.clone(),
+                                                  Box::new(self.clone())) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
@@ -2127,6 +2307,28 @@ impl SnapManager {
     }
 }
 
+impl SnapshotDeleter for SnapManager {
+    fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
+        let core = self.core.rl();
+        if check_entry {
+            if let Some(e) = core.registry.get(key) {
+                if e.len() > 1 {
+                    info!("skip to delete {} since it's registered more than 1, registered \
+                           entries {:?}",
+                          snap.path(),
+                          e);
+                    return false;
+                }
+            }
+        } else if core.registry.contains_key(key) {
+            info!("skip to delete {} since it's registered", snap.path());
+            return false;
+        }
+        snap.delete();
+        true
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::io;
@@ -2142,7 +2344,8 @@ mod test {
     use util::rocksdb;
     use super::super::peer_storage::JOB_STATUS_RUNNING;
     use super::super::engine::Snapshot as DbSnapshot;
-    use super::{SnapKey, SnapshotStatistics, ApplyOptions, Snapshot, SnapManager};
+    use super::{SnapEntry, SnapKey, SnapshotStatistics, ApplyOptions, Snapshot, SnapshotDeleter,
+                SnapManager};
     use super::v1::{Snap as SnapV1, CRC32_BYTES_COUNT};
     use super::v2::{self, Snap as SnapV2};
 
@@ -2223,18 +2426,28 @@ mod test {
         let snapshot = DbSnapshot::new(v2::test::get_test_db(&db_dir).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
-        let mut s1 = SnapV2::new_for_building(&path, &key1, &snapshot, size_track.clone()).unwrap();
+        let deleter = Box::new(mgr.clone());
+        let mut s1 =
+            SnapV2::new_for_building(&path, &key1, &snapshot, size_track.clone(), deleter.clone())
+                .unwrap();
         let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
-        let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone()).unwrap();
+        s1.build(&snapshot,
+                   &region,
+                   &mut snap_data,
+                   &mut stat,
+                   deleter.clone())
+            .unwrap();
+        let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone(), deleter.clone())
+            .unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = SnapV2::new_for_receiving(&path,
                                                &key1,
                                                snap_data.get_meta().clone(),
-                                               size_track.clone())
+                                               size_track.clone(),
+                                               deleter.clone())
             .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
         assert_eq!(n, expected_size);
@@ -2243,8 +2456,14 @@ mod test {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 = SnapV2::new_for_building(&path, &key2, &snapshot, size_track.clone()).unwrap();
-        let s4 = SnapV2::new_for_receiving(&path, &key2, snap_data.take_meta(), size_track.clone())
+        let s3 =
+            SnapV2::new_for_building(&path, &key2, &snapshot, size_track.clone(), deleter.clone())
+                .unwrap();
+        let s4 = SnapV2::new_for_receiving(&path,
+                                           &key2,
+                                           snap_data.take_meta(),
+                                           size_track.clone(),
+                                           deleter.clone())
             .unwrap();
 
         assert!(s1.exists());
@@ -2285,7 +2504,12 @@ mod test {
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
+        s1.build(&snapshot,
+                   &region,
+                   &mut snap_data,
+                   &mut stat,
+                   Box::new(src_mgr.clone()))
+            .unwrap();
         let mut v = vec![];
         snap_data.write_to_vec(&mut v).unwrap();
 
@@ -2315,5 +2539,86 @@ mod test {
         s4.apply(options).unwrap();
 
         v2::test::assert_eq_db(db, dst_db.as_ref());
+    }
+
+    #[test]
+    fn test_snap_deletion_on_registry() {
+        test_snap_deletion_on_registry_impl(false);
+        test_snap_deletion_on_registry_impl(true);
+    }
+
+    fn check_registry_around_deregister(mgr: SnapManager, key: &SnapKey, entry: &SnapEntry) {
+        let snap_keys = mgr.list_idle_snap().unwrap();
+        assert!(snap_keys.is_empty());
+        assert!(mgr.has_registered(key));
+        mgr.deregister(key, entry);
+        let mut snap_keys = mgr.list_idle_snap().unwrap();
+        assert_eq!(snap_keys.len(), 1);
+        let snap_key = snap_keys.pop().unwrap().0;
+        assert_eq!(snap_key, *key);
+        assert!(!mgr.has_registered(&snap_key));
+    }
+
+    fn test_snap_deletion_on_registry_impl(use_sst_file_snapshot: bool) {
+        let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
+        let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
+        let src_mgr = SnapManager::new(src_path.clone(), None, use_sst_file_snapshot);
+        src_mgr.init().unwrap();
+
+        let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
+        let db = v2::test::get_test_db(&src_db_dir).unwrap();
+        let snapshot = DbSnapshot::new(db);
+
+        let key = SnapKey::new(1, 1, 1);
+        let region = v2::test::get_test_region(1, 1, 1);
+
+        // Ensure the snapshot being built will not be deleted on GC.
+        src_mgr.register(key.clone(), SnapEntry::Generating);
+        let mut s1 = src_mgr.get_snapshot_for_building(&key, &snapshot).unwrap();
+        let mut snap_data = RaftSnapshotData::new();
+        snap_data.set_region(region.clone());
+        let mut stat = SnapshotStatistics::new();
+        s1.build(&snapshot,
+                   &region,
+                   &mut snap_data,
+                   &mut stat,
+                   Box::new(src_mgr.clone()))
+            .unwrap();
+        let mut v = vec![];
+        snap_data.write_to_vec(&mut v).unwrap();
+
+        check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Generating);
+
+        // Ensure the snapshot being sent will not be deleted on GC.
+        src_mgr.register(key.clone(), SnapEntry::Sending);
+        let mut s2 = src_mgr.get_snapshot_for_sending(&key).unwrap();
+        let expected_size = s2.total_size().unwrap();
+
+        let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
+        let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
+        let dst_mgr = SnapManager::new(dst_path.clone(), None, use_sst_file_snapshot);
+        dst_mgr.init().unwrap();
+
+        // Ensure the snapshot being received will not be deleted on GC.
+        dst_mgr.register(key.clone(), SnapEntry::Receiving);
+        let mut s3 = dst_mgr.get_snapshot_for_receiving(&key, &v[..]).unwrap();
+        let n = io::copy(&mut s2, &mut s3).unwrap();
+        assert_eq!(n, expected_size);
+        s3.save().unwrap();
+
+        check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Sending);
+        check_registry_around_deregister(dst_mgr.clone(), &key, &SnapEntry::Receiving);
+
+        // Ensure the snapshot to be applied will not be deleted on GC.
+        let mut snap_keys = dst_mgr.list_idle_snap().unwrap();
+        assert_eq!(snap_keys.len(), 1);
+        let snap_key = snap_keys.pop().unwrap().0;
+        assert_eq!(snap_key, key);
+        assert!(!dst_mgr.has_registered(&snap_key));
+        dst_mgr.register(key.clone(), SnapEntry::Applying);
+        let s4 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
+        let s5 = dst_mgr.get_snapshot_for_applying(&key).unwrap();
+        dst_mgr.delete_snapshot(&key, s4.as_ref(), false);
+        assert!(s5.exists());
     }
 }

@@ -13,7 +13,7 @@
 
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, RwLock, Mutex, mpsc};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::boxed::FnBox;
@@ -161,6 +161,7 @@ impl Simulator for NodeCluster {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
 
         let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
+        let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
@@ -181,7 +182,8 @@ impl Simulator for NodeCluster {
         node.start(event_loop,
                    engine.clone(),
                    simulate_trans.clone(),
-                   snap_mgr.clone())
+                   snap_mgr.clone(),
+                   snap_status_receiver)
             .unwrap();
         assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
             .unwrap()
@@ -195,12 +197,12 @@ impl Simulator for NodeCluster {
         }
 
         let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch(), node_id);
+        let router = ServerRaftStoreRouter::new(node.get_sendch());
         self.trans.wl().routers.insert(node_id, SimulateTransport::new(router));
         self.trans
             .wl()
             .snapshot_status_senders
-            .insert(node_id, Mutex::new(node.get_snapshot_status_sender()));
+            .insert(node_id, Mutex::new(snap_status_sender));
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 
@@ -237,7 +239,7 @@ impl Simulator for NodeCluster {
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
-    fn send_raft_msg(&self, msg: raft_serverpb::RaftMessage) -> Result<()> {
+    fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {
         self.trans.send(msg)
     }
 

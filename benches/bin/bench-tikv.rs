@@ -33,11 +33,12 @@ extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate uuid;
 extern crate test;
 extern crate kvproto;
 extern crate time;
 extern crate futures;
+extern crate tokio_core;
+extern crate grpc;
 
 #[allow(dead_code)]
 #[path="../../tests/util.rs"]

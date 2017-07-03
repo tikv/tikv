@@ -993,8 +993,8 @@ fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectRespon
     let (tx, rx) = mpsc::channel();
     let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
     end_point.schedule(EndPointTask::Request(req)).unwrap();
-    let resp = rx.recv().unwrap().take_cop_resp();
-    assert!(resp.has_data(), "{:?}", resp);
+    let resp = rx.recv().unwrap();
+    assert!(!resp.get_data().is_empty(), "{:?}", resp);
     let mut sel_resp = SelectResponse::new();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
     sel_resp
@@ -1048,6 +1048,33 @@ fn test_index_reverse_limit() {
     let handles = spliter.map(|row| row.handle);
     data.reverse();
     for (h, (id, _, _)) in handles.zip(data.drain(..5)) {
+        assert_eq!(id, h);
+    }
+
+    end_point.stop().unwrap().join().unwrap();
+}
+
+#[test]
+fn test_limit_oom() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:3"), 3),
+        (4, Some("name:0"), 1),
+        (5, Some("name:5"), 4),
+        (6, Some("name:5"), 4),
+        (7, None, 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, mut end_point) = init_with_data(&product, &data);
+
+    let req = Select::from_index(&product.table, product.id).limit(100000000).build();
+    let mut resp = handle_select(&end_point, req);
+    assert_eq!(row_cnt(resp.get_chunks()), data.len());
+    let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
+    let mut handles: Vec<_> = spliter.map(|row| row.handle).collect();
+    handles.sort();
+    for (&h, (id, _, _)) in handles.iter().zip(data) {
         assert_eq!(id, h);
     }
 
@@ -1459,8 +1486,8 @@ fn test_handle_truncate() {
         let (tx, rx) = mpsc::channel();
         let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
         end_point.schedule(EndPointTask::Request(req)).unwrap();
-        let resp = rx.recv().unwrap().take_cop_resp();
-        assert!(resp.has_other_error());
+        let resp = rx.recv().unwrap();
+        assert!(!resp.get_other_error().is_empty());
     }
 
     end_point.stop().unwrap().join().unwrap();

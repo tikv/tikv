@@ -12,14 +12,14 @@ ${LOCAL_DIR}/lib/libgflags.a:
 	make install
 
 ${LOCAL_DIR}/lib/librocksdb.dylib: |prepare_brew
-${LOCAL_DIR}/lib/librocksdb.so: ${LOCAL_DIR}/lib/libgflags.a
-${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so:
+${LOCAL_DIR}/lib/librocksdb.so.5.4.5: ${LOCAL_DIR}/lib/libgflags.a
+${LOCAL_DIR}/lib/librocksdb.dylib ${LOCAL_DIR}/lib/librocksdb.so.5.4.5:
 	export CPLUS_INCLUDE_PATH="${CPLUS_INCLUDE_PATH}:${LOCAL_DIR}/include" && \
 	export CXX=${COMPILER} && \
 	cd /tmp && \
-	curl -L https://github.com/facebook/rocksdb/archive/v5.2.1.tar.gz -o rocksdb.tar.gz && \
+	curl -L https://github.com/facebook/rocksdb/archive/v5.4.5.tar.gz -o rocksdb.tar.gz && \
 	tar xf rocksdb.tar.gz && \
-	cd rocksdb-5.2.1 && \
+	cd rocksdb-5.4.5 && \
 	INSTALL_PATH=${LOCAL_DIR} make install-shared
 
 # TODO: use offical archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
@@ -43,11 +43,11 @@ prepare-rustfmt:
 	mkdir -p ${HOME}/.cargo/bin && tar xzf rustfmt-${RUSTFMT_VERSION}-linux-amd64.tar.gz -C ${HOME}/.cargo/bin --strip-components=1
 	# cargo install --vers =0.6.0 rustfmt || exit 0
 
-prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
+prepare_linux: ${LOCAL_DIR}/lib/librocksdb.so.5.4.5 ${LOCAL_DIR}/bin/kcov  prepare-rustfmt
 
 prepare_brew:
 	brew update && \
-	brew install gflags snappy rocksdb
+	brew install gflags snappy gperftools rocksdb
 
 prepare_osx: prepare_brew ${LOCAL_DIR}/bin/kcov
 

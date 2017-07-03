@@ -8,7 +8,7 @@ machine:
     CPPFLAGS: "-I$HOME/.local/include"
     CXXFLAGS: "-I$HOME/.local/include"
     PKG_CONFIG_PATH: "$PKG_CONFIG_PATH:$HOME/.local/lib/pkgconfig"
-    RUSTC_DATE: "2017-03-28"
+    RUSTC_DATE: "2017-05-29"
     LOCAL_PREFIX: "$HOME/.local"
     # used by cargo
     LIBRARY_PATH: "$LIBRARY_PATH:$HOME/.local/lib"
@@ -53,15 +53,17 @@ dependencies:
         make install;
       fi
     - |
-      if [[ ! -e $HOME/.local/lib/librocksdb.so.5.2.1 ]]; then
+      if [[ ! -e $HOME/.local/lib/librocksdb.so.5.4.5 ]]; then
         export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
         cd /tmp && \
-        curl -L https://github.com/facebook/rocksdb/archive/v5.2.1.tar.gz -o rocksdb.tar.gz && \
+        curl -L https://github.com/facebook/rocksdb/archive/v5.4.5.tar.gz -o rocksdb.tar.gz && \
         tar xf rocksdb.tar.gz && \
-        cd rocksdb-5.2.1 && \
+        cd rocksdb-5.4.5 && \
         INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared;
       fi
   post:
+    # check format first
+    - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
     # cargo test also use debug
     - cargo build:
         timeout: 1800
@@ -71,6 +73,5 @@ dependencies:
 
 test:
   override:
-    - make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a pr!; exit 1)
     - cargo test --features "default" -- --nocapture
     - cargo test --features "default" --bench benches -- --nocapture

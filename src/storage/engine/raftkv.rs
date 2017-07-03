@@ -22,7 +22,6 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Re
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 
-use uuid::Uuid;
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
@@ -124,15 +123,11 @@ enum CmdRes {
 
 fn on_result(mut resp: RaftCmdResponse,
              resp_cnt: usize,
-             uuid: &[u8],
              db: Arc<DB>)
              -> (CbContext, Result<CmdRes>) {
     let mut cb_ctx = CbContext::new();
     cb_ctx.term = Some(resp.get_header().get_current_term());
 
-    if resp.get_header().get_uuid() != uuid {
-        return (cb_ctx, Err(Error::InvalidResponse("response is not correct!!!".to_owned())));
-    }
     if resp.get_header().has_error() {
         return (cb_ctx, Err(Error::RequestFailed(resp.take_header().take_error())));
     }
@@ -160,12 +155,11 @@ impl<S: RaftStoreRouter> RaftKv<S> {
     }
 
     fn call_command(&self, req: RaftCmdRequest, cb: Callback<CmdRes>) -> Result<()> {
-        let uuid = req.get_header().get_uuid().to_vec();
         let l = req.get_requests().len();
         let db = self.db.clone();
         try!(self.router.send_command(req,
                                       box move |resp| {
-                                          let (cb_ctx, res) = on_result(resp, l, &uuid, db);
+                                          let (cb_ctx, res) = on_result(resp, l, db);
                                           cb((cb_ctx, res.map_err(Error::into)));
                                       }));
         Ok(())
@@ -176,8 +170,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         header.set_region_id(ctx.get_region_id());
         header.set_peer(ctx.get_peer().clone());
         header.set_region_epoch(ctx.get_region_epoch().clone());
-        header.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        header.set_read_quorum(ctx.get_read_quorum());
         if ctx.get_term() != 0 {
             header.set_term(ctx.get_term());
         }
