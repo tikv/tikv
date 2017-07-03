@@ -21,18 +21,19 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Re
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
+use util::rocksdb::UserProperties;
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Debug};
 use std::io::Error as IoError;
 use std::time::Duration;
 use std::result;
-use rocksdb::{DB, Range};
+use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
 use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback,
-            Iterator as EngineIterator, Properties};
+            Iterator as EngineIterator};
 use storage::{Key, Value, CfName, CF_DEFAULT};
 use super::metrics::*;
 use raftstore::store::engine::IterOption;
@@ -324,17 +325,9 @@ impl Snapshot for RegionSnapshot {
         Ok(Cursor::new(try!(RegionSnapshot::iter_cf(self, cf, iter_opt)), mode))
     }
 
-    fn get_properties_cf(&self, cf: CfName) -> engine::Result<Properties> {
-        let db = self.get_db();
-        let cf = try!(db.cf_handle(cf)
-            .ok_or(engine::Error::RocksDb(format!("cf {} not found.", cf))));
-        let range = Range::new(self.get_start_key(), self.get_end_key());
-        let props = try!(db.get_properties_of_tables_in_range(cf, &[range]));
-        let mut res = Properties::new();
-        for (k, v) in props {
-            res.insert(k, v.user_collected_properties);
-        }
-        Ok(res)
+    fn get_properties_cf(&self, cf: CfName) -> engine::Result<UserProperties> {
+        RegionSnapshot::get_properties_cf(self, cf)
+            .or_else(|e| Err(engine::Error::RocksDb(format!("{}", e))))
     }
 
     fn clone(&self) -> Box<Snapshot> {

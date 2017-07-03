@@ -103,6 +103,6 @@ lazy_static! {
     pub static ref KV_COMMAND_GC_SKIPPED_COUNTER: Counter =
         register_counter!(
             "tikv_storage_gc_skipped_counter",
-            "Total number of gc command skipped owe to optimization"
+            "Total number of gc command skipped owing to optimization"
         ).unwrap();
 }

@@ -14,6 +14,7 @@
 use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Cursor;
 use std::path::Path;
 use std::u64;
 
@@ -246,13 +247,30 @@ impl SliceTransform for NoopSliceTransform {
     }
 }
 
-#[derive(Clone, Debug)]
+pub trait DecodeU64 {
+    fn decode_u64(&self, k: &str) -> Result<u64, codec::Error>;
+}
+
+impl DecodeU64 for HashMap<Vec<u8>, Vec<u8>> {
+    fn decode_u64(&self, k: &str) -> Result<u64, codec::Error> {
+        let v = try!(self.get(k.as_bytes()).ok_or(codec::Error::KeyNotFound));
+        Cursor::new(v).decode_u64()
+    }
+}
+
+impl<'a> DecodeU64 for HashMap<&'a [u8], &'a [u8]> {
+    fn decode_u64(&self, k: &str) -> Result<u64, codec::Error> {
+        let v = try!(self.get(k.as_bytes().as_ref()).ok_or(codec::Error::KeyNotFound));
+        Cursor::new(v).decode_u64()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct UserProperties {
     pub min_ts: u64,
     pub max_ts: u64,
     pub num_keys: u64,
     pub num_puts: u64,
-    pub num_merges: u64,
     pub num_deletes: u64,
     pub num_corrupts: u64,
 }
@@ -264,14 +282,13 @@ impl UserProperties {
             max_ts: u64::MIN,
             num_keys: 0,
             num_puts: 0,
-            num_merges: 0,
             num_deletes: 0,
             num_corrupts: 0,
         }
     }
 
     pub fn num_versions(&self) -> u64 {
-        self.num_puts + self.num_merges + self.num_deletes
+        self.num_puts + self.num_deletes
     }
 
     pub fn add(&mut self, other: &UserProperties) {
@@ -279,7 +296,6 @@ impl UserProperties {
         self.max_ts = cmp::max(self.max_ts, other.max_ts);
         self.num_keys += other.num_keys;
         self.num_puts += other.num_puts;
-        self.num_merges += other.num_merges;
         self.num_deletes += other.num_deletes;
         self.num_corrupts += other.num_corrupts;
     }
@@ -289,33 +305,26 @@ impl UserProperties {
                      ("tikv.max_ts", self.max_ts),
                      ("tikv.num_keys", self.num_keys),
                      ("tikv.num_puts", self.num_puts),
-                     ("tikv.num_merges", self.num_merges),
                      ("tikv.num_deletes", self.num_deletes),
                      ("tikv.num_corrupts", self.num_corrupts)];
-        let mut map = HashMap::new();
-        for &(k, v) in items.iter() {
-            let mut buf = Vec::new();
-            buf.encode_u64(v).unwrap();
-            map.insert(k.as_bytes().to_owned(), buf);
-        }
-        map
+        items.iter()
+            .map(|&(k, v)| {
+                let mut buf = Vec::with_capacity(8);
+                buf.encode_u64(v).unwrap();
+                (k.as_bytes().to_owned(), buf)
+            })
+            .collect()
     }
 
-    pub fn decode(map: &HashMap<Vec<u8>, Vec<u8>>) -> Result<UserProperties, codec::Error> {
-        let mut props = UserProperties::new();
-        props.min_ts = try!(Self::decode_u64(map, "tikv.min_ts"));
-        props.max_ts = try!(Self::decode_u64(map, "tikv.max_ts"));
-        props.num_keys = try!(Self::decode_u64(map, "tikv.num_keys"));
-        props.num_puts = try!(Self::decode_u64(map, "tikv.num_puts"));
-        props.num_merges = try!(Self::decode_u64(map, "tikv.num_merges"));
-        props.num_deletes = try!(Self::decode_u64(map, "tikv.num_deletes"));
-        props.num_corrupts = try!(Self::decode_u64(map, "tikv.num_corrupts"));
-        Ok(props)
-    }
-
-    fn decode_u64(map: &HashMap<Vec<u8>, Vec<u8>>, name: &str) -> Result<u64, codec::Error> {
-        let v = try!(map.get(name.as_bytes()).ok_or(codec::Error::KeyNotFound));
-        v.as_slice().decode_u64()
+    pub fn decode<T: DecodeU64>(props: &T) -> Result<UserProperties, codec::Error> {
+        let mut res = UserProperties::new();
+        res.min_ts = try!(props.decode_u64("tikv.min_ts"));
+        res.max_ts = try!(props.decode_u64("tikv.max_ts"));
+        res.num_keys = try!(props.decode_u64("tikv.num_keys"));
+        res.num_puts = try!(props.decode_u64("tikv.num_puts"));
+        res.num_deletes = try!(props.decode_u64("tikv.num_deletes"));
+        res.num_corrupts = try!(props.decode_u64("tikv.num_corrupts"));
+        Ok(res)
     }
 }
 
@@ -338,7 +347,7 @@ impl TablePropertiesCollector for UserPropertiesCollector {
         "tikv.user-properties-collector"
     }
 
-    fn add_userkey(&mut self, key: &[u8], _: &[u8], entry_type: DBEntryType) {
+    fn add(&mut self, key: &[u8], _: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if !keys::validate_data_key(key) {
             return;
         }
@@ -359,9 +368,7 @@ impl TablePropertiesCollector for UserPropertiesCollector {
         }
         match entry_type {
             DBEntryType::Put => self.props.num_puts += 1,
-            DBEntryType::Merge => self.props.num_merges += 1,
-            DBEntryType::Delete |
-            DBEntryType::SingleDelete => self.props.num_deletes += 1,
+            DBEntryType::Delete => self.props.num_deletes += 1,
             _ => {}
         }
     }
@@ -371,6 +378,7 @@ impl TablePropertiesCollector for UserPropertiesCollector {
     }
 }
 
+#[derive(Default)]
 pub struct UserPropertiesCollectorFactory {}
 
 impl UserPropertiesCollectorFactory {
@@ -438,25 +446,22 @@ mod tests {
     #[test]
     fn test_user_properties() {
         let cases = [("ab", 2, DBEntryType::Put),
-                     ("ab", 1, DBEntryType::Merge),
                      ("ab", 0, DBEntryType::Delete),
                      ("cd", 4, DBEntryType::Delete),
                      ("cd", 3, DBEntryType::Put),
                      ("ef", 6, DBEntryType::Put),
-                     ("ef", 5, DBEntryType::Merge),
                      ("gh", 7, DBEntryType::Delete)];
         let mut collector = UserPropertiesCollector::new();
-        for &(key, ts, entry_type) in cases.iter() {
+        for &(key, ts, entry_type) in &cases {
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
             let data_key = keys::data_key(k.encoded());
-            collector.add_userkey(&data_key, &[0], entry_type);
+            collector.add(&data_key, &[0], entry_type, 0, 0);
         }
         let props = UserProperties::decode(&collector.finish()).unwrap();
         assert_eq!(props.min_ts, 0);
         assert_eq!(props.max_ts, 7);
         assert_eq!(props.num_keys, 4);
         assert_eq!(props.num_puts, 3);
-        assert_eq!(props.num_merges, 2);
         assert_eq!(props.num_deletes, 3);
     }
 }

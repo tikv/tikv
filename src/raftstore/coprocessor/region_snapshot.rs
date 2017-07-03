@@ -12,12 +12,13 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use rocksdb::{DB, SeekKey, DBVector, DBIterator};
+use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator};
 use kvproto::metapb::Region;
+use util::rocksdb::UserProperties;
 
 use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
-use raftstore::Result;
+use raftstore::{Error, Result};
 
 
 /// Snapshot of a region.
@@ -48,10 +49,6 @@ impl RegionSnapshot {
             snap: self.snap.clone(),
             region: self.region.clone(),
         }
-    }
-
-    pub fn get_db(&self) -> Arc<DB> {
-        self.snap.get_db().clone()
     }
 
     pub fn get_region(&self) -> &Region {
@@ -109,6 +106,26 @@ impl RegionSnapshot {
         }
 
         Ok(())
+    }
+
+    pub fn get_properties_cf(&self, cf: &str) -> Result<UserProperties> {
+        let db = self.snap.get_db();
+        let cf = try!(db.cf_handle(cf)
+            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
+
+        let start = keys::enc_start_key(self.get_region());
+        let end = keys::enc_end_key(self.get_region());
+        let range = Range::new(&start, &end);
+        let collection = try!(db.get_properties_of_tables_in_range(cf, &[range]));
+
+        // Aggregates properties from multiple tables.
+        let mut res = UserProperties::new();
+        for v in collection.collect().values() {
+            let props = v.user_collected_properties();
+            let other = try!(UserProperties::decode(&props));
+            res.add(&other);
+        }
+        Ok(res)
     }
 
     pub fn get_start_key(&self) -> &[u8] {
