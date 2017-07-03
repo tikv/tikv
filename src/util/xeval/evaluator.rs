@@ -13,6 +13,7 @@
 
 use std::cmp::Ordering;
 use std::ascii::AsciiExt;
+use std::str;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType};
@@ -20,8 +21,7 @@ use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
-use util::codec::mysql::DecimalDecoder;
-use util::codec::mysql::{MAX_FSP, Duration};
+use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration};
 use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
@@ -137,6 +137,7 @@ impl Evaluator {
             ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
+            ExprType::JsonUnquote => self.eval_json_unquote(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -223,6 +224,17 @@ impl Evaluator {
         }
         let children = expr.get_children();
         Ok((&children[0], &children[1]))
+    }
+
+    fn eval_one_child(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 1 {
+            return Err(Error::Expr(format!("{:?} need 1 operands but got {}",
+                                           expr.get_tp(),
+                                           children.len())));
+        }
+        let child = try!(self.eval(ctx, &children[0]));
+        Ok(child)
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
@@ -384,6 +396,23 @@ impl Evaluator {
         } else {
             Ok(left)
         }
+    }
+
+    fn eval_json_unquote(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr));
+        if child == Datum::Null {
+            return Ok(Datum::Null);
+        }
+        // here Datum::Byte(bs) should be converted into Json::String(bs)
+        // select JSON_UNQUOTE('{"a":   "b"}');
+        // +------------------------------+
+        // | JSON_UNQUOTE('{"a":   "b"}') |
+        // +------------------------------+
+        // | {"a":   "b"}                 |
+        // +------------------------------+
+        let json = try!(child.into_json());
+        let unquote_data = try!(json.unquote());
+        Ok(Datum::Bytes(unquote_data.into_bytes()))
     }
 
     fn eval_logic<F>(&mut self,
@@ -588,6 +617,23 @@ mod test {
             }
         };
     }
+
+    macro_rules! test_eval_err {
+        ($tag:ident, $cases:expr) => {
+            #[test]
+            fn $tag() {
+                let cases = $cases;
+
+                let mut xevaluator = Evaluator::default();
+                xevaluator.row.insert(1, Datum::I64(100));
+                for expr in cases {
+                    let res = xevaluator.eval(&Default::default(), &expr);
+                    assert!(res.is_err());
+                }
+            }
+        };
+    }
+
 
     test_eval!(test_eval_datum_col,
                vec![
@@ -999,4 +1045,31 @@ mod test {
             }
         }
     }
+
+    fn build_byte_datums_expr(data: &[&[u8]], tp: ExprType) -> Expr {
+        let datums = data.into_iter().map(|item| Datum::Bytes(item.to_vec())).collect();
+        build_expr(datums, tp)
+    }
+
+    test_eval!(test_eval_json_unquote,
+               vec![
+            (build_expr(vec![Datum::Null], ExprType::JsonUnquote),
+                        Datum::Null),
+            (build_byte_datums_expr(&[b"a"], ExprType::JsonUnquote),
+                        Datum::Bytes(b"a".to_vec())),
+            (build_byte_datums_expr(&[br#"\"3\""#], ExprType::JsonUnquote),
+                        Datum::Bytes(br#""3""#.to_vec())),
+            (build_byte_datums_expr(&[br#"{"a":  "b"}"#], ExprType::JsonUnquote),
+                        Datum::Bytes(br#"{"a":  "b"}"#.to_vec())),
+            (build_byte_datums_expr(&[br#"hello,\"quoted string\",world"#],
+                                    ExprType::JsonUnquote),
+                        Datum::Bytes(br#"hello,"quoted string",world"#.to_vec())),
+    ]);
+
+    test_eval_err!(test_eval_json_err,
+                   vec![
+          build_expr(vec![], ExprType::JsonUnquote),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonUnquote),
+     ]);
+
 }
