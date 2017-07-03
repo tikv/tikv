@@ -13,6 +13,7 @@
 
 use std::cmp::Ordering;
 use std::ascii::AsciiExt;
+use std::str;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType};
@@ -20,8 +21,7 @@ use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
-use util::codec::mysql::DecimalDecoder;
-use util::codec::mysql::{MAX_FSP, Duration};
+use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, PathExpression};
 use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
@@ -137,6 +137,7 @@ impl Evaluator {
             ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
+            ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -230,6 +231,22 @@ impl Evaluator {
         let left = try!(self.eval(ctx, left_expr));
         let right = try!(self.eval(ctx, right_expr));
         Ok((left, right))
+    }
+
+    fn eval_more_children(&mut self,
+                          ctx: &EvalContext,
+                          expr: &Expr,
+                          num: usize)
+                          -> Result<Vec<Datum>> {
+        let children = expr.get_children();
+        if children.len() < num {
+            return Err(Error::Expr(format!("expect more than {} operands, got {}",
+                                           num,
+                                           children.len())));
+        }
+        children.iter()
+            .map(|child| self.eval(ctx, child))
+            .collect()
     }
 
     fn eval_not(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -383,6 +400,22 @@ impl Evaluator {
             Ok(Datum::Null)
         } else {
             Ok(left)
+        }
+    }
+
+    fn eval_json_extract(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2));
+        if children.iter().any(|item| *item == Datum::Null) {
+            return Ok(Datum::Null);
+        }
+        let mut children = children.into_iter();
+        let json = try!(children.next().unwrap().cast_as_json());
+        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.as_json_path_expr())
+            .collect());
+        if let Some(data) = json.extract(&path_extrs) {
+            Ok(Datum::Json(data))
+        } else {
+            Ok(Datum::Null)
         }
     }
 
@@ -588,6 +621,23 @@ mod test {
             }
         };
     }
+
+    macro_rules! test_eval_err {
+        ($tag:ident, $cases:expr) => {
+            #[test]
+            fn $tag() {
+                let cases = $cases;
+
+                let mut xevaluator = Evaluator::default();
+                xevaluator.row.insert(1, Datum::I64(100));
+                for expr in cases {
+                    let res = xevaluator.eval(&Default::default(), &expr);
+                    assert!(res.is_err());
+                }
+            }
+        };
+    }
+
 
     test_eval!(test_eval_datum_col,
                vec![
@@ -999,4 +1049,29 @@ mod test {
             }
         }
     }
+
+    fn build_byte_datums_expr(data: &[&[u8]], tp: ExprType) -> Expr {
+        let datums = data.into_iter().map(|item| Datum::Bytes(item.to_vec())).collect();
+        build_expr(datums, tp)
+    }
+
+    test_eval!(test_eval_json_extract,
+               vec![
+        (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonExtract),
+                    Datum::Null),
+        (build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#,
+                                     b"$.a[0].aa[0].aaa", b"$.aaa"],
+                             ExprType::JsonExtract),
+                    Datum::Json("[1,2]".parse().unwrap())),
+    ]);
+
+    test_eval_err!(test_eval_json_err,
+                   vec![
+          build_expr(vec![], ExprType::JsonExtract),
+          build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#],
+                                ExprType::JsonExtract),
+          build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#, b"aaa"],
+                                ExprType::JsonExtract),
+     ]);
+
 }
