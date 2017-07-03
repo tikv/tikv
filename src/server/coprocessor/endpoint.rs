@@ -373,7 +373,9 @@ impl TiDbEndPoint {
                 return Err(err);
             }
         };
-        let snap = SnapshotStore::new(self.snap.as_ref(), sel.get_start_ts());
+        let snap = SnapshotStore::new(self.snap.as_ref(),
+                                      sel.get_start_ts(),
+                                      t.req.get_context().get_isolation_level());
         let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let mut range = t.req.get_ranges().to_vec();
         debug!("scanning range: {:?}", range);
@@ -455,12 +457,12 @@ fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 }
 
 #[inline]
-fn inflate_with_col<'a, T>(eval: &mut Evaluator,
-                           ctx: &EvalContext,
-                           values: &RowColsDict,
-                           cols: T,
-                           h: i64)
-                           -> Result<()>
+pub fn inflate_with_col<'a, T>(eval: &mut Evaluator,
+                               ctx: &EvalContext,
+                               values: &RowColsDict,
+                               cols: T,
+                               h: i64)
+                               -> Result<()>
     where T: IntoIterator<Item = &'a ColumnInfo>
 {
     for col in cols {
@@ -497,10 +499,10 @@ fn get_chunk(chunks: &mut Vec<Chunk>) -> &mut Chunk {
     chunks.last_mut().unwrap()
 }
 
-struct SortRow {
-    key: Vec<Datum>,
-    handle: i64,
-    data: RowColsDict,
+pub struct SortRow {
+    pub handle: i64,
+    pub data: RowColsDict,
+    pub key: Vec<Datum>,
     order_cols: Rc<Vec<ByItem>>,
     ctx: Rc<EvalContext>,
     err: Rc<RefCell<Option<String>>>,
@@ -508,16 +510,16 @@ struct SortRow {
 
 impl SortRow {
     fn new(handle: i64,
-           order_cols: Rc<Vec<ByItem>>,
-           ctx: Rc<EvalContext>,
            data: RowColsDict,
            key: Vec<Datum>,
+           order_cols: Rc<Vec<ByItem>>,
+           ctx: Rc<EvalContext>,
            err: Rc<RefCell<Option<String>>>)
            -> SortRow {
         SortRow {
-            key: key,
             handle: handle,
             data: data,
+            key: key,
             order_cols: order_cols,
             ctx: ctx,
             err: err,
@@ -561,8 +563,8 @@ impl SortRow {
     }
 }
 
-struct TopNHeap {
-    rows: BinaryHeap<SortRow>,
+pub struct TopNHeap {
+    pub rows: BinaryHeap<SortRow>,
     limit: usize,
     err: Rc<RefCell<Option<String>>>,
 }
@@ -570,7 +572,7 @@ struct TopNHeap {
 const HEAP_MAX_CAPACITY: usize = 1024;
 
 impl TopNHeap {
-    fn new(limit: usize) -> Result<TopNHeap> {
+    pub fn new(limit: usize) -> Result<TopNHeap> {
         if limit == usize::MAX {
             return Err(box_err!("invalid limit"));
         }
@@ -583,21 +585,21 @@ impl TopNHeap {
     }
 
     #[inline]
-    fn check_err(&self) -> Result<()> {
+    pub fn check_err(&self) -> Result<()> {
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
             return Err(box_err!(err_msg.to_owned()));
         }
         Ok(())
     }
 
-    fn try_add_row(&mut self,
-                   handle: i64,
-                   order_cols: Rc<Vec<ByItem>>,
-                   ctx: Rc<EvalContext>,
-                   data: RowColsDict,
-                   key: Vec<Datum>)
-                   -> Result<()> {
-        let row = SortRow::new(handle, order_cols, ctx, data, key, self.err.clone());
+    pub fn try_add_row(&mut self,
+                       handle: i64,
+                       data: RowColsDict,
+                       values: Vec<Datum>,
+                       order_cols: Rc<Vec<ByItem>>,
+                       ctx: Rc<EvalContext>)
+                       -> Result<()> {
+        let row = SortRow::new(handle, data, values, order_cols, ctx, self.err.clone());
         // push into heap when heap is not full
         if self.rows.len() < self.limit {
             self.rows.push(row);
@@ -612,7 +614,7 @@ impl TopNHeap {
         self.check_err()
     }
 
-    fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
+    pub fn into_sorted_vec(self) -> Result<Vec<SortRow>> {
         let sorted_data = self.rows.into_sorted_vec();
         // check is needed here since err may caused by any call of cmp
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
@@ -622,7 +624,7 @@ impl TopNHeap {
     }
 }
 
-impl<'a> Ord for SortRow {
+impl Ord for SortRow {
     fn cmp(&self, right: &SortRow) -> CmpOrdering {
         if let Ok(order) = self.cmp_and_check(right) {
             return order;
@@ -802,10 +804,10 @@ impl SelectContextCore {
         }
 
         self.topn_heap.as_mut().unwrap().try_add_row(h,
-                                                     self.order_cols.clone(),
-                                                     self.ctx.clone(),
                                                      values,
-                                                     sort_keys)
+                                                     sort_keys,
+                                                     self.order_cols.clone(),
+                                                     self.ctx.clone())
     }
 
     fn get_row(&mut self, h: i64, values: RowColsDict) -> Result<()> {
@@ -1273,10 +1275,10 @@ mod tests {
             let cur_key: Vec<Datum> = vec![name, count];
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap.try_add_row(handle as i64,
-                             order_cols.clone(),
-                             ctx.clone(),
                              row_data,
-                             cur_key)
+                             cur_key,
+                             order_cols.clone(),
+                             ctx.clone())
                 .unwrap();
         }
         let result = topn_heap.into_sorted_vec().unwrap();
@@ -1299,26 +1301,26 @@ mod tests {
 
         let std_key: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(2)];
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
-        topn_heap.try_add_row(0 as i64, order_cols.clone(), ctx.clone(), row_data, std_key)
+        topn_heap.try_add_row(0 as i64, row_data, std_key, order_cols.clone(), ctx.clone())
             .unwrap();
 
         let std_key2: Vec<Datum> = vec![Datum::Bytes(b"aaa".to_vec()), Datum::I64(3)];
         let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
         topn_heap.try_add_row(0 as i64,
-                         order_cols.clone(),
-                         ctx.clone(),
                          row_data2,
-                         std_key2)
+                         std_key2,
+                         order_cols.clone(),
+                         ctx.clone())
             .unwrap();
 
         let bad_key1: Vec<Datum> = vec![Datum::I64(2), Datum::Bytes(b"aaa".to_vec())];
         let row_data3 = RowColsDict::new(HashMap::default(), b"name:3".to_vec());
 
         assert!(topn_heap.try_add_row(0 as i64,
-                         order_cols.clone(),
-                         ctx.clone(),
                          row_data3,
-                         bad_key1)
+                         bad_key1,
+                         order_cols.clone(),
+                         ctx.clone())
             .is_err());
 
         assert!(topn_heap.into_sorted_vec().is_err());
@@ -1352,10 +1354,10 @@ mod tests {
             let cur_key: Vec<Datum> = vec![name, count];
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap.try_add_row(handle as i64,
-                             order_cols.clone(),
-                             ctx.clone(),
                              row_data,
-                             cur_key)
+                             cur_key,
+                             order_cols.clone(),
+                             ctx.clone())
                 .unwrap();
         }
 

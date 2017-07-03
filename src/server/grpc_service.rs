@@ -613,8 +613,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         let ch = self.ch.clone();
         ctx.spawn(stream.map_err(Error::from)
             .for_each(move |msg| {
-                RAFT_MESSAGE_RECV_COUNTER.inc();
-                future::result(ch.send_raft_msg(msg)).map_err(Error::from)
+                let res = match msg.get_region_id() {
+                    0 => Ok(()),
+                    _ => {
+                        RAFT_MESSAGE_RECV_COUNTER.inc();
+                        ch.send_raft_msg(msg)
+                    }
+                };
+                future::result(res).map_err(Error::from)
             })
             .map_err(|e| error!("send raft msg to raft store fail: {}", e))
             .then(|_| future::ok::<_, ()>(())));

@@ -11,20 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO: remove it
+#![allow(dead_code)]
+
 use util::codec::table::RowColsDict;
 use server::coprocessor::Result;
 
 mod scanner;
 pub mod table_scan;
 pub mod index_scan;
+pub mod selection;
+pub mod topn;
+pub mod limit;
 
-#[allow(dead_code)] //TODO:remove it
+#[derive(Debug)]
 pub struct Row {
     pub handle: i64,
     pub data: RowColsDict,
 }
 
-#[allow(dead_code)] //TODO:remove it
 impl Row {
     pub fn new(handle: i64, data: RowColsDict) -> Row {
         Row {
