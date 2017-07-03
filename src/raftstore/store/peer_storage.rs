@@ -15,7 +15,7 @@ use std::sync::{self, Arc};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
-use std::{error, cmp};
+use std::{error, cmp, u64};
 use std::time::Instant;
 use std::collections::VecDeque;
 
@@ -109,6 +109,111 @@ pub fn first_index(state: &RaftApplyState) -> u64 {
     state.get_truncated_state().get_index() + 1
 }
 
+#[derive(Default)]
+struct EntryCache {
+    cache: VecDeque<Entry>,
+}
+
+impl EntryCache {
+    fn first_index(&self) -> u64 {
+        self.cache.front().map_or(u64::MAX, |e| e.get_index())
+    }
+
+    fn fetch_entries_to(&self, begin: u64, end: u64, mut fetched_size: u64, max_size: u64, ents: &mut Vec<Entry>) {
+        if begin >= end {
+            return;
+        }
+        assert!(!self.cache.is_empty());
+        let cache_low = self.cache.front().unwrap().get_index();
+        let start_idx = begin.checked_sub(cache_low).unwrap() as usize;
+        let limit_idx = end.checked_sub(cache_low).unwrap() as usize;
+        
+        let mut end_idx = start_idx;
+        self.cache
+            .iter()
+            .skip(start_idx)
+            .take_while(|e| {
+                let cur_idx = end_idx as u64 + cache_low;
+                assert_eq!(e.get_index(), cur_idx);
+                let m = e.compute_size() as u64;
+                fetched_size += m;
+                if fetched_size == m {
+                    end_idx += 1;
+                    fetched_size <= max_size && end_idx < limit_idx
+                } else if fetched_size <= max_size {
+                    end_idx += 1;
+                    end_idx < limit_idx
+                } else {
+                    false
+                }
+            })
+            .count();
+        // Cache either is empty or contains latest log. Hence we don't need to fetch log
+        // from rocksdb anymore.
+        assert!(end_idx == limit_idx || fetched_size > max_size);
+        let (first, second) = util::slices_in_range(&self.cache, start_idx, end_idx);
+        ents.extend_from_slice(first);
+        ents.extend_from_slice(second);
+    }
+
+    fn append(&mut self, tag: &str, entries: &[Entry]) {
+        if entries.is_empty() {
+            return;
+        }
+        if let Some(cache_last_index) = self.cache.back().map(|e| e.get_index()) {
+            let first_index = entries[0].get_index();
+            if cache_last_index >= first_index {
+                if self.cache.front().unwrap().get_index() >= first_index {
+                    self.cache.clear();
+                } else {
+                    let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
+                    self.cache.truncate(left);
+                }
+                if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY &&
+                   self.cache.capacity() > SHRINK_CACHE_CAPACITY {
+                    self.cache.shrink_to_fit();
+                }
+            } else if cache_last_index + 1 < first_index {
+                panic!("{} unexpected hole: {} < {}",
+                       tag,
+                       cache_last_index,
+                       first_index);
+            }
+        }
+        let mut start_idx = 0;
+        if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
+            if len < self.cache.len() {
+                self.cache.drain(..len);
+            } else {
+                start_idx = len - self.cache.len();
+                self.cache.clear();
+            }
+        }
+        for e in &entries[start_idx..] {
+            self.cache.push_back(e.to_owned());
+        }
+    }
+
+    pub fn compact_to(&mut self, idx: u64) {
+        let cache_first_idx = match self.cache.front() {
+            None => return,
+            Some(e) => e.get_index(),
+        };
+
+        if cache_first_idx > idx {
+            return;
+        }
+        let cache_last_idx = self.cache.back().unwrap().get_index();
+        self.cache.drain(..(cmp::min(cache_last_idx, idx) - cache_first_idx) as usize);
+        if self.cache.len() < SHRINK_CACHE_CAPACITY &&
+           self.cache.capacity() > SHRINK_CACHE_CAPACITY {
+            // So the peer storage doesn't have much writes since the proposal of compaction,
+            // we can consider this peer is going to be inactive.
+            self.cache.shrink_to_fit();
+        }
+    }
+}
+
 pub struct PeerStorage {
     pub engine: Arc<DB>,
 
@@ -121,7 +226,7 @@ pub struct PeerStorage {
     snap_state: RefCell<SnapState>,
     region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
-    cache: VecDeque<Entry>,
+    cache: EntryCache,
 
     pub tag: String,
 }
@@ -270,7 +375,7 @@ impl PeerStorage {
             tag: tag,
             applied_index_term: RAFT_INIT_LOG_TERM,
             last_term: last_term,
-            cache: VecDeque::new(),
+            cache: EntryCache::default(),
         })
     }
 
@@ -323,8 +428,8 @@ impl PeerStorage {
         if low == high {
             return Ok(ents);
         }
-        let cache_low = self.cache.front().map_or(0, |e| e.get_index());
-        if self.cache.is_empty() || high <= cache_low {
+        let cache_low = self.cache.first_index();
+        if high <= cache_low {
             // not overlap
             try!(self.fetch_entries_to(low, high, max_size, &mut ents));
             return Ok(ents);
@@ -336,36 +441,12 @@ impl PeerStorage {
                 // max_size exceed.
                 return Ok(ents);
             }
-            0
+            cache_low
         } else {
-            (low - cache_low) as usize
+            low
         };
-        let mut end_idx = begin_idx;
-        self.cache
-            .iter()
-            .skip(begin_idx)
-            .take_while(|e| {
-                let cur_idx = end_idx as u64 + cache_low;
-                assert_eq!(e.get_index(), cur_idx);
-                let m = e.compute_size() as u64;
-                fetched_size += m;
-                if fetched_size == m {
-                    end_idx += 1;
-                    fetched_size <= max_size && cur_idx + 1 < high
-                } else if fetched_size <= max_size {
-                    end_idx += 1;
-                    cur_idx + 1 < high
-                } else {
-                    false
-                }
-            })
-            .count();
-        let (first, second) = util::slices_in_range(&self.cache, begin_idx, end_idx);
-        ents.extend_from_slice(first);
-        ents.extend_from_slice(second);
-        // Cache either is empty or contains latest log. Hence we don't need to fetch log
-        // from rocksdb anymore.
-        assert!(fetched_size > max_size || ents.len() as u64 == high - low);
+
+        self.cache.fetch_entries_to(begin_idx, high, fetched_size, max_size, &mut ents);
         Ok(ents)
     }
 
@@ -618,59 +699,12 @@ impl PeerStorage {
         ctx.last_term = last_term;
 
         // TODO: if the writebatch is failed to commit, the cache will be wrong.
-        if let Some(cache_last_index) = self.cache.back().map(|e| e.get_index()) {
-            let first_index = entries[0].get_index();
-            if cache_last_index >= first_index {
-                if self.cache.front().unwrap().get_index() >= first_index {
-                    self.cache.clear();
-                } else {
-                    let left = self.cache.len() - (cache_last_index - first_index + 1) as usize;
-                    self.cache.truncate(left);
-                }
-                if self.cache.len() + entries.len() < SHRINK_CACHE_CAPACITY &&
-                   self.cache.capacity() > SHRINK_CACHE_CAPACITY {
-                    self.cache.shrink_to_fit();
-                }
-            } else if cache_last_index + 1 < first_index {
-                panic!("{} unexpected hole: {} < {}",
-                       self.tag,
-                       cache_last_index,
-                       first_index);
-            }
-        }
-        let mut start_idx = 0;
-        if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
-            if len < self.cache.len() {
-                self.cache.drain(..len);
-            } else {
-                start_idx = len - self.cache.len();
-                self.cache.clear();
-            }
-        }
-        for e in &entries[start_idx..] {
-            self.cache.push_back(e.to_owned());
-        }
-
+        self.cache.append(&self.tag, entries);
         Ok(last_index)
     }
 
     pub fn compact_to(&mut self, idx: u64) {
-        let cache_first_idx = match self.cache.front() {
-            None => return,
-            Some(e) => e.get_index(),
-        };
-
-        if cache_first_idx > idx {
-            return;
-        }
-        let cache_last_idx = self.cache.back().unwrap().get_index();
-        self.cache.drain(..(cmp::min(cache_last_idx, idx) - cache_first_idx) as usize);
-        if self.cache.len() < SHRINK_CACHE_CAPACITY &&
-           self.cache.capacity() > SHRINK_CACHE_CAPACITY {
-            // So the peer storage doesn't have much writes since the proposal of compaction,
-            // we can consider this peer is going to be inactive.
-            self.cache.shrink_to_fit();
-        }
+        self.cache.compact_to(idx);
     }
 
     // Apply the peer with given snapshot.
@@ -747,7 +781,7 @@ impl PeerStorage {
                                      raft_count += 1;
                                      Ok(true)
                                  }));
-        self.cache = VecDeque::new();
+        self.cache = EntryCache::default();
         info!("{} clear peer {} meta keys and {} raft keys, takes {:?}",
               self.tag,
               meta_count,
@@ -1142,7 +1176,7 @@ mod test {
     }
 
     fn validate_cache(store: &PeerStorage, exp_ents: &[Entry]) {
-        assert_eq!(store.cache, exp_ents);
+        assert_eq!(store.cache.cache, exp_ents);
         let handle = rocksdb::get_cf_handle(&store.engine, CF_RAFT).unwrap();
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
@@ -1422,7 +1456,7 @@ mod test {
         let worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.clear();
+        store.cache.cache.clear();
         // empty cache should fetch data from rocksdb directly.
         let mut res = store.entries(4, 6, u64::max_value()).unwrap();
         assert_eq!(*res, ents[1..]);
@@ -1465,7 +1499,7 @@ mod test {
         let worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut store = new_storage_from_ents(sched, &td, &ents);
-        store.cache.clear();
+        store.cache.cache.clear();
 
         // initial cache
         let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
@@ -1522,20 +1556,20 @@ mod test {
         validate_cache(&store, &exp_res);
 
         // compact shrink
-        assert!(store.cache.capacity() > cap as usize);
+        assert!(store.cache.cache.capacity() > cap as usize);
         store.compact_to(cap * 2);
         exp_res = (cap * 2..cap * 2 + 7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
-        assert!(store.cache.capacity() < cap as usize);
+        assert!(store.cache.cache.capacity() < cap as usize);
 
         // append shrink
         entries = (0..cap + 1).map(|i| new_entry(i, 8)).collect();
         append_ents(&mut store, &entries);
-        assert!(store.cache.capacity() > cap as usize);
+        assert!(store.cache.cache.capacity() > cap as usize);
         append_ents(&mut store, &[new_entry(6, 8)]);
         exp_res = (1..7).map(|i| new_entry(i, 8)).collect();
         validate_cache(&store, &exp_res);
-        assert!(store.cache.capacity() < cap as usize);
+        assert!(store.cache.cache.capacity() < cap as usize);
     }
 
 
