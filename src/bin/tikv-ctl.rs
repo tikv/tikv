@@ -62,17 +62,21 @@ fn main() {
                 .arg(Arg::with_name("key")
                     .short("k")
                     .takes_value(true)
-                    .help("set the raw key")))
-            .subcommand(SubCommand::with_name("region")
-                .about("print region info")
-                .arg(Arg::with_name("region")
-                    .short("r")
-                    .takes_value(true)
-                    .help("set the region id, if not specified, print all regions."))
-                .arg(Arg::with_name("skip-tombstone")
-                    .short("s")
-                    .takes_value(false)
-                    .help("skip tombstone region."))))
+                    .help("set the raw key"))))
+        .subcommand(SubCommand::with_name("region")
+            .about("print region info")
+            .arg(Arg::with_name("region")
+                .short("r")
+                .takes_value(true)
+                .help("set the region id, if not specified, print all regions."))
+            .arg(Arg::with_name("skip-tombstone")
+                .short("s")
+                .takes_value(false)
+                .help("skip tombstone region."))
+            .arg(Arg::with_name("size")
+                .short("S")
+                .takes_value(false)
+                .help("print the size of region.")))
         .subcommand(SubCommand::with_name("scan")
             .about("print the range db range")
             .arg(Arg::with_name("from")
@@ -150,11 +154,24 @@ fn main() {
             dump_raft_log_entry(db, &key);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
+            let enable_printing_size = matches.is_present("size");
             match matches.value_of("region") {
                 Some(id) => {
-                    dump_region_info(&db, String::from(id).parse().unwrap(), skip_tombstone)
+                    dump_region_info(&db, String::from(id).parse().unwrap(), skip_tombstone);
+                    if enable_printing_size {
+                        let size = get_region_size(&db, String::from(id).parse().unwrap());
+                        println!("region size: {}", size)
+                    }
                 }
-                None => dump_all_region_info(db, skip_tombstone),
+                None => {
+                    dump_all_region_info(&db, skip_tombstone);
+                    if enable_printing_size {
+                        let region_ids = get_all_region_id(&db, skip_tombstone);
+                        for region_id in region_ids {
+                            let size = get_region_size(&db, region_id);
+                        }
+                    }
+                },
             }
         } else {
             panic!("Currently only support raft log entry and scan.")
@@ -353,7 +370,8 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     println!("apply state: {:?}", apply_state);
 }
 
-fn dump_all_region_info(db: DB, skip_tombstone: bool) {
+// TODO(Hu Yingqian): use get_all_region_id to refactor this
+fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
     let start_key = keys::REGION_META_MIN_KEY;
     let end_key = keys::REGION_META_MAX_KEY;
     db.scan(start_key,
@@ -364,10 +382,42 @@ fn dump_all_region_info(db: DB, skip_tombstone: bool) {
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
-            dump_region_info(&db, region_id, skip_tombstone);
+            dump_region_info(db, region_id, skip_tombstone);
             Ok(true)
         })
         .unwrap();
+}
+
+fn get_all_region_id(db: &DB, skip_tombstone: bool) -> Vec<u64> {
+    let start_key = keys::REGION_META_MIN_KEY;
+    let end_key = keys::REGION_META_MAX_KEY;
+    let mut region_ids: Vec<u64> = Vec::new();
+    db.scan(start_key, end_key, false, &mut |key, _| {
+        let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
+        if suffix != keys::REGION_STATE_SUFFIX {
+            return Ok(true);
+        }
+        region_ids.push(region_id);
+        Ok(true)
+    }).unwrap();
+    region_ids
+}
+
+fn get_region_size(db: &DB, region_id: u64) -> u64 {
+    let region_state_key = keys::region_state_key(region_id);
+    let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
+    let region = region_state.get_region();
+    let start_key = &keys::data_key(region.get_start_key());
+    let end_key = &keys::data_end_key(region.get_end_key());
+    let mut size: u64 = 0;
+    let cf_arr = [CF_DEFAULT, CF_WRITE, CF_LOCK];
+    for cf in cf_arr.iter() {
+        db.scan_cf(cf, &start_key, &end_key, true, &mut |_, v| {
+            size += v.len() as u64;
+            Ok(true)
+        }).unwrap();
+    }
+    size
 }
 
 fn parse_ts_key_from_key(encode_key: Vec<u8>) -> (u64, Vec<u8>) {
