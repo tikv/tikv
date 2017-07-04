@@ -412,9 +412,13 @@ fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
 fn dump_all_region_size(db: &DB) {
     let region_ids = get_all_region_id(db);
     let mut v: Vec<(u64, u64)> = Vec::new();
+    let mut total_size = 0;
+    let mut region_number = 0;
     for region_id in region_ids {
         let size = get_region_size(db, region_id);
         v.push((region_id, size));
+        total_size += size;
+        region_number += 1;
     }
     v.sort_by(|a, b| {
         if a.1 > b.1 {
@@ -434,6 +438,8 @@ fn dump_all_region_size(db: &DB) {
         return Ordering::Equal;
     });
     v.reverse();
+    println!("total region number: {}", region_number);
+    println!("total region size: {}", convert_gbmbkb(total_size));
     for (id, size) in v {
         println!("region_id: {}", id);
         println!("region size: {}", convert_gbmbkb(size));
