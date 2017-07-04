@@ -19,6 +19,7 @@ use tikv::util::rocksdb;
 use tempdir::TempDir;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
+use rocksdb::DBCompressionType;
 
 use super::pd::{TestPdClient, bootstrap_with_first_region};
 use super::cluster::{Cluster, Simulator};
@@ -56,7 +57,8 @@ fn test_node_bootstrap_with_prepared_data() {
     let mut node = Node::new(&mut event_loop, &cfg, pd_client.clone());
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(),
                                     Some(node.get_sendch()),
-                                    cfg.raft_store.use_sst_file_snapshot);
+                                    cfg.raft_store.use_sst_file_snapshot,
+                                    DBCompressionType::DBLz4);
     let (_, snapshot_status_receiver) = mpsc::channel();
 
 

@@ -18,7 +18,7 @@ use std::time::Duration;
 use std::boxed::FnBox;
 
 use grpc::Environment;
-use rocksdb::DB;
+use rocksdb::{DB, DBCompressionType};
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
@@ -107,7 +107,8 @@ impl Simulator for ServerCluster {
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
         let snap_mgr = SnapManager::new(tmp_str,
                                         Some(store_sendch),
-                                        cfg.raft_store.use_sst_file_snapshot);
+                                        cfg.raft_store.use_sst_file_snapshot,
+                                        DBCompressionType::DBLz4);
         let mut server = Server::new(&cfg,
                                      store.clone(),
                                      sim_router.clone(),

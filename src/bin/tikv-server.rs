@@ -54,7 +54,7 @@ use std::time::Duration;
 use std::env;
 
 use clap::{Arg, App, ArgMatches};
-use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
+use rocksdb::{Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
@@ -861,7 +861,8 @@ fn run_raft_server(pd_client: RpcClient,
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
-                                    cfg.raft_store.use_sst_file_snapshot);
+                                    cfg.raft_store.use_sst_file_snapshot,
+                                    DBCompressionType::DBLz4);
     let mut server = Server::new(&cfg,
                                  storage.clone(),
                                  raft_router,

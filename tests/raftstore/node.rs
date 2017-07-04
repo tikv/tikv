@@ -19,7 +19,7 @@ use std::time::Duration;
 use std::boxed::FnBox;
 use std::ops::Deref;
 
-use rocksdb::DB;
+use rocksdb::{DB, DBCompressionType};
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
@@ -171,7 +171,8 @@ impl Simulator for NodeCluster {
             let tmp = TempDir::new("test_cluster").unwrap();
             let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(),
                                             Some(node.get_sendch()),
-                                            cfg.raft_store.use_sst_file_snapshot);
+                                            cfg.raft_store.use_sst_file_snapshot,
+                                            DBCompressionType::DBLz4);
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.rl();

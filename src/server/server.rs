@@ -161,6 +161,7 @@ mod tests {
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::Storage;
     use kvproto::raft_serverpb::RaftMessage;
+    use rocksdb::DBCompressionType;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
@@ -229,7 +230,7 @@ mod tests {
                         router,
                         snapshot_status_sender,
                         MockResolver { addr: addr.clone() },
-                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
+                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot, DBCompressionType::DBLz4))
                 .unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 

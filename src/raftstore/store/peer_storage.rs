@@ -1067,7 +1067,7 @@ pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft:
 
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = try!(mgr.get_snapshot_for_building(&key, snap));
+    let mut s = try!(mgr.get_snapshot_for_building(&key));
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
@@ -1165,7 +1165,7 @@ mod test {
     use util::rocksdb::new_engine;
     use storage::ALL_CFS;
     use kvproto::eraftpb::HardState;
-    use rocksdb::WriteBatch;
+    use rocksdb::{WriteBatch, DBCompressionType};
 
     use super::*;
 
@@ -1342,7 +1342,8 @@ mod test {
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
                                    None,
-                                   use_sst_file_snapshot);
+                                   use_sst_file_snapshot,
+                                   DBCompressionType::DBLz4);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1622,7 +1623,8 @@ mod test {
         let snap_dir = TempDir::new("snap").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
                                    None,
-                                   use_sst_file_snapshot);
+                                   use_sst_file_snapshot,
+                                   DBCompressionType::DBLz4);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
