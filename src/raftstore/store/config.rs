@@ -47,7 +47,7 @@ const DEFAULT_MESSAGES_PER_TICK: usize = 4096;
 const DEFAULT_MAX_PEER_DOWN_SECS: u64 = 300;
 const DEFAULT_LOCK_CF_COMPACT_INTERVAL: u64 = 10 * 60 * 1000; // 10 min
 const DEFAULT_LOCK_CF_COMPACT_BYTES_THRESHOLD: u64 = 256 * 1024 * 1024; // 256 MB
-const DEFAULT_FLUSH_APPLIED_INTERVAL: u64 = 10 * 60 * 1000; // 10 min
+const DEFAULT_FLUSH_APPLIED_INTERVAL: u64 = 30 * 1000; // 30 seconds
 const DEFAULT_FLUSH_APPLIED_THRESHOLD: u64 = 1024 * 1024 * 1024; // 1 GB
 // If the leader missing for over 2 hours,
 // a peer should consider itself as a stale peer that is out of region.

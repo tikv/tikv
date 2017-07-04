@@ -829,7 +829,6 @@ impl Peer {
         });
 
         self.raft_group.advance_apply(res.apply_state.get_applied_index());
-        //        self.mut_store().apply_state = res.apply_state.clone();
         self.mut_store().applied_index_term = res.applied_index_term;
         self.peer_stat.written_keys += res.metrics.written_keys;
         self.peer_stat.written_bytes += res.metrics.written_bytes;

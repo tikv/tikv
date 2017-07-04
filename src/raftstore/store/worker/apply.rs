@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -252,6 +251,12 @@ pub struct ApplyDelegate {
     term: u64,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
+    // we can't compact index larger than last_flushed_index, so we record
+    // compact_index, and do compact after flush.
+    last_flushed_index: u64,
+    last_flushed_term: u64,
+    pending_compact_index: u64,
+    pending_compact_term: u64,
 }
 
 impl ApplyDelegate {
@@ -275,11 +280,15 @@ impl ApplyDelegate {
             engine: db,
             region: reg.region,
             pending_remove: false,
+            last_flushed_index: reg.apply_state.get_applied_index(),
+            last_flushed_term: reg.applied_index_term,
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             pending_cmds: Default::default(),
             metrics: Default::default(),
+            pending_compact_index: 0,
+            pending_compact_term: 0,
         }
     }
 
@@ -319,10 +328,6 @@ impl ApplyDelegate {
                 results.push(res);
             }
         }
-
-        //        if !self.pending_remove {
-        //            self.write_apply_state(apply_ctx.wb_mut());
-        //        }
 
         self.update_metrics(apply_ctx);
         apply_ctx.mark_last_bytes_and_keys();
@@ -366,8 +371,6 @@ impl ApplyDelegate {
             let cmd = parse_data_at(data, index, &self.tag);
 
             if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
-                // self.write_apply_state(apply_ctx.wb_mut());
-
                 self.update_metrics(apply_ctx);
 
                 // flush to engine
@@ -836,7 +839,14 @@ impl ApplyDelegate {
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
 
-        let compact_index = req.get_compact_log().get_compact_index();
+        let mut compact_index = req.get_compact_log().get_compact_index();
+        let mut compact_term = req.get_compact_log().get_compact_term();
+        if compact_index > self.last_flushed_index {
+            self.pending_compact_index = compact_index;
+            self.pending_compact_term = compact_term;
+            compact_index = self.last_flushed_index;
+            compact_term = self.last_flushed_term;
+        }
         let resp = AdminResponse::new();
 
         let first_index = peer_storage::first_index(&ctx.apply_state);
@@ -848,7 +858,6 @@ impl ApplyDelegate {
             return Ok((resp, None));
         }
 
-        let compact_term = req.get_compact_log().get_compact_term();
         // TODO: add unit tests to cover all the message integrity checks.
         if compact_term == 0 {
             info!("{} compact term missing in {:?}, skip.",
@@ -868,6 +877,53 @@ impl ApplyDelegate {
             state: ctx.apply_state.get_truncated_state().clone(),
             first_index: first_index,
         })))
+    }
+
+    pub fn flush_pending_compact(&mut self) -> Option<ExecResult> {
+        self.last_flushed_index = self.apply_state.get_applied_index();
+        self.last_flushed_term = self.applied_index_term;
+
+        if self.pending_compact_index == 0 {
+            return None;
+        }
+        assert!(self.last_flushed_index >= self.pending_compact_index);
+
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
+
+        let compact_index = self.pending_compact_index;
+        self.pending_compact_index = 0;
+
+        let first_index = peer_storage::first_index(&self.apply_state);
+        if compact_index <= first_index {
+            debug!("{} compact index {} <= first index {}, no need to compact",
+                   self.tag,
+                   compact_index,
+                   first_index);
+            return None;
+        }
+
+        let compact_term = self.pending_compact_term;
+        // TODO: add unit tests to cover all the message integrity checks.
+        if compact_term == 0 {
+            info!("{} compact term missing, skip.", self.tag);
+            // old format compact log command, safe to ignore.
+            return None;
+        }
+
+        // compact failure is safe to be omitted, no need to assert.
+        if compact_raft_log(&self.tag,
+                            &mut self.apply_state,
+                            compact_index,
+                            compact_term).is_err() {
+            return None;
+        }
+
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
+
+        Some(ExecResult::CompactLog {
+            state: self.apply_state.get_truncated_state().clone(),
+            first_index: first_index,
+        })
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
@@ -1200,7 +1256,7 @@ pub struct ApplyRes {
 pub enum TaskRes {
     Applys(Vec<ApplyRes>),
     Destroy(ApplyDelegate),
-    FlushApplied(Vec<(u64, RaftApplyState)>),
+    FlushApplied(Vec<(u64, RaftApplyState, Option<ExecResult>)>),
 }
 
 // TODO: use threadpool to do task concurrently
@@ -1345,9 +1401,10 @@ impl Runner {
         let wb = WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE);
         let mut res = Vec::with_capacity(self.regions_need_flush_applied.len());
         for region_id in self.regions_need_flush_applied.drain() {
-            let delegate = self.delegates.get(&region_id).unwrap();
+            let delegate = self.delegates.get_mut(&region_id).unwrap();
+            let compact_exec_result = delegate.flush_pending_compact();
             delegate.write_apply_state(&wb);
-            res.push((region_id, delegate.apply_state.clone()));
+            res.push((region_id, delegate.apply_state.clone(), compact_exec_result));
         }
 
         // Flush memtables of default/lock/write column families.
