@@ -26,7 +26,7 @@ use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
 use super::bytes::BytesEncoder;
 use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
-                   Time, Json, JsonEncoder, JsonDecoder};
+                   Time, Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -273,7 +273,7 @@ impl Datum {
                 Json::String(String::from(data)).cmp(json)
             }
             _ => {
-                let data = self.as_string().unwrap_or_default();
+                let data = self.to_string().unwrap_or_default();
                 Json::String(data).cmp(json)
             }
         };
@@ -299,7 +299,7 @@ impl Datum {
         Ok(b)
     }
 
-    pub fn as_string(&self) -> Result<String> {
+    pub fn to_string(&self) -> Result<String> {
         let s = match *self {
             Datum::I64(i) => format!("{}", i),
             Datum::U64(u) => format!("{}", u),
@@ -321,7 +321,7 @@ impl Datum {
             let data = try!(String::from_utf8(bs));
             Ok(data)
         } else {
-            self.as_string()
+            self.to_string()
         }
     }
 
@@ -453,6 +453,14 @@ impl Datum {
         }
     }
 
+    pub fn to_json_path_expr(&self) -> Result<PathExpression> {
+        let v = match *self {
+            Datum::Bytes(ref bs) => try!(str::from_utf8(bs)),
+            _ => "",
+        };
+        parse_json_path_expr(v)
+    }
+  
     /// Try its best effort to convert into a decimal datum.
     /// source function name is `ConvertDatumToDecimal`.
     fn coerce_to_dec(self) -> Result<Datum> {
@@ -1400,7 +1408,7 @@ mod test {
     fn test_cast_as_json() {
         let tests = vec![
             (Datum::I64(1), "1.0"),
-            (Datum::F64(3.3),"3.3"),
+            (Datum::F64(3.3), "3.3"),
             (Datum::Bytes(br#""Hello,world""#.to_vec()), r#""Hello,world""#),
             (Datum::Bytes(b"[1, 2, 3]".to_vec()), "[1, 2, 3]"),
             (Datum::Bytes(b"{}".to_vec()), "{}"),
@@ -1427,7 +1435,7 @@ mod test {
     fn test_datum_into_json() {
         let tests = vec![
             (Datum::I64(1), "1.0"),
-            (Datum::F64(3.3),"3.3"),
+            (Datum::F64(3.3), "3.3"),
             (Datum::Bytes(b"Hello,world".to_vec()), r#""Hello,world""#),
             (Datum::Bytes(b"[1, 2, 3]".to_vec()), r#""[1, 2, 3]""#),
             (Datum::Null, "null"),
