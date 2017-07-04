@@ -1,23 +1,39 @@
-use tikv::server::coprocessor::*;
-use tikv::server::coprocessor;
-use kvproto::kvrpcpb::Context;
-use tikv::util::codec::{table, Datum, datum};
-use tikv::util::codec::number::*;
-use tikv::storage::{Mutation, Key, ALL_CFS};
-use tikv::storage::engine::{self, Engine, TEMP_DIR};
-use tikv::util::worker::Worker;
-use kvproto::coprocessor::{Request, KeyRange};
-use tipb::select::{SelectRequest, SelectResponse, Chunk};
-use tipb::schema::{self, ColumnInfo};
-use tipb::expression::{Expr, ExprType, ByItem};
-use storage::sync_storage::SyncStorage;
-use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
+// Copyright 2016 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::{HashMap, BTreeMap};
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use protobuf::{RepeatedField, Message};
+
+use kvproto::kvrpcpb::Context;
+use kvproto::coprocessor::{Request, KeyRange};
+use tikv::server::coprocessor;
+use tikv::server::coprocessor::*;
+use tikv::storage::{Mutation, Key, ALL_CFS};
+use tikv::storage::engine::{self, Engine, TEMP_DIR};
+use tipb::select::{SelectRequest, DAGRequest, SelectResponse, Chunk};
+use tipb::executor::{Executor, ExecType, TableScan, IndexScan, Selection, Aggregation, TopN, Limit};
+use tipb::schema::{self, ColumnInfo};
+use tipb::expression::{Expr, ExprType, ByItem};
+use tikv::util::worker::Worker;
+use tikv::util::codec::{table, Datum, datum};
+use tikv::util::codec::datum::DatumDecoder;
+use tikv::util::codec::number::*;
+use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
+
+use storage::sync_storage::SyncStorage;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
 
@@ -81,6 +97,26 @@ impl Iterator for ChunkSpliter {
             return Some(row);
         }
     }
+}
+
+#[allow(dead_code)]
+fn debug_chunk(prefix: &str, chunk: &[Chunk]) {
+    println!("{}: {{", prefix);
+    for c in chunk {
+        let mut start: usize = 0;
+        let mut end: usize = 0;
+        let mut data = c.get_rows_data();
+        for meta in c.get_rows_meta().iter() {
+            end += meta.get_length() as usize;
+            let mut row = &data[start..end];
+            println!("\thandle={}, len={}, data={:?}",
+                     meta.get_handle(),
+                     meta.get_length(),
+                     row.decode().unwrap());
+            start = end;
+        }
+    }
+    println!("}}");
 }
 
 #[derive(Clone, Copy)]
@@ -175,13 +211,6 @@ impl Table {
             c_info.set_tp(col.col_type);
             c_info.set_column_id(col.id);
             c_info.set_pk_handle(col.id == self.handle_id);
-            idx_info.mut_columns().push(c_info);
-        }
-        if let Some(col) = self.cols.get(&self.handle_id) {
-            let mut c_info = ColumnInfo::new();
-            c_info.set_tp(col.col_type);
-            c_info.set_column_id(col.id);
-            c_info.set_pk_handle(true);
             idx_info.mut_columns().push(c_info);
         }
         idx_info
@@ -317,13 +346,6 @@ impl<'a> Select<'a> {
         self
     }
 
-    fn order_by_pk(mut self, desc: bool) -> Select<'a> {
-        let mut item = ByItem::new();
-        item.set_desc(desc);
-        self.sel.mut_order_by().push(item);
-        self
-    }
-
     fn order_by(mut self, col: Column, desc: bool) -> Select<'a> {
         let mut item = ByItem::new();
         let mut expr = Expr::new();
@@ -334,7 +356,6 @@ impl<'a> Select<'a> {
         self.sel.mut_order_by().push(item);
         self
     }
-
 
     fn count(mut self) -> Select<'a> {
         let mut expr = Expr::new();
@@ -391,13 +412,13 @@ impl<'a> Select<'a> {
         self
     }
 
-    fn build(self) -> Request {
+    fn build(self) -> Vec<Request> {
         self.build_with(&[0])
     }
 
-    fn build_with(mut self, flags: &[u64]) -> Request {
+    fn build_with(mut self, flags: &[u64]) -> Vec<Request> {
         let mut req = Request::new();
-
+        // construct sel req
         if self.idx < 0 {
             self.sel.set_table_info(self.table.get_table_info());
             req.set_tp(REQ_TYPE_SELECT);
@@ -406,11 +427,9 @@ impl<'a> Select<'a> {
             req.set_tp(REQ_TYPE_INDEX);
         }
         self.sel.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
-
         req.set_data(self.sel.write_to_bytes().unwrap());
 
         let mut range = KeyRange::new();
-
         let mut buf = Vec::with_capacity(8);
         buf.encode_i64(i64::MIN).unwrap();
         if self.idx < 0 {
@@ -418,7 +437,6 @@ impl<'a> Select<'a> {
         } else {
             range.set_start(table::encode_index_seek_key(self.table.id, self.idx, &buf));
         }
-
         buf.clear();
         buf.encode_i64(i64::MAX).unwrap();
         if self.idx < 0 {
@@ -426,9 +444,100 @@ impl<'a> Select<'a> {
         } else {
             range.set_end(table::encode_index_seek_key(self.table.id, self.idx, &buf));
         }
-        req.set_ranges(RepeatedField::from_vec(vec![range]));
-        req
+        req.set_ranges(RepeatedField::from_vec(vec![range.clone()]));
+
+        // construct dag req
+        let mut dag_req = Request::new();
+        dag_req.set_tp(REQ_TYPE_DAG);
+        let dag = into_dag(self.sel);
+        dag_req.set_data(dag.write_to_bytes().unwrap());
+        dag_req.set_ranges(RepeatedField::from_vec(vec![range]));
+
+        let mut reqs = Vec::with_capacity(2);
+        reqs.push(req);
+        reqs.push(dag_req);
+        reqs
     }
+}
+
+fn into_dag(mut sel: SelectRequest) -> DAGRequest {
+    let mut dag = DAGRequest::new();
+    let mut execs = Vec::new();
+    // tablescan or indexscan
+    if sel.has_table_info() {
+        let mut exec = Executor::new();
+        exec.set_tp(ExecType::TypeTableScan);
+        let mut tbl_scan = TableScan::new();
+        let mut table_info = sel.take_table_info();
+        tbl_scan.set_table_id(table_info.get_table_id());
+        tbl_scan.set_columns(table_info.take_columns());
+        exec.set_tbl_scan(tbl_scan);
+        execs.push(exec);
+    } else {
+        let mut exec = Executor::new();
+        exec.set_tp(ExecType::TypeIndexScan);
+        let mut idx_scan = IndexScan::new();
+        let mut index_info = sel.take_index_info();
+        idx_scan.set_table_id(index_info.get_table_id());
+        idx_scan.set_index_id(index_info.get_index_id());
+        idx_scan.set_columns(index_info.take_columns());
+        exec.set_idx_scan(idx_scan);
+        execs.push(exec);
+    }
+    // selection
+    if sel.has_field_where() {
+        let mut exec = Executor::new();
+        exec.set_tp(ExecType::TypeSelection);
+        let mut selection = Selection::new();
+        selection.mut_conditions().push(sel.take_field_where());
+        exec.set_selection(selection);
+        execs.push(exec);
+    }
+    // aggregations
+    if !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty() {
+        let mut exec = Executor::new();
+        exec.set_tp(ExecType::TypeAggregation);
+        let mut aggr = Aggregation::new();
+        if !sel.get_aggregates().is_empty() {
+            aggr.set_agg_func(sel.take_aggregates());
+        }
+        if !sel.get_group_by().is_empty() {
+            let group_by: Vec<_> = sel.mut_group_by()
+                .iter_mut()
+                .map(|item| item.take_expr())
+                .collect();
+            aggr.set_group_by(RepeatedField::from_vec(group_by));
+        }
+        exec.set_aggregation(aggr);
+        execs.push(exec);
+    }
+    // topn
+    if !sel.get_order_by().is_empty() {
+        let mut exec = Executor::new();
+        exec.set_tp(ExecType::TypeTopN);
+        let mut topn = TopN::new();
+        topn.set_order_by(sel.take_order_by());
+        if sel.has_limit() {
+            topn.set_limit(sel.get_limit() as u64);
+        }
+        exec.set_topN(topn);
+        execs.push(exec);
+    }
+    // limit
+    if sel.get_order_by().is_empty() && sel.has_limit() {
+        let mut exec = Executor::new();
+        exec.set_tp(ExecType::TypeLimit);
+        let mut limit = Limit::new();
+        limit.set_limit(sel.get_limit() as u64);
+        exec.set_limit(limit);
+        execs.push(exec);
+    }
+
+    dag.set_executors(RepeatedField::from_vec(execs));
+    dag.set_start_ts(sel.get_start_ts());
+    dag.set_time_zone_offset(sel.get_time_zone_offset());
+    dag.set_flags(sel.get_flags());
+    dag
 }
 
 struct Delete<'a> {
@@ -571,6 +680,27 @@ fn init_with_data(tbl: &ProductTable,
     end_point.start_batch(runner, 5).unwrap();
 
     (store, end_point)
+}
+
+fn handle_select(end_point: &Worker<EndPointTask>, reqs: Vec<Request>) -> SelectResponse {
+    assert!(reqs.len() == 2);
+    let (tx, rx) = mpsc::channel();
+
+    let mut resps: Vec<_> = reqs.into_iter()
+        .map(|req| {
+            let tx = tx.clone();
+            let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
+            end_point.schedule(EndPointTask::Request(req)).unwrap();
+            let resp = rx.recv().unwrap();
+            assert!(!resp.get_data().is_empty(), "{:?}", resp);
+            let mut sel_resp = SelectResponse::new();
+            sel_resp.merge_from_bytes(resp.get_data()).unwrap();
+            sel_resp
+        })
+        .collect();
+
+    assert_eq!(resps[0], resps[1]);
+    resps.pop().unwrap()
 }
 
 #[test]
@@ -974,7 +1104,7 @@ fn test_reverse() {
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
 
-    let req = Select::from(&product.table).limit(5).order_by_pk(true).build();
+    let req = Select::from(&product.table).limit(5).order_by(product.id, true).build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), 5);
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
@@ -987,17 +1117,6 @@ fn test_reverse() {
     }
 
     end_point.stop().unwrap().join().unwrap();
-}
-
-fn handle_select(end_point: &Worker<EndPointTask>, req: Request) -> SelectResponse {
-    let (tx, rx) = mpsc::channel();
-    let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
-    end_point.schedule(EndPointTask::Request(req)).unwrap();
-    let resp = rx.recv().unwrap();
-    assert!(!resp.get_data().is_empty(), "{:?}", resp);
-    let mut sel_resp = SelectResponse::new();
-    sel_resp.merge_from_bytes(resp.get_data()).unwrap();
-    sel_resp
 }
 
 #[test]
@@ -1041,7 +1160,8 @@ fn test_index_reverse_limit() {
     let product = ProductTable::new();
     let (_, mut end_point) = init_with_data(&product, &data);
 
-    let req = Select::from_index(&product.table, product.id).limit(5).order_by_pk(true).build();
+    let req =
+        Select::from_index(&product.table, product.id).limit(5).order_by(product.id, true).build();
     let mut resp = handle_select(&end_point, req);
     assert_eq!(row_cnt(resp.get_chunks()), 5);
     let spliter = ChunkSpliter::new(resp.take_chunks().into_vec());
@@ -1482,7 +1602,7 @@ fn test_handle_truncate() {
         assert_eq!(row.data, &*expected_encoded);
 
         // Do NOT ignore truncate error.
-        let req = Select::from(&product.table).where_expr(cond.clone()).build();
+        let req = Select::from(&product.table).where_expr(cond.clone()).build().remove(0);
         let (tx, rx) = mpsc::channel();
         let req = RequestTask::new(req, box move |r| tx.send(r).unwrap());
         end_point.schedule(EndPointTask::Request(req)).unwrap();

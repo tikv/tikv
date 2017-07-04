@@ -418,6 +418,8 @@ impl TiDbEndPoint {
                     let mut sel_resp = SelectResponse::new();
                     sel_resp.set_error(to_pb_error(&e));
                     resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                    resp.set_other_error(format!("{}", e));
+                    COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
                     Ok(resp)
                 } else {
                     Err(e)
@@ -430,7 +432,11 @@ impl TiDbEndPoint {
         let ranges = t.req.get_ranges().to_vec();
         let eval_ctx = Rc::new(box_try!(EvalContext::new(dag.get_time_zone_offset(),
                                                          dag.get_flags())));
-        let mut ctx = DAGContext::new(dag, t.deadline, ranges, self.snap.as_ref(), eval_ctx.clone());
+        let mut ctx = DAGContext::new(dag,
+                                      t.deadline,
+                                      ranges,
+                                      self.snap.as_ref(),
+                                      eval_ctx.clone());
         try!(ctx.validate_dag());
         let mut exec = try!(ctx.build_dag(&mut t.statistics));
         let mut chunks = vec![];
@@ -465,6 +471,7 @@ impl TiDbEndPoint {
                         let mut sel_resp = SelectResponse::new();
                         sel_resp.set_error(to_pb_error(&e));
                         resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                        resp.set_other_error(format!("{}", e));
                         return Ok(resp);
                     } else {
                         return Err(e);
@@ -825,9 +832,10 @@ impl SelectContextCore {
                 .collect())
         } else {
             let cols = sel.mut_index_info().mut_columns();
-            if cols.last().map_or(false, |c| c.get_pk_handle()) {
-                cols.pop();
-            }
+            // FIXME
+            // if cols.last().map_or(false, |c| c.get_pk_handle()) {
+            //     cols.pop();
+            // }
             Either::Right(cols.iter().map(|c| c.get_column_id()).collect())
         };
 

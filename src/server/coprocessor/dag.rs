@@ -33,7 +33,7 @@ use super::executor::limit::LimitExecutor;
 
 pub struct DAGContext<'s> {
     req: DAGRequest,
-    pub deadline: Instance,
+    pub deadline: Instant,
     pub columns: Vec<ColumnInfo>,
     ranges: Vec<KeyRange>,
     snap: &'s Snapshot,

@@ -20,6 +20,7 @@ use kvproto::coprocessor::KeyRange;
 use kvproto::kvrpcpb::IsolationLevel;
 use storage::{Snapshot, Statistics};
 use util::codec::{table, datum, mysql};
+use util::codec::datum::DatumDecoder;
 use byteorder::{BigEndian, ReadBytesExt};
 use super::{Executor, Row};
 use super::scanner::Scanner;
@@ -97,7 +98,7 @@ impl<'a> IndexScanExecutor<'a> {
             } else {
                 datum::Datum::I64(handle)
             };
-            let mut bytes = datum::encode_value(&[handle_datum]).unwrap();
+            let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
             values.append(pk_col.get_column_id(), &mut bytes);
         }
         Ok(Some(Row::new(handle, values)))
