@@ -224,14 +224,16 @@ mod tests {
         let (snapshot_status_sender, _) = mpsc::channel();
 
         let addr = Arc::new(Mutex::new(None));
-        let mut server =
-            Server::new(&cfg,
-                        storage,
-                        router,
-                        snapshot_status_sender,
-                        MockResolver { addr: addr.clone() },
-                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot, DBCompressionType::DBLz4))
-                .unwrap();
+        let mut server = Server::new(&cfg,
+                                     storage,
+                                     router,
+                                     snapshot_status_sender,
+                                     MockResolver { addr: addr.clone() },
+                                     SnapManager::new("",
+                                                      None,
+                                                      cfg.raft_store.use_sst_file_snapshot,
+                                                      DBCompressionType::DBLz4))
+            .unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 
         server.start(&cfg).unwrap();

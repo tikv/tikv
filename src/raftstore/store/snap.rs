@@ -716,7 +716,8 @@ mod v2 {
     use protobuf::{Message, RepeatedField};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
-    use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, Options as RocksdbOptions, DBCompressionType};
+    use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, Options as RocksdbOptions,
+                  DBCompressionType};
     use storage::{CfName, CF_LOCK};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
     use util::file::{get_file_size, file_exists, delete_file_if_exist};
@@ -2171,16 +2172,20 @@ impl SnapManager {
         self.core.rl().registry.contains_key(key)
     }
 
-    pub fn get_snapshot_for_building(&self,
-                                     key: &SnapKey)
-                                     -> RaftStoreResult<Box<Snapshot>> {
+    pub fn get_snapshot_for_building(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let (use_sst_file_snapshot, dir, snap_size, snap_compression) = {
             let core = self.core.rl();
-            (core.use_sst_file_snapshot, core.base.clone(), core.snap_size.clone(), core.snap_compression.clone())
+            (core.use_sst_file_snapshot,
+             core.base.clone(),
+             core.snap_size.clone(),
+             core.snap_compression.clone())
         };
         if use_sst_file_snapshot {
-            let f =
-                try!(v2::Snap::new_for_building(dir, key, snap_size, Box::new(self.clone()), snap_compression));
+            let f = try!(v2::Snap::new_for_building(dir,
+                                                    key,
+                                                    snap_size,
+                                                    Box::new(self.clone()),
+                                                    snap_compression));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(dir, snap_size, true, key));
@@ -2434,9 +2439,12 @@ mod test {
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
         let deleter = Box::new(mgr.clone());
-        let mut s1 =
-            SnapV2::new_for_building(&path, &key1, size_track.clone(), deleter.clone(), DBCompressionType::DBLz4)
-                .unwrap();
+        let mut s1 = SnapV2::new_for_building(&path,
+                                              &key1,
+                                              size_track.clone(),
+                                              deleter.clone(),
+                                              DBCompressionType::DBLz4)
+            .unwrap();
         let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
@@ -2463,9 +2471,12 @@ mod test {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 =
-            SnapV2::new_for_building(&path, &key2, size_track.clone(), deleter.clone(), DBCompressionType::DBLz4)
-                .unwrap();
+        let s3 = SnapV2::new_for_building(&path,
+                                          &key2,
+                                          size_track.clone(),
+                                          deleter.clone(),
+                                          DBCompressionType::DBLz4)
+            .unwrap();
         let s4 = SnapV2::new_for_receiving(&path,
                                            &key2,
                                            snap_data.take_meta(),
@@ -2569,7 +2580,10 @@ mod test {
     fn test_snap_deletion_on_registry_impl(use_sst_file_snapshot: bool) {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path.clone(), None, use_sst_file_snapshot, DBCompressionType::DBNo);
+        let src_mgr = SnapManager::new(src_path.clone(),
+                                       None,
+                                       use_sst_file_snapshot,
+                                       DBCompressionType::DBNo);
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
@@ -2603,7 +2617,10 @@ mod test {
 
         let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path.clone(), None, use_sst_file_snapshot, DBCompressionType::DBNo);
+        let dst_mgr = SnapManager::new(dst_path.clone(),
+                                       None,
+                                       use_sst_file_snapshot,
+                                       DBCompressionType::DBNo);
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
