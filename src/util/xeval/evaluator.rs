@@ -15,7 +15,7 @@ use std::cmp::Ordering;
 use std::ascii::AsciiExt;
 
 use chrono::FixedOffset;
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
@@ -137,6 +137,7 @@ impl Evaluator {
             ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
+            ExprType::ScalarFunc => self.eval_scalar_function(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -214,6 +215,15 @@ impl Evaluator {
             return Ok(None);
         }
         left.cmp(ctx, &right).map(Some).map_err(From::from)
+    }
+
+    pub fn get_one_child<'a>(&mut self, expr: &'a Expr) -> Result<&'a Expr> {
+        let l = expr.get_children().len();
+        if l != 1 {
+            return Err(Error::Expr(format!("{:?} need 1 operands but got {}", expr.get_tp(), l)));
+        }
+        let children = expr.get_children();
+        Ok(&children[0])
     }
 
     fn get_two_children<'a>(&mut self, expr: &'a Expr) -> Result<(&'a Expr, &'a Expr)> {
@@ -383,6 +393,18 @@ impl Evaluator {
             Ok(Datum::Null)
         } else {
             Ok(left)
+        }
+    }
+
+    fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        match expr.get_sig() {
+            ScalarFuncSig::CastInAsInt => self.cast_int_as_int(ctx, expr),
+            ScalarFuncSig::CastIntAsReal => self.cast_int_as_real(ctx, expr),
+            ScalarFuncSig::CastIntAsString => self.cast_int_as_string(ctx, expr),
+            ScalarFuncSig::CastIntAsDecimal => self.cast_int_as_decimal(ctx, expr),
+            ScalarFuncSig::CastIntAsTime => self.cast_int_as_time(ctx, expr),
+            ScalarFuncSig::CastIntAsDuration => self.cast_int_as_duration(ctx, expr),
+            _ => Err(Error::Expr(format!("unsupport scalar function {:?}", expr.get_sig()))),
         }
     }
 
@@ -685,7 +707,7 @@ mod test {
     // TODO: test time
     test_eval!(test_eval_plus,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Plus), Datum::U64(2)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Plus), Datum::F64(2.0)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Plus), Datum::F64(0.0)),
@@ -711,7 +733,7 @@ mod test {
 
     test_eval!(test_eval_div,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div), Datum::Dec(1.into())),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div), Datum::Dec(1.into())),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Div), Datum::Dec(1.into())),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Div), Datum::F64(1f64)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Div), Datum::F64(-1f64)),
@@ -764,7 +786,7 @@ mod test {
 
     test_eval!(test_eval_mul,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Mul), Datum::U64(1)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Mul), Datum::F64(1f64)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Mul), Datum::F64(-1f64)),
@@ -788,7 +810,7 @@ mod test {
 
     test_eval!(test_eval_int_div,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::IntDiv), Datum::Null),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::IntDiv), Datum::U64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::IntDiv), Datum::Null),
@@ -817,7 +839,7 @@ mod test {
     test_eval!(test_eval_rem,
                vec![
         (bin_expr(Datum::I64(3), Datum::I64(1), ExprType::Mod), Datum::I64(0)),
-		(bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
+        (bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::Mod), Datum::Null),
         (bin_expr(Datum::I64(3), Datum::U64(2), ExprType::Mod), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::Mod), Datum::Null),
