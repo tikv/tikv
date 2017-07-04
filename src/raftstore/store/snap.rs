@@ -2178,7 +2178,7 @@ impl SnapManager {
             (core.use_sst_file_snapshot,
              core.base.clone(),
              core.snap_size.clone(),
-             core.snap_compression.clone())
+             core.snap_compression)
         };
         if use_sst_file_snapshot {
             let f = try!(v2::Snap::new_for_building(dir,
