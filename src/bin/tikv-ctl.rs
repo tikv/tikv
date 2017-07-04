@@ -166,12 +166,12 @@ fn main() {
                 None => {
                     dump_all_region_info(&db, skip_tombstone);
                     if enable_printing_size {
-                        let region_ids = get_all_region_id(&db, skip_tombstone);
+                        let region_ids = get_all_region_id(&db);
                         for region_id in region_ids {
                             let size = get_region_size(&db, region_id);
                         }
                     }
-                },
+                }
             }
         } else {
             panic!("Currently only support raft log entry and scan.")
@@ -370,36 +370,29 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     println!("apply state: {:?}", apply_state);
 }
 
-// TODO(Hu Yingqian): use get_all_region_id to refactor this
 fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
+    let region_ids = get_all_region_id(db);
+    for region_id in region_ids {
+        dump_region_info(db, region_id, skip_tombstone);
+    }
+}
+
+fn get_all_region_id(db: &DB) -> Vec<u64> {
     let start_key = keys::REGION_META_MIN_KEY;
     let end_key = keys::REGION_META_MAX_KEY;
+    let mut region_ids: Vec<u64> = Vec::new();
     db.scan(start_key,
               end_key,
               false,
               &mut |key, _| {
-            let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
+            let (region_id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
-            dump_region_info(db, region_id, skip_tombstone);
+            region_ids.push(region_id);
             Ok(true)
         })
         .unwrap();
-}
-
-fn get_all_region_id(db: &DB, skip_tombstone: bool) -> Vec<u64> {
-    let start_key = keys::REGION_META_MIN_KEY;
-    let end_key = keys::REGION_META_MAX_KEY;
-    let mut region_ids: Vec<u64> = Vec::new();
-    db.scan(start_key, end_key, false, &mut |key, _| {
-        let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
-        if suffix != keys::REGION_STATE_SUFFIX {
-            return Ok(true);
-        }
-        region_ids.push(region_id);
-        Ok(true)
-    }).unwrap();
     region_ids
 }
 
@@ -412,10 +405,15 @@ fn get_region_size(db: &DB, region_id: u64) -> u64 {
     let mut size: u64 = 0;
     let cf_arr = [CF_DEFAULT, CF_WRITE, CF_LOCK];
     for cf in cf_arr.iter() {
-        db.scan_cf(cf, &start_key, &end_key, true, &mut |_, v| {
-            size += v.len() as u64;
-            Ok(true)
-        }).unwrap();
+        db.scan_cf(cf,
+                     &start_key,
+                     &end_key,
+                     true,
+                     &mut |_, v| {
+                         size += v.len() as u64;
+                         Ok(true)
+                     })
+            .unwrap();
     }
     size
 }
