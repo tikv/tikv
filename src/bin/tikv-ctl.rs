@@ -62,21 +62,23 @@ fn main() {
                 .arg(Arg::with_name("key")
                     .short("k")
                     .takes_value(true)
-                    .help("set the raw key"))))
-        .subcommand(SubCommand::with_name("region")
-            .about("print region info")
+                    .help("set the raw key")))
+            .subcommand(SubCommand::with_name("region")
+                .about("print region info")
+                .arg(Arg::with_name("region")
+                    .short("r")
+                    .takes_value(true)
+                    .help("set the region id, if not specified, print all regions."))
+                .arg(Arg::with_name("skip-tombstone")
+                    .short("s")
+                    .takes_value(false)
+                    .help("skip tombstone region."))))
+        .subcommand(SubCommand::with_name("size")
+            .about("print region size")
             .arg(Arg::with_name("region")
                 .short("r")
                 .takes_value(true)
-                .help("set the region id, if not specified, print all regions."))
-            .arg(Arg::with_name("skip-tombstone")
-                .short("s")
-                .takes_value(false)
-                .help("skip tombstone region."))
-            .arg(Arg::with_name("size")
-                .short("S")
-                .takes_value(false)
-                .help("print the size of region.")))
+                .help("set the region id, if not specified, print all regions.")))
         .subcommand(SubCommand::with_name("scan")
             .about("print the range db range")
             .arg(Arg::with_name("from")
@@ -154,27 +156,23 @@ fn main() {
             dump_raft_log_entry(db, &key);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");
-            let enable_printing_size = matches.is_present("size");
             match matches.value_of("region") {
                 Some(id) => {
                     dump_region_info(&db, String::from(id).parse().unwrap(), skip_tombstone);
-                    if enable_printing_size {
-                        let size = get_region_size(&db, String::from(id).parse().unwrap());
-                        println!("region size: {}", size)
-                    }
                 }
                 None => {
                     dump_all_region_info(&db, skip_tombstone);
-                    if enable_printing_size {
-                        let region_ids = get_all_region_id(&db);
-                        for region_id in region_ids {
-                            let size = get_region_size(&db, region_id);
-                        }
-                    }
                 }
             }
         } else {
             panic!("Currently only support raft log entry and scan.")
+        }
+    } else if let Some(matches) = matches.subcommand_matches("size") {
+        match matches.value_of("region") {
+            Some(id) => {
+                dump_region_size(&db, String::from(id).parse().unwrap());
+            }
+            None => dump_all_region_size(&db),
         }
     } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = String::from(matches.value_of("from").unwrap());
@@ -370,10 +368,23 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     println!("apply state: {:?}", apply_state);
 }
 
+fn dump_region_size(db: &DB, region_id: u64) {
+    println!("region id: {}", region_id);
+    let size = get_region_size(db, region_id);
+    println!("region size: {}", size);
+}
+
 fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
     let region_ids = get_all_region_id(db);
     for region_id in region_ids {
         dump_region_info(db, region_id, skip_tombstone);
+    }
+}
+
+fn dump_all_region_size(db: &DB) {
+    let region_ids = get_all_region_id(db);
+    for region_id in region_ids {
+        dump_region_size(db, region_id);
     }
 }
 
