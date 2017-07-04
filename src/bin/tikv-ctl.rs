@@ -369,37 +369,25 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     println!("apply state: {:?}", apply_state);
 }
 
-fn convert_gbmbkb(mut bytes: u64) -> String {
-    let b = if bytes % 1024 == 0 {
+fn convert_gbmb(mut bytes: u64) -> String {
+    let mb = if bytes % (1024 * 1024 * 1024) == 0 {
         String::from("")
     } else {
-        format!("{} B", bytes % 1024)
+        format!("{:.3} MB ", bytes as f64 / 1024.0 / 1024.0)
     };
-    bytes /= 1024;
-    let kb = if bytes % 1024 == 0 {
+    bytes /= 1024 * 1024 * 1024;
+    let gb = if bytes == 0 {
         String::from("")
     } else {
-        format!("{} KB ", bytes % 1024)
+        format!("{} GB ", bytes)
     };
-    bytes /= 1024;
-    let mb = if bytes % 1024 == 0 {
-        String::from("")
-    } else {
-        format!("{} MB ", bytes % 1024)
-    };
-    bytes /= 1024;
-    let gb = if bytes % 1024 == 0 {
-        String::from("")
-    } else {
-        format!("{} GB ", bytes % 1024)
-    };
-    format!("{}{}{}{}", gb, mb, kb, b)
+    format!("{}{}", gb, mb)
 }
 
 fn dump_region_size(db: &DB, region_id: u64) {
     println!("region id: {}", region_id);
     let size = get_region_size(db, region_id);
-    println!("region size: {}", convert_gbmbkb(size));
+    println!("region size: {}", convert_gbmb(size));
 }
 
 fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
@@ -439,10 +427,10 @@ fn dump_all_region_size(db: &DB) {
     });
     v.reverse();
     println!("total region number: {}", region_number);
-    println!("total region size: {}", convert_gbmbkb(total_size));
+    println!("total region size: {}", convert_gbmb(total_size));
     for (id, size) in v {
         println!("region_id: {}", id);
-        println!("region size: {}", convert_gbmbkb(size));
+        println!("region size: {}", convert_gbmb(size));
     }
 }
 
