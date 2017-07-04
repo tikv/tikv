@@ -753,6 +753,7 @@ pub struct SelectContextCore {
     sel: SelectRequest,
     eval: Evaluator,
     cols: Either<HashSet<i64>, Vec<i64>>,
+    pk_col: Option<ColumnInfo>,
     cond_cols: Vec<ColumnInfo>,
     topn_cols: Vec<ColumnInfo>,
     aggr: bool,
@@ -768,7 +769,7 @@ pub struct SelectContextCore {
 }
 
 impl SelectContextCore {
-    fn new(mut sel: SelectRequest) -> Result<SelectContextCore> {
+    fn new(sel: SelectRequest) -> Result<SelectContextCore> {
         let cond_cols;
         let topn_cols;
         let mut order_by_cols: Vec<ByItem> = Vec::new();
@@ -823,6 +824,7 @@ impl SelectContextCore {
             }
         }
 
+        let mut pk_col = None;
         let cols = if sel.has_table_info() {
             Either::Left(sel.get_table_info()
                 .get_columns()
@@ -831,11 +833,10 @@ impl SelectContextCore {
                 .map(|c| c.get_column_id())
                 .collect())
         } else {
-            let cols = sel.mut_index_info().mut_columns();
-            // FIXME
-            // if cols.last().map_or(false, |c| c.get_pk_handle()) {
-            //     cols.pop();
-            // }
+            let cols = sel.get_index_info().get_columns();
+            if cols.last().map_or(false, |c| c.get_pk_handle()) {
+                pk_col = Some(cols.last().unwrap().clone());
+            }
             Either::Right(cols.iter().map(|c| c.get_column_id()).collect())
         };
 
@@ -847,6 +848,7 @@ impl SelectContextCore {
             sel: sel,
             eval: Default::default(),
             cols: cols,
+            pk_col: pk_col,
             cond_cols: cond_cols,
             gks: vec![],
             gk_aggrs: map![],
@@ -1230,15 +1232,28 @@ impl<'a> SelectContext<'a> {
                 prefix_next(&key)
             };
             {
-                let (values, handle) = {
-                    let ids = self.core.cols.as_ref().right().unwrap();
-                    box_try!(table::cut_idx_key(key, ids))
+                let (mut values, handle) = {
+                    let mut ids = self.core.cols.as_ref().right().unwrap().clone();
+                    if self.core.pk_col.is_some() {
+                        ids.pop();
+                    }
+                    box_try!(table::cut_idx_key(key, &ids))
                 };
                 let handle = if handle.is_none() {
                     box_try!(val.as_slice().read_i64::<BigEndian>())
                 } else {
                     handle.unwrap()
                 };
+                if let Some(ref pk_col) = self.core.pk_col {
+                    let handle_datum = if mysql::has_unsigned_flag(pk_col.get_flag() as u64) {
+                        // PK column is unsigned
+                        datum::Datum::U64(handle as u64)
+                    } else {
+                        datum::Datum::I64(handle)
+                    };
+                    let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
+                    values.append(pk_col.get_column_id(), &mut bytes);
+                }
                 row_cnt += try!(self.core.handle_row(handle, values));
             }
         }

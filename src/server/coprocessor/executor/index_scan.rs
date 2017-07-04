@@ -20,7 +20,6 @@ use kvproto::coprocessor::KeyRange;
 use kvproto::kvrpcpb::IsolationLevel;
 use storage::{Snapshot, Statistics};
 use util::codec::{table, datum, mysql};
-use util::codec::datum::DatumDecoder;
 use byteorder::{BigEndian, ReadBytesExt};
 use super::{Executor, Row};
 use super::scanner::Scanner;
