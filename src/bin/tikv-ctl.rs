@@ -417,11 +417,19 @@ fn dump_all_region_size(db: &DB) {
         v.push((region_id, size));
     }
     v.sort_by(|a, b| {
-        if a.1 > b.1 { return Ordering::Greater; }
-        if a.1 < b.1 { return Ordering::Less; }
+        if a.1 > b.1 {
+            return Ordering::Greater;
+        }
+        if a.1 < b.1 {
+            return Ordering::Less;
+        }
 
-        if a.0 > b.0 { return Ordering::Greater; }
-        if a.0 < b.0 { return Ordering::Less; }
+        if a.0 > b.0 {
+            return Ordering::Greater;
+        }
+        if a.0 < b.0 {
+            return Ordering::Less;
+        }
 
         return Ordering::Equal;
     });
