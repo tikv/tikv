@@ -373,7 +373,8 @@ fn convert_gbmb(mut bytes: u64) -> String {
     let mb = if bytes % (1024 * 1024 * 1024) == 0 {
         String::from("")
     } else {
-        format!("{:.3} MB ", bytes as f64 / 1024.0 / 1024.0)
+        format!("{:.3} MB ",
+                (bytes % (1024 * 1024 * 1024)) as f64 / 1024.0 / 1024.0)
     };
     bytes /= 1024 * 1024 * 1024;
     let gb = if bytes == 0 {
