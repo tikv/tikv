@@ -115,8 +115,6 @@ lazy_static! {
                     512.0, 1024.0, 5120.0, 10240.0]
         ).unwrap();
 
-
-
     pub static ref REGION_WRITTEN_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_region_written_bytes",
@@ -179,5 +177,12 @@ lazy_static! {
             "tikv_snapshot_size",
             "Size of snapshot",
              exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
+        ).unwrap();
+
+    pub static ref RAFT_ENTRY_FETCHES: CounterVec =
+        register_counter_vec!(
+            "tikv_raftstore_entry_fetches",
+            "Total number of raft entry fetches",
+            &["type"]
         ).unwrap();
 }
