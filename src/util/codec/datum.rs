@@ -460,7 +460,7 @@ impl Datum {
         };
         parse_json_path_expr(v)
     }
-  
+
     /// Try its best effort to convert into a decimal datum.
     /// source function name is `ConvertDatumToDecimal`.
     fn coerce_to_dec(self) -> Result<Datum> {
