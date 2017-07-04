@@ -13,7 +13,7 @@
 
 use tipb::expression::Expr;
 use util::codec::datum::Datum;
-use util::codec::mysql::{Decimal, Time, Duration};
+use util::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP};
 use super::{Evaluator, EvalContext, Result, Error};
 
 impl Evaluator {
@@ -70,7 +70,7 @@ impl Evaluator {
             _ => return Err(Error::Eval(format!("invalid datum type: {:?}, expect to be int", d))),
         }
         let s = try!(d.into_string());
-        let t = try!(Time::parse_utc_datetime(&s, 0));
+        let t = try!(Time::parse_datetime(&s, DEFAULT_FSP, &ctx.tz));
         Ok(Datum::Time(t))
     }
 
@@ -82,7 +82,7 @@ impl Evaluator {
             _ => return Err(Error::Eval(format!("invalid datum type: {:?}, expect to be int", d))),
         }
         let s = try!(d.into_string());
-        let duration = try!(Duration::parse(s.as_bytes(), 0));
+        let duration = try!(Duration::parse(s.as_bytes(), DEFAULT_FSP));
         Ok(Datum::Dur(duration))
     }
 }
