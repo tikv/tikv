@@ -124,6 +124,11 @@ pub struct Config {
     /// read_only_option specifies how the read only request is processed.
     pub read_only_option: ReadOnlyOption,
 
+    // Don't broadcast an empty raft entry to notify follower to commit an entry.
+    // This may make follower wait a longer time to apply an entry. This configuration
+    // May affect proposal forwarding and follower read.
+    pub skip_bcast_commit: bool,
+
     /// tag is only used for logging
     pub tag: String,
 }
@@ -206,6 +211,7 @@ pub struct Raft<T: Storage> {
 
     pub check_quorum: bool,
     pre_vote: bool,
+    skip_bcast_commit: bool,
 
     heartbeat_timeout: usize,
     election_timeout: usize,
@@ -295,6 +301,7 @@ impl<T: Storage> Raft<T> {
             vote: Default::default(),
             heartbeat_elapsed: Default::default(),
             randomized_election_timeout: 0,
+            skip_bcast_commit: c.skip_bcast_commit,
             tag: c.tag.to_owned(),
         };
         for p in peers {
@@ -1311,7 +1318,9 @@ impl<T: Storage> Raft<T> {
                                          &mut more_to_send);
         if maybe_commit {
             if self.maybe_commit() {
-                self.bcast_append();
+                if !self.skip_bcast_commit {
+                    self.bcast_append();
+                }
             } else if old_paused {
                 // update() reset the wait state on this node. If we had delayed sending
                 // an update before, send it now.
@@ -1624,7 +1633,7 @@ impl<T: Storage> Raft<T> {
 
         // The quorum size is now smaller, so see if any pending entries can
         // be committed.
-        if self.maybe_commit() {
+        if self.maybe_commit() && !self.skip_bcast_commit {
             self.bcast_append();
         }
         // If the removed node is the lead_transferee, then abort the leadership transferring.

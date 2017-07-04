@@ -26,7 +26,7 @@ use super::{number, Result, bytes, convert};
 use super::number::NumberDecoder;
 use super::bytes::BytesEncoder;
 use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
-                   Time, Json, JsonEncoder, JsonDecoder};
+                   Time, Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr};
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -273,7 +273,7 @@ impl Datum {
                 Json::String(String::from(data)).cmp(json)
             }
             _ => {
-                let data = format!("{:?}", *self);
+                let data = self.to_string().unwrap_or_default();
                 Json::String(data).cmp(json)
             }
         };
@@ -299,21 +299,30 @@ impl Datum {
         Ok(b)
     }
 
-    /// into_string convert self into a string.
-    /// source function name is `ToString`.
-    pub fn into_string(self) -> Result<String> {
-        let s = match self {
+    pub fn to_string(&self) -> Result<String> {
+        let s = match *self {
             Datum::I64(i) => format!("{}", i),
             Datum::U64(u) => format!("{}", u),
             Datum::F64(f) => format!("{}", f),
-            Datum::Bytes(bs) => try!(String::from_utf8(bs)),
-            Datum::Time(t) => format!("{}", t),
-            Datum::Dur(d) => format!("{}", d),
-            Datum::Dec(d) => format!("{}", d),
-            Datum::Json(d) => d.to_string(),
-            d => return Err(invalid_type!("can't convert {:?} to string", d)),
+            Datum::Bytes(ref bs) => try!(String::from_utf8(bs.to_vec())),
+            Datum::Time(ref t) => format!("{}", t),
+            Datum::Dur(ref d) => format!("{}", d),
+            Datum::Dec(ref d) => format!("{}", d),
+            Datum::Json(ref d) => d.to_string(),
+            ref d => return Err(invalid_type!("can't convert {:?} to string", d)),
         };
         Ok(s)
+    }
+
+    /// into_string convert self into a string.
+    /// source function name is `ToString`.
+    pub fn into_string(self) -> Result<String> {
+        if let Datum::Bytes(bs) = self {
+            let data = try!(String::from_utf8(bs));
+            Ok(data)
+        } else {
+            self.to_string()
+        }
     }
 
     /// `into_f64` converts self into f64.
@@ -397,6 +406,59 @@ impl Datum {
                 }
             }
         }
+    }
+
+    /// cast_as_json converts Datum::Bytes(bs) into Json::from_str(bs)
+    /// and Datum::Null would be illegal. It would be used in cast,
+    /// json_merge,json_extract,json_type
+    /// mysql> SELECT CAST('null' AS JSON);
+    /// +----------------------+
+    /// | CAST('null' AS JSON) |
+    /// +----------------------+
+    /// | null                 |
+    /// +----------------------+
+    pub fn cast_as_json(self) -> Result<Json> {
+        match self {
+            Datum::Bytes(ref bs) => {
+                let s = box_try!(str::from_utf8(bs));
+                let json: Json = try!(s.parse());
+                Ok(json)
+            }
+            Datum::I64(d) => Ok(Json::I64(d)),
+            Datum::U64(d) => Ok(Json::I64(d as i64)),
+            Datum::F64(d) => Ok(Json::Double(d)),
+            Datum::Dec(d) => {
+                let ff = try!(d.as_f64());
+                Ok(Json::Double(ff))
+            }
+            Datum::Json(d) => Ok(d),
+            _ => {
+                let s = try!(self.into_string());
+                Ok(Json::String(s))
+            }
+        }
+    }
+
+    /// into_json would convert Datum::Bytes(bs) into Json::String(bs)
+    /// and convert Datum::Null into Json::None.
+    /// This func would be used in json_unquote and json_modify
+    pub fn into_json(self) -> Result<Json> {
+        match self {
+            Datum::Null => Ok(Json::None),
+            Datum::Bytes(bs) => {
+                let s = try!(String::from_utf8(bs));
+                Ok(Json::String(s))
+            }
+            _ => self.cast_as_json(),
+        }
+    }
+
+    pub fn to_json_path_expr(&self) -> Result<PathExpression> {
+        let v = match *self {
+            Datum::Bytes(ref bs) => try!(str::from_utf8(bs)),
+            _ => "",
+        };
+        parse_json_path_expr(v)
     }
 
     /// Try its best effort to convert into a decimal datum.
@@ -1205,12 +1267,12 @@ mod test {
              Ordering::Equal),
             (Datum::I64(18), Datum::Json(Json::I64(18)), Ordering::Equal),
             (Datum::U64(18), Datum::Json(Json::I64(20)), Ordering::Less),
-            (Datum::F64(1.2),Datum::Json(Json::Double(1.0)), Ordering::Greater),
+            (Datum::F64(1.2), Datum::Json(Json::Double(1.0)), Ordering::Greater),
             (Datum::Dec(i32::MIN.into()),
              Datum::Json(Json::Double(i32::MIN as f64)), Ordering::Equal),
             (b"hi".as_ref().into(), Datum::Json(Json::from_str(r#""hi""#).unwrap()),
              Ordering::Equal),
-            (Datum::Max,Datum::Json(Json::from_str(r#""MAX""#).unwrap()),Ordering::Equal),
+            (Datum::Max, Datum::Json(Json::from_str(r#""MAX""#).unwrap()),Ordering::Less),
         ];
 
         for (lhs, rhs, ret) in tests {
@@ -1339,6 +1401,57 @@ mod test {
             let (res_x, res_y) = Datum::coerce(x, y).unwrap();
             assert_eq!(res_x, exp_x);
             assert_eq!(res_y, exp_y);
+        }
+    }
+
+    #[test]
+    fn test_cast_as_json() {
+        let tests = vec![
+            (Datum::I64(1), "1.0"),
+            (Datum::F64(3.3), "3.3"),
+            (Datum::Bytes(br#""Hello,world""#.to_vec()), r#""Hello,world""#),
+            (Datum::Bytes(b"[1, 2, 3]".to_vec()), "[1, 2, 3]"),
+            (Datum::Bytes(b"{}".to_vec()), "{}"),
+            (Datum::I64(1), "true"),
+        ];
+
+        for (d, json) in tests {
+            assert_eq!(d.cast_as_json().unwrap(), json.parse().unwrap());
+        }
+
+        let illegal_cases = vec![
+            Datum::Bytes(b"hello,world".to_vec()),
+            Datum::Null,
+            Datum::Max,
+            Datum::Min,
+        ];
+
+        for d in illegal_cases {
+            assert!(d.cast_as_json().is_err());
+        }
+    }
+
+    #[test]
+    fn test_datum_into_json() {
+        let tests = vec![
+            (Datum::I64(1), "1.0"),
+            (Datum::F64(3.3), "3.3"),
+            (Datum::Bytes(b"Hello,world".to_vec()), r#""Hello,world""#),
+            (Datum::Bytes(b"[1, 2, 3]".to_vec()), r#""[1, 2, 3]""#),
+            (Datum::Null, "null"),
+        ];
+
+        for (d, json) in tests {
+            assert_eq!(d.into_json().unwrap(), json.parse().unwrap());
+        }
+
+        let illegal_cases = vec![
+            Datum::Max,
+            Datum::Min,
+        ];
+
+        for d in illegal_cases {
+            assert!(d.into_json().is_err());
         }
     }
 }
