@@ -494,14 +494,14 @@ fn do_div_mod(mut lhs: Decimal,
               do_mod: bool)
               -> Option<Res<Decimal>> {
     let r_frac_cnt = word_cnt!(rhs.frac_cnt) * DIGITS_PER_WORD;
-    let (r_idx, mut r_prec) = rhs.remove_leading_zeros();
+    let (r_idx, mut r_prec) = rhs.remove_leading_zeroes();
     r_prec += r_frac_cnt;
     if r_prec == 0 {
         return None;
     }
 
     let l_frac_cnt = word_cnt!(lhs.frac_cnt) * DIGITS_PER_WORD;
-    let (l_idx, mut l_prec) = lhs.remove_leading_zeros();
+    let (l_idx, mut l_prec) = lhs.remove_leading_zeroes();
     l_prec += l_frac_cnt;
     if l_prec == 0 {
         lhs.reset_to_zero();
@@ -802,7 +802,7 @@ impl Decimal {
     }
 
     /// get the index of first non-zero word and the actual int_cnt.
-    fn remove_leading_zeros(&self) -> (usize, u8) {
+    fn remove_leading_zeroes(&self) -> (usize, u8) {
         let mut int_cnt = self.int_cnt;
         let mut i = ((int_cnt + DIGITS_PER_WORD - 1) % DIGITS_PER_WORD) + 1;
         let mut word_idx = 0;
@@ -821,7 +821,7 @@ impl Decimal {
     /// Prepare a buf for string output.
     fn prepare_buf(&self) -> (Vec<u8>, usize, u8, u8, u8) {
         let frac_cnt = self.frac_cnt;
-        let (mut word_start_idx, mut int_cnt) = self.remove_leading_zeros();
+        let (mut word_start_idx, mut int_cnt) = self.remove_leading_zeroes();
         if int_cnt + frac_cnt == 0 {
             int_cnt = 1;
             word_start_idx = 0;
@@ -887,7 +887,7 @@ impl Decimal {
     /// Get the least precision and fraction count to encode this decimal completely.
     pub fn prec_and_frac(&self) -> (u8, u8) {
         if self.precision == 0 {
-            let (_, int_cnt) = self.remove_leading_zeros();
+            let (_, int_cnt) = self.remove_leading_zeroes();
             let prec = int_cnt + self.frac_cnt;
             if prec == 0 {
                 (1, self.frac_cnt)
@@ -1345,7 +1345,7 @@ impl Decimal {
 
     /// Convert the decimal to float value.
     ///
-    /// Please note that this convertion may lose precision.
+    /// Please note that this conversion may lose precision.
     pub fn as_f64(&self) -> Result<f64> {
         let s = format!("{}", self);
         // Can this line really return error?
@@ -1601,7 +1601,7 @@ macro_rules! read_word {
 }
 
 pub trait DecimalEncoder: Write {
-    /// Encode decimal to compareable bytes.
+    /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     #[allow(cyclomatic_complexity)]
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
@@ -1620,7 +1620,7 @@ pub trait DecimalEncoder: Write {
         let mut frac_size = frac_word_cnt * WORD_SIZE + DIG_2_BYTES[trailing_digits];
         let src_frac_size = src_frac_word_cnt * WORD_SIZE + DIG_2_BYTES[src_trailing_digits];
 
-        let (mut src_word_start_idx, src_int_cnt) = d.remove_leading_zeros();
+        let (mut src_word_start_idx, src_int_cnt) = d.remove_leading_zeroes();
         if src_int_cnt + src_frac_size == 0 {
             mask = 0;
             int_cnt = 1;
