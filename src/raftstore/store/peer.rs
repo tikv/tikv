@@ -1098,6 +1098,14 @@ impl Peer {
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
 
+        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader &&
+           peer.get_id() == self.peer_id() {
+            warn!("{} rejects remove leader request {:?}",
+                  self.tag,
+                  change_peer);
+            return Err(box_err!("ignore remove leader"));
+        }
+
         let mut status = self.raft_group.status();
         let total = status.progress.len();
         if total == 1 {

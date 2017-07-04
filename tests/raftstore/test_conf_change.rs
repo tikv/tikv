@@ -337,6 +337,7 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // disable auto compact log.
     cluster.cfg.raft_store.raft_log_gc_threshold = 10000;
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let r1 = cluster.run_conf_change();
 
@@ -414,6 +415,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_rule();
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let r1 = cluster.run_conf_change();
 
@@ -498,6 +500,7 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let region_id = cluster.run_conf_change();
 
@@ -566,4 +569,27 @@ fn test_server_safe_conf_change() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_conf_change_safe(&mut cluster);
+}
+
+#[test]
+fn test_conf_change_remove_leader() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_rule();
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    // Transfer leader to the first peer.
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
+
+    // Try to remove leader, which should be ignored.
+    let epoch = cluster.get_region_epoch(r1);
+    let req = new_admin_request(r1,
+                                &epoch,
+                                new_change_peer_request(ConfChangeType::RemoveNode,
+                                                        new_peer(1, 1)));
+    let res = cluster.call_command_on_leader(req, Duration::from_secs(5)).unwrap();
+    assert_eq!(res.get_header().get_error().get_message(),
+               "ignore remove leader");
 }
