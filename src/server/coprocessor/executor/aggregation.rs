@@ -121,7 +121,6 @@ impl<'a> Executor for AggregationExecutor<'a> {
         if !self.executed {
             try!(self.aggregate());
             self.executed = true;
-            assert_eq!(self.group_keys.len(), self.group_key_aggrs.len());
         }
 
         if self.cursor >= self.group_keys.len() {
