@@ -430,7 +430,7 @@ impl Evaluator {
 
         let kv_len = children.len() / 2;
         let mut children = children.into_iter();
-        let mut json = try!(children.next().unwrap().into_json());
+        let mut json = try!(children.next().unwrap().cast_as_json());
         let mut keys = Vec::with_capacity(kv_len);
         let mut values = Vec::with_capacity(kv_len);
         while let Some(item) = children.next() {
@@ -1098,6 +1098,10 @@ mod test {
         (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
                          ExprType::JsonReplace),
                     Datum::Json(r#"9"#.parse().unwrap())),
+        (build_expr(vec![Datum::Bytes(br#"{"a":"x"}"#.to_vec()),
+                            Datum::Bytes(b"$.a".to_vec()),Datum::Null],
+                        ExprType::JsonSet),
+                    Datum::Json(r#"{"a":null}"#.parse().unwrap())),
     ]);
 
     test_eval_err!(test_eval_json_err,
