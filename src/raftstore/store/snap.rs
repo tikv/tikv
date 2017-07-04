@@ -1199,7 +1199,12 @@ mod v2 {
                       cf_size);
             }
 
+            let t = Instant::now();
             try!(self.save_cf_files());
+            info!("[region {}] save snapshot cf files, takes {:?}",
+                  region.get_id(),
+                  t.elapsed());
+
             stat.kv_count = snap_key_count;
             // save snapshot meta to meta file
             let snapshot_meta = try!(gen_snapshot_meta(&self.cf_files[..]));
@@ -1329,12 +1334,16 @@ mod v2 {
                 try!(check_abort(&options.abort));
                 let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
                 if plain_file_used(cf_file.cf) {
+                    let t = Instant::now();
                     let mut file = box_try!(File::open(&cf_file.path));
                     try!(apply_plain_cf_file(&mut file, &options, cf_handle));
+                    info!("apply plain cf file, takes {:?}", t.elapsed());
                 } else {
+                    let t = Instant::now();
                     let ingest_opt = IngestExternalFileOptions::new();
                     let path = cf_file.path.as_path().to_str().unwrap();
                     box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
+                    info!("apply sst cf file, takes {:?}", t.elapsed());
                 }
             }
             Ok(())
