@@ -16,39 +16,16 @@
 
 use std::usize;
 use std::rc::Rc;
-use std::collections::HashSet;
 use std::vec::IntoIter;
+
+use super::{Executor, Row, ExprColumnRefVisitor};
+use super::super::Result;
+use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
+use util::xeval::{Evaluator, EvalContext};
 
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
-use tipb::expression::{Expr, ExprType, ByItem};
-use util::codec::number::NumberDecoder;
-use util::xeval::{Evaluator, EvalContext};
-
-use super::{Executor, Row};
-use super::super::Result;
-use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
-
-struct ExprColumnRefVisitor {
-    col_ids: HashSet<i64>,
-}
-
-impl ExprColumnRefVisitor {
-    fn new() -> ExprColumnRefVisitor {
-        ExprColumnRefVisitor { col_ids: HashSet::new() }
-    }
-
-    fn visit(&mut self, expr: &Expr) -> Result<()> {
-        if expr.get_tp() == ExprType::ColumnRef {
-            self.col_ids.insert(box_try!(expr.get_val().decode_i64()));
-        } else {
-            for sub_expr in expr.get_children() {
-                try!(self.visit(sub_expr));
-            }
-        }
-        Ok(())
-    }
-}
+use tipb::expression::ByItem;
 
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
