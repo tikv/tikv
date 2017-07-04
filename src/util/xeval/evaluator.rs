@@ -398,7 +398,7 @@ impl Evaluator {
 
     fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         match expr.get_sig() {
-            ScalarFuncSig::CastInAsInt => self.cast_int_as_int(ctx, expr),
+            ScalarFuncSig::CastIntAsInt => self.cast_int_as_int(ctx, expr),
             ScalarFuncSig::CastIntAsReal => self.cast_int_as_real(ctx, expr),
             ScalarFuncSig::CastIntAsString => self.cast_int_as_string(ctx, expr),
             ScalarFuncSig::CastIntAsDecimal => self.cast_int_as_decimal(ctx, expr),
@@ -483,7 +483,7 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
     use util::codec::{Datum, datum};
@@ -550,6 +550,12 @@ mod test {
 
     fn bin_expr(left: Datum, right: Datum, tp: ExprType) -> Expr {
         build_expr(vec![left, right], tp)
+    }
+
+    pub fn build_expr_with_sig(children: Vec<Datum>, tp: ExprType, sig: ScalarFuncSig) -> Expr {
+        let mut expr = build_expr(children, tp);
+        expr.set_sig(sig);
+        expr
     }
 
     fn build_expr(children: Vec<Datum>, tp: ExprType) -> Expr {
