@@ -552,13 +552,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
                 }
                 Ok(ApplyTaskRes::FlushApplied(res)) => {
-                    for (region_id, apply_state, exec_res) in res {
-                        if let Some(p) = self.region_peers.get_mut(&region_id) {
-                            p.advance_applied(apply_state);
-                        }
-                        if exec_res.is_some() {
-                            self.on_ready_result(region_id, vec![exec_res.unwrap()]);
-                        }
+                    for (region_id, exec_res) in res {
+                        self.on_ready_result(region_id, vec![exec_res]);
                     }
                 }
                 Err(TryRecvError::Empty) => break,

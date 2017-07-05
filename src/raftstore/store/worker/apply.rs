@@ -1256,7 +1256,7 @@ pub struct ApplyRes {
 pub enum TaskRes {
     Applys(Vec<ApplyRes>),
     Destroy(ApplyDelegate),
-    FlushApplied(Vec<(u64, RaftApplyState, Option<ExecResult>)>),
+    FlushApplied(Vec<(u64, ExecResult)>),
 }
 
 // TODO: use threadpool to do task concurrently
@@ -1403,8 +1403,10 @@ impl Runner {
         for region_id in self.regions_need_flush_applied.drain() {
             let delegate = self.delegates.get_mut(&region_id).unwrap();
             let compact_exec_result = delegate.flush_pending_compact();
+            if compact_exec_result.is_some() {
+                res.push((region_id, compact_exec_result.unwrap()));
+            }
             delegate.write_apply_state(&wb);
-            res.push((region_id, delegate.apply_state.clone(), compact_exec_result));
         }
 
         // Flush memtables of default/lock/write column families.

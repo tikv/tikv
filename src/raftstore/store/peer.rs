@@ -25,7 +25,7 @@ use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType, MessageType};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, CmdType, AdminCmdType, AdminResponse,
                           TransferLeaderRequest, TransferLeaderResponse};
-use kvproto::raft_serverpb::{RaftMessage, PeerState, RaftApplyState};
+use kvproto::raft_serverpb::{RaftMessage, PeerState};
 use kvproto::pdpb::PeerStats;
 
 use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progress, INVALID_INDEX};
@@ -829,6 +829,7 @@ impl Peer {
         });
 
         self.raft_group.advance_apply(res.apply_state.get_applied_index());
+        self.mut_store().apply_state = res.apply_state.clone();
         self.mut_store().applied_index_term = res.applied_index_term;
         self.peer_stat.written_keys += res.metrics.written_keys;
         self.peer_stat.written_bytes += res.metrics.written_bytes;
@@ -854,10 +855,6 @@ impl Peer {
             }
             self.pending_reads.ready_cnt = 0;
         }
-    }
-
-    pub fn advance_applied(&mut self, apply_state: RaftApplyState) {
-        self.mut_store().apply_state = apply_state;
     }
 
     fn update_lease_with(&mut self, propose_time: Timespec) {
