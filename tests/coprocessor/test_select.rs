@@ -17,10 +17,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use protobuf::{RepeatedField, Message};
 
+use tikv::coprocessor::*;
+use tikv::coprocessor;
 use kvproto::kvrpcpb::Context;
 use kvproto::coprocessor::{Request, KeyRange};
-use tikv::server::coprocessor;
-use tikv::server::coprocessor::*;
 use tikv::storage::{Mutation, Key, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tipb::select::{SelectRequest, DAGRequest, SelectResponse, Chunk};

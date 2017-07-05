@@ -1279,7 +1279,7 @@ pub fn get_req_type_str(tp: i64) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use server::coprocessor::endpoint::TopNHeap;
+    use coprocessor::endpoint::TopNHeap;
     use util::worker::Worker;
     use storage::engine::{self, TEMP_DIR};
 
