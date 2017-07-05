@@ -19,5 +19,5 @@ use raftstore::Result;
 pub trait Transport: Send + Clone {
     fn send(&self, msg: RaftMessage) -> Result<()>;
 
-    fn flush(&mut self) {}
+    fn flush(&mut self);
 }
