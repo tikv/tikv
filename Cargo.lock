@@ -28,7 +28,7 @@ dependencies = [
  "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 0.1.80 (registry+https://github.com/rust-lang/crates.io-index)",
- "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression)",
+ "rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression2)",
  "serde 1.0.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "signal 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -432,15 +432,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-<<<<<<< HEAD
-<<<<<<< HEAD
-source = "git+https://github.com/pingcap/rust-rocksdb.git#40b2408fc922d07bb9f33ac57af0f149e1889e8d"
-=======
-source = "git+https://github.com/pingcap/rust-rocksdb.git#9c41fa6b4aaf1b68acc826c07365ca9452f6cb93"
->>>>>>> cargo: update rust-rocksdb
-=======
 source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression#dbfe778e5ad7f0d4e340ae52963c773f7c0bc19e"
->>>>>>> snap: filter unavailable compression type
 dependencies = [
  "gcc 0.3.51 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.24 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -739,10 +731,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression#dbfe778e5ad7f0d4e340ae52963c773f7c0bc19e"
+source = "git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression2#87b4408fd6e758c44b2dedfc68dfa0d35e8ee82d"
 dependencies = [
  "libc 0.2.24 (registry+https://github.com/rust-lang/crates.io-index)",
- "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression)",
+ "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression2)",
  "tempdir 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1153,7 +1145,7 @@ dependencies = [
 "checksum lazycell 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "ce12306c4739d86ee97c23139f3a34ddf0387bbf181bc7929d287025a8c3ef6b"
 "checksum libc 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)" = "e32a70cf75e5846d53a673923498228bbec6a8624708a9ea5645f075d6276122"
 "checksum libc 0.2.24 (registry+https://github.com/rust-lang/crates.io-index)" = "38f5c2b18a287cf78b4097db62e20f43cace381dc76ae5c0a3073067f78b7ddc"
-"checksum librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression)" = "<none>"
+"checksum librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression2)" = "<none>"
 "checksum log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "880f77541efa6e5cc74e76910c9884d9859683118839d6a1dc3b11e63512565b"
 "checksum matches 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "100aabe6b8ff4e4a7e32c1c13523379802df0772b82466207ac25b013f193376"
 "checksum memchr 0.1.11 (registry+https://github.com/rust-lang/crates.io-index)" = "d8b629fb514376c675b98c1421e80b151d3817ac42d7c667717d282761418d20"
@@ -1188,7 +1180,7 @@ dependencies = [
 "checksum regex 0.1.80 (registry+https://github.com/rust-lang/crates.io-index)" = "4fd4ace6a8cf7860714a2c2280d6c1f7e6a413486c13298bbc86fd3da019402f"
 "checksum regex-syntax 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)" = "f9ec002c35e86791825ed294b50008eea9ddfc8def4420124fbc6b08db834957"
 "checksum regex-syntax 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "ad890a5eef7953f55427c50575c680c42841653abd2b028b68cd223d157f62db"
-"checksum rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression)" = "<none>"
+"checksum rocksdb 0.3.0 (git+https://github.com/pingcap/rust-rocksdb.git?branch=hyq/checkcompression2)" = "<none>"
 "checksum rustc-demangle 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "3058a43ada2c2d0b92b3ae38007a2d0fa5e9db971be260e0171408a4ff471c95"
 "checksum rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)" = "dcf128d1287d2ea9d80910b5f1120d0b8eede3fbf1abe91c40d39ea7d51e6fda"
 "checksum rustc_version 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "c5f5376ea5e30ce23c03eb77cbe4962b988deead10910c372b226388b594c084"

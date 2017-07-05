@@ -718,6 +718,7 @@ mod v2 {
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
     use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, Options as RocksdbOptions,
                   DBCompressionType};
+    use rocksdb::rocksdb::supported_compression;
     use storage::{CfName, CF_LOCK};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
     use util::file::{get_file_size, file_exists, delete_file_if_exist};
@@ -808,19 +809,17 @@ mod v2 {
             .and_then(|_| check_file_checksum(path, expected_checksum))
     }
 
-    // TODO: Should use CompressionTypeSupported in rocksdb(util/compression.h) instead once it is exposed.
-    fn check_compression_available(levels: &Vec<DBCompressionType>,
-                                   compression: DBCompressionType)
-                                   -> bool {
-        levels.iter().any(|x| *x == compression)
+    fn check_compression_available(compression: DBCompressionType) -> bool {
+        let compressions: Vec<DBCompressionType> = supported_compression();
+        compressions.contains(&compression)
     }
 
-    fn get_fastest_compression(levels: &Vec<DBCompressionType>) -> DBCompressionType {
+    fn get_fastest_compression() -> DBCompressionType {
         // Zlib and bzip2 are too slow.
         let compression_priority =
             [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
-        for compression in compression_priority.iter() {
-            if check_compression_available(levels, *compression) {
+        for compression in &compression_priority {
+            if check_compression_available(*compression) {
                 return *compression;
             }
         }
@@ -1023,17 +1022,14 @@ mod v2 {
                 } else {
                     // initialize sst file writer
                     let handle = try!(snap.cf_handle(cf_file.cf));
-                    let compression_levels =
-                        snap.get_db().get_options_cf(handle).get_compression_per_level();
                     let env_opt = EnvOptions::new();
                     let mut io_options = RocksdbOptions::new();
                     // compression types in compression_levels are all checked by rocksdb
-                    let valid_compression = if check_compression_available(&compression_levels,
-                                                                           compression) {
+                    let valid_compression = if check_compression_available(compression) {
                         compression
                     } else {
                         // fall back to find the best compression type in compression_levels
-                        get_fastest_compression(&compression_levels)
+                        get_fastest_compression()
                     };
                     io_options.compression(valid_compression);
                     let mut writer = SstFileWriter::new(env_opt, io_options);
