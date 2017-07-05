@@ -403,7 +403,7 @@ fn dump_all_region_size(db: &DB) {
         region_ids.iter().map(|&region_id| get_region_size(db, region_id)).collect();
     let region_number = region_ids.len();
     let total_size = region_sizes.iter().sum();
-    let mut v: Vec<(u64, u64)> = region_ids.drain(..).zip(region_sizes.drain(..)).collect();
+    let mut v: Vec<(u64, u64)> = region_sizes.drain(..).zip(region_ids.drain(..)).collect();
     v.sort();
     v.reverse();
     println!("total region number: {}", region_number);
