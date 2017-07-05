@@ -138,6 +138,7 @@ impl Evaluator {
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
             ExprType::JsonUnquote => self.eval_json_unquote(ctx, expr),
+            ExprType::JsonType => self.eval_json_type(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -413,6 +414,16 @@ impl Evaluator {
         let json = try!(child.into_json());
         let unquote_data = try!(json.unquote());
         Ok(Datum::Bytes(unquote_data.into_bytes()))
+    }
+
+    fn eval_json_type(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr));
+        if Datum::Null == child {
+            return Ok(Datum::Null);
+        }
+        let json = try!(child.cast_as_json());
+        let json_type = json.json_type().to_vec();
+        Ok(Datum::Bytes(json_type))
     }
 
     fn eval_logic<F>(&mut self,
@@ -1064,12 +1075,30 @@ mod test {
             (build_byte_datums_expr(&[br#"hello,\"quoted string\",world"#],
                                     ExprType::JsonUnquote),
                         Datum::Bytes(br#"hello,"quoted string",world"#.to_vec())),
+               ]);
+    test_eval!(test_eval_json_type,
+               vec![
+            (build_expr(vec![Datum::Null], ExprType::JsonType),
+                        Datum::Null),
+            (build_byte_datums_expr(&[br#"true"#], ExprType::JsonType),
+                        Datum::Bytes(b"BOOLEAN".to_vec())),
+            (build_byte_datums_expr(&[br#"null"#], ExprType::JsonType),
+                        Datum::Bytes(b"NULL".to_vec())),
+            (build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
+                        Datum::Bytes(b"INTEGER".to_vec())),
+            (build_byte_datums_expr(&[br#"3.14"#], ExprType::JsonType),
+                        Datum::Bytes(b"DOUBLE".to_vec())),
+            (build_byte_datums_expr(&[br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
+                        Datum::Bytes(b"OBJECT".to_vec())),
+            (build_byte_datums_expr(&[br#"[1,2,3]"#], ExprType::JsonType),
+                        Datum::Bytes(b"ARRAY".to_vec())),
     ]);
 
     test_eval_err!(test_eval_json_err,
                    vec![
           build_expr(vec![], ExprType::JsonUnquote),
           build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonUnquote),
+          build_expr(vec![], ExprType::JsonType),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
      ]);
-
 }
