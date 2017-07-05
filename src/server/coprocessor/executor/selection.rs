@@ -15,39 +15,15 @@
 #![allow(dead_code)]
 
 use std::rc::Rc;
-use std::collections::HashSet;
 
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::Expr;
 use util::xeval::{Evaluator, EvalContext};
-use util::codec::number::NumberDecoder;
 
-use super::{Row, Executor};
 use super::super::Result;
+use super::{Row, Executor, ExprColumnRefVisitor};
 use super::super::endpoint::inflate_with_col;
-
-/// Collect all mentioned column ids in expr tree
-pub struct ExprColumnRefVisitor {
-    pub column_ids: HashSet<i64>,
-}
-
-impl ExprColumnRefVisitor {
-    pub fn new() -> ExprColumnRefVisitor {
-        ExprColumnRefVisitor { column_ids: HashSet::new() }
-    }
-
-    pub fn visit_expr<'e>(&mut self, expr: &'e Expr) -> Result<()> {
-        if expr.get_tp() == ExprType::ColumnRef {
-            self.column_ids.insert(box_try!(expr.get_val().decode_i64()));
-        } else {
-            for sub_expr in expr.get_children() {
-                try!(self.visit_expr(sub_expr));
-            }
-        }
-        Ok(())
-    }
-}
 
 pub struct SelectionExecutor<'a> {
     conditions: Vec<Expr>,
@@ -65,11 +41,11 @@ impl<'a> SelectionExecutor<'a> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new();
         for cond in &conditions {
-            try!(visitor.visit_expr(cond));
+            try!(visitor.visit(cond));
         }
 
         let columns = columns_info.iter()
-            .filter(|col| visitor.column_ids.get(&col.get_column_id()).is_some())
+            .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect::<Vec<ColumnInfo>>();
         Ok(SelectionExecutor {
