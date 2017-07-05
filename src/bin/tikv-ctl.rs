@@ -159,7 +159,7 @@ fn main() {
             let skip_tombstone = matches.is_present("skip-tombstone");
             match matches.value_of("region") {
                 Some(id) => {
-                    dump_region_info(&db, String::from(id).parse().unwrap(), skip_tombstone);
+                    dump_region_info(&db, id.parse().unwrap(), skip_tombstone);
                 }
                 None => {
                     dump_all_region_info(&db, skip_tombstone);
@@ -171,7 +171,7 @@ fn main() {
     } else if let Some(matches) = matches.subcommand_matches("size") {
         match matches.value_of("region") {
             Some(id) => {
-                dump_region_size(&db, String::from(id).parse().unwrap());
+                dump_region_size(&db, id.parse().unwrap());
             }
             None => dump_all_region_size(&db),
         }
@@ -424,7 +424,7 @@ fn dump_all_region_size(db: &DB) {
             return Ordering::Less;
         }
 
-        return Ordering::Equal;
+        Ordering::Equal
     });
     v.reverse();
     println!("total region number: {}", region_number);
