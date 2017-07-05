@@ -21,7 +21,7 @@ use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 
 use util::collections::{HashMap, HashMapEntry as Entry};
-use util::codec::datum::{self, DatumEncoder, approximate_size};
+use util::codec::datum::{self, Datum, DatumEncoder, approximate_size};
 use util::codec::table::RowColsDict;
 use util::xeval::{Evaluator, EvalContext};
 
@@ -30,24 +30,24 @@ use super::{Executor, Row, ExprColumnRefVisitor};
 use super::super::endpoint::{inflate_with_col, SINGLE_GROUP};
 use super::super::aggregate::{self, AggrFunc};
 
-struct AggregationExecutor<'a> {
+pub struct AggregationExecutor<'a> {
     group_by: Vec<Expr>,
     aggr_func: Vec<Expr>,
     group_keys: Vec<Rc<Vec<u8>>>,
     group_key_aggrs: HashMap<Rc<Vec<u8>>, Vec<Box<AggrFunc>>>,
     cursor: usize,
     executed: bool,
-    ctx: EvalContext,
+    ctx: Rc<EvalContext>,
     cols: Vec<ColumnInfo>,
-    src: &'a mut Executor,
+    src: Box<Executor + 'a>,
 }
 
 impl<'a> AggregationExecutor<'a> {
-    fn new(mut meta: Aggregation,
-           ctx: EvalContext,
-           columns: &[ColumnInfo],
-           src: &'a mut Executor)
-           -> Result<AggregationExecutor<'a>> {
+    pub fn new(mut meta: Aggregation,
+               ctx: Rc<EvalContext>,
+               columns: &[ColumnInfo],
+               src: Box<Executor + 'a>)
+               -> Result<AggregationExecutor<'a>> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new();
         let group_by = meta.take_group_by().into_vec();
@@ -75,7 +75,8 @@ impl<'a> AggregationExecutor<'a> {
 
     fn get_group_key(&mut self, eval: &mut Evaluator) -> Result<Vec<u8>> {
         if self.group_by.is_empty() {
-            return Ok(SINGLE_GROUP.to_vec());
+            let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
+            return Ok(box_try!(datum::encode_value(&[single_group])));
         }
         let mut vals = Vec::with_capacity(self.group_by.len());
         for expr in &self.group_by {
@@ -219,12 +220,12 @@ mod test {
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut statistics = Statistics::default();
-        let mut ts_ect = TableScanExecutor::new(table_scan,
-                                                key_ranges,
-                                                snapshot,
-                                                &mut statistics,
-                                                start_ts,
-                                                IsolationLevel::SI);
+        let ts_ect = TableScanExecutor::new(table_scan,
+                                            key_ranges,
+                                            snapshot,
+                                            &mut statistics,
+                                            start_ts,
+                                            IsolationLevel::SI);
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -235,9 +236,11 @@ mod test {
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init Aggregation Executor
-        let mut aggr_ect =
-            AggregationExecutor::new(aggregation, EvalContext::default(), &cis, &mut ts_ect)
-                .unwrap();
+        let mut aggr_ect = AggregationExecutor::new(aggregation,
+                                                    Rc::new(EvalContext::default()),
+                                                    &cis,
+                                                    Box::new(ts_ect))
+            .unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(row) = aggr_ect.next().unwrap() {

@@ -305,7 +305,7 @@ mod test {
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
             let handle_datum = datum::Datum::I64(handle as i64);
-            let pk = datum::encode_value(&[handle_datum]).unwrap();
+            let pk = datum::encode_key(&[handle_datum]).unwrap();
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();

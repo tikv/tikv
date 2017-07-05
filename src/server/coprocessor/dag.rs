@@ -27,7 +27,7 @@ use super::executor::Executor as DAGExecutor;
 use super::executor::table_scan::TableScanExecutor;
 use super::executor::index_scan::IndexScanExecutor;
 use super::executor::selection::SelectionExecutor;
-// use super::executor::aggregation::AggregationExecutor;
+use super::executor::aggregation::AggregationExecutor;
 use super::executor::topn::TopNExecutor;
 use super::executor::limit::LimitExecutor;
 
@@ -127,10 +127,10 @@ impl<'s> DAGContext<'s> {
                                                          src)))
                 }
                 ExecType::TypeAggregation => {
-                    Box::new(try!(SelectionExecutor::new(exec.take_selection(),
-                                                         self.eval_ctx.clone(),
-                                                         &self.columns,
-                                                         src)))
+                    Box::new(try!(AggregationExecutor::new(exec.take_aggregation(),
+                                                           self.eval_ctx.clone(),
+                                                           &self.columns,
+                                                           src)))
                 }
                 ExecType::TypeTopN => {
                     Box::new(try!(TopNExecutor::new(exec.take_topN(),
