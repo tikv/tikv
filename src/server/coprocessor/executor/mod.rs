@@ -14,7 +14,10 @@
 // TODO: remove it
 #![allow(dead_code)]
 
+use std::collections::HashSet;
 use util::codec::table::RowColsDict;
+use util::codec::number::NumberDecoder;
+use tipb::expression::{Expr, ExprType};
 use server::coprocessor::Result;
 
 mod scanner;
@@ -23,6 +26,37 @@ pub mod index_scan;
 pub mod selection;
 pub mod topn;
 pub mod limit;
+pub mod aggregation;
+
+#[allow(dead_code)]
+pub struct ExprColumnRefVisitor {
+    pub col_ids: HashSet<i64>,
+}
+
+#[allow(dead_code)]
+impl ExprColumnRefVisitor {
+    pub fn new() -> ExprColumnRefVisitor {
+        ExprColumnRefVisitor { col_ids: HashSet::new() }
+    }
+
+    pub fn visit(&mut self, expr: &Expr) -> Result<()> {
+        if expr.get_tp() == ExprType::ColumnRef {
+            self.col_ids.insert(box_try!(expr.get_val().decode_i64()));
+        } else {
+            for sub_expr in expr.get_children() {
+                try!(self.visit(sub_expr));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn batch_visit(&mut self, exprs: &[Expr]) -> Result<()> {
+        for expr in exprs {
+            try!(self.visit(expr));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug)]
 pub struct Row {

@@ -138,6 +138,7 @@ impl Evaluator {
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
             ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
+            ExprType::JsonType => self.eval_json_type(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -224,6 +225,17 @@ impl Evaluator {
         }
         let children = expr.get_children();
         Ok((&children[0], &children[1]))
+    }
+
+    fn eval_one_child(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 1 {
+            return Err(Error::Expr(format!("{:?} need 1 operands but got {}",
+                                           expr.get_tp(),
+                                           children.len())));
+        }
+        let child = try!(self.eval(ctx, &children[0]));
+        Ok(child)
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
@@ -410,13 +422,23 @@ impl Evaluator {
         }
         let mut children = children.into_iter();
         let json = try!(children.next().unwrap().cast_as_json());
-        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.as_json_path_expr())
+        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.to_json_path_expr())
             .collect());
         if let Some(data) = json.extract(&path_extrs) {
             Ok(Datum::Json(data))
         } else {
             Ok(Datum::Null)
         }
+    }
+
+    fn eval_json_type(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr));
+        if Datum::Null == child {
+            return Ok(Datum::Null);
+        }
+        let json = try!(child.cast_as_json());
+        let json_type = json.json_type().to_vec();
+        Ok(Datum::Bytes(json_type))
     }
 
     fn eval_logic<F>(&mut self,
@@ -1056,13 +1078,30 @@ mod test {
     }
 
     test_eval!(test_eval_json_extract,
+               vec![(build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonExtract),
+                     Datum::Null),
+                    (build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#,
+                                              b"$.a[0].aa[0].aaa",
+                                              b"$.aaa"],
+                                            ExprType::JsonExtract),
+                     Datum::Json("[1,2]".parse().unwrap()))]);
+
+    test_eval!(test_eval_json_type,
                vec![
-        (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonExtract),
-                    Datum::Null),
-        (build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#,
-                                     b"$.a[0].aa[0].aaa", b"$.aaa"],
-                             ExprType::JsonExtract),
-                    Datum::Json("[1,2]".parse().unwrap())),
+            (build_expr(vec![Datum::Null], ExprType::JsonType),
+                        Datum::Null),
+            (build_byte_datums_expr(&[br#"true"#], ExprType::JsonType),
+                        Datum::Bytes(b"BOOLEAN".to_vec())),
+            (build_byte_datums_expr(&[br#"null"#], ExprType::JsonType),
+                        Datum::Bytes(b"NULL".to_vec())),
+            (build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
+                        Datum::Bytes(b"INTEGER".to_vec())),
+            (build_byte_datums_expr(&[br#"3.14"#], ExprType::JsonType),
+                        Datum::Bytes(b"DOUBLE".to_vec())),
+            (build_byte_datums_expr(&[br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
+                        Datum::Bytes(b"OBJECT".to_vec())),
+            (build_byte_datums_expr(&[br#"[1,2,3]"#], ExprType::JsonType),
+                        Datum::Bytes(b"ARRAY".to_vec())),
     ]);
 
     test_eval_err!(test_eval_json_err,
@@ -1072,6 +1111,8 @@ mod test {
                                 ExprType::JsonExtract),
           build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#, b"aaa"],
                                 ExprType::JsonExtract),
+          build_expr(vec![], ExprType::JsonType),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
      ]);
 
 }
