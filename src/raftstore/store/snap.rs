@@ -1003,9 +1003,7 @@ mod v2 {
             Ok(s)
         }
 
-        fn init_for_building(&mut self,
-                             compression: DBCompressionType)
-                             -> RaftStoreResult<()> {
+        fn init_for_building(&mut self, compression: DBCompressionType) -> RaftStoreResult<()> {
             if self.exists() {
                 return Ok(());
             }
@@ -2198,8 +2196,7 @@ impl SnapManager {
         self.core.rl().registry.contains_key(key)
     }
 
-    pub fn get_snapshot_for_building(&self,
-                                     key: &SnapKey)-> RaftStoreResult<Box<Snapshot>> {
+    pub fn get_snapshot_for_building(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let (use_sst_file_snapshot, dir, snap_size, snap_compression) = {
             let core = self.core.rl();
             (core.use_sst_file_snapshot,
