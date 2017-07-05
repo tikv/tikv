@@ -79,7 +79,7 @@ impl<'s> DAGContext<'s> {
             }
         }
         // check whether dag has a aggregation action and take a flag
-        if execs.iter().rev().find(|&exec| exec.get_tp() == ExecType::TypeAggregation).is_some() {
+        if execs.iter().rev().any(|ref exec| exec.get_tp() == ExecType::TypeAggregation) {
             self.has_aggr = true;
         }
         Ok(())
