@@ -85,6 +85,156 @@ impl Evaluator {
         let duration = try!(Duration::parse(s.as_bytes(), DEFAULT_FSP));
         Ok(Datum::Dur(duration))
     }
+
+    pub fn cast_real_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_real_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_real_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_real_as_decimal(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_real_as_time(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_real_as_duration(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_decimal_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_decimal_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_decimal_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_decimal_as_decimal(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_decimal_as_time(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_decimal_as_duration(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_string_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_string_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_string_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_string_as_decimal(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_string_as_time(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_string_as_duration(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_time_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_time_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_time_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_time_as_decimal(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_time_as_time(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_time_as_duration(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_duration_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_duration_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_duration_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_duration_as_decimal(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_duration_as_time(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
+
+    pub fn cast_duration_as_duration(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO: add impl
+        Err(Error::Eval("unimplemented".to_owned()))
+    }
 }
 
 #[cfg(test)]
