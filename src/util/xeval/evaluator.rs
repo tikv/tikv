@@ -234,8 +234,7 @@ impl Evaluator {
                                            expr.get_tp(),
                                            children.len())));
         }
-        let child = try!(self.eval(ctx, &children[0]));
-        Ok(child)
+        self.eval(ctx, &children[0])
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {

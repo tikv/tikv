@@ -273,7 +273,6 @@ impl Datum {
                 Json::String(String::from(data)).cmp(json)
             }
             _ => {
-
                 let data = self.to_string().unwrap_or_default();
                 Json::String(data).cmp(json)
             }
@@ -299,7 +298,6 @@ impl Datum {
         };
         Ok(b)
     }
-
 
     pub fn to_string(&self) -> Result<String> {
         let s = match *self {
