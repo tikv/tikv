@@ -34,7 +34,7 @@ use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
 use storage::engine::Error as EngineError;
 use super::transport::RaftStoreRouter;
-use super::coprocessor::{RequestTask, EndPointTask};
+use coprocessor::{RequestTask, EndPointTask};
 use super::snap::Task as SnapTask;
 use super::metrics::*;
 use super::Error;

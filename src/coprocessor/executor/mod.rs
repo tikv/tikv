@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use util::codec::table::RowColsDict;
 use util::codec::number::NumberDecoder;
 use tipb::expression::{Expr, ExprType};
-use server::coprocessor::Result;
+use coprocessor::Result;
 
 mod scanner;
 pub mod table_scan;
