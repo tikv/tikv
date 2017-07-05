@@ -986,7 +986,6 @@ mod v2 {
             if self.exists() {
                 return Ok(());
             }
-            let env_opt = EnvOptions::new();
             for cf_file in &mut self.cf_files {
                 if plain_file_used(cf_file.cf) {
                     let f = try!(OpenOptions::new()
@@ -998,8 +997,9 @@ mod v2 {
                 } else {
                     // initialize sst file writer
                     let handle = try!(snap.cf_handle(cf_file.cf));
+                    let env_opt = EnvOptions::new();
                     let io_options = snap.get_db().get_options_cf(handle);
-                    let mut writer = SstFileWriter::new(&env_opt, &io_options);
+                    let mut writer = SstFileWriter::new(env_opt, io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
                 }
