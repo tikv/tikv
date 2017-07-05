@@ -26,8 +26,6 @@
 #![allow(module_inception)]
 #![allow(should_implement_trait)]
 #![allow(large_enum_variant)]
-// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
-#![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
 #[macro_use]
