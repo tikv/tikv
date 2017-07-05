@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use server::coprocessor::endpoint::{prefix_next, is_point};
-use server::coprocessor::Result;
+use coprocessor::endpoint::{prefix_next, is_point};
+use coprocessor::Result;
 use tipb::executor::TableScan;
 use kvproto::coprocessor::KeyRange;
 use kvproto::kvrpcpb::IsolationLevel;
@@ -119,7 +119,7 @@ mod test {
     use tipb::schema::ColumnInfo;
     use storage::Statistics;
     use protobuf::RepeatedField;
-    use server::coprocessor::endpoint::{is_point, prefix_next};
+    use coprocessor::endpoint::{is_point, prefix_next};
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
