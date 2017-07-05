@@ -808,6 +808,25 @@ mod v2 {
             .and_then(|_| check_file_checksum(path, expected_checksum))
     }
 
+    // TODO: Should use CompressionTypeSupported in rocksdb(util/compression.h) instead once it is exposed.
+    fn check_compression_available(levels: &Vec<DBCompressionType>,
+                                   compression: DBCompressionType)
+                                   -> bool {
+        levels.iter().any(|x| *x == compression)
+    }
+
+    fn get_fastest_compression(levels: &Vec<DBCompressionType>) -> DBCompressionType {
+        // Zlib and bzip2 are too slow.
+        let compression_priority =
+            [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
+        for compression in compression_priority.iter() {
+            if check_compression_available(levels, *compression) {
+                return *compression;
+            }
+        }
+        DBCompressionType::DBNo
+    }
+
     #[derive(Default)]
     struct CfFile {
         pub cf: CfName,
@@ -917,12 +936,13 @@ mod v2 {
 
         pub fn new_for_building<T: Into<PathBuf>>(dir: T,
                                                   key: &SnapKey,
+                                                  snap: &DbSnapshot,
                                                   size_track: Arc<RwLock<u64>>,
                                                   deleter: Box<SnapshotDeleter>,
                                                   compression: DBCompressionType)
                                                   -> RaftStoreResult<Snap> {
             let mut s = try!(Snap::new(dir, key, size_track, true, true, deleter));
-            try!(s.init_for_building(compression));
+            try!(s.init_for_building(compression, snap));
             Ok(s)
         }
 
@@ -985,7 +1005,10 @@ mod v2 {
             Ok(s)
         }
 
-        fn init_for_building(&mut self, compression: DBCompressionType) -> RaftStoreResult<()> {
+        fn init_for_building(&mut self,
+                             compression: DBCompressionType,
+                             snap: &DbSnapshot)
+                             -> RaftStoreResult<()> {
             if self.exists() {
                 return Ok(());
             }
@@ -999,9 +1022,20 @@ mod v2 {
                     cf_file.file = Some(f);
                 } else {
                     // initialize sst file writer
+                    let handle = try!(snap.cf_handle(cf_file.cf));
+                    let compression_levels =
+                        snap.get_db().get_options_cf(handle).get_compression_per_level();
                     let env_opt = EnvOptions::new();
                     let mut io_options = RocksdbOptions::new();
-                    io_options.compression(compression);
+                    // compression types in compression_levels are all checked by rocksdb
+                    let valid_compression = if check_compression_available(&compression_levels,
+                                                                           compression) {
+                        compression
+                    } else {
+                        // fall back to find the best compression type in compression_levels
+                        get_fastest_compression(&compression_levels)
+                    };
+                    io_options.compression(valid_compression);
                     let mut writer = SstFileWriter::new(env_opt, io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
@@ -1165,7 +1199,7 @@ mod v2 {
                             return Err(e);
                         }
                         let compression = self.snap_compression;
-                        try!(self.init_for_building(compression));
+                        try!(self.init_for_building(compression, snap));
                     }
                 }
             }
@@ -1614,6 +1648,7 @@ mod v2 {
             let deleter = Box::new(DummyDeleter {});
             let mut s1 = Snap::new_for_building(src_dir.path(),
                                                 &key,
+                                                &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
                                                 DBCompressionType::DBLz4)
@@ -1728,6 +1763,7 @@ mod v2 {
             let deleter = Box::new(DummyDeleter {});
             let mut s1 = Snap::new_for_building(dir.path(),
                                                 &key,
+                                                &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
                                                 DBCompressionType::DBLz4)
@@ -1747,6 +1783,7 @@ mod v2 {
 
             let mut s2 = Snap::new_for_building(dir.path(),
                                                 &key,
+                                                &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
                                                 DBCompressionType::DBLz4)
@@ -1879,6 +1916,7 @@ mod v2 {
             let deleter = Box::new(DummyDeleter {});
             let mut s1 = Snap::new_for_building(dir.path(),
                                                 &key,
+                                                &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
                                                 DBCompressionType::DBLz4)
@@ -1903,6 +1941,7 @@ mod v2 {
 
             let mut s2 = Snap::new_for_building(dir.path(),
                                                 &key,
+                                                &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
                                                 DBCompressionType::DBLz4)
@@ -1971,6 +2010,7 @@ mod v2 {
             let deleter = Box::new(DummyDeleter {});
             let mut s1 = Snap::new_for_building(dir.path(),
                                                 &key,
+                                                &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
                                                 DBCompressionType::DBLz4)
@@ -1995,6 +2035,7 @@ mod v2 {
 
             let mut s2 = Snap::new_for_building(dir.path(),
                                                 &key,
+                                                &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
                                                 DBCompressionType::DBLz4)
@@ -2172,7 +2213,10 @@ impl SnapManager {
         self.core.rl().registry.contains_key(key)
     }
 
-    pub fn get_snapshot_for_building(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
+    pub fn get_snapshot_for_building(&self,
+                                     key: &SnapKey,
+                                     snap: &DbSnapshot)
+                                     -> RaftStoreResult<Box<Snapshot>> {
         let (use_sst_file_snapshot, dir, snap_size, snap_compression) = {
             let core = self.core.rl();
             (core.use_sst_file_snapshot,
@@ -2183,6 +2227,7 @@ impl SnapManager {
         if use_sst_file_snapshot {
             let f = try!(v2::Snap::new_for_building(dir,
                                                     key,
+                                                    snap,
                                                     snap_size,
                                                     Box::new(self.clone()),
                                                     snap_compression));
@@ -2441,6 +2486,7 @@ mod test {
         let deleter = Box::new(mgr.clone());
         let mut s1 = SnapV2::new_for_building(&path,
                                               &key1,
+                                              &snapshot,
                                               size_track.clone(),
                                               deleter.clone(),
                                               DBCompressionType::DBLz4)
@@ -2473,6 +2519,7 @@ mod test {
         snap_data.set_region(region);
         let s3 = SnapV2::new_for_building(&path,
                                           &key2,
+                                          &snapshot,
                                           size_track.clone(),
                                           deleter.clone(),
                                           DBCompressionType::DBLz4)
@@ -2517,7 +2564,7 @@ mod test {
         let db = v2::test::get_test_db(&src_db_dir).unwrap();
         let snapshot = DbSnapshot::new(db.clone());
         let key = SnapKey::new(1, 1, 1);
-        let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
+        let mut s1 = src_mgr.get_snapshot_for_building(&key, &snapshot).unwrap();
         let region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
@@ -2595,7 +2642,7 @@ mod test {
 
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
-        let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
+        let mut s1 = src_mgr.get_snapshot_for_building(&key, &snapshot).unwrap();
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
