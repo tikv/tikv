@@ -146,3 +146,18 @@ pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error>
         Ok((k, try!(ts.decode_u64_desc())))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_ts() {
+        let k = b"k";
+        let ts = 123;
+        assert_eq!(split_encoded_key_on_ts(k).is_err(), true);
+        let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
+        let res = split_encoded_key_on_ts(enc.encoded()).unwrap();
+        assert_eq!(res, (k.as_ref(), ts));
+    }
+}
