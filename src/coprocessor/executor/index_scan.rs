@@ -12,8 +12,8 @@
 // limitations under the License.
 
 
-use server::coprocessor::endpoint::prefix_next;
-use server::coprocessor::Result;
+use coprocessor::endpoint::prefix_next;
+use coprocessor::Result;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::KeyRange;

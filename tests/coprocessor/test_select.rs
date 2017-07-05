@@ -1,5 +1,5 @@
-use tikv::server::coprocessor::*;
-use tikv::server::coprocessor;
+use tikv::coprocessor::*;
+use tikv::coprocessor;
 use kvproto::kvrpcpb::Context;
 use tikv::util::codec::{table, Datum, datum};
 use tikv::util::codec::number::*;
