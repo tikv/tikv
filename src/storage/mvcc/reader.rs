@@ -439,10 +439,14 @@ impl<'a> MvccReader<'a> {
         }
         // We don't need gc if:
         // 1. min_ts > safe_point:
-        //    no data older than safe_point to gc
-        // 2. num_keys == num_versions:
-        //    each key has only one version
-        !(props.min_ts > safe_point || props.num_keys == props.num_versions())
+        //    No data older than safe_point to gc.
+        // 2. num_keys >= num_versions:
+        //    No keys have more than one versions.
+        //    Notice: Since the properties are file-based, this can be false positive.
+        //    For example, if multiple files have a different version of the same key,
+        //    the result will be `num_keys == num_versions`, but it doesn't mean that
+        //    we don't need gc. Can we rely on the compaction to solve this?
+        !(props.min_ts > safe_point || props.num_keys >= props.num_versions())
     }
 }
 
@@ -552,8 +556,8 @@ mod tests {
         let db_opts = rocksdb::Options::new();
         let mut cf_opts = rocksdb::Options::new();
         if with_properties {
-            let f = UserPropertiesCollectorFactory::new();
-            cf_opts.add_table_properties_collector_factory(Box::new(f));
+            let f = Box::new(UserPropertiesCollectorFactory::new());
+            cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::Options::new()),
                             CFOptions::new(CF_RAFT, rocksdb::Options::new()),
@@ -628,8 +632,8 @@ mod tests {
             engine.delete(&[5], 7, 7);
             engine.delete(&[6], 8, 8);
             engine.flush();
-            // After this flush, the new SST file has some keys with more than
-            // one versions, so we need gc.
+            // After this flush, keys 5,6 in the new SST file have more than one
+            // versions, so we need gc.
             check_need_gc(db.clone(), region.clone(), 10, true);
             // But if the `safe_point` is older than all versions, we don't need gc too.
             check_need_gc(db.clone(), region.clone(), 0, false);
@@ -638,13 +642,14 @@ mod tests {
             engine.gc(&[5], 10);
             engine.gc(&[6], 10);
             engine.flush();
-            // After this flush, and before compaction, some keys still have
-            // more than one versions, so we still need gc.
-            check_need_gc(db.clone(), region.clone(), 10, true);
-            engine.compact();
-            // After this compact, the keys with multiple versions have been
-            // dropped, so we don't need gc now.
+            // After this flush, all versions of keys 5,6 are deleted,
+            // no keys have more than one versions, so we don't need gc.
             check_need_gc(db.clone(), region.clone(), 10, false);
+
+            // A single delete version need gc.
+            engine.delete(&[7], 9, 9);
+            engine.flush();
+            check_need_gc(db.clone(), region.clone(), 10, true);
         }
     }
 }

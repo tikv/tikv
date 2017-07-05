@@ -14,11 +14,11 @@
 use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Cursor;
 use std::path::Path;
 use std::u64;
 
 use storage::CF_DEFAULT;
+use storage::mvcc::{Write, WriteType};
 use storage::types;
 use raftstore::store::keys;
 use rocksdb::{DB, Options, SliceTransform, DBCompressionType, DBEntryType,
@@ -253,15 +253,22 @@ pub trait DecodeU64 {
 
 impl DecodeU64 for HashMap<Vec<u8>, Vec<u8>> {
     fn decode_u64(&self, k: &str) -> Result<u64, codec::Error> {
-        let v = try!(self.get(k.as_bytes()).ok_or(codec::Error::KeyNotFound));
-        Cursor::new(v).decode_u64()
+        match self.get(k.as_bytes()) {
+            Some(v) => v.as_slice().decode_u64(),
+            None => Err(codec::Error::KeyNotFound),
+        }
     }
 }
 
 impl<'a> DecodeU64 for HashMap<&'a [u8], &'a [u8]> {
     fn decode_u64(&self, k: &str) -> Result<u64, codec::Error> {
-        let v = try!(self.get(k.as_bytes().as_ref()).ok_or(codec::Error::KeyNotFound));
-        Cursor::new(v).decode_u64()
+        match self.get(k.as_bytes().as_ref()) {
+            Some(v) => {
+                let mut v = *v;
+                v.decode_u64()
+            }
+            None => Err(codec::Error::KeyNotFound),
+        }
     }
 }
 
@@ -272,7 +279,6 @@ pub struct UserProperties {
     pub num_keys: u64,
     pub num_puts: u64,
     pub num_deletes: u64,
-    pub num_corrupts: u64,
 }
 
 impl UserProperties {
@@ -283,12 +289,11 @@ impl UserProperties {
             num_keys: 0,
             num_puts: 0,
             num_deletes: 0,
-            num_corrupts: 0,
         }
     }
 
     pub fn num_versions(&self) -> u64 {
-        self.num_puts + self.num_deletes
+        self.num_puts.checked_sub(self.num_deletes).unwrap_or(0)
     }
 
     pub fn add(&mut self, other: &UserProperties) {
@@ -297,7 +302,6 @@ impl UserProperties {
         self.num_keys += other.num_keys;
         self.num_puts += other.num_puts;
         self.num_deletes += other.num_deletes;
-        self.num_corrupts += other.num_corrupts;
     }
 
     pub fn encode(&self) -> HashMap<Vec<u8>, Vec<u8>> {
@@ -305,8 +309,7 @@ impl UserProperties {
                      ("tikv.max_ts", self.max_ts),
                      ("tikv.num_keys", self.num_keys),
                      ("tikv.num_puts", self.num_puts),
-                     ("tikv.num_deletes", self.num_deletes),
-                     ("tikv.num_corrupts", self.num_corrupts)];
+                     ("tikv.num_deletes", self.num_deletes)];
         items.iter()
             .map(|&(k, v)| {
                 let mut buf = Vec::with_capacity(8);
@@ -323,7 +326,6 @@ impl UserProperties {
         res.num_keys = try!(props.decode_u64("tikv.num_keys"));
         res.num_puts = try!(props.decode_u64("tikv.num_puts"));
         res.num_deletes = try!(props.decode_u64("tikv.num_deletes"));
-        res.num_corrupts = try!(props.decode_u64("tikv.num_corrupts"));
         Ok(res)
     }
 }
@@ -343,33 +345,40 @@ impl UserPropertiesCollector {
 }
 
 impl TablePropertiesCollector for UserPropertiesCollector {
-    fn name(&self) -> &str {
-        "tikv.user-properties-collector"
-    }
-
-    fn add(&mut self, key: &[u8], _: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if !keys::validate_data_key(key) {
             return;
         }
+
         let (k, ts) = match types::split_encoded_key_on_ts(key) {
             Ok((k, ts)) => (k, ts),
-            Err(_) => {
-                // Should we ignore this or panic?
-                self.props.num_corrupts += 1;
-                return;
-            }
+            Err(_) => return,   // Ignore error
         };
+
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
-        if k.cmp(&self.last_key) != Ordering::Equal {
-            self.props.num_keys += 1;
-            self.last_key.clear();
-            self.last_key.extend_from_slice(k);
-        }
         match entry_type {
             DBEntryType::Put => self.props.num_puts += 1,
-            DBEntryType::Delete => self.props.num_deletes += 1,
+            DBEntryType::Delete => {
+                self.props.num_deletes += 1;
+                return;
+            }
             _ => {}
+        }
+
+        if k.cmp(&self.last_key) != Ordering::Equal {
+            self.last_key.clear();
+            self.last_key.extend_from_slice(k);
+        } else {
+            return;
+        }
+
+        let v = match Write::parse(value) {
+            Ok(v) => v,
+            Err(_) => return,   // Ignore error
+        };
+        if v.write_type == WriteType::Put {
+            self.props.num_keys += 1;
         }
     }
 
@@ -388,10 +397,6 @@ impl UserPropertiesCollectorFactory {
 }
 
 impl TablePropertiesCollectorFactory for UserPropertiesCollectorFactory {
-    fn name(&self) -> &str {
-        "tikv.user-properties-collector-factory"
-    }
-
     fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
         Box::new(UserPropertiesCollector::new())
     }
@@ -402,6 +407,7 @@ mod tests {
     use rocksdb::{DB, Options, DBEntryType, TablePropertiesCollector};
     use tempdir::TempDir;
     use storage::{Key, CF_DEFAULT};
+    use storage::mvcc::{Write, WriteType};
     use raftstore::store::keys;
     use super::{check_and_open, CFOptions, UserProperties, UserPropertiesCollector};
 
@@ -445,23 +451,26 @@ mod tests {
 
     #[test]
     fn test_user_properties() {
-        let cases = [("ab", 2, DBEntryType::Put),
-                     ("ab", 0, DBEntryType::Delete),
-                     ("cd", 4, DBEntryType::Delete),
-                     ("cd", 3, DBEntryType::Put),
-                     ("ef", 6, DBEntryType::Put),
-                     ("gh", 7, DBEntryType::Delete)];
+        let cases = [("ab", 2, WriteType::Put, DBEntryType::Put),
+                     ("ab", 1, WriteType::Delete, DBEntryType::Put),
+                     ("ab", 1, WriteType::Delete, DBEntryType::Delete),
+                     ("cd", 4, WriteType::Delete, DBEntryType::Put),
+                     ("cd", 3, WriteType::Put, DBEntryType::Put),
+                     ("ef", 5, WriteType::Put, DBEntryType::Put),
+                     ("ef", 5, WriteType::Put, DBEntryType::Delete),
+                     ("gh", 6, WriteType::Delete, DBEntryType::Put)];
         let mut collector = UserPropertiesCollector::new();
-        for &(key, ts, entry_type) in &cases {
+        for &(key, ts, write_type, entry_type) in &cases {
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
-            let data_key = keys::data_key(k.encoded());
-            collector.add(&data_key, &[0], entry_type, 0, 0);
+            let k = keys::data_key(k.encoded());
+            let v = Write::new(write_type, ts, None).to_bytes();
+            collector.add(&k, &v, entry_type, 0, 0);
         }
         let props = UserProperties::decode(&collector.finish()).unwrap();
-        assert_eq!(props.min_ts, 0);
-        assert_eq!(props.max_ts, 7);
-        assert_eq!(props.num_keys, 4);
-        assert_eq!(props.num_puts, 3);
-        assert_eq!(props.num_deletes, 3);
+        assert_eq!(props.min_ts, 1);
+        assert_eq!(props.max_ts, 6);
+        assert_eq!(props.num_keys, 2);
+        assert_eq!(props.num_puts, 6);
+        assert_eq!(props.num_deletes, 2);
     }
 }

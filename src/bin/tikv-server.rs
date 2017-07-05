@@ -554,8 +554,8 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
     // Create prefix bloom filter for memtable.
     opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
     // Collects user defined properties.
-    opts.add_table_properties_collector_factory(
-        Box::new(rocksdb_util::UserPropertiesCollectorFactory::new()));
+    let f = Box::new(rocksdb_util::UserPropertiesCollectorFactory::new());
+    opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
     opts
 }
 
