@@ -13,6 +13,7 @@
 
 use std::cmp::Ordering;
 use std::ascii::AsciiExt;
+use std::str;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, ScalarFuncSig};
@@ -20,8 +21,7 @@ use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
-use util::codec::mysql::DecimalDecoder;
-use util::codec::mysql::{MAX_FSP, Duration};
+use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration};
 use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
@@ -137,6 +137,7 @@ impl Evaluator {
             ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
+            ExprType::JsonType => self.eval_json_type(ctx, expr),
             ExprType::ScalarFunc => self.eval_scalar_function(ctx, expr),
             _ => Ok(Datum::Null),
         }
@@ -233,6 +234,12 @@ impl Evaluator {
         }
         let children = expr.get_children();
         Ok((&children[0], &children[1]))
+    }
+
+    fn eval_one_child(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child_expr = try!(self.get_one_child(expr));
+        let child = try!(self.eval(ctx, child_expr));
+        Ok(child)
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
@@ -394,6 +401,16 @@ impl Evaluator {
         } else {
             Ok(left)
         }
+    }
+
+    fn eval_json_type(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr));
+        if Datum::Null == child {
+            return Ok(Datum::Null);
+        }
+        let json = try!(child.cast_as_json());
+        let json_type = json.json_type().to_vec();
+        Ok(Datum::Bytes(json_type))
     }
 
     fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -616,6 +633,23 @@ pub mod test {
             }
         };
     }
+
+    macro_rules! test_eval_err {
+        ($tag:ident, $cases:expr) => {
+            #[test]
+            fn $tag() {
+                let cases = $cases;
+
+                let mut xevaluator = Evaluator::default();
+                xevaluator.row.insert(1, Datum::I64(100));
+                for expr in cases {
+                    let res = xevaluator.eval(&Default::default(), &expr);
+                    assert!(res.is_err());
+                }
+            }
+        };
+    }
+
 
     test_eval!(test_eval_datum_col,
                vec![
@@ -1027,4 +1061,34 @@ pub mod test {
             }
         }
     }
+
+    fn build_byte_datums_expr(data: &[&[u8]], tp: ExprType) -> Expr {
+        let datums = data.into_iter().map(|item| Datum::Bytes(item.to_vec())).collect();
+        build_expr(datums, tp)
+    }
+
+    test_eval!(test_eval_json_type,
+               vec![
+            (build_expr(vec![Datum::Null], ExprType::JsonType),
+                        Datum::Null),
+            (build_byte_datums_expr(&[br#"true"#], ExprType::JsonType),
+                        Datum::Bytes(b"BOOLEAN".to_vec())),
+            (build_byte_datums_expr(&[br#"null"#], ExprType::JsonType),
+                        Datum::Bytes(b"NULL".to_vec())),
+            (build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
+                        Datum::Bytes(b"INTEGER".to_vec())),
+            (build_byte_datums_expr(&[br#"3.14"#], ExprType::JsonType),
+                        Datum::Bytes(b"DOUBLE".to_vec())),
+            (build_byte_datums_expr(&[br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
+                        Datum::Bytes(b"OBJECT".to_vec())),
+            (build_byte_datums_expr(&[br#"[1,2,3]"#], ExprType::JsonType),
+                        Datum::Bytes(b"ARRAY".to_vec())),
+    ]);
+
+    test_eval_err!(test_eval_json_err,
+                   vec![
+          build_expr(vec![], ExprType::JsonType),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
+     ]);
+
 }
