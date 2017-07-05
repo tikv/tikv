@@ -462,10 +462,10 @@ fn get_region_size(db: &DB, region_id: u64) -> u64 {
     let end_key = &keys::data_end_key(region.get_end_key());
     let mut size: u64 = 0;
     let cf_arr = [CF_DEFAULT, CF_WRITE, CF_LOCK];
-    for cf in cf_arr.iter() {
+    for cf in &cf_arr {
         db.scan_cf(cf,
-                     &start_key,
-                     &end_key,
+                     start_key,
+                     end_key,
                      true,
                      &mut |_, v| {
                          size += v.len() as u64;
