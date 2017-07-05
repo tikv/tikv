@@ -398,12 +398,12 @@ fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
 }
 
 fn dump_all_region_size(db: &DB) {
-    let region_ids = get_all_region_id(db);
-    let (total_size, region_number) = region_ids.iter().fold((0, 0), |acc, &region_id| {
-        (acc.0 + get_region_size(db, region_id), acc.1 + 1)
-    });
-    let mut v: Vec<(u64, u64)> =
-        region_ids.iter().map(|&region_id| (get_region_size(db, region_id), region_id)).collect();
+    let mut region_ids = get_all_region_id(db);
+    let mut region_sizes: Vec<u64> =
+        region_ids.iter().map(|&region_id| get_region_size(db, region_id)).collect();
+    let region_number = region_ids.len();
+    let total_size = region_sizes.iter().sum();
+    let mut v: Vec<(u64, u64)> = region_ids.drain(..).zip(region_sizes.drain(..)).collect();
     v.sort();
     v.reverse();
     println!("total region number: {}", region_number);
