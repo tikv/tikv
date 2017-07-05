@@ -77,3 +77,4 @@ pub use storage::Storage;
 pub mod raftstore;
 pub mod pd;
 pub mod server;
+pub mod coprocessor;
