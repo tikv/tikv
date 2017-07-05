@@ -140,6 +140,7 @@ impl Evaluator {
             ExprType::JsonSet => self.eval_json_modify(ctx, expr, ModifyType::Set),
             ExprType::JsonInsert => self.eval_json_modify(ctx, expr, ModifyType::Insert),
             ExprType::JsonReplace => self.eval_json_modify(ctx, expr, ModifyType::Replace),
+            ExprType::JsonType => self.eval_json_type(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -226,6 +227,17 @@ impl Evaluator {
         }
         let children = expr.get_children();
         Ok((&children[0], &children[1]))
+    }
+
+    fn eval_one_child(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = expr.get_children();
+        if children.len() != 1 {
+            return Err(Error::Expr(format!("{:?} need 1 operands but got {}",
+                                           expr.get_tp(),
+                                           children.len())));
+        }
+        let child = try!(self.eval(ctx, &children[0]));
+        Ok(child)
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
@@ -434,7 +446,7 @@ impl Evaluator {
         let mut keys = Vec::with_capacity(kv_len);
         let mut values = Vec::with_capacity(kv_len);
         while let Some(item) = children.next() {
-            let key = try!(item.as_json_path_expr());
+            let key = try!(item.to_json_path_expr());
             let value = try!(children.next().unwrap().into_json());
             keys.push(key);
             values.push(value);
@@ -442,6 +454,16 @@ impl Evaluator {
 
         try!(json.modify(&keys, values, mt));
         Ok(Datum::Json(json))
+    }
+
+    fn eval_json_type(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr));
+        if Datum::Null == child {
+            return Ok(Datum::Null);
+        }
+        let json = try!(child.cast_as_json());
+        let json_type = json.json_type().to_vec();
+        Ok(Datum::Bytes(json_type))
     }
 
     fn eval_logic<F>(&mut self,
@@ -1102,12 +1124,30 @@ mod test {
                             Datum::Bytes(b"$.a".to_vec()),Datum::Null],
                         ExprType::JsonSet),
                     Datum::Json(r#"{"a":null}"#.parse().unwrap())),
+               ]);
+    test_eval!(test_eval_json_type,
+               vec![
+            (build_expr(vec![Datum::Null], ExprType::JsonType),
+                        Datum::Null),
+            (build_byte_datums_expr(&[br#"true"#], ExprType::JsonType),
+                        Datum::Bytes(b"BOOLEAN".to_vec())),
+            (build_byte_datums_expr(&[br#"null"#], ExprType::JsonType),
+                        Datum::Bytes(b"NULL".to_vec())),
+            (build_byte_datums_expr(&[br#"3"#], ExprType::JsonType),
+                        Datum::Bytes(b"INTEGER".to_vec())),
+            (build_byte_datums_expr(&[br#"3.14"#], ExprType::JsonType),
+                        Datum::Bytes(b"DOUBLE".to_vec())),
+            (build_byte_datums_expr(&[br#"{"name":"shirly","age":18}"#], ExprType::JsonType),
+                        Datum::Bytes(b"OBJECT".to_vec())),
+            (build_byte_datums_expr(&[br#"[1,2,3]"#], ExprType::JsonType),
+                        Datum::Bytes(b"ARRAY".to_vec())),
     ]);
 
     test_eval_err!(test_eval_json_err,
                    vec![
           build_byte_datums_expr(&[b"{}", b"$invalidPath", b"3",], ExprType::JsonReplace),
           build_byte_datums_expr(&[b"{}", b"$.a", b"3", b"$.c"], ExprType::JsonReplace),
+          build_expr(vec![], ExprType::JsonType),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
      ]);
-
 }

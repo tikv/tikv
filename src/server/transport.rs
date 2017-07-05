@@ -249,6 +249,10 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + Send + 'static> Server
                    e);
         }
     }
+
+    pub fn flush_raft_client(&mut self) {
+        self.raft_client.wl().flush();
+    }
 }
 
 impl<T, S> Transport for ServerTransport<T, S>
@@ -262,7 +266,7 @@ impl<T, S> Transport for ServerTransport<T, S>
     }
 
     fn flush(&mut self) {
-        self.raft_client.wl().flush();
+        self.flush_raft_client();
     }
 }
 
