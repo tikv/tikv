@@ -839,15 +839,19 @@ impl ApplyDelegate {
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
 
-        let mut compact_index = req.get_compact_log().get_compact_index();
-        let mut compact_term = req.get_compact_log().get_compact_term();
-        if compact_index > self.last_flushed_index {
+        let resp = AdminResponse::new();
+        let compact_index = req.get_compact_log().get_compact_index();
+        let compact_term = req.get_compact_log().get_compact_term();
+
+        if compact_index >= self.last_flushed_index {
             self.pending_compact_index = compact_index;
             self.pending_compact_term = compact_term;
-            compact_index = self.last_flushed_index;
-            compact_term = self.last_flushed_term;
+            debug!("{} compact index {} >= last flushed index {}, delay compact",
+                   self.tag,
+                   compact_index,
+                   self.last_flushed_index);
+            return Ok((resp, None));
         }
-        let resp = AdminResponse::new();
 
         let first_index = peer_storage::first_index(&ctx.apply_state);
         if compact_index <= first_index {
@@ -886,7 +890,7 @@ impl ApplyDelegate {
         if self.pending_compact_index == 0 {
             return None;
         }
-        assert!(self.last_flushed_index >= self.pending_compact_index);
+        assert!(self.last_flushed_index > self.pending_compact_index);
 
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
 
