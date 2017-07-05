@@ -295,15 +295,16 @@ impl ApplyDelegate {
     fn handle_raft_committed_entries(&mut self,
                                      apply_ctx: &mut ApplyContext,
                                      committed_entries: Vec<Entry>)
-                                     -> Vec<ExecResult> {
+                                     -> (Vec<ExecResult>, bool) {
         if committed_entries.is_empty() {
-            return vec![];
+            return (vec![], false);
         }
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         let t = SlowTimer::new();
         let mut results = vec![];
+        let mut has_peer_state_changed = false;
         let committed_count = committed_entries.len();
         for entry in committed_entries {
             if self.pending_remove {
@@ -319,13 +320,16 @@ impl ApplyDelegate {
                        entry.get_index());
             }
 
-            let res = match entry.get_entry_type() {
+            let (res, peer_state_changed) = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, entry),
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, entry),
             };
 
             if let Some(res) = res {
                 results.push(res);
+            }
+            if peer_state_changed {
+                has_peer_state_changed = true;
             }
         }
 
@@ -336,7 +340,7 @@ impl ApplyDelegate {
                   "{} handle ready {} committed entries",
                   self.tag,
                   committed_count);
-        results
+        (results, has_peer_state_changed)
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
@@ -362,7 +366,7 @@ impl ApplyDelegate {
     fn handle_raft_entry_normal(&mut self,
                                 apply_ctx: &mut ApplyContext,
                                 entry: Entry)
-                                -> Option<ExecResult> {
+                                -> (Option<ExecResult>, bool) {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
@@ -402,34 +406,35 @@ impl ApplyDelegate {
             apply_ctx.cbs
                 .push((cmd.cb.take().unwrap(), cmd_resp::err_resp(Error::StaleCommand, term)));
         }
-        None
+        (None, false)
     }
 
     fn handle_raft_entry_conf_change(&mut self,
                                      apply_ctx: &mut ApplyContext,
                                      entry: Entry)
-                                     -> Option<ExecResult> {
+                                     -> (Option<ExecResult>, bool) {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        Some(self.process_raft_cmd(apply_ctx, index, term, cmd)
-            .map_or_else(|| {
-                             // If failed, tell raft that the config change was aborted.
-                             ExecResult::ChangePeer(Default::default())
-                         },
-                         |mut res| {
-                if let ExecResult::ChangePeer(ref mut cp) = res {
-                    cp.conf_change = conf_change;
-                } else {
-                    panic!("{} unexpected result {:?} for conf change {:?} at {}",
-                           self.tag,
-                           res,
-                           conf_change,
-                           index);
-                }
-                res
-            }))
+        let (mut res, peer_state_changed) = self.process_raft_cmd(apply_ctx, index, term, cmd);
+
+        if res.is_none() {
+            // If failed, tell raft that the config change was aborted.
+            return (Some(ExecResult::ChangePeer(Default::default())), peer_state_changed);
+        }
+
+        match res.as_mut().unwrap() {
+            &mut ExecResult::ChangePeer(ref mut cp) => cp.conf_change = conf_change,
+            ref other => {
+                panic!("{} unexpected result {:?} for conf change {:?} at {}",
+                       self.tag,
+                       other,
+                       conf_change,
+                       index);
+            }
+        }
+        (res, peer_state_changed)
     }
 
     fn find_cb(&mut self, index: u64, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
@@ -459,7 +464,7 @@ impl ApplyDelegate {
                         index: u64,
                         term: u64,
                         mut cmd: RaftCmdRequest)
-                        -> Option<ExecResult> {
+                        -> (Option<ExecResult>, bool) {
         if index == 0 {
             panic!("{} processing raft command needs a none zero index",
                    self.tag);
@@ -467,12 +472,13 @@ impl ApplyDelegate {
 
         let cmd_cb = self.find_cb(index, term, &cmd);
         apply_ctx.host.pre_apply(&self.region, &mut cmd);
-        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
+        let (mut resp, exec_result, peer_state_changed) =
+            self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
 
         debug!("{} applied command at log index {}", self.tag, index);
 
         let cb = match cmd_cb {
-            None => return exec_result,
+            None => return (exec_result, peer_state_changed),
             Some(cb) => cb,
         };
 
@@ -482,7 +488,7 @@ impl ApplyDelegate {
         cmd_resp::bind_term(&mut resp, self.term);
         apply_ctx.cbs.push((cb, resp));
 
-        exec_result
+        (exec_result, peer_state_changed)
     }
 
     // apply operation can fail as following situation:
@@ -496,21 +502,22 @@ impl ApplyDelegate {
                       index: u64,
                       term: u64,
                       req: &RaftCmdRequest)
-                      -> (RaftCmdResponse, Option<ExecResult>) {
+                      -> (RaftCmdResponse, Option<ExecResult>, bool) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
         let mut ctx = self.new_ctx(wb, index, term, req);
         ctx.wb.set_save_point();
-        let (resp, exec_result) = self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-            // clear dirty values.
-            ctx.wb.rollback_to_save_point().unwrap();
-            match e {
-                Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
-                _ => error!("{} execute raft command err: {:?}", self.tag, e),
-            }
-            (cmd_resp::new_error(e), None)
-        });
+        let (resp, exec_result, peer_state_changed) =
+            self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
+                // clear dirty values.
+                ctx.wb.rollback_to_save_point().unwrap();
+                match e {
+                    Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                }
+                (cmd_resp::new_error(e), None, false)
+            });
 
         ctx.apply_state.set_applied_index(index);
 
@@ -537,7 +544,7 @@ impl ApplyDelegate {
             }
         }
 
-        (resp, exec_result)
+        (resp, exec_result, peer_state_changed)
     }
 
     /// Clear all the pending commands.
@@ -606,19 +613,19 @@ impl ApplyDelegate {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(&mut self,
                      ctx: &mut ExecContext)
-                     -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+                     -> Result<(RaftCmdResponse, Option<ExecResult>, bool)> {
         try!(check_epoch(&self.region, ctx.req));
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx)
         } else {
             // Now we don't care write command outer, so use None.
-            self.exec_write_cmd(ctx).and_then(|v| Ok((v, None)))
+            self.exec_write_cmd(ctx).and_then(|v| Ok((v, None, false)))
         }
     }
 
     fn exec_admin_cmd(&mut self,
                       ctx: &mut ExecContext)
-                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
+                      -> Result<(RaftCmdResponse, Option<ExecResult>, bool)> {
         let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         info!("{} execute admin command {:?} at [term: {}, index: {}]",
@@ -627,9 +634,10 @@ impl ApplyDelegate {
               ctx.term,
               ctx.index);
 
+        let mut peer_state_changed = false;
         let (mut response, exec_result) = try!(match cmd_type {
-            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
-            AdminCmdType::Split => self.exec_split(ctx, request),
+            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request, &mut peer_state_changed),
+            AdminCmdType::Split => self.exec_split(ctx, request, &mut peer_state_changed),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
@@ -640,12 +648,13 @@ impl ApplyDelegate {
 
         let mut resp = RaftCmdResponse::new();
         resp.set_admin_response(response);
-        Ok((resp, exec_result))
+        Ok((resp, exec_result, peer_state_changed))
     }
 
     fn exec_change_peer(&mut self,
                         ctx: &ExecContext,
-                        request: &AdminRequest)
+                        request: &AdminRequest,
+                        peer_state_changed: &mut bool)
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
@@ -727,6 +736,7 @@ impl ApplyDelegate {
         if let Err(e) = write_peer_state(ctx.wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
+        *peer_state_changed = true;
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -741,7 +751,8 @@ impl ApplyDelegate {
 
     fn exec_split(&mut self,
                   ctx: &ExecContext,
-                  req: &AdminRequest)
+                  req: &AdminRequest,
+                  peer_state_changed: &mut bool)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
 
@@ -804,6 +815,7 @@ impl ApplyDelegate {
                        new_region,
                        e)
             });
+        *peer_state_changed = true;
 
         let mut resp = AdminResponse::new();
         if right_derive {
@@ -1292,52 +1304,64 @@ impl Runner {
     fn handle_applies(&mut self, applys: Vec<Apply>) {
         let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
 
+        let mut need_flush = false;
         let mut applys_res = Vec::with_capacity(applys.len());
-        let mut apply_ctx = ApplyContext::new(self.host.as_ref());
-        for apply in applys {
-            if apply.entries.is_empty() {
-                continue;
-            }
-            let mut e = match self.delegates.entry(apply.region_id) {
-                MapEntry::Vacant(_) => {
-                    error!("[region {}] is missing", apply.region_id);
+
+        {
+            let mut apply_ctx = ApplyContext::new(self.host.as_ref());
+            for apply in applys {
+                if apply.entries.is_empty() {
                     continue;
                 }
-                MapEntry::Occupied(e) => e,
-            };
-            {
-                let delegate = e.get_mut();
-                delegate.metrics = ApplyMetrics::default();
-                delegate.term = apply.term;
-                let results = delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
+                let mut e = match self.delegates.entry(apply.region_id) {
+                    MapEntry::Vacant(_) => {
+                        error!("[region {}] is missing", apply.region_id);
+                        continue;
+                    }
+                    MapEntry::Occupied(e) => e,
+                };
+                {
+                    let delegate = e.get_mut();
+                    delegate.metrics = ApplyMetrics::default();
+                    delegate.term = apply.term;
+                    let (results, peer_state_changed) =
+                        delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
 
-                if delegate.pending_remove {
-                    delegate.destroy();
+                    if peer_state_changed {
+                        need_flush = true;
+                    }
+                    if delegate.pending_remove {
+                        delegate.destroy();
+                    }
+
+                    applys_res.push(ApplyRes {
+                        region_id: apply.region_id,
+                        apply_state: delegate.apply_state.clone(),
+                        exec_res: results,
+                        metrics: delegate.metrics.clone(),
+                        applied_index_term: delegate.applied_index_term,
+                    });
                 }
-
-                applys_res.push(ApplyRes {
-                    region_id: apply.region_id,
-                    apply_state: delegate.apply_state.clone(),
-                    exec_res: results,
-                    metrics: delegate.metrics.clone(),
-                    applied_index_term: delegate.applied_index_term,
-                });
+                if e.get().pending_remove {
+                    e.remove();
+                } else {
+                    self.regions_need_flush_applied.insert(apply.region_id);
+                }
             }
-            if e.get().pending_remove {
-                e.remove();
-            } else {
-                self.regions_need_flush_applied.insert(apply.region_id);
+
+            // Write to engine
+            self.db
+                .write_without_wal(apply_ctx.wb.take().unwrap())
+                .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
+
+            // Call callbacks
+            for (cb, resp) in apply_ctx.cbs.drain(..) {
+                cb(resp);
             }
         }
 
-        // Write to engine
-        self.db
-            .write_without_wal(apply_ctx.wb.take().unwrap())
-            .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
-
-        // Call callbacks
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
+        if need_flush {
+            self.handle_flush_applied();
         }
 
         if !applys_res.is_empty() {
