@@ -1207,14 +1207,12 @@ mod tests {
         storage.async_import(Context::new(), mutations, 100, expect_ok(tx.clone(), 0))
             .unwrap();
         rx.recv().unwrap();
-        let mut id = 0;
         for (key, value) in data {
             storage.async_get(Context::new(),
                            key.clone(),
                            120,
-                           expect_get_val(tx.clone(), value.clone(), id))
+                           expect_get_val(tx.clone(), value.clone(), 0))
                 .unwrap();
-            id += 1;
             rx.recv().unwrap();
         }
         storage.stop().unwrap();
