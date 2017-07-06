@@ -39,7 +39,7 @@ use std::thread;
 
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
-use kvproto::kvrpcpb::{Context, LockInfo, CommandPri};
+use kvproto::kvrpcpb::{Context, LockInfo, CommandPri, IsolationLevel};
 
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode, Statistics};
@@ -611,7 +611,11 @@ fn process_write_impl(cid: u64,
             }
         }
         Command::Import { ref mutations, commit_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, commit_ts, None);
+            let mut txn = MvccTxn::new(snapshot,
+                                       &mut statistics,
+                                       commit_ts,
+                                       None,
+                                       IsolationLevel::SI);
             for m in mutations {
                 try!(txn.import(m.clone(), commit_ts));
             }

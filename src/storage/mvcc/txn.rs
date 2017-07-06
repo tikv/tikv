@@ -915,7 +915,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
+        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None, IsolationLevel::SI);
         txn.import(Mutation::Put((make_key(key), value.to_vec())), ts).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
     }
@@ -924,7 +924,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
+        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None, IsolationLevel::SI);
         txn.import(Mutation::Delete(make_key(key)), ts).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
     }
@@ -933,7 +933,7 @@ mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut statistics = Statistics::default();
-        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None);
+        let mut txn = MvccTxn::new(snapshot.as_ref(), &mut statistics, ts, None, IsolationLevel::SI);
         txn.import(Mutation::Lock(make_key(key)), ts).unwrap();
         engine.write(&ctx, txn.modifies()).unwrap();
     }

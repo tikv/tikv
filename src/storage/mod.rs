@@ -1204,15 +1204,17 @@ mod tests {
             .into_iter()
             .map(|(key, value)| Mutation::Put((key.clone(), value.clone())))
             .collect();
-        storage.async_import(Context::new(), mutations, 100, expect_ok(tx.clone()))
+        storage.async_import(Context::new(), mutations, 100, expect_ok(tx.clone(), 0))
             .unwrap();
         rx.recv().unwrap();
+        let mut id = 0;
         for (key, value) in data {
             storage.async_get(Context::new(),
                            key.clone(),
                            120,
-                           expect_get_val(tx.clone(), value.clone()))
+                           expect_get_val(tx.clone(), value.clone(), id))
                 .unwrap();
+            id += 1;
             rx.recv().unwrap();
         }
         storage.stop().unwrap();
