@@ -11,10 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use server::coprocessor::endpoint::{prefix_next, is_point};
-use server::coprocessor::Result;
+use coprocessor::endpoint::{prefix_next, is_point};
+use coprocessor::Result;
 use tipb::executor::TableScan;
 use kvproto::coprocessor::KeyRange;
+use kvproto::kvrpcpb::IsolationLevel;
 use util::codec::table;
 use util::collections::HashSet;
 use storage::{Snapshot, Statistics};
@@ -35,14 +36,20 @@ impl<'a> TableScanExecutor<'a> {
                key_ranges: Vec<KeyRange>,
                snapshot: &'a Snapshot,
                statistics: &'a mut Statistics,
-               start_ts: u64)
+               start_ts: u64,
+               isolation_level: IsolationLevel)
                -> TableScanExecutor<'a> {
         let col_ids = meta.get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
             .map(|c| c.get_column_id())
             .collect();
-        let scanner = Scanner::new(meta.get_desc(), false, snapshot, statistics, start_ts);
+        let scanner = Scanner::new(meta.get_desc(),
+                                   false,
+                                   snapshot,
+                                   statistics,
+                                   start_ts,
+                                   isolation_level);
         TableScanExecutor {
             meta: meta,
             col_ids: col_ids,
@@ -112,7 +119,7 @@ mod test {
     use tipb::schema::ColumnInfo;
     use storage::Statistics;
     use protobuf::RepeatedField;
-    use server::coprocessor::endpoint::{is_point, prefix_next};
+    use coprocessor::endpoint::{is_point, prefix_next};
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
@@ -167,7 +174,8 @@ mod test {
                                                        wrapper.ranges,
                                                        snapshot,
                                                        &mut statistics,
-                                                       start_ts);
+                                                       start_ts,
+                                                       IsolationLevel::SI);
 
         let row = table_scanner.next().unwrap().unwrap();
         assert_eq!(row.handle, handle as i64);
@@ -197,7 +205,8 @@ mod test {
                                                        wrapper.ranges,
                                                        snapshot,
                                                        &mut statistics,
-                                                       start_ts);
+                                                       start_ts,
+                                                       IsolationLevel::SI);
 
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap();
@@ -223,7 +232,8 @@ mod test {
                                                        wrapper.ranges,
                                                        snapshot,
                                                        &mut statistics,
-                                                       start_ts);
+                                                       start_ts,
+                                                       IsolationLevel::SI);
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;

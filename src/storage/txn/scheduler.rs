@@ -286,9 +286,10 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
 
     let pr = match cmd {
         // Gets from the snapshot.
-        Command::Get { ref key, start_ts, .. } => {
+        Command::Get { ref ctx, ref key, start_ts, .. } => {
             KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag]).observe(1f64);
-            let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
+            let snap_store =
+                SnapshotStore::new(snapshot.as_ref(), start_ts, ctx.get_isolation_level());
             let res = snap_store.get(key, &mut statistics);
             match res {
                 Ok(val) => ProcessResult::Value { value: val },
@@ -296,10 +297,11 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Batch gets from the snapshot.
-        Command::BatchGet { ref keys, start_ts, .. } => {
+        Command::BatchGet { ref ctx, ref keys, start_ts, .. } => {
             KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
                 .observe(keys.len() as f64);
-            let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
+            let snap_store =
+                SnapshotStore::new(snapshot.as_ref(), start_ts, ctx.get_isolation_level());
             match snap_store.batch_get(keys, &mut statistics) {
                 Ok(results) => {
                     let mut res = vec![];
@@ -316,8 +318,9 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
-        Command::Scan { ref start_key, limit, start_ts, ref options, .. } => {
-            let snap_store = SnapshotStore::new(snapshot.as_ref(), start_ts);
+        Command::Scan { ref ctx, ref start_key, limit, start_ts, ref options, .. } => {
+            let snap_store =
+                SnapshotStore::new(snapshot.as_ref(), start_ts, ctx.get_isolation_level());
             let res = snap_store.scanner(ScanMode::Forward, options.key_only, None, &mut statistics)
                 .and_then(|mut scanner| scanner.scan(start_key.clone(), limit))
                 .and_then(|mut results| {
@@ -332,12 +335,13 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Scans locks with timestamp <= `max_ts`
-        Command::ScanLock { max_ts, .. } => {
+        Command::ScanLock { ref ctx, max_ts, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
                                              &mut statistics,
                                              Some(ScanMode::Forward),
                                              true,
-                                             None);
+                                             None,
+                                             ctx.get_isolation_level());
             let res = reader.scan_lock(None, |lock| lock.ts <= max_ts, None)
                 .map_err(Error::from)
                 .and_then(|(v, _)| {
@@ -365,7 +369,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              &mut statistics,
                                              Some(ScanMode::Forward),
                                              true,
-                                             None);
+                                             None,
+                                             ctx.get_isolation_level());
             let res = reader.scan_lock(scan_key.take(),
                            |lock| lock.ts == start_ts,
                            Some(RESOLVE_LOCK_BATCH_SIZE))
@@ -398,7 +403,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              &mut statistics,
                                              Some(ScanMode::Forward),
                                              true,
-                                             None);
+                                             None,
+                                             ctx.get_isolation_level());
             // scan_key is used as start_key here,and Range start gc with scan_key=none.
             let is_range_start_key = scan_key.is_none();
             let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
@@ -468,8 +474,12 @@ fn process_write_impl(cid: u64,
                       -> Result<()> {
     let mut statistics = Statistics::default();
     let (pr, modifies) = match cmd {
-        Command::Prewrite { ref mutations, ref primary, start_ts, ref options, .. } => {
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
+        Command::Prewrite { ref ctx, ref mutations, ref primary, start_ts, ref options, .. } => {
+            let mut txn = MvccTxn::new(snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       None,
+                                       ctx.get_isolation_level());
             let mut locks = vec![];
             for m in mutations {
                 match txn.prewrite(m.clone(), primary, options) {
@@ -489,14 +499,18 @@ fn process_write_impl(cid: u64,
                 (pr, vec![])
             }
         }
-        Command::Commit { ref keys, lock_ts, commit_ts, .. } => {
+        Command::Commit { ref ctx, ref keys, lock_ts, commit_ts, .. } => {
             if commit_ts <= lock_ts {
                 return Err(Error::InvalidTxnTso {
                     start_ts: lock_ts,
                     commit_ts: commit_ts,
                 });
             }
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, lock_ts, None);
+            let mut txn = MvccTxn::new(snapshot,
+                                       &mut statistics,
+                                       lock_ts,
+                                       None,
+                                       ctx.get_isolation_level());
             for k in keys {
                 try!(txn.commit(k, commit_ts));
             }
@@ -504,15 +518,23 @@ fn process_write_impl(cid: u64,
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
         }
-        Command::Cleanup { ref key, start_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
+        Command::Cleanup { ref ctx, ref key, start_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       None,
+                                       ctx.get_isolation_level());
             try!(txn.rollback(key));
 
             let pr = ProcessResult::Res;
             (pr, txn.modifies())
         }
-        Command::Rollback { ref keys, start_ts, .. } => {
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
+        Command::Rollback { ref ctx, ref keys, start_ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       None,
+                                       ctx.get_isolation_level());
             for k in keys {
                 try!(txn.rollback(k));
             }
@@ -530,7 +552,11 @@ fn process_write_impl(cid: u64,
                 }
             }
             let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, start_ts, None);
+            let mut txn = MvccTxn::new(snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       None,
+                                       ctx.get_isolation_level());
             for k in keys {
                 match commit_ts {
                     Some(ts) => try!(txn.commit(k, ts)),
@@ -558,7 +584,11 @@ fn process_write_impl(cid: u64,
         }
         Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(snapshot, &mut statistics, 0, Some(ScanMode::Forward));
+            let mut txn = MvccTxn::new(snapshot,
+                                       &mut statistics,
+                                       0,
+                                       Some(ScanMode::Forward),
+                                       ctx.get_isolation_level());
             for k in keys {
                 try!(txn.gc(k, safe_point));
                 if txn.write_size() >= MAX_TXN_WRITE_SIZE {

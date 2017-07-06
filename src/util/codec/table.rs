@@ -230,17 +230,19 @@ pub trait TableDecoder: DatumDecoder {
 
 impl<T: BytesDecoder> TableDecoder for T {}
 
+#[derive(Debug)]
 pub struct RowColMeta {
     offset: usize,
     length: usize,
 }
 
+#[derive(Debug)]
 pub struct RowColsDict {
     // data of current row
-    value: Vec<u8>,
+    pub value: Vec<u8>,
     // cols contains meta of each column in the format of:
     // (col_id1,(offset1,len1)),(col_id2,(offset2,len2),...)
-    cols: HashMap<i64, RowColMeta>,
+    pub cols: HashMap<i64, RowColMeta>,
 }
 
 impl RowColMeta {

@@ -22,6 +22,7 @@ use std::str;
 use rocksdb::{DB, Writable, WriteBatch};
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, PeerState};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
+use threadpool::ThreadPool;
 
 use util::worker::Runnable;
 use util::{escape, rocksdb};
@@ -34,6 +35,8 @@ use raftstore::store::snap::{Error, Result};
 use storage::CF_RAFT;
 
 use super::metrics::*;
+
+const GENERATE_POOL_SIZE: usize = 2;
 
 /// region related task.
 pub enum Task {
@@ -81,24 +84,15 @@ impl Display for Task {
     }
 }
 
-// TODO: use threadpool to do task concurrently
-pub struct Runner {
+#[derive(Clone)]
+struct SnapContext {
     raft_db: Arc<DB>,
     kv_db: Arc<DB>,
     batch_size: usize,
     mgr: SnapManager,
 }
 
-impl Runner {
-    pub fn new(raft_db: Arc<DB>, kv_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
-        Runner {
-            raft_db: raft_db,
-            kv_db: kv_db,
-            mgr: mgr,
-            batch_size: batch_size,
-        }
-    }
-
+impl SnapContext {
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
         let raft_snap = Snapshot::new(self.raft_db.clone());
@@ -305,13 +299,37 @@ impl Runner {
     }
 }
 
+pub struct Runner {
+    pool: ThreadPool,
+    ctx: SnapContext,
+}
+
+impl Runner {
+    pub fn new(raft_db: Arc<DB>, kv_db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
+        Runner {
+            pool: ThreadPool::new_with_name(thd_name!("snap generator"), GENERATE_POOL_SIZE),
+            ctx: SnapContext {
+                raft_db: raft_db,
+                kv_db: kv_db,
+                mgr: mgr,
+                batch_size: batch_size,
+            },
+        }
+    }
+}
+
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Gen { region_id, notifier } => self.handle_gen(region_id, notifier),
-            Task::Apply { region_id, status } => self.handle_apply(region_id, status),
+            Task::Gen { region_id, notifier } => {
+                // It safe for now to handle generating and applying snapshot concurrently,
+                // but it may not when merge is implemented.
+                let ctx = self.ctx.clone();
+                self.pool.execute(move || ctx.handle_gen(region_id, notifier))
+            }
+            Task::Apply { region_id, status } => self.ctx.handle_apply(region_id, status),
             Task::Destroy { region_id, start_key, end_key } => {
-                self.handle_destroy(region_id, start_key, end_key)
+                self.ctx.handle_destroy(region_id, start_key, end_key)
             }
         }
     }

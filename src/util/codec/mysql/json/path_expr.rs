@@ -41,7 +41,7 @@ use std::ops::Index;
 use std::ascii::AsciiExt;
 use regex::Regex;
 use super::super::Result;
-use super::functions::unquote_string;
+use super::json_unquote::unquote_string;
 
 pub const PATH_EXPR_ASTERISK: &'static str = "*";
 
@@ -69,14 +69,19 @@ pub type PathExpressionFlag = u8;
 pub const PATH_EXPRESSION_CONTAINS_ASTERISK: PathExpressionFlag = 0x01;
 pub const PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK: PathExpressionFlag = 0x02;
 
-pub fn contains_any_asterisk(flags: PathExpressionFlag) -> bool {
-    (flags & (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK)) != 0
-}
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct PathExpression {
     pub legs: Vec<PathLeg>,
     pub flags: PathExpressionFlag,
+}
+
+impl PathExpression {
+    pub fn contains_any_asterisk(&self) -> bool {
+        (self.flags &
+         (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK)) !=
+        0
+    }
 }
 
 /// Parses a JSON path expression. Returns a `PathExpression`
@@ -151,20 +156,22 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
     })
 }
 
-
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
     fn test_path_expression_flag() {
-        let mut flag = PathExpressionFlag::default();
-        assert!(!contains_any_asterisk(flag));
-        flag |= PATH_EXPRESSION_CONTAINS_ASTERISK;
-        assert!(contains_any_asterisk(flag));
-        let mut flag = PathExpressionFlag::default();
-        flag |= PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK;
-        assert!(contains_any_asterisk(flag));
+        let mut e = PathExpression {
+            legs: vec![],
+            flags: PathExpressionFlag::default(),
+        };
+        assert!(!e.contains_any_asterisk());
+        e.flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
+        assert!(e.contains_any_asterisk());
+        e.flags = PathExpressionFlag::default();
+        e.flags |= PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK;
+        assert!(e.contains_any_asterisk());
     }
 
     #[test]
@@ -237,7 +244,7 @@ mod test {
             let r = parse_json_path_expr(path_expr);
             assert!(r.is_ok(), "#{} expect parse ok but got err {:?}", i, r);
             let e = r.unwrap();
-            let b = contains_any_asterisk(e.flags);
+            let b = e.contains_any_asterisk();
             assert_eq!(b, expected, "#{} expect {:?} but got {:?}", i, expected, b);
         }
     }

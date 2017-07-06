@@ -15,16 +15,20 @@
 mod binary;
 mod comparison;
 mod serde;
-mod json_type;
+// json functions
+mod json_extract;
 mod json_merge;
-mod functions;
+mod json_modify;
+mod json_type;
+mod json_unquote;
 mod path_expr;
 
+use std::collections::BTreeMap;
 pub use self::binary::{JsonEncoder, JsonDecoder};
+pub use self::path_expr::{PathExpression, parse_json_path_expr};
+pub use self::json_modify::ModifyType;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
-
-use std::collections::BTreeMap;
 
 /// Json implements type json used in tikv, it specifies the following
 /// implementations:

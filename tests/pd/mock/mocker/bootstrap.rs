@@ -13,14 +13,12 @@
 
 use kvproto::pdpb::*;
 
-use super::Mocker;
-use super::Result;
-use super::DEFAULT_CLUSTER_ID;
+use super::*;
 
 #[derive(Debug)]
 pub struct AlreadyBootstrapped;
 
-impl Mocker for AlreadyBootstrapped {
+impl PdMocker for AlreadyBootstrapped {
     fn bootstrap(&self, _: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
         let mut err = Error::new();
         err.set_field_type(ErrorType::ALREADY_BOOTSTRAPPED);

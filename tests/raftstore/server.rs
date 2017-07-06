@@ -186,6 +186,7 @@ impl Simulator for ServerCluster {
         let store_id = raft_msg.get_to_peer().get_store_id();
         let addr = self.addrs[&store_id];
         self.raft_client.send(store_id, addr, raft_msg).unwrap();
+        self.raft_client.flush();
         Ok(())
     }
 

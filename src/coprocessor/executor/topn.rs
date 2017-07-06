@@ -16,39 +16,16 @@
 
 use std::usize;
 use std::rc::Rc;
-use std::collections::HashSet;
 use std::vec::IntoIter;
+
+use super::{Executor, Row, ExprColumnRefVisitor};
+use super::super::Result;
+use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
+use util::xeval::{Evaluator, EvalContext};
 
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
-use tipb::expression::{Expr, ExprType, ByItem};
-use util::codec::number::NumberDecoder;
-use util::xeval::{Evaluator, EvalContext};
-
-use super::{Executor, Row};
-use super::super::Result;
-use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
-
-struct ExprColumnRefVisitor {
-    col_ids: HashSet<i64>,
-}
-
-impl ExprColumnRefVisitor {
-    fn new() -> ExprColumnRefVisitor {
-        ExprColumnRefVisitor { col_ids: HashSet::new() }
-    }
-
-    fn visit(&mut self, expr: &Expr) -> Result<()> {
-        if expr.get_tp() == ExprType::ColumnRef {
-            self.col_ids.insert(box_try!(expr.get_val().decode_i64()));
-        } else {
-            for sub_expr in expr.get_children() {
-                try!(self.visit(sub_expr));
-            }
-        }
-        Ok(())
-    }
-}
+use tipb::expression::ByItem;
 
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
@@ -142,6 +119,7 @@ pub mod test {
     use tipb::expression::{Expr, ExprType};
 
     use protobuf::RepeatedField;
+    use kvproto::kvrpcpb::IsolationLevel;
 
     fn new_order_by(col_id: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
@@ -286,8 +264,12 @@ pub mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let mut statistics = Statistics::default();
-        let ts_ect =
-            TableScanExecutor::new(table_scan, key_ranges, snapshot, &mut statistics, start_ts);
+        let ts_ect = TableScanExecutor::new(table_scan,
+                                            key_ranges,
+                                            snapshot,
+                                            &mut statistics,
+                                            start_ts,
+                                            IsolationLevel::SI);
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);

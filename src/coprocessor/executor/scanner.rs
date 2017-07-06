@@ -13,6 +13,7 @@
 
 use storage::txn::Result;
 use kvproto::coprocessor::KeyRange;
+use kvproto::kvrpcpb::IsolationLevel;
 use storage::{Key, Value, Snapshot, ScanMode, Statistics};
 use storage::mvcc::MvccReader;
 use util::escape;
@@ -30,14 +31,21 @@ impl<'a> Scanner<'a> {
                key_only: bool,
                snapshot: &'a Snapshot,
                statistics: &'a mut Statistics,
-               start_ts: u64)
+               start_ts: u64,
+               isolation_level: IsolationLevel)
                -> Scanner<'a> {
         let scan_mode = if desc {
             ScanMode::Backward
         } else {
             ScanMode::Forward
         };
-        let mut reader = MvccReader::new(snapshot, statistics, Some(scan_mode), true, None);
+        let mut reader = MvccReader::new(snapshot,
+                                         statistics,
+                                         Some(scan_mode),
+                                         true,
+                                         None,
+                                         isolation_level);
+
         reader.set_key_only(key_only);
         Scanner {
             reader: reader,
@@ -109,11 +117,11 @@ pub mod test {
     use util::codec::table;
     use util::collections::HashMap;
     use tipb::schema::ColumnInfo;
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, Snapshot};
     use storage::engine::{self, Engine, TEMP_DIR, Modify};
-    use server::coprocessor::endpoint::prefix_next;
+    use coprocessor::endpoint::prefix_next;
 
     pub fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
@@ -213,7 +221,11 @@ pub mod test {
             let mut statistics = Statistics::default();
             // do prewrite.
             let txn_motifies = {
-                let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
+                let mut txn = MvccTxn::new(self.snapshot.as_ref(),
+                                           &mut statistics,
+                                           START_TS,
+                                           None,
+                                           IsolationLevel::SI);
                 let mut pk = vec![];
                 for &(ref key, ref value) in kv_data {
                     if pk.is_empty() {
@@ -229,7 +241,11 @@ pub mod test {
             self.write_modifies(txn_motifies);
             // do commit
             let txn_modifies = {
-                let mut txn = MvccTxn::new(self.snapshot.as_ref(), &mut statistics, START_TS, None);
+                let mut txn = MvccTxn::new(self.snapshot.as_ref(),
+                                           &mut statistics,
+                                           START_TS,
+                                           None,
+                                           IsolationLevel::SI);
                 for &(ref key, _) in kv_data {
                     txn.commit(&make_key(key), COMMIT_TS).unwrap();
                 }
@@ -272,7 +288,12 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let mut scanner = Scanner::new(false, false, snapshot, &mut statistics, start_ts);
+        let mut scanner = Scanner::new(false,
+                                       false,
+                                       snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       IsolationLevel::SI);
         let data = scanner.get_row(&key).unwrap().unwrap();
         assert_eq!(data, value);
     }
@@ -289,7 +310,12 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let mut scanner = Scanner::new(false, false, snapshot, &mut statistics, start_ts);
+        let mut scanner = Scanner::new(false,
+                                       false,
+                                       snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       IsolationLevel::SI);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         for &(ref k, ref v) in &test_data {
             let (key, value) = scanner.next_row(&range).unwrap().unwrap();
@@ -309,7 +335,12 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&data.kv_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let mut scanner = Scanner::new(true, false, snapshot, &mut statistics, start_ts);
+        let mut scanner = Scanner::new(true,
+                                       false,
+                                       snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       IsolationLevel::SI);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         data.kv_data.reverse();
         for &(ref k, ref v) in &data.kv_data {
@@ -334,7 +365,12 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let mut scanner = Scanner::new(false, true, snapshot, &mut statistics, start_ts);
+        let mut scanner = Scanner::new(false,
+                                       true,
+                                       snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       IsolationLevel::SI);
 
         let range = get_range(table_id, i64::MIN, i64::MAX);
         let (_, value) = scanner.next_row(&range).unwrap().unwrap();
@@ -352,7 +388,12 @@ pub mod test {
         let mut statistics = Statistics::default();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let mut scanner = Scanner::new(true, false, snapshot, &mut statistics, start_ts);
+        let mut scanner = Scanner::new(true,
+                                       false,
+                                       snapshot,
+                                       &mut statistics,
+                                       start_ts,
+                                       IsolationLevel::SI);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         // 1. seek_key is some
         scanner.set_seek_key(Some(pk.clone()));
