@@ -21,7 +21,7 @@ use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
-use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, PathExpression};
+use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression};
 use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
@@ -139,6 +139,7 @@ impl Evaluator {
             ExprType::NullIf => self.eval_null_if(ctx, expr),
             ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
             ExprType::JsonType => self.eval_json_type(ctx, expr),
+            ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -439,6 +440,18 @@ impl Evaluator {
         let json = try!(child.cast_as_json());
         let json_type = json.json_type().to_vec();
         Ok(Datum::Bytes(json_type))
+    }
+
+    fn eval_json_merge(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2));
+        if children.iter().any(|item| *item == Datum::Null) {
+            return Ok(Datum::Null);
+        }
+        let mut children = children.into_iter();
+        let first = try!(children.next().unwrap().cast_as_json());
+        let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json())
+            .collect());
+        Ok(Datum::Json(first.merge(suffixes)))
     }
 
     fn eval_logic<F>(&mut self,
@@ -1104,6 +1117,16 @@ mod test {
                         Datum::Bytes(b"ARRAY".to_vec())),
     ]);
 
+    test_eval!(test_eval_json_merge,
+               vec![
+        (build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonMerge),
+                    Datum::Null),
+        (build_byte_datums_expr(&[b"{}", b"[]"], ExprType::JsonMerge),
+                    Datum::Json("[{}]".parse().unwrap())),
+        (build_byte_datums_expr(&[b"{}", b"[]", b"3", br#""4""#], ExprType::JsonMerge),
+                    Datum::Json(r#"[{}, 3, "4"]"#.parse().unwrap())),
+    ]);
+
     test_eval_err!(test_eval_json_err,
                    vec![
           build_expr(vec![], ExprType::JsonExtract),
@@ -1113,6 +1136,8 @@ mod test {
                                 ExprType::JsonExtract),
           build_expr(vec![], ExprType::JsonType),
           build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
+          build_expr(vec![], ExprType::JsonMerge),
+          build_expr(vec![Datum::Null], ExprType::JsonMerge),
      ]);
 
 }
