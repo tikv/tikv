@@ -28,7 +28,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
 use util::collections::{HashMap, HashMapEntry as MapEntry, HashSet};
-use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+use storage::{CF_LOCK, CF_RAFT};
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
@@ -42,9 +42,6 @@ use super::metrics::*;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-
-//const KV_CFS_NEED_FLUSH: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
-//const RAFT_CFS_NEED_FLUSH: &'static [CfName] = &[CF_DEFAULT, CF_RAFT];
 
 pub struct PendingCmd {
     pub index: u64,
@@ -169,10 +166,6 @@ impl<'a> ApplyContext<'a> {
 
     pub fn wb_ref(&self) -> &WriteBatch {
         self.wb.as_ref().unwrap()
-    }
-
-    pub fn raft_wb_mut(&mut self) -> &mut WriteBatch {
-        self.raft_wb.as_mut().unwrap()
     }
 
     pub fn raft_wb_ref(&self) -> &WriteBatch {
@@ -309,15 +302,15 @@ impl ApplyDelegate {
                                      apply_ctx: &mut ApplyContext,
                                      committed_entries: Vec<Entry>)
                                      -> (Vec<ExecResult>, bool) {
+        let mut need_flush = false;
         if committed_entries.is_empty() {
-            return (vec![], false);
+            return (vec![], need_flush);
         }
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
         let t = SlowTimer::new();
         let mut results = vec![];
-        let mut has_peer_state_changed = false;
         let committed_count = committed_entries.len();
         for entry in committed_entries {
             if self.pending_remove {
@@ -333,16 +326,19 @@ impl ApplyDelegate {
                        entry.get_index());
             }
 
-            let (res, peer_state_changed) = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, entry),
+            let res = match entry.get_entry_type() {
+                EntryType::EntryNormal => {
+                    let (res, flush_flag) = self.handle_raft_entry_normal(apply_ctx, entry);
+                    if flush_flag {
+                        need_flush = true;
+                    }
+                    res
+                }
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, entry),
             };
 
             if let Some(res) = res {
                 results.push(res);
-            }
-            if peer_state_changed {
-                has_peer_state_changed = true;
             }
         }
 
@@ -353,7 +349,7 @@ impl ApplyDelegate {
                   "{} handle ready {} committed entries",
                   self.tag,
                   committed_count);
-        (results, has_peer_state_changed)
+        (results, need_flush)
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
@@ -383,16 +379,12 @@ impl ApplyDelegate {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
+        let mut need_flush = false;
 
         if !data.is_empty() {
             let cmd = parse_data_at(data, index, &self.tag);
 
             if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
-<<<<<<< HEAD
-                // self.write_apply_state(apply_ctx.raft_wb_mut());
-
-=======
->>>>>>> javaforfun/apply-disable-wal
                 self.update_metrics(apply_ctx);
 
                 // flush to engine
@@ -408,6 +400,7 @@ impl ApplyDelegate {
                         .unwrap_or_else(|e| {
                             panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                         });
+                    need_flush = true;
                 }
 
                 // call callback
@@ -419,7 +412,7 @@ impl ApplyDelegate {
                 apply_ctx.mark_last_bytes_and_keys();
             }
 
-            return self.process_raft_cmd(apply_ctx, index, term, cmd);
+            return (self.process_raft_cmd(apply_ctx, index, term, cmd), need_flush);
         }
 
         // when a peer become leader, it will send an empty entry.
@@ -433,35 +426,34 @@ impl ApplyDelegate {
             apply_ctx.cbs
                 .push((cmd.cb.take().unwrap(), cmd_resp::err_resp(Error::StaleCommand, term)));
         }
-        (None, false)
+        (None, need_flush)
     }
 
     fn handle_raft_entry_conf_change(&mut self,
                                      apply_ctx: &mut ApplyContext,
                                      entry: Entry)
-                                     -> (Option<ExecResult>, bool) {
+                                     -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let conf_change: ConfChange = parse_data_at(entry.get_data(), index, &self.tag);
         let cmd = parse_data_at(conf_change.get_context(), index, &self.tag);
-        let (mut res, peer_state_changed) = self.process_raft_cmd(apply_ctx, index, term, cmd);
-
-        if res.is_none() {
-            // If failed, tell raft that the config change was aborted.
-            return (Some(ExecResult::ChangePeer(Default::default())), peer_state_changed);
-        }
-
-        match res.as_mut().unwrap() {
-            &mut ExecResult::ChangePeer(ref mut cp) => cp.conf_change = conf_change,
-            ref other => {
-                panic!("{} unexpected result {:?} for conf change {:?} at {}",
-                       self.tag,
-                       other,
-                       conf_change,
-                       index);
-            }
-        }
-        (res, peer_state_changed)
+        Some(self.process_raft_cmd(apply_ctx, index, term, cmd)
+            .map_or_else(|| {
+                             // If failed, tell raft that the config change was aborted.
+                             ExecResult::ChangePeer(Default::default())
+                         },
+                         |mut res| {
+                if let ExecResult::ChangePeer(ref mut cp) = res {
+                    cp.conf_change = conf_change;
+                } else {
+                    panic!("{} unexpected result {:?} for conf change {:?} at {}",
+                           self.tag,
+                           res,
+                           conf_change,
+                           index);
+                }
+                res
+            }))
     }
 
     fn find_cb(&mut self, index: u64, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
@@ -491,7 +483,7 @@ impl ApplyDelegate {
                         index: u64,
                         term: u64,
                         mut cmd: RaftCmdRequest)
-                        -> (Option<ExecResult>, bool) {
+                        -> Option<ExecResult> {
         if index == 0 {
             panic!("{} processing raft command needs a none zero index",
                    self.tag);
@@ -499,7 +491,6 @@ impl ApplyDelegate {
 
         let cmd_cb = self.find_cb(index, term, &cmd);
         apply_ctx.host.pre_apply(&self.region, &mut cmd);
-<<<<<<< HEAD
 
         apply_ctx.wb_mut().set_save_point();
         let (mut resp, exec_result, is_ok) =
@@ -507,15 +498,11 @@ impl ApplyDelegate {
         if is_ok == false {
             apply_ctx.wb_mut().rollback_to_save_point().unwrap();
         }
-=======
-        let (mut resp, exec_result, peer_state_changed) =
-            self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
->>>>>>> javaforfun/apply-disable-wal
 
         debug!("{} applied command at log index {}", self.tag, index);
 
         let cb = match cmd_cb {
-            None => return (exec_result, peer_state_changed),
+            None => return exec_result,
             Some(cb) => cb,
         };
 
@@ -525,7 +512,7 @@ impl ApplyDelegate {
         cmd_resp::bind_term(&mut resp, self.term);
         apply_ctx.cbs.push((cb, resp));
 
-        (exec_result, peer_state_changed)
+        exec_result
     }
 
     // apply operation can fail as following situation:
@@ -546,7 +533,6 @@ impl ApplyDelegate {
 
         let mut is_ok = true;
         let mut ctx = self.new_ctx(wb, index, term, req);
-<<<<<<< HEAD
         let (resp, exec_result) = self.exec_raft_cmd(&mut ctx, raft_wb).unwrap_or_else(|e| {
             // clear dirty values.
             is_ok = false;
@@ -556,19 +542,6 @@ impl ApplyDelegate {
             }
             (cmd_resp::new_error(e), None)
         });
-=======
-        ctx.wb.set_save_point();
-        let (resp, exec_result, peer_state_changed) =
-            self.exec_raft_cmd(&mut ctx).unwrap_or_else(|e| {
-                // clear dirty values.
-                ctx.wb.rollback_to_save_point().unwrap();
-                match e {
-                    Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
-                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
-                }
-                (cmd_resp::new_error(e), None, false)
-            });
->>>>>>> javaforfun/apply-disable-wal
 
         ctx.apply_state.set_applied_index(index);
 
@@ -595,11 +568,7 @@ impl ApplyDelegate {
             }
         }
 
-<<<<<<< HEAD
         (resp, exec_result, is_ok)
-=======
-        (resp, exec_result, peer_state_changed)
->>>>>>> javaforfun/apply-disable-wal
     }
 
     /// Clear all the pending commands.
@@ -667,32 +636,22 @@ struct ExecContext<'a> {
 impl ApplyDelegate {
     // Only errors that will also occur on all other stores should be returned.
     fn exec_raft_cmd(&mut self,
-<<<<<<< HEAD
                      ctx: &mut ExecContext,
                      raft_wb: &WriteBatch)
                      -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-=======
-                     ctx: &mut ExecContext)
-                     -> Result<(RaftCmdResponse, Option<ExecResult>, bool)> {
->>>>>>> javaforfun/apply-disable-wal
         try!(check_epoch(&self.region, ctx.req));
         if ctx.req.has_admin_request() {
             self.exec_admin_cmd(ctx, raft_wb)
         } else {
             // Now we don't care write command outer, so use None.
-            self.exec_write_cmd(ctx).and_then(|v| Ok((v, None, false)))
+            self.exec_write_cmd(ctx).and_then(|v| Ok((v, None)))
         }
     }
 
     fn exec_admin_cmd(&mut self,
-<<<<<<< HEAD
                       ctx: &mut ExecContext,
                       raft_wb: &WriteBatch)
                       -> Result<(RaftCmdResponse, Option<ExecResult>)> {
-=======
-                      ctx: &mut ExecContext)
-                      -> Result<(RaftCmdResponse, Option<ExecResult>, bool)> {
->>>>>>> javaforfun/apply-disable-wal
         let request = ctx.req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         info!("{} execute admin command {:?} at [term: {}, index: {}]",
@@ -701,15 +660,9 @@ impl ApplyDelegate {
               ctx.term,
               ctx.index);
 
-        let mut peer_state_changed = false;
         let (mut response, exec_result) = try!(match cmd_type {
-<<<<<<< HEAD
             AdminCmdType::ChangePeer => self.exec_change_peer(raft_wb, request),
             AdminCmdType::Split => self.exec_split(raft_wb, request),
-=======
-            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request, &mut peer_state_changed),
-            AdminCmdType::Split => self.exec_split(ctx, request, &mut peer_state_changed),
->>>>>>> javaforfun/apply-disable-wal
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
@@ -720,18 +673,12 @@ impl ApplyDelegate {
 
         let mut resp = RaftCmdResponse::new();
         resp.set_admin_response(response);
-        Ok((resp, exec_result, peer_state_changed))
+        Ok((resp, exec_result))
     }
 
     fn exec_change_peer(&mut self,
-<<<<<<< HEAD
                         raft_wb: &WriteBatch,
                         request: &AdminRequest)
-=======
-                        ctx: &ExecContext,
-                        request: &AdminRequest,
-                        peer_state_changed: &mut bool)
->>>>>>> javaforfun/apply-disable-wal
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
@@ -813,7 +760,6 @@ impl ApplyDelegate {
         if let Err(e) = write_peer_state(raft_wb, &region, state) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
-        *peer_state_changed = true;
 
         let mut resp = AdminResponse::new();
         resp.mut_change_peer().set_region(region.clone());
@@ -827,14 +773,8 @@ impl ApplyDelegate {
     }
 
     fn exec_split(&mut self,
-<<<<<<< HEAD
                   raft_wb: &WriteBatch,
                   req: &AdminRequest)
-=======
-                  ctx: &ExecContext,
-                  req: &AdminRequest,
-                  peer_state_changed: &mut bool)
->>>>>>> javaforfun/apply-disable-wal
                   -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["split", "all"]).inc();
 
@@ -897,7 +837,6 @@ impl ApplyDelegate {
                        new_region,
                        e)
             });
-        *peer_state_changed = true;
 
         let mut resp = AdminResponse::new();
         if right_derive {
@@ -1390,7 +1329,6 @@ impl Runner {
 
         let mut need_flush = false;
         let mut applys_res = Vec::with_capacity(applys.len());
-
         {
             let mut apply_ctx = ApplyContext::new(self.host.as_ref());
             for apply in applys {
@@ -1408,14 +1346,14 @@ impl Runner {
                     let delegate = e.get_mut();
                     delegate.metrics = ApplyMetrics::default();
                     delegate.term = apply.term;
-                    let (results, peer_state_changed) =
+                    let (results, flush_flag) =
                         delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
 
-                    if peer_state_changed {
-                        need_flush = true;
-                    }
                     if delegate.pending_remove {
                         delegate.destroy();
+                    }
+                    if flush_flag {
+                        need_flush = true;
                     }
 
                     applys_res.push(ApplyRes {
@@ -1435,8 +1373,15 @@ impl Runner {
 
             // Write to engine
             self.db
-                .write_without_wal(apply_ctx.wb.take().unwrap())
-                .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
+                .write(apply_ctx.wb.take().unwrap())
+                .unwrap_or_else(|e| panic!("failed to write to kv engine, error: {:?}", e));
+
+            if !apply_ctx.raft_wb_ref().is_empty() {
+                self.raft_db
+                    .write(apply_ctx.raft_wb.take().unwrap())
+                    .unwrap_or_else(|e| panic!("failed to write to raft engine, error: {:?}", e));
+                need_flush = true;
+            }
 
             // Call callbacks
             for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1444,25 +1389,8 @@ impl Runner {
             }
         }
 
-<<<<<<< HEAD
-        // Write to engine
-        self.db
-            .write(apply_ctx.wb.take().unwrap())
-            .unwrap_or_else(|e| panic!("failed to write to kv engine, error: {:?}", e));
-
-        if !apply_ctx.raft_wb_ref().is_empty() {
-            self.raft_db
-                .write(apply_ctx.raft_wb.take().unwrap())
-                .unwrap_or_else(|e| panic!("failed to write to raft engine, error: {:?}", e));
-        }
-
-        // Call callbacks
-        for (cb, resp) in apply_ctx.cbs.drain(..) {
-            cb(resp);
-=======
         if need_flush {
-            self.handle_flush_applied();
->>>>>>> javaforfun/apply-disable-wal
+            self.handle_flush_applied(true);
         }
 
         if !applys_res.is_empty() {
@@ -1526,29 +1454,27 @@ impl Runner {
         }
     }
 
-    fn handle_flush_applied(&mut self) {
+    fn handle_flush_applied(&mut self, sync_flag: bool) {
         let raft_wb = WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE);
         let mut res = Vec::with_capacity(self.regions_need_flush_applied.len());
         for region_id in self.regions_need_flush_applied.drain() {
-<<<<<<< HEAD
-            let delegate = self.delegates.get(&region_id).unwrap();
-            delegate.write_apply_state(&raft_wb);
-            res.push((region_id, delegate.apply_state.clone()));
-=======
             let delegate = self.delegates.get_mut(&region_id).unwrap();
             let compact_exec_result = delegate.flush_pending_compact();
             if compact_exec_result.is_some() {
                 res.push((region_id, compact_exec_result.unwrap()));
             }
-            delegate.write_apply_state(&wb);
->>>>>>> javaforfun/apply-disable-wal
+            delegate.write_apply_state(&raft_wb);
         }
 
-        // Write apply state.
-        // let mut write_opts = WriteOptions::new();
-        // write_opts.set_sync(true);
-        // self.raft_db.write_opt(raft_wb, &write_opts).unwrap_or_else(|e| {
-        self.raft_db.write(raft_wb).unwrap_or_else(|e| {
+        // Sync kv engine WAL
+        self.db.sync_wal().unwrap_or_else(|e| {
+            panic!("failed to sync kv engine wal, error: {:?}", e);
+        });
+
+        // Write apply state with WAL.
+        let mut write_opts = WriteOptions::new();
+        write_opts.set_sync(sync_flag);
+        self.raft_db.write_opt(raft_wb, &write_opts).unwrap_or_else(|e| {
             panic!("failed to flush applied state, error: {:?}", e);
         });
 
@@ -1558,7 +1484,7 @@ impl Runner {
 
     fn handle_shutdown(&mut self) {
         // Flush applied states to db before shutdown.
-        self.handle_flush_applied();
+        self.handle_flush_applied(false);
 
         for p in self.delegates.values_mut() {
             p.clear_pending_commands();
@@ -1573,7 +1499,7 @@ impl Runnable<Task> for Runner {
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
-            Task::FlushApplied(()) => self.handle_flush_applied(),
+            Task::FlushApplied(()) => self.handle_flush_applied(false),
         }
     }
 
