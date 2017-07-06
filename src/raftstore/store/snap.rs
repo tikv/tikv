@@ -25,6 +25,7 @@ use std::thread;
 
 use protobuf::Message;
 use rocksdb::{DB, DBCompressionType};
+use rocksdb::rocksdb::supported_compression;
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -717,7 +718,6 @@ mod v2 {
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
     use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, DBCompressionType};
-    use rocksdb::rocksdb::supported_compression;
     use storage::{CfName, CF_LOCK};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
     use util::file::{get_file_size, file_exists, delete_file_if_exist};
@@ -806,19 +806,6 @@ mod v2 {
                                     -> RaftStoreResult<()> {
         check_file_size(path, expected_size)
             .and_then(|_| check_file_checksum(path, expected_checksum))
-    }
-
-    fn check_compression_available(compression: DBCompressionType) -> bool {
-        supported_compression().contains(&compression)
-    }
-
-    fn get_fastest_compression() -> DBCompressionType {
-        // Zlib and bzip2 are too slow.
-        let compression_priority =
-            [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
-        *compression_priority.into_iter()
-            .find(|&&c| check_compression_available(c))
-            .unwrap_or(&DBCompressionType::DBNo)
     }
 
     #[derive(Default)]
@@ -1019,14 +1006,7 @@ mod v2 {
                     let old_options = snap.get_db().get_options_cf(handle);
                     let env_opt = EnvOptions::new();
                     let mut io_options = old_options.clone();
-                    // compression types in compression_levels are all checked by rocksdb
-                    let valid_compression = if check_compression_available(compression) {
-                        compression
-                    } else {
-                        // fall back to find the best compression type in compression_levels
-                        get_fastest_compression()
-                    };
-                    io_options.compression(valid_compression);
+                    io_options.compression(compression);
                     let mut writer = SstFileWriter::new(env_opt, io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
@@ -1642,7 +1622,7 @@ mod v2 {
                                                 &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
-                                                DBCompressionType::DBLz4)
+                                                DBCompressionType::DBNo)
                 .unwrap();
             // Ensure that this snapshot file doesn't exist before being built.
             assert!(!s1.exists());
@@ -1757,7 +1737,7 @@ mod v2 {
                                                 &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
-                                                DBCompressionType::DBLz4)
+                                                DBCompressionType::DBNo)
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1777,7 +1757,7 @@ mod v2 {
                                                 &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
-                                                DBCompressionType::DBLz4)
+                                                DBCompressionType::DBNo)
                 .unwrap();
             assert!(s2.exists());
 
@@ -1910,7 +1890,7 @@ mod v2 {
                                                 &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
-                                                DBCompressionType::DBLz4)
+                                                DBCompressionType::DBNo)
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1935,7 +1915,7 @@ mod v2 {
                                                 &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
-                                                DBCompressionType::DBLz4)
+                                                DBCompressionType::DBNo)
                 .unwrap();
             assert!(!s2.exists());
             s2.build(&snapshot,
@@ -2004,7 +1984,7 @@ mod v2 {
                                                 &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
-                                                DBCompressionType::DBLz4)
+                                                DBCompressionType::DBNo)
                 .unwrap();
             assert!(!s1.exists());
 
@@ -2029,7 +2009,7 @@ mod v2 {
                                                 &snapshot,
                                                 size_track.clone(),
                                                 deleter.clone(),
-                                                DBCompressionType::DBLz4)
+                                                DBCompressionType::DBNo)
                 .unwrap();
             assert!(!s2.exists());
             s2.build(&snapshot,
@@ -2104,19 +2084,38 @@ pub struct SnapManager {
     ch: Option<SendCh<Msg>>,
 }
 
+fn check_compression_available(compression: DBCompressionType) -> bool {
+    supported_compression().contains(&compression)
+}
+
+fn get_fastest_compression() -> DBCompressionType {
+    // Zlib and bzip2 are too slow.
+    let compression_priority =
+        [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
+    *compression_priority.into_iter()
+        .find(|&&c| check_compression_available(c))
+        .unwrap_or(&DBCompressionType::DBNo)
+}
+
 impl SnapManager {
     pub fn new<T: Into<String>>(path: T,
                                 ch: Option<SendCh<Msg>>,
                                 use_sst_file_snapshot: bool,
                                 compression: DBCompressionType)
                                 -> SnapManager {
+        let valid_compression = if check_compression_available(compression) {
+            compression
+        } else {
+            // fall back to find the best supported compression type
+            get_fastest_compression()
+        };
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
                 base: path.into(),
                 registry: map![],
                 use_sst_file_snapshot: use_sst_file_snapshot,
                 snap_size: Arc::new(RwLock::new(0)),
-                snap_compression: compression,
+                snap_compression: valid_compression,
             })),
             ch: ch,
         }
@@ -2480,7 +2479,7 @@ mod test {
                                               &snapshot,
                                               size_track.clone(),
                                               deleter.clone(),
-                                              DBCompressionType::DBLz4)
+                                              DBCompressionType::DBNo)
             .unwrap();
         let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
@@ -2513,7 +2512,7 @@ mod test {
                                           &snapshot,
                                           size_track.clone(),
                                           deleter.clone(),
-                                          DBCompressionType::DBLz4)
+                                          DBCompressionType::DBNo)
             .unwrap();
         let s4 = SnapV2::new_for_receiving(&path,
                                            &key2,

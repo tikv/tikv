@@ -172,7 +172,7 @@ impl Simulator for NodeCluster {
             let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(),
                                             Some(node.get_sendch()),
                                             cfg.raft_store.use_sst_file_snapshot,
-                                            DBCompressionType::DBLz4);
+                                            DBCompressionType::DBNo);
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.rl();

@@ -232,7 +232,7 @@ mod tests {
                                      SnapManager::new("",
                                                       None,
                                                       cfg.raft_store.use_sst_file_snapshot,
-                                                      DBCompressionType::DBLz4))
+                                                      DBCompressionType::DBNo))
             .unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 

@@ -1343,7 +1343,7 @@ mod test {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
                                    None,
                                    use_sst_file_snapshot,
-                                   DBCompressionType::DBLz4);
+                                   DBCompressionType::DBNo);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1624,7 +1624,7 @@ mod test {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
                                    None,
                                    use_sst_file_snapshot,
-                                   DBCompressionType::DBLz4);
+                                   DBCompressionType::DBNo);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);

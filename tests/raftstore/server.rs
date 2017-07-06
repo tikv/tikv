@@ -108,7 +108,7 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str,
                                         Some(store_sendch),
                                         cfg.raft_store.use_sst_file_snapshot,
-                                        DBCompressionType::DBLz4);
+                                        DBCompressionType::DBNo);
         let mut server = Server::new(&cfg,
                                      store.clone(),
                                      sim_router.clone(),

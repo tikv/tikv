@@ -58,7 +58,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(),
                                     Some(node.get_sendch()),
                                     cfg.raft_store.use_sst_file_snapshot,
-                                    DBCompressionType::DBLz4);
+                                    DBCompressionType::DBNo);
     let (_, snapshot_status_receiver) = mpsc::channel();
 
 
