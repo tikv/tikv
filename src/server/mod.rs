@@ -20,7 +20,6 @@ mod raft_client;
 pub mod config;
 pub mod errors;
 pub mod server;
-pub mod coprocessor;
 pub mod transport;
 pub mod node;
 pub mod resolve;

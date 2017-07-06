@@ -24,7 +24,7 @@ use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 
 use super::{Result, Config};
-use super::coprocessor::{EndPointHost, EndPointTask};
+use coprocessor::{EndPointHost, EndPointTask};
 use super::grpc_service::Service;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
