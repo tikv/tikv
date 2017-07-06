@@ -810,20 +810,14 @@ mod v2 {
     }
 
     fn check_compression_available(compression: DBCompressionType) -> bool {
-        let compressions: Vec<DBCompressionType> = supported_compression();
-        compressions.contains(&compression)
+        supported_compression().contains(&compression)
     }
 
     fn get_fastest_compression() -> DBCompressionType {
         // Zlib and bzip2 are too slow.
         let compression_priority =
             [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
-        for compression in &compression_priority {
-            if check_compression_available(*compression) {
-                return *compression;
-            }
-        }
-        DBCompressionType::DBNo
+        *compression_priority.into_iter().find(|&&c| check_compression_available(c)).unwrap_or(&DBCompressionType::DBNo)
     }
 
     #[derive(Default)]
