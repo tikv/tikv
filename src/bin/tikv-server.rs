@@ -55,6 +55,7 @@ use std::env;
 
 use clap::{Arg, App, ArgMatches};
 use rocksdb::{Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
+use rocksdb::rocksdb::supported_compression;
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
@@ -812,6 +813,15 @@ fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<Strin
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
 }
 
+fn get_fastest_supported_compression_type() -> DBCompressionType {
+    // Zlib and bzip2 are too slow.
+    let compression_priority =
+        [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
+    *compression_priority.into_iter()
+        .find(|&&c| check_compression_available(c))
+        .unwrap_or(&DBCompressionType::DBNo)
+}
+
 fn run_raft_server(pd_client: RpcClient,
                    cfg: Config,
                    backup_path: &str,
@@ -859,10 +869,11 @@ fn run_raft_server(pd_client: RpcClient,
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    let snap_compression = get_fastest_supported_compression_type();
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
                                     cfg.raft_store.use_sst_file_snapshot,
-                                    DBCompressionType::DBLz4);
+                                    snap_compression);
     let mut server = Server::new(&cfg,
                                  storage.clone(),
                                  raft_router,

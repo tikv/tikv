@@ -25,7 +25,6 @@ use std::thread;
 
 use protobuf::Message;
 use rocksdb::{DB, DBCompressionType};
-use rocksdb::rocksdb::supported_compression;
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -2084,38 +2083,19 @@ pub struct SnapManager {
     ch: Option<SendCh<Msg>>,
 }
 
-fn check_compression_available(compression: DBCompressionType) -> bool {
-    supported_compression().contains(&compression)
-}
-
-fn get_fastest_compression() -> DBCompressionType {
-    // Zlib and bzip2 are too slow.
-    let compression_priority =
-        [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
-    *compression_priority.into_iter()
-        .find(|&&c| check_compression_available(c))
-        .unwrap_or(&DBCompressionType::DBNo)
-}
-
 impl SnapManager {
     pub fn new<T: Into<String>>(path: T,
                                 ch: Option<SendCh<Msg>>,
                                 use_sst_file_snapshot: bool,
                                 compression: DBCompressionType)
                                 -> SnapManager {
-        let valid_compression = if check_compression_available(compression) {
-            compression
-        } else {
-            // fall back to find the best supported compression type
-            get_fastest_compression()
-        };
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
                 base: path.into(),
                 registry: map![],
                 use_sst_file_snapshot: use_sst_file_snapshot,
                 snap_size: Arc::new(RwLock::new(0)),
-                snap_compression: valid_compression,
+                snap_compression: compression,
             })),
             ch: ch,
         }
