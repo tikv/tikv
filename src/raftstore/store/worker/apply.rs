@@ -16,7 +16,7 @@ use std::sync::mpsc::Sender;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::collections::VecDeque;
 
-use rocksdb::{DB, WriteBatch, Writable, WriteOptions};
+use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
@@ -301,10 +301,9 @@ impl ApplyDelegate {
     fn handle_raft_committed_entries(&mut self,
                                      apply_ctx: &mut ApplyContext,
                                      committed_entries: Vec<Entry>)
-                                     -> (Vec<ExecResult>, bool) {
-        let mut need_flush = false;
+                                     -> Vec<ExecResult> {
         if committed_entries.is_empty() {
-            return (vec![], need_flush);
+            return vec![];
         }
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
@@ -327,13 +326,7 @@ impl ApplyDelegate {
             }
 
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => {
-                    let (res, flush_flag) = self.handle_raft_entry_normal(apply_ctx, entry);
-                    if flush_flag {
-                        need_flush = true;
-                    }
-                    res
-                }
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, entry),
                 EntryType::EntryConfChange => self.handle_raft_entry_conf_change(apply_ctx, entry),
             };
 
@@ -349,7 +342,7 @@ impl ApplyDelegate {
                   "{} handle ready {} committed entries",
                   self.tag,
                   committed_count);
-        (results, need_flush)
+        results
     }
 
     fn update_metrics(&mut self, apply_ctx: &ApplyContext) {
@@ -375,11 +368,10 @@ impl ApplyDelegate {
     fn handle_raft_entry_normal(&mut self,
                                 apply_ctx: &mut ApplyContext,
                                 entry: Entry)
-                                -> (Option<ExecResult>, bool) {
+                                -> Option<ExecResult> {
         let index = entry.get_index();
         let term = entry.get_term();
         let data = entry.get_data();
-        let mut need_flush = false;
 
         if !data.is_empty() {
             let cmd = parse_data_at(data, index, &self.tag);
@@ -400,7 +392,6 @@ impl ApplyDelegate {
                         .unwrap_or_else(|e| {
                             panic!("{} failed to write to engine, error: {:?}", self.tag, e)
                         });
-                    need_flush = true;
                 }
 
                 // call callback
@@ -412,7 +403,7 @@ impl ApplyDelegate {
                 apply_ctx.mark_last_bytes_and_keys();
             }
 
-            return (self.process_raft_cmd(apply_ctx, index, term, cmd), need_flush);
+            return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
 
         // when a peer become leader, it will send an empty entry.
@@ -426,7 +417,7 @@ impl ApplyDelegate {
             apply_ctx.cbs
                 .push((cmd.cb.take().unwrap(), cmd_resp::err_resp(Error::StaleCommand, term)));
         }
-        (None, need_flush)
+        None
     }
 
     fn handle_raft_entry_conf_change(&mut self,
@@ -1327,70 +1318,58 @@ impl Runner {
     fn handle_applies(&mut self, applys: Vec<Apply>) {
         let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
 
-        let mut need_flush = false;
         let mut applys_res = Vec::with_capacity(applys.len());
-        {
-            let mut apply_ctx = ApplyContext::new(self.host.as_ref());
-            for apply in applys {
-                if apply.entries.is_empty() {
+        let mut apply_ctx = ApplyContext::new(self.host.as_ref());
+        for apply in applys {
+            if apply.entries.is_empty() {
+                continue;
+            }
+            let mut e = match self.delegates.entry(apply.region_id) {
+                MapEntry::Vacant(_) => {
+                    error!("[region {}] is missing", apply.region_id);
                     continue;
                 }
-                let mut e = match self.delegates.entry(apply.region_id) {
-                    MapEntry::Vacant(_) => {
-                        error!("[region {}] is missing", apply.region_id);
-                        continue;
-                    }
-                    MapEntry::Occupied(e) => e,
-                };
-                {
-                    let delegate = e.get_mut();
-                    delegate.metrics = ApplyMetrics::default();
-                    delegate.term = apply.term;
-                    let (results, flush_flag) =
-                        delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
+                MapEntry::Occupied(e) => e,
+            };
+            {
+                let delegate = e.get_mut();
+                delegate.metrics = ApplyMetrics::default();
+                delegate.term = apply.term;
+                let results = delegate.handle_raft_committed_entries(&mut apply_ctx, apply.entries);
 
-                    if delegate.pending_remove {
-                        delegate.destroy();
-                    }
-                    if flush_flag {
-                        need_flush = true;
-                    }
-
-                    applys_res.push(ApplyRes {
-                        region_id: apply.region_id,
-                        apply_state: delegate.apply_state.clone(),
-                        exec_res: results,
-                        metrics: delegate.metrics.clone(),
-                        applied_index_term: delegate.applied_index_term,
-                    });
+                if delegate.pending_remove {
+                    delegate.destroy();
                 }
-                if e.get().pending_remove {
-                    e.remove();
-                } else {
-                    self.regions_need_flush_applied.insert(apply.region_id);
-                }
+
+                applys_res.push(ApplyRes {
+                    region_id: apply.region_id,
+                    apply_state: delegate.apply_state.clone(),
+                    exec_res: results,
+                    metrics: delegate.metrics.clone(),
+                    applied_index_term: delegate.applied_index_term,
+                });
             }
-
-            // Write to engine
-            self.db
-                .write(apply_ctx.wb.take().unwrap())
-                .unwrap_or_else(|e| panic!("failed to write to kv engine, error: {:?}", e));
-
-            if !apply_ctx.raft_wb_ref().is_empty() {
-                self.raft_db
-                    .write(apply_ctx.raft_wb.take().unwrap())
-                    .unwrap_or_else(|e| panic!("failed to write to raft engine, error: {:?}", e));
-                need_flush = true;
-            }
-
-            // Call callbacks
-            for (cb, resp) in apply_ctx.cbs.drain(..) {
-                cb(resp);
+            if e.get().pending_remove {
+                e.remove();
+            } else {
+                self.regions_need_flush_applied.insert(apply.region_id);
             }
         }
 
-        if need_flush {
-            self.handle_flush_applied(true);
+        // Write to engine
+        self.db
+            .write(apply_ctx.wb.take().unwrap())
+            .unwrap_or_else(|e| panic!("failed to write to kv engine, error: {:?}", e));
+
+        if !apply_ctx.raft_wb_ref().is_empty() {
+            self.raft_db
+                .write(apply_ctx.raft_wb.take().unwrap())
+                .unwrap_or_else(|e| panic!("failed to write to raft engine, error: {:?}", e));
+        }
+
+        // Call callbacks
+        for (cb, resp) in apply_ctx.cbs.drain(..) {
+            cb(resp);
         }
 
         if !applys_res.is_empty() {
@@ -1454,7 +1433,7 @@ impl Runner {
         }
     }
 
-    fn handle_flush_applied(&mut self, sync_flag: bool) {
+    fn handle_flush_applied(&mut self) {
         let raft_wb = WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE);
         let mut res = Vec::with_capacity(self.regions_need_flush_applied.len());
         for region_id in self.regions_need_flush_applied.drain() {
@@ -1472,9 +1451,7 @@ impl Runner {
         });
 
         // Write apply state with WAL.
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(sync_flag);
-        self.raft_db.write_opt(raft_wb, &write_opts).unwrap_or_else(|e| {
+        self.raft_db.write(raft_wb).unwrap_or_else(|e| {
             panic!("failed to flush applied state, error: {:?}", e);
         });
 
@@ -1484,7 +1461,7 @@ impl Runner {
 
     fn handle_shutdown(&mut self) {
         // Flush applied states to db before shutdown.
-        self.handle_flush_applied(false);
+        self.handle_flush_applied();
 
         for p in self.delegates.values_mut() {
             p.clear_pending_commands();
@@ -1499,7 +1476,7 @@ impl Runnable<Task> for Runner {
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
-            Task::FlushApplied(()) => self.handle_flush_applied(false),
+            Task::FlushApplied(()) => self.handle_flush_applied(),
         }
     }
 
