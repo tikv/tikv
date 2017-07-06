@@ -2218,7 +2218,7 @@ impl SnapManager {
         if use_sst_file_snapshot {
             let f = try!(v2::Snap::new_for_building(dir,
                                                     key,
-                                                    &snap,
+                                                    snap,
                                                     snap_size,
                                                     Box::new(self.clone()),
                                                     snap_compression));
