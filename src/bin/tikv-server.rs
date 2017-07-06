@@ -813,6 +813,10 @@ fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<Strin
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
 }
 
+fn check_compression_available(compression: DBCompressionType) -> bool {
+    supported_compression().contains(&compression)
+}
+
 fn get_fastest_supported_compression_type() -> DBCompressionType {
     // Zlib and bzip2 are too slow.
     let compression_priority =
