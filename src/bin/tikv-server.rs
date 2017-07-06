@@ -820,7 +820,7 @@ fn check_compression_available(compression: DBCompressionType) -> bool {
 fn get_fastest_supported_compression_type() -> DBCompressionType {
     // Zlib and bzip2 are too slow.
     let compression_priority =
-        [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
+        [DBCompressionType::DBLz4, DBCompressionType::DBSnappy, DBCompressionType::DBZstd];
     *compression_priority.into_iter()
         .find(|&&c| check_compression_available(c))
         .unwrap_or(&DBCompressionType::DBNo)
