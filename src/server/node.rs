@@ -35,11 +35,11 @@ use super::transport::RaftStoreRouter;
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
-pub fn create_raft_storage<S>(router: S, db: Arc<DB>, cfg: &Config) -> Result<Storage>
+pub fn create_raft_storage<S>(router: S, kv_db: Arc<DB>, cfg: &Config) -> Result<Storage>
     where S: RaftStoreRouter + 'static
 {
-    let engine = box RaftKv::new(db, router);
-    let store = try!(Storage::from_engine(engine, &cfg.storage));
+    let kv_engine = box RaftKv::new(kv_db, router);
+    let store = try!(Storage::from_engine(kv_engine, &cfg.storage));
     Ok(store)
 }
 
@@ -110,7 +110,8 @@ impl<C> Node<C>
 
     pub fn start<T>(&mut self,
                     event_loop: EventLoop<Store<T, C>>,
-                    engine: Arc<DB>,
+                    raft_engine: Arc<DB>,
+                    kv_engine: Arc<DB>,
                     trans: T,
                     snap_mgr: SnapManager,
                     snap_status_receiver: Receiver<SnapshotStatusMsg>)
@@ -118,9 +119,9 @@ impl<C> Node<C>
         where T: Transport + 'static
     {
         let bootstrapped = try!(self.check_cluster_bootstrapped());
-        let mut store_id = try!(self.check_store(&engine));
+        let mut store_id = try!(self.check_store(&raft_engine));
         if store_id == INVALID_ID {
-            store_id = try!(self.bootstrap_store(&engine));
+            store_id = try!(self.bootstrap_store(&raft_engine));
         } else if !bootstrapped {
             // We have saved data before, and the cluster must be bootstrapped.
             return Err(box_err!("store {} is not empty, but cluster {} is not bootstrapped, \
@@ -131,12 +132,12 @@ impl<C> Node<C>
         }
 
         self.store.set_id(store_id);
-        try!(self.check_prepare_bootstrap_cluster(&engine));
+        try!(self.check_prepare_bootstrap_cluster(&raft_engine));
         if !bootstrapped {
             // cluster is not bootstrapped, and we choose first store to bootstrap
             // prepare bootstrap.
-            let region = try!(self.prepare_bootstrap_cluster(&engine, store_id));
-            try!(self.bootstrap_cluster(&engine, region));
+            let region = try!(self.prepare_bootstrap_cluster(&raft_engine, store_id));
+            try!(self.bootstrap_cluster(&raft_engine, region));
         }
 
         // inform pd.
@@ -144,7 +145,8 @@ impl<C> Node<C>
             .put_store(self.store.clone()));
         try!(self.start_store(event_loop,
                               store_id,
-                              engine,
+                              raft_engine,
+                              kv_engine,
                               trans,
                               snap_mgr,
                               snap_status_receiver));
@@ -161,8 +163,8 @@ impl<C> Node<C>
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engine: &DB) -> Result<u64> {
-        let res = try!(engine.get_msg::<StoreIdent>(&keys::store_ident_key()));
+    fn check_store(&self, raft_engine: &DB) -> Result<u64> {
+        let res = try!(raft_engine.get_msg::<StoreIdent>(&keys::store_ident_key()));
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -189,16 +191,17 @@ impl<C> Node<C>
         Ok(id)
     }
 
-    fn bootstrap_store(&self, engine: &DB) -> Result<u64> {
+    fn bootstrap_store(&self, raft_engine: &DB) -> Result<u64> {
         let store_id = try!(self.alloc_id());
         info!("alloc store id {} ", store_id);
 
-        try!(store::bootstrap_store(engine, self.cluster_id, store_id));
+        try!(store::bootstrap_store(raft_engine, self.cluster_id, store_id));
 
         Ok(store_id)
     }
 
-    pub fn prepare_bootstrap_cluster(&self, engine: &DB, store_id: u64) -> Result<metapb::Region> {
+    pub fn prepare_bootstrap_cluster(&self, raft_engine: &DB, store_id: u64)
+                                     -> Result<metapb::Region> {
         let region_id = try!(self.alloc_id());
         info!("alloc first region id {} for cluster {}, store {}",
               region_id,
@@ -209,12 +212,12 @@ impl<C> Node<C>
               peer_id,
               region_id);
 
-        let region = try!(store::prepare_bootstrap(engine, store_id, region_id, peer_id));
+        let region = try!(store::prepare_bootstrap(raft_engine, store_id, region_id, peer_id));
         Ok(region)
     }
 
-    fn check_prepare_bootstrap_cluster(&self, engine: &DB) -> Result<()> {
-        let res = try!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
+    fn check_prepare_bootstrap_cluster(&self, raft_engine: &DB) -> Result<()> {
+        let res = try!(raft_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
         if res.is_none() {
             return Ok(());
         }
@@ -225,9 +228,9 @@ impl<C> Node<C>
                 Ok(region) => {
                     if region.get_id() == first_region.get_id() {
                         try!(check_region_epoch(&region, &first_region));
-                        try!(store::clear_prepare_bootstrap_state(engine));
+                        try!(store::clear_prepare_bootstrap_state(raft_engine));
                     } else {
-                        try!(store::clear_prepare_bootstrap(engine, first_region.get_id()));
+                        try!(store::clear_prepare_bootstrap(raft_engine, first_region.get_id()));
                     }
                     return Ok(());
                 }
@@ -241,18 +244,18 @@ impl<C> Node<C>
         Err(box_err!("check cluster prepare bootstrapped failed"))
     }
 
-    fn bootstrap_cluster(&mut self, engine: &DB, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(&mut self, raft_engine: &DB, region: metapb::Region) -> Result<()> {
         let region_id = region.get_id();
         match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
                 error!("cluster {} is already bootstrapped", self.cluster_id);
-                try!(store::clear_prepare_bootstrap(engine, region_id));
+                try!(store::clear_prepare_bootstrap(raft_engine, region_id));
                 Ok(())
             }
             // TODO: should we clean region for other errors too?
             Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
-                try!(store::clear_prepare_bootstrap_state(engine));
+                try!(store::clear_prepare_bootstrap_state(raft_engine));
                 info!("bootstrap cluster {} ok", self.cluster_id);
                 Ok(())
             }
@@ -275,7 +278,8 @@ impl<C> Node<C>
     fn start_store<T>(&mut self,
                       mut event_loop: EventLoop<Store<T, C>>,
                       store_id: u64,
-                      db: Arc<DB>,
+                      raft_db: Arc<DB>,
+                      kv_db: Arc<DB>,
                       trans: T,
                       snap_mgr: SnapManager,
                       snapshot_status_receiver: Receiver<SnapshotStatusMsg>)
@@ -300,7 +304,7 @@ impl<C> Node<C>
                 sender: sender,
                 snapshot_status_receiver: snapshot_status_receiver,
             };
-            let mut store = match Store::new(ch, store, cfg, db, trans, pd_client, snap_mgr) {
+            let mut store = match Store::new(ch, store, cfg, raft_db, kv_db, trans, pd_client, snap_mgr) {
                 Err(e) => panic!("construct store {} err {:?}", store_id, e),
                 Ok(s) => s,
             };

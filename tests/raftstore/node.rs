@@ -181,6 +181,8 @@ impl Simulator for NodeCluster {
 
         node.start(event_loop,
                    engine.clone(),
+                   // TODO(lishuai): split engine
+                   engine.clone(),
                    simulate_trans.clone(),
                    snap_mgr.clone(),
                    snap_status_receiver)
