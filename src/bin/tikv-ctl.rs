@@ -369,13 +369,14 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
 }
 
 fn convert_gbmb(mut bytes: u64) -> String {
-    let mb = if bytes % (1024 * 1024 * 1024) == 0 {
+    const GB: u64 = 1024 * 1024 * 1024;
+    const MB: u64 = 1024 * 1024;
+    let mb = if bytes % GB == 0 {
         String::from("")
     } else {
-        format!("{:.3} MB ",
-                (bytes % (1024 * 1024 * 1024)) as f64 / 1024.0 / 1024.0)
+        format!("{:.3} MB ", (bytes % GB) as f64 / MB as f64)
     };
-    bytes /= 1024 * 1024 * 1024;
+    bytes /= GB;
     let gb = if bytes == 0 {
         String::from("")
     } else {
@@ -391,14 +392,14 @@ fn dump_region_size(db: &DB, region_id: u64) {
 }
 
 fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
-    let region_ids = get_all_region_id(db);
+    let region_ids = get_all_region_ids(db);
     for region_id in region_ids {
         dump_region_info(db, region_id, skip_tombstone);
     }
 }
 
 fn dump_all_region_size(db: &DB) {
-    let mut region_ids = get_all_region_id(db);
+    let mut region_ids = get_all_region_ids(db);
     let mut region_sizes: Vec<u64> =
         region_ids.iter().map(|&region_id| get_region_size(db, region_id)).collect();
     let region_number = region_ids.len();
@@ -414,10 +415,10 @@ fn dump_all_region_size(db: &DB) {
     }
 }
 
-fn get_all_region_id(db: &DB) -> Vec<u64> {
+fn get_all_region_ids(db: &DB) -> Vec<u64> {
     let start_key = keys::REGION_META_MIN_KEY;
     let end_key = keys::REGION_META_MAX_KEY;
-    let mut region_ids: Vec<u64> = Vec::new();
+    let mut region_ids = vec![];
     db.scan(start_key,
               end_key,
               false,
