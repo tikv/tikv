@@ -716,8 +716,7 @@ mod v2 {
     use protobuf::{Message, RepeatedField};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
-    use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, Options as RocksdbOptions,
-                  DBCompressionType};
+    use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, DBCompressionType};
     use rocksdb::rocksdb::supported_compression;
     use storage::{CfName, CF_LOCK};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
@@ -817,7 +816,9 @@ mod v2 {
         // Zlib and bzip2 are too slow.
         let compression_priority =
             [DBCompressionType::DBLz4, DBCompressionType::DBZstd, DBCompressionType::DBSnappy];
-        *compression_priority.into_iter().find(|&&c| check_compression_available(c)).unwrap_or(&DBCompressionType::DBNo)
+        *compression_priority.into_iter()
+            .find(|&&c| check_compression_available(c))
+            .unwrap_or(&DBCompressionType::DBNo)
     }
 
     #[derive(Default)]
@@ -998,7 +999,10 @@ mod v2 {
             Ok(s)
         }
 
-        fn init_for_building(&mut self, snap: &DbSnapshot, compression: DBCompressionType) -> RaftStoreResult<()> {
+        fn init_for_building(&mut self,
+                             snap: &DbSnapshot,
+                             compression: DBCompressionType)
+                             -> RaftStoreResult<()> {
             if self.exists() {
                 return Ok(());
             }
@@ -2200,7 +2204,10 @@ impl SnapManager {
         self.core.rl().registry.contains_key(key)
     }
 
-    pub fn get_snapshot_for_building(&self, key: &SnapKey, snap: &DbSnapshot) -> RaftStoreResult<Box<Snapshot>> {
+    pub fn get_snapshot_for_building(&self,
+                                     key: &SnapKey,
+                                     snap: &DbSnapshot)
+                                     -> RaftStoreResult<Box<Snapshot>> {
         let (use_sst_file_snapshot, dir, snap_size, snap_compression) = {
             let core = self.core.rl();
             (core.use_sst_file_snapshot,
