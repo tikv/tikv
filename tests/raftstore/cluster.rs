@@ -56,7 +56,7 @@ pub trait Simulator {
                             request: RaftCmdRequest,
                             timeout: Duration)
                             -> Result<RaftCmdResponse>;
-    fn send_raft_msg(&self, msg: RaftMessage) -> Result<()>;
+    fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter);
@@ -169,8 +169,8 @@ impl<T: Simulator> Cluster<T> {
         self.engines[&node_id].clone()
     }
 
-    pub fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
-        self.sim.rl().send_raft_msg(msg)
+    pub fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
+        self.sim.wl().send_raft_msg(msg)
     }
 
     pub fn call_command_on_node(&self,
@@ -351,7 +351,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engine in self.engines.values() {
-            try!(write_prepare_bootstrap(&engine, &region));
+            try!(write_prepare_bootstrap(engine, &region));
         }
 
         self.bootstrap_cluster(region);

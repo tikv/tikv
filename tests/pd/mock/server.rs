@@ -12,127 +12,212 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::net::ToSocketAddrs;
 
-use futures;
-use futures::Future;
-
-use grpc::error::GrpcError;
-use grpc::futures_grpc::{GrpcFutureSend, GrpcStreamSend};
+use futures::{Future, Stream, Sink};
+use grpc::{Server as GrpcServer, ServerBuilder, RpcContext, UnarySink, RequestStream, DuplexSink,
+           Environment, RpcStatus, RpcStatusCode, WriteFlags};
+use tikv::pd::Error as PdError;
 
 use kvproto::pdpb::*;
-use kvproto::pdpb_grpc::{PDAsync, PDAsyncServer};
+use kvproto::pdpb_grpc::{self, Pd};
 
-use super::Mocker;
-use super::mocker::Service;
-use super::mocker::Result;
+use super::mocker::*;
 
 pub struct Server {
-    _server: PDAsyncServer,
+    server: GrpcServer,
 }
 
 impl Server {
-    pub fn run<A, C>(addr: A, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
-        where A: ToSocketAddrs,
-              C: Mocker + Send + Sync + 'static
+    pub fn run<C>(eps_count: usize, handler: Arc<Service>, case: Option<Arc<C>>) -> Server
+        where C: PdMocker + Send + Sync + 'static
     {
-        let m = Mock {
-            handler: handler,
-            case: case,
+        let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
+        Server::run_with_eps(eps, handler, case)
+    }
+
+    pub fn run_with_eps<C>(eps: Vec<(String, u16)>,
+                           handler: Arc<Service>,
+                           case: Option<Arc<C>>)
+                           -> Server
+        where C: PdMocker + Send + Sync + 'static
+    {
+        let m = PdMock {
+            default_handler: handler.clone(),
+            case: case.clone(),
         };
-        Server { _server: PDAsyncServer::new(addr, Default::default(), m) }
+        let service = pdpb_grpc::create_pd(m);
+        let env = Arc::new(Environment::new(1));
+        let mut sb = ServerBuilder::new(env).register_service(service);
+        for (host, port) in eps {
+            sb = sb.bind(host, port);
+        }
+
+        let mut server = sb.build().unwrap();
+        {
+            let addrs = server.bind_addrs();
+            handler.set_endpoints(addrs.iter()
+                .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+                .collect());
+            if let Some(case) = case.as_ref() {
+                case.set_endpoints(addrs.iter()
+                    .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+                    .collect());
+            }
+        }
+
+        server.start();
+        Server { server: server }
+    }
+
+    pub fn bind_addrs(&self) -> Vec<(String, u16)> {
+        self.server.bind_addrs().to_vec()
     }
 }
 
-fn try_takeover<F, R, C: Mocker>(mock: &Mock<C>, f: F) -> GrpcFutureSend<R>
+fn hijack_unary<F, R, C: PdMocker>(mock: &PdMock<C>, ctx: RpcContext, sink: UnarySink<R>, f: F)
     where R: Send + 'static,
-          F: Fn(&Mocker) -> Option<Result<R>>
+          F: Fn(&PdMocker) -> Option<Result<R>>
 {
-    if let Some(ref case) = mock.case {
-        match f(case.as_ref()) {
-            Some(Ok(resp)) => return futures::future::ok(resp).boxed(),
-            Some(Err(err)) => return futures::future::err(err).boxed(),
-            _ => (),
-        }
-    }
+    let resp = mock.case
+        .as_ref()
+        .and_then(|case| f(case.as_ref()))
+        .or_else(|| f(mock.default_handler.as_ref()));
 
-    match f(mock.handler.as_ref()) {
-        Some(Ok(resp)) => futures::future::ok(resp).boxed(),
-        Some(Err(err)) => futures::future::err(err).boxed(),
-        _ => futures::future::err(GrpcError::Other("unimpl")).boxed(),
+    match resp {
+        Some(Ok(resp)) => {
+            ctx.spawn(sink.success(resp).map_err(move |err| panic!("failed to reply: {:?}", err)))
+        }
+        Some(Err(err)) => {
+            let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)));
+            ctx.spawn(sink.fail(status).map_err(move |err| panic!("failed to reply: {:?}", err)));
+        }
+        _ => {
+            let status = RpcStatus::new(RpcStatusCode::Unimplemented,
+                                        Some("Unimplemented".to_owned()));
+            ctx.spawn(sink.fail(status).map_err(move |err| panic!("failed to reply: {:?}", err)));
+        }
     }
 }
 
 #[derive(Debug)]
-struct Mock<C: Mocker> {
-    handler: Arc<Service>,
+struct PdMock<C: PdMocker> {
+    default_handler: Arc<Service>,
     case: Option<Arc<C>>,
 }
 
-impl<C: Mocker> PDAsync for Mock<C> {
-    fn GetMembers(&self, req: GetMembersRequest) -> GrpcFutureSend<GetMembersResponse> {
-        try_takeover(self, |c| c.GetMembers(&req))
+impl<C: PdMocker> Clone for PdMock<C> {
+    fn clone(&self) -> Self {
+        PdMock {
+            default_handler: self.default_handler.clone(),
+            case: self.case.clone(),
+        }
+    }
+}
+
+impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
+    fn get_members(&self,
+                   ctx: RpcContext,
+                   req: GetMembersRequest,
+                   sink: UnarySink<GetMembersResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.get_members(&req))
     }
 
-    fn Tso(&self, _: GrpcStreamSend<TsoRequest>) -> GrpcStreamSend<TsoResponse> {
+    fn tso(&self, _: RpcContext, _: RequestStream<TsoRequest>, _: DuplexSink<TsoResponse>) {
         unimplemented!()
     }
 
-    fn Bootstrap(&self, req: BootstrapRequest) -> GrpcFutureSend<BootstrapResponse> {
-        try_takeover(self, |c| c.Bootstrap(&req))
+    fn bootstrap(&self,
+                 ctx: RpcContext,
+                 req: BootstrapRequest,
+                 sink: UnarySink<BootstrapResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.bootstrap(&req))
     }
 
-    fn IsBootstrapped(&self, req: IsBootstrappedRequest) -> GrpcFutureSend<IsBootstrappedResponse> {
-        try_takeover(self, |c| c.IsBootstrapped(&req))
+    fn is_bootstrapped(&self,
+                       ctx: RpcContext,
+                       req: IsBootstrappedRequest,
+                       sink: UnarySink<IsBootstrappedResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.is_bootstrapped(&req))
     }
 
-    fn AllocID(&self, req: AllocIDRequest) -> GrpcFutureSend<AllocIDResponse> {
-        try_takeover(self, |c| c.AllocID(&req))
+    fn alloc_id(&self, ctx: RpcContext, req: AllocIDRequest, sink: UnarySink<AllocIDResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.alloc_id(&req))
     }
 
-    fn GetStore(&self, req: GetStoreRequest) -> GrpcFutureSend<GetStoreResponse> {
-        try_takeover(self, |c| c.GetStore(&req))
+    fn get_store(&self, ctx: RpcContext, req: GetStoreRequest, sink: UnarySink<GetStoreResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.get_store(&req))
     }
 
-    fn PutStore(&self, _: PutStoreRequest) -> GrpcFutureSend<PutStoreResponse> {
-        futures::future::err(GrpcError::Other("unimpl")).boxed()
+    fn put_store(&self, ctx: RpcContext, req: PutStoreRequest, sink: UnarySink<PutStoreResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.put_store(&req))
     }
 
-    fn StoreHeartbeat(&self, req: StoreHeartbeatRequest) -> GrpcFutureSend<StoreHeartbeatResponse> {
-        try_takeover(self, |c| c.StoreHeartbeat(&req))
+    fn store_heartbeat(&self,
+                       ctx: RpcContext,
+                       req: StoreHeartbeatRequest,
+                       sink: UnarySink<StoreHeartbeatResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.store_heartbeat(&req))
     }
 
-    fn RegionHeartbeat(&self,
-                       req: RegionHeartbeatRequest)
-                       -> GrpcFutureSend<RegionHeartbeatResponse> {
-        try_takeover(self, |c| c.RegionHeartbeat(&req))
+    fn region_heartbeat(&self,
+                        ctx: RpcContext,
+                        stream: RequestStream<RegionHeartbeatRequest>,
+                        sink: DuplexSink<RegionHeartbeatResponse>) {
+        let mock = self.clone();
+        let f = sink.sink_map_err(PdError::from)
+            .send_all(stream.map_err(PdError::from)
+                .and_then(move |req| {
+                    match mock.case
+                        .as_ref()
+                        .map_or_else(|| mock.default_handler.region_heartbeat(&req),
+                                     |s| s.region_heartbeat(&req)) {
+                        None => Ok(None),
+                        Some(Ok(resp)) => Ok(Some((resp, WriteFlags::default()))),
+                        Some(Err(e)) => Err(box_err!("{:?}", e)),
+                    }
+                })
+                .filter_map(|o| o))
+            .map(|_| ())
+            .map_err(|e| error!("failed to handle heartbeat: {:?}", e));
+        ctx.spawn(f)
     }
 
-    fn GetRegion(&self, _: GetRegionRequest) -> GrpcFutureSend<GetRegionResponse> {
-        futures::future::err(GrpcError::Other("unimpl")).boxed()
+    fn get_region(&self,
+                  ctx: RpcContext,
+                  req: GetRegionRequest,
+                  sink: UnarySink<GetRegionResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.get_region(&req))
     }
 
-    fn GetRegionByID(&self, req: GetRegionByIDRequest) -> GrpcFutureSend<GetRegionResponse> {
-        try_takeover(self, |c| c.GetRegionByID(&req))
+    fn get_region_by_id(&self,
+                        ctx: RpcContext,
+                        req: GetRegionByIDRequest,
+                        sink: UnarySink<GetRegionResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.get_region_by_id(&req))
     }
 
-    fn AskSplit(&self, req: AskSplitRequest) -> GrpcFutureSend<AskSplitResponse> {
-        try_takeover(self, |c| c.AskSplit(&req))
+    fn ask_split(&self, ctx: RpcContext, req: AskSplitRequest, sink: UnarySink<AskSplitResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.ask_split(&req))
     }
 
-    fn ReportSplit(&self, req: ReportSplitRequest) -> GrpcFutureSend<ReportSplitResponse> {
-        try_takeover(self, |c| c.ReportSplit(&req))
+    fn report_split(&self,
+                    ctx: RpcContext,
+                    req: ReportSplitRequest,
+                    sink: UnarySink<ReportSplitResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.report_split(&req))
     }
 
-    fn GetClusterConfig(&self,
-                        _: GetClusterConfigRequest)
-                        -> GrpcFutureSend<GetClusterConfigResponse> {
-        futures::future::err(GrpcError::Other("unimpl")).boxed()
+    fn get_cluster_config(&self,
+                          ctx: RpcContext,
+                          req: GetClusterConfigRequest,
+                          sink: UnarySink<GetClusterConfigResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.get_cluster_config(&req))
     }
 
-    fn PutClusterConfig(&self,
-                        _: PutClusterConfigRequest)
-                        -> GrpcFutureSend<PutClusterConfigResponse> {
-        futures::future::err(GrpcError::Other("unimpl")).boxed()
+    fn put_cluster_config(&self,
+                          ctx: RpcContext,
+                          req: PutClusterConfigRequest,
+                          sink: UnarySink<PutClusterConfigResponse>) {
+        hijack_unary(self, ctx, sink, |c| c.put_cluster_config(&req))
     }
 }

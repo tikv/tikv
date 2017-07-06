@@ -12,108 +12,70 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::thread::{self, Builder};
-use std::net::{SocketAddr, TcpStream};
-use std::sync::{Arc, Mutex, RwLock};
-use std::sync::atomic::{Ordering, AtomicUsize};
+use std::net::SocketAddr;
+use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
-use std::io::ErrorKind;
 use std::boxed::FnBox;
 
+use grpc::Environment;
 use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
-use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
+use tikv::server::{Server, ServerTransport};
+use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver, RaftClient};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
-use tikv::util::codec::rpc;
 use tikv::util::transport::SendCh;
 use tikv::storage::{Engine, CfName, ALL_CFS};
-use tikv::util::make_std_tcp_conn;
 use kvproto::raft_serverpb::{self, RaftMessage};
-use kvproto::msgpb::{Message, MessageType};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
-use super::util::sleep_ms;
 use super::transport_simulate::*;
 
-type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;
+type SimulateStoreTransport = SimulateTransport<StoreMsg, ServerRaftStoreRouter>;
+type SimulateServerTransport = SimulateTransport<RaftMessage,
+                                                 ServerTransport<SimulateStoreTransport,
+                                                                 PdStoreAddrResolver>>;
 
 pub struct ServerCluster {
-    routers: HashMap<u64, SimulateTransport<StoreMsg, ServerRaftStoreRouter>>,
-    senders: HashMap<u64, SendCh<Msg>>,
-    handles: HashMap<u64, (Node<TestPdClient>, thread::JoinHandle<()>)>,
+    routers: HashMap<u64, SimulateStoreTransport>,
+    servers: HashMap<u64, Server<SimulateStoreTransport, PdStoreAddrResolver>>,
+    nodes: HashMap<u64, Node<TestPdClient>>,
     addrs: HashMap<u64, SocketAddr>,
-    conns: Mutex<HashMap<SocketAddr, Vec<TcpStream>>>,
     sim_trans: HashMap<u64, SimulateServerTransport>,
     store_chs: HashMap<u64, SendCh<StoreMsg>>,
     pub storages: HashMap<u64, Box<Engine>>,
     snap_paths: HashMap<u64, TempDir>,
-
-    msg_id: AtomicUsize,
     pd_client: Arc<TestPdClient>,
+    raft_client: RaftClient,
 }
 
 impl ServerCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster {
         ServerCluster {
             routers: HashMap::new(),
-            senders: HashMap::new(),
-            handles: HashMap::new(),
+            servers: HashMap::new(),
+            nodes: HashMap::new(),
             addrs: HashMap::new(),
             sim_trans: HashMap::new(),
-            conns: Mutex::new(HashMap::new()),
-            msg_id: AtomicUsize::new(1),
             pd_client: pd_client,
             store_chs: HashMap::new(),
             storages: HashMap::new(),
             snap_paths: HashMap::new(),
+            raft_client: RaftClient::new(Arc::new(Environment::new(1)), Config::new()),
         }
-    }
-
-    fn alloc_msg_id(&self) -> u64 {
-        self.msg_id.fetch_add(1, Ordering::Relaxed) as u64
-    }
-
-
-    fn pool_get(&self, addr: &SocketAddr) -> Result<TcpStream> {
-        {
-            let mut conns = self.conns
-                .lock()
-                .unwrap();
-            let conn = conns.get_mut(addr);
-            if let Some(mut pool) = conn {
-                if !pool.is_empty() {
-                    return Ok(pool.pop().unwrap());
-                }
-            }
-        }
-
-        let conn = make_std_tcp_conn(addr).unwrap();
-        Ok(conn)
-    }
-
-    fn pool_put(&self, addr: &SocketAddr, conn: TcpStream) {
-        let mut conns = self.conns
-            .lock()
-            .unwrap();
-        let p = conns.entry(*addr).or_insert_with(Vec::new);
-        p.push(conn);
     }
 }
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, cfg: Config, engine: Arc<DB>) -> u64 {
-        assert!(node_id == 0 || !self.handles.contains_key(&node_id));
-        assert!(node_id == 0 || !self.senders.contains_key(&node_id));
-
-        let mut cfg = cfg;
+    fn run_node(&mut self, node_id: u64, mut cfg: Config, engine: Arc<DB>) -> u64 {
+        assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
+        assert!(node_id == 0 || !self.servers.contains_key(&node_id));
 
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
@@ -124,87 +86,60 @@ impl Simulator for ServerCluster {
         };
 
         // Now we cache the store address, so here we should re-use last
-        // listening address for the same store. Maybe we should enable
-        // reuse_socket?
+        // listening address for the same store.
         if let Some(addr) = self.addrs.get(&node_id) {
             cfg.addr = format!("{}", addr)
         }
 
-        let listener;
-        let mut try_cnt = 0;
-        loop {
-            match bind(&cfg.addr) {
-                Err(server::Error::Io(ref e)) if e.kind() == ErrorKind::AddrInUse &&
-                                                 try_cnt < 100 => sleep_ms(10),
-                Ok(l) => {
-                    listener = l;
-                    break;
-                }
-                Err(e) => panic!("unexpected error: {:?}", e),
-            }
-            try_cnt += 1;
-        }
-        let addr = listener.local_addr().unwrap();
-        cfg.addr = format!("{}", addr);
+        // Initialize raftstore channels.
+        let mut event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
+        let store_sendch = SendCh::new(event_loop.channel(), "raftstore");
+        let raft_router = ServerRaftStoreRouter::new(store_sendch.clone());
+        let sim_router = SimulateTransport::new(raft_router);
+        let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
-        // TODO: simplify creating raft server later.
-        let mut event_loop = create_event_loop(&cfg).unwrap();
-        let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
+        // Create storage.
+        let mut store = create_raft_storage(sim_router.clone(), engine.clone(), &cfg).unwrap();
+        store.start(&cfg.storage).unwrap();
+        self.storages.insert(node_id, store.get_engine());
+
+        // Create pd client, snapshot manager, server.
         let resolver = PdStoreAddrResolver::new(self.pd_client.clone()).unwrap();
-        let trans = ServerTransport::new(sendch.clone());
-
-        let mut store_event_loop = store::create_event_loop(&cfg.raft_store).unwrap();
-        let simulate_trans = SimulateTransport::new(trans.clone());
-        let mut node = Node::new(&mut store_event_loop, &cfg, self.pd_client.clone());
         let snap_mgr = SnapManager::new(tmp_str,
-                                        Some(node.get_sendch()),
+                                        Some(store_sendch),
                                         cfg.raft_store.use_sst_file_snapshot);
-
-        node.start(store_event_loop,
-                   engine.clone(),
-                   simulate_trans.clone(),
-                   snap_mgr.clone())
+        let mut server = Server::new(&cfg,
+                                     store.clone(),
+                                     sim_router.clone(),
+                                     snap_status_sender,
+                                     resolver,
+                                     snap_mgr.clone())
             .unwrap();
-        let router = ServerRaftStoreRouter::new(node.get_sendch(), node.id());
-        let sim_router = SimulateTransport::new(router);
+        let addr = server.listening_addr();
+        cfg.addr = format!("{}", addr);
+        let trans = server.transport();
+        let simulate_trans = SimulateTransport::new(trans.clone());
 
+        // Create node.
+        let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
+        node.start(event_loop,
+                   engine,
+                   simulate_trans.clone(),
+                   snap_mgr.clone(),
+                   snap_status_receiver)
+            .unwrap();
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
             self.snap_paths.insert(node_id, tmp);
         }
-
         self.store_chs.insert(node_id, node.get_sendch());
         self.sim_trans.insert(node_id, simulate_trans);
 
-        let mut store = create_raft_storage(sim_router.clone(), engine, &cfg).unwrap();
-        store.start(&cfg.storage).unwrap();
-        self.storages.insert(node_id, store.get_engine());
+        server.start(&cfg).unwrap();
 
-        let server_chan = ServerChannel {
-            raft_router: sim_router.clone(),
-            snapshot_status_sender: node.get_snapshot_status_sender(),
-        };
-        let mut server = Server::new(&mut event_loop,
-                                     &cfg,
-                                     listener,
-                                     store,
-                                     server_chan,
-                                     resolver,
-                                     snap_mgr)
-            .unwrap();
-
-        let ch = server.get_sendch();
-
-        let t = Builder::new()
-            .name(thd_name!(format!("server-{}", node_id)))
-            .spawn(move || {
-                server.run(&mut event_loop).unwrap();
-            })
-            .unwrap();
-
-        self.handles.insert(node_id, (node, t));
-        self.senders.insert(node_id, ch);
+        self.nodes.insert(node_id, node);
+        self.servers.insert(node_id, server);
         self.routers.insert(node_id, sim_router);
         self.addrs.insert(node_id, addr);
 
@@ -216,22 +151,15 @@ impl Simulator for ServerCluster {
     }
 
     fn stop_node(&mut self, node_id: u64) {
-        let (mut node, h) = self.handles.remove(&node_id).unwrap();
-        let ch = self.senders.remove(&node_id).unwrap();
-        let addr = &self.addrs[&node_id];
-        let _ = self.store_chs.remove(&node_id).unwrap();
-        self.conns
-            .lock()
-            .unwrap()
-            .remove(addr);
-
-        ch.try_send(Msg::Quit).unwrap();
+        let mut server = self.servers.remove(&node_id).unwrap();
+        server.stop().unwrap();
+        let mut node = self.nodes.remove(&node_id).unwrap();
         node.stop().unwrap();
-        h.join().unwrap();
+        let _ = self.store_chs.remove(&node_id).unwrap();
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {
-        self.senders.keys().cloned().collect()
+        self.nodes.keys().cloned().collect()
     }
 
     fn call_command_on_node(&self,
@@ -251,21 +179,11 @@ impl Simulator for ServerCluster {
             .ok_or_else(|| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
-    fn send_raft_msg(&self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
+    fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
         let store_id = raft_msg.get_to_peer().get_store_id();
-        let addr = &self.addrs[&store_id];
-
-        let mut msg = Message::new();
-        msg.set_msg_type(MessageType::Raft);
-        msg.set_raft(raft_msg);
-        let msg_id = self.alloc_msg_id();
-
-        let mut conn = self.pool_get(addr).unwrap();
-        conn.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
-        try!(rpc::encode_msg(&mut conn, msg_id, &msg));
-
-        self.pool_put(addr, conn);
-
+        let addr = self.addrs[&store_id];
+        self.raft_client.send(store_id, addr, raft_msg).unwrap();
+        self.raft_client.flush();
         Ok(())
     }
 

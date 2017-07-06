@@ -23,8 +23,6 @@
 #![allow(new_without_default)]
 #![feature(const_fn)]
 
-// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
-#![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
 #[cfg(feature = "mem-profiling")]
@@ -37,16 +35,16 @@ extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate uuid;
 extern crate mio;
 extern crate kvproto;
 extern crate tipb;
 extern crate time;
-extern crate rustc_serialize;
 extern crate fnv;
 extern crate test;
 extern crate grpc;
 extern crate futures;
+extern crate futures_cpupool;
+extern crate tokio_core;
 
 mod raft;
 mod raftstore;

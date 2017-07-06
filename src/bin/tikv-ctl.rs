@@ -15,8 +15,6 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
-// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
-#![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
 extern crate tikv;
@@ -493,7 +491,7 @@ mod tests {
             let lock = &kv.value;
             let key = kv.key.raw().unwrap();
             assert!(&key[..] == test_data.0 && test_data.1 == lock.lock_type &&
-                    &test_data.2[..] == &lock.primary[..] &&
+                    test_data.2 == lock.primary.as_slice() &&
                     test_data.3 == lock.ts);
         }
         assert_iter(&gen_mvcc_iter(&db, "kv", false, CF_LOCK), test_data_lock[0]);

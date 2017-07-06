@@ -31,7 +31,7 @@ quick_error!{
             description("cluster not bootstrap error")
             display("cluster {} is not bootstrapped", cluster_id)
         }
-        Grpc(err: ::grpc::error::GrpcError) {
+        Grpc(err: ::grpc::Error) {
             from()
             cause(err)
             description(err.description())

@@ -690,12 +690,6 @@ fn test_node_consistency_check() {
     test_consistency_check(&mut cluster);
 }
 
-#[test]
-fn test_server_consistency_check() {
-    let mut cluster = new_server_cluster(0, 2);
-    test_consistency_check(&mut cluster);
-}
-
 fn test_batch_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
     let r = cluster.get_region(b"");
@@ -720,12 +714,6 @@ fn test_batch_write<T: Simulator>(cluster: &mut Cluster<T>) {
     assert!(resp.get_header().has_error());
     assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
     assert_eq!(cluster.must_get(b"k3"), None);
-}
-
-#[test]
-fn test_node_batch_write() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_batch_write(&mut cluster);
 }
 
 #[test]

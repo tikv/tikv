@@ -32,7 +32,7 @@ const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 pub type Callback = Box<FnBox(Result<SocketAddr>) + Send>;
 
 // StoreAddrResolver resolves the store address.
-pub trait StoreAddrResolver {
+pub trait StoreAddrResolver: Send {
     // Resolve resolves the store address asynchronously.
     fn resolve(&self, store_id: u64, cb: Callback) -> Result<()>;
 }
@@ -157,7 +157,7 @@ mod tests {
 
     use kvproto::pdpb;
     use kvproto::metapb;
-    use pd::{PdClient, Result, PdFuture};
+    use pd::{PdClient, Result, PdFuture, RegionStat};
     use util;
     use util::collections::HashMap;
 
@@ -204,12 +204,17 @@ mod tests {
         fn region_heartbeat(&self,
                             _: metapb::Region,
                             _: metapb::Peer,
-                            _: Vec<pdpb::PeerStats>,
-                            _: Vec<metapb::Peer>,
-                            _: u64)
-                            -> PdFuture<pdpb::RegionHeartbeatResponse> {
+                            _: RegionStat)
+                            -> PdFuture<()> {
             unimplemented!();
         }
+
+        fn handle_region_heartbeat_response<F>(&self, _: u64, _: F) -> PdFuture<()>
+            where F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static
+        {
+            unimplemented!()
+        }
+
         fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
             unimplemented!();
         }

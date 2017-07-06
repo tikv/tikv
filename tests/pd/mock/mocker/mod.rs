@@ -11,11 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(non_snake_case)]
-
 use std::result;
-
-use grpc::error::GrpcError;
 
 use kvproto::pdpb::*;
 
@@ -27,78 +23,80 @@ mod retry;
 
 pub use self::service::Service;
 pub use self::split::Split;
-pub use self::bootstrap::AlreadyBootstrap;
+pub use self::bootstrap::AlreadyBootstrapped;
 pub use self::leader_change::LeaderChange;
 pub use self::retry::Retry;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 42;
 
-pub type Result<T> = result::Result<T, GrpcError>;
+pub type Result<T> = result::Result<T, String>;
 
-pub trait Mocker {
-    fn GetMembers(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
+pub trait PdMocker {
+    fn get_members(&self, _: &GetMembersRequest) -> Option<Result<GetMembersResponse>> {
         None
     }
 
-    fn Tso(&self, _: &TsoRequest) -> Option<Result<TsoResponse>> {
+    fn tso(&self, _: &TsoRequest) -> Option<Result<TsoResponse>> {
         None
     }
 
-    fn Bootstrap(&self, _: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
+    fn bootstrap(&self, _: &BootstrapRequest) -> Option<Result<BootstrapResponse>> {
         None
     }
 
-    fn IsBootstrapped(&self, _: &IsBootstrappedRequest) -> Option<Result<IsBootstrappedResponse>> {
+    fn is_bootstrapped(&self, _: &IsBootstrappedRequest) -> Option<Result<IsBootstrappedResponse>> {
         None
     }
 
-    fn AllocID(&self, _: &AllocIDRequest) -> Option<Result<AllocIDResponse>> {
+    fn alloc_id(&self, _: &AllocIDRequest) -> Option<Result<AllocIDResponse>> {
         None
     }
 
-    fn GetStore(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
+    fn get_store(&self, _: &GetStoreRequest) -> Option<Result<GetStoreResponse>> {
         None
     }
 
-    fn PutStore(&self, _: &PutStoreRequest) -> Option<Result<PutStoreResponse>> {
+    fn put_store(&self, _: &PutStoreRequest) -> Option<Result<PutStoreResponse>> {
         None
     }
 
-    fn StoreHeartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
+    fn store_heartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
         None
     }
 
-    fn RegionHeartbeat(&self,
-                       _: &RegionHeartbeatRequest)
-                       -> Option<Result<RegionHeartbeatResponse>> {
+    fn region_heartbeat(&self,
+                        _: &RegionHeartbeatRequest)
+                        -> Option<Result<RegionHeartbeatResponse>> {
         None
     }
 
-    fn GetRegion(&self, _: &GetRegionRequest) -> Option<Result<GetRegionResponse>> {
+    fn get_region(&self, _: &GetRegionRequest) -> Option<Result<GetRegionResponse>> {
         None
     }
 
-    fn GetRegionByID(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
+    fn get_region_by_id(&self, _: &GetRegionByIDRequest) -> Option<Result<GetRegionResponse>> {
         None
     }
 
-    fn AskSplit(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
+    fn ask_split(&self, _: &AskSplitRequest) -> Option<Result<AskSplitResponse>> {
         None
     }
 
-    fn ReportSplit(&self, _: &ReportSplitRequest) -> Option<Result<ReportSplitResponse>> {
+    fn report_split(&self, _: &ReportSplitRequest) -> Option<Result<ReportSplitResponse>> {
         None
     }
 
-    fn GetClusterConfig(&self,
-                        _: &GetClusterConfigRequest)
-                        -> Option<Result<GetClusterConfigResponse>> {
+    fn get_cluster_config(&self,
+                          _: &GetClusterConfigRequest)
+                          -> Option<Result<GetClusterConfigResponse>> {
         None
     }
 
-    fn PutClusterConfig(&self,
-                        _: &PutClusterConfigRequest)
-                        -> Option<Result<PutClusterConfigResponse>> {
+    fn put_cluster_config(&self,
+                          _: &PutClusterConfigRequest)
+                          -> Option<Result<PutClusterConfigResponse>> {
         None
     }
+
+    fn set_endpoints(&self, _: Vec<String>) {}
 }

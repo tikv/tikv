@@ -12,28 +12,33 @@
 // limitations under the License.
 
 use std::thread;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use grpc::EnvBuilder;
 use futures::Future;
+use futures_cpupool::Builder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
-use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError};
+use tikv::pd::{PdClient, RpcClient, validate_endpoints, Error as PdError, RegionStat};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;
 
 #[test]
 fn test_rpc_client() {
-    let eps = "http://127.0.0.1:52729".to_owned();
-
-    let se = Arc::new(Service::new(vec![eps.clone()]));
-    let _server = MockServer::run("127.0.0.1:52729", se.clone(), Some(se.clone()));
+    let eps_count = 1;
+    let se = Arc::new(Service::new());
+    let server = MockServer::run::<Service>(eps_count, se.clone(), None);
+    let eps: Vec<String> = server.bind_addrs()
+        .into_iter()
+        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .collect();
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps).unwrap();
+    let client = RpcClient::new(&eps[0]).unwrap();
     assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
@@ -63,20 +68,24 @@ fn test_rpc_client() {
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let client = RpcClient::new(&eps).unwrap();
+        let client = RpcClient::new(&eps[0]).unwrap();
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
     }
 
+    let poller = Builder::new().pool_size(1).name_prefix(thd_name!("poller")).create();
+    let (tx, rx) = mpsc::channel();
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
+        let _ = tx.send(resp);
+    });
+    poller.spawn(f).forget();
     // Only check if it works.
-    client.region_heartbeat(metapb::Region::new(),
-                          metapb::Peer::new(),
-                          vec![],
-                          vec![],
-                          0)
-        .wait()
-        .unwrap();
+    poller.spawn(client.region_heartbeat(metapb::Region::new(),
+                                       metapb::Peer::new(),
+                                       RegionStat::default()))
+        .forget();
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
     client.store_heartbeat(pdpb::StoreStats::new()).wait().unwrap();
     client.ask_split(metapb::Region::new()).wait().unwrap();
     client.report_split(metapb::Region::new(), metapb::Region::new()).wait().unwrap();
@@ -84,17 +93,18 @@ fn test_rpc_client() {
 
 #[test]
 fn test_reboot() {
-    let mut eps = vec![
-        "http://127.0.0.1:52730".to_owned(),
-    ];
+    let eps_count = 1;
+    let se = Arc::new(Service::new());
+    let al = Arc::new(AlreadyBootstrapped);
+    let server = MockServer::run(eps_count, se.clone(), Some(al));
+    let eps: Vec<String> = server.bind_addrs()
+        .into_iter()
+        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .collect();
 
-    let se = Arc::new(Service::new(eps.clone()));
-    let lc = Arc::new(AlreadyBootstrap::new());
-
-    let _server = MockServer::run("127.0.0.1:52730", se.clone(), Some(lc.clone()));
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
+    let client = RpcClient::new(&eps[0]).unwrap();
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
@@ -108,39 +118,36 @@ fn test_reboot() {
 
 #[test]
 fn test_validate_endpoints() {
-    let eps = vec![
-        "http://127.0.0.1:13079".to_owned(),
-        "http://127.0.0.1:23079".to_owned(),
-        "http://127.0.0.1:33079".to_owned(),
-    ];
-
-    let se = Arc::new(Service::new(eps.clone()));
-    let sp = Arc::new(Split::new(eps.clone()));
-
-    let _server_a = MockServer::run("127.0.0.1:13079", se.clone(), Some(sp.clone()));
-    let _server_b = MockServer::run("127.0.0.1:23079", se.clone(), Some(sp.clone()));
-    let _server_c = MockServer::run("127.0.0.1:33079", se.clone(), Some(sp.clone()));
+    let eps_count = 3;
+    let se = Arc::new(Service::new());
+    let sp = Arc::new(Split::new());
+    let server = MockServer::run(eps_count, se, Some(sp));
+    let env = Arc::new(EnvBuilder::new().cq_count(1).name_prefix("test_pd").build());
+    let eps: Vec<String> = server.bind_addrs()
+        .into_iter()
+        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .collect();
 
     thread::sleep(Duration::from_secs(1));
 
-    assert!(validate_endpoints(&eps).is_err());
+    assert!(validate_endpoints(env, &eps).is_err());
 }
 
 #[test]
 fn test_retry_async() {
-    let mut eps = vec![
-        "http://127.0.0.1:63080".to_owned(),
-    ];
-
-    let se = Arc::new(Service::new(eps.clone()));
+    let eps_count = 1;
+    let se = Arc::new(Service::new());
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
-    let lc = Arc::new(Retry::new(3));
-
-    let _server_a = MockServer::run("127.0.0.1:63080", se.clone(), Some(lc.clone()));
+    let retry = Arc::new(Retry::new(3));
+    let server = MockServer::run(eps_count, se.clone(), Some(retry));
+    let eps: Vec<String> = server.bind_addrs()
+        .into_iter()
+        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .collect();
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
+    let client = RpcClient::new(&eps[0]).unwrap();
 
     for _ in 0..5 {
         let region = client.get_region_by_id(1);
@@ -150,18 +157,15 @@ fn test_retry_async() {
 
 #[test]
 fn test_restart_leader() {
-    let eps = vec![
-        "http://127.0.0.1:42978".to_owned(),
-        "http://127.0.0.1:52978".to_owned(),
-        "http://127.0.0.1:62978".to_owned(),
-    ];
-
+    let eps_count = 3;
     // Service has only one GetMembersResponse, so the leader never changes.
-    let se = Arc::new(Service::new(eps.clone()));
+    let se = Arc::new(Service::new());
     // Start mock servers.
-    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
-    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
-    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+    let server = MockServer::run::<Service>(eps_count, se.clone(), None);
+    let eps: Vec<String> = server.bind_addrs()
+        .into_iter()
+        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .collect();
 
     thread::sleep(Duration::from_secs(2));
 
@@ -185,14 +189,13 @@ fn test_restart_leader() {
     let region = client.get_region_by_id(1);
     region.wait().unwrap();
 
+    // Get the random binded addrs.
+    let eps = server.bind_addrs();
+
     // Kill servers.
-    drop(_server_a);
-    drop(_server_b);
-    drop(_server_c);
+    drop(server);
     // Restart them again.
-    let _server_a = MockServer::run("127.0.0.1:42978", se.clone(), Some(se.clone()));
-    let _server_b = MockServer::run("127.0.0.1:52978", se.clone(), Some(se.clone()));
-    let _server_c = MockServer::run("127.0.0.1:62978", se.clone(), Some(se.clone()));
+    let _server = MockServer::run_with_eps::<Service>(eps, se.clone(), None);
 
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
@@ -203,22 +206,18 @@ fn test_restart_leader() {
 
 #[test]
 fn test_change_leader_async() {
-    let mut eps = vec![
-        "http://127.0.0.1:42979".to_owned(),
-        "http://127.0.0.1:52979".to_owned(),
-        "http://127.0.0.1:62979".to_owned(),
-    ];
-
-    let se = Arc::new(Service::new(eps.clone()));
-    let lc = Arc::new(LeaderChange::new(eps.clone()));
-
-    let _server_a = MockServer::run("127.0.0.1:42979", se.clone(), Some(lc.clone()));
-    let _server_b = MockServer::run("127.0.0.1:52979", se.clone(), Some(lc.clone()));
-    let _server_c = MockServer::run("127.0.0.1:62979", se.clone(), Some(lc.clone()));
+    let eps_count = 3;
+    let se = Arc::new(Service::new());
+    let lc = Arc::new(LeaderChange::new());
+    let server = MockServer::run(eps_count, se.clone(), Some(lc.clone()));
+    let eps: Vec<String> = server.bind_addrs()
+        .into_iter()
+        .map(|addr| format!("http://{}:{}", addr.0, addr.1))
+        .collect();
 
     thread::sleep(Duration::from_secs(1));
 
-    let client = RpcClient::new(&eps.pop().unwrap()).unwrap();
+    let client = RpcClient::new(&eps[0]).unwrap();
     let leader = client.get_leader();
 
     for _ in 0..5 {

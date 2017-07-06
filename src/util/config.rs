@@ -23,53 +23,43 @@ use rocksdb::{DBCompressionType, DBRecoveryMode};
 quick_error! {
     #[derive(Debug)]
     pub enum ConfigError {
-        RocksDB
-        ReadableNumber
         Limit(msg: String) {
-            description(&msg)
+            description(msg)
             display("{}", msg)
         }
         Address(msg: String) {
-            description(&msg)
-            display("{}", msg)
+            description(msg)
+            display("config address error: {}", msg)
         }
         StoreLabels(msg: String) {
-            description(&msg)
-            display("{}", msg)
+            description(msg)
+            display("store label error: {}", msg)
+        }
+        Value(msg: String) {
+            description(msg)
+            display("config value error: {}", msg)
         }
     }
 }
 
 pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ConfigError> {
-    match &*tp.to_lowercase() {
+    match &*tp.trim().to_lowercase() {
         "no" => Ok(DBCompressionType::DBNo),
         "snappy" => Ok(DBCompressionType::DBSnappy),
         "zlib" => Ok(DBCompressionType::DBZlib),
         "bzip2" => Ok(DBCompressionType::DBBz2),
         "lz4" => Ok(DBCompressionType::DBLz4),
         "lz4hc" => Ok(DBCompressionType::DBLz4hc),
-        _ => Err(ConfigError::RocksDB),
+        "zstd" => Ok(DBCompressionType::DBZstd),
+        _ => Err(ConfigError::Value(format!("invalid compression type {:?}", tp))),
     }
 }
 
 pub fn parse_rocksdb_per_level_compression(tp: &str)
                                            -> Result<Vec<DBCompressionType>, ConfigError> {
-    let mut result: Vec<DBCompressionType> = vec![];
-    let v: Vec<&str> = tp.split(':').collect();
-    for i in &v {
-        match &*i.to_lowercase() {
-            "no" => result.push(DBCompressionType::DBNo),
-            "snappy" => result.push(DBCompressionType::DBSnappy),
-            "zlib" => result.push(DBCompressionType::DBZlib),
-            "bzip2" => result.push(DBCompressionType::DBBz2),
-            "lz4" => result.push(DBCompressionType::DBLz4),
-            "lz4hc" => result.push(DBCompressionType::DBLz4hc),
-            "zstd" => result.push(DBCompressionType::DBZstd),
-            _ => return Err(ConfigError::RocksDB),
-        }
-    }
-
-    Ok(result)
+    tp.split(':')
+        .map(parse_rocksdb_compression)
+        .collect()
 }
 
 pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ConfigError> {
@@ -78,7 +68,7 @@ pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, Conf
         1 => Ok(DBRecoveryMode::AbsoluteConsistency),
         2 => Ok(DBRecoveryMode::PointInTime),
         3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
-        _ => Err(ConfigError::RocksDB),
+        _ => Err(ConfigError::Value(format!("invalid recovery mode: {:?}", mode))),
     }
 }
 
@@ -96,7 +86,9 @@ fn split_property(property: &str) -> Result<(f64, &str), ConfigError> {
     }
 
     let (num, unit) = property.split_at(indx);
-    num.parse::<f64>().map(|f| (f, unit)).or(Err(ConfigError::ReadableNumber))
+    num.parse::<f64>()
+        .map(|f| (f, unit))
+        .or_else(|_| Err(ConfigError::Value(format!("cannot parse {:?} as f64", num))))
 }
 
 const UNIT: usize = 1;
@@ -133,7 +125,7 @@ pub fn parse_readable_int(size: &str) -> Result<i64, ConfigError> {
         "m" => Ok((num * (MINTUE as f64)) as i64),
         "h" => Ok((num * (HOUR as f64)) as i64),
 
-        _ => Err(ConfigError::ReadableNumber),
+        _ => Err(ConfigError::Value(format!("invalid unit {:?}", unit))),
     }
 }
 
@@ -150,14 +142,14 @@ pub fn parse_store_labels(labels: &str) -> Result<HashMap<String, String>, Confi
         match kv[..] {
             [k, v] => {
                 if !re.is_match(k) || !re.is_match(v) {
-                    return Err(ConfigError::StoreLabels(format!("invalid label {}", label)));
+                    return Err(ConfigError::StoreLabels(format!("invalid label {:?}", label)));
                 }
                 if map.insert(k.to_owned(), v.to_owned()).is_some() {
-                    return Err(ConfigError::StoreLabels(format!("duplicated label {}", label)));
+                    return Err(ConfigError::StoreLabels(format!("duplicated label {:?}", label)));
                 }
             }
             _ => {
-                return Err(ConfigError::StoreLabels(format!("invalid label {}", label)));
+                return Err(ConfigError::StoreLabels(format!("invalid label {:?}", label)));
             }
         }
     }
@@ -297,21 +289,21 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 
     // ["Host", "Port"]
     if parts.len() != 2 {
-        return Err(ConfigError::Address(format!("invalid addr: {}", addr)));
+        return Err(ConfigError::Address(format!("invalid addr: {:?}", addr)));
     }
 
     // Check Port.
     let port: u16 = try!(parts[1]
         .parse()
-        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {}", addr))));
+        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))));
     // Port = 0 is invalid.
     if port == 0 {
-        return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {}", addr)));
+        return Err(ConfigError::Address(format!("invalid addr, port can not be 0: {:?}", addr)));
     }
 
     // Check Host.
     if let Err(e) = url::Host::parse(parts[0]) {
-        return Err(ConfigError::Address(format!("{:?}", e)));
+        return Err(ConfigError::Address(format!("invalid addr: {:?}", e)));
     }
 
     Ok(())

@@ -18,41 +18,89 @@ use std::time::Instant;
 use std::time::Duration;
 use std::collections::HashSet;
 
-use futures::{Future, BoxFuture};
-use futures::future::ok;
-use futures::future::{loop_fn, Loop};
-
+use futures::{Future, BoxFuture, Stream, Async, task, Poll};
+use futures::task::Task;
+use futures::future::{loop_fn, Loop, ok};
+use futures::sync::mpsc::UnboundedSender;
+use grpc::{Environment, ChannelBuilder, Result as GrpcResult, ClientDuplexSender,
+           ClientDuplexReceiver};
 use tokio_timer::Timer;
-
-use grpc;
-use grpc::futures_grpc::GrpcFutureSend;
-use url::Url;
 use rand::{self, Rng};
+use kvproto::pdpb::{ResponseHeader, ErrorType, GetMembersRequest, GetMembersResponse, Member,
+                    RegionHeartbeatRequest, RegionHeartbeatResponse};
+use kvproto::pdpb_grpc::PdClient;
+use prometheus::HistogramTimer;
 
-use kvproto::pdpb::{ResponseHeader, ErrorType, GetMembersRequest, GetMembersResponse, Member};
-use kvproto::pdpb_grpc::{PDAsyncClient, PDAsync};
-
-use util::HandyRwLock;
-
-use super::super::{Result, Error, PdFuture};
-use super::super::metrics::PD_SEND_MSG_HISTOGRAM;
+use util::{HandyRwLock, Either};
+use pd::{Result, Error, PdFuture};
+use pd::metrics::PD_SEND_MSG_HISTOGRAM;
 
 pub struct Inner {
-    client: PDAsyncClient,
+    env: Arc<Environment>,
+    pub hb_sender: Either<Option<ClientDuplexSender<RegionHeartbeatRequest>>,
+                          UnboundedSender<RegionHeartbeatRequest>>,
+    pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
+    pub client: PdClient,
     members: GetMembersResponse,
 
     last_update: Instant,
 }
 
+pub struct HeartbeatReceiver {
+    receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
+    inner: Arc<RwLock<Inner>>,
+}
+
+impl Stream for HeartbeatReceiver {
+    type Item = RegionHeartbeatResponse;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Error> {
+        loop {
+            if let Some(ref mut receiver) = self.receiver {
+                match receiver.poll() {
+                    Ok(Async::Ready(Some(item))) => return Ok(Async::Ready(Some(item))),
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    // If it's None or there's error, we need to update receiver.
+                    _ => {}
+                }
+            }
+
+            self.receiver.take();
+
+            let mut inner = self.inner.wl();
+            let mut receiver = None;
+            if let Either::Left(ref mut recv) = inner.hb_receiver {
+                receiver = recv.take();
+            }
+            if receiver.is_some() {
+                self.receiver = receiver;
+            } else {
+                inner.hb_receiver = Either::Right(task::current());
+                return Ok(Async::NotReady);
+            }
+        }
+    }
+}
+
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
+    timer: Timer,
     inner: Arc<RwLock<Inner>>,
 }
 
 impl LeaderClient {
-    pub fn new(client: PDAsyncClient, members: GetMembersResponse) -> LeaderClient {
+    pub fn new(env: Arc<Environment>,
+               client: PdClient,
+               members: GetMembersResponse)
+               -> LeaderClient {
+        let (tx, rx) = client.region_heartbeat();
         LeaderClient {
+            timer: Timer::default(),
             inner: Arc::new(RwLock::new(Inner {
+                env: env,
+                hb_sender: Either::Left(Some(tx)),
+                hb_receiver: Either::Left(Some(rx)),
                 client: client,
                 members: members,
 
@@ -61,18 +109,36 @@ impl LeaderClient {
         }
     }
 
+    pub fn handle_region_heartbeat_response<F>(&self, f: F) -> PdFuture<()>
+        where F: Fn(RegionHeartbeatResponse) + Send + 'static
+    {
+        let recv = HeartbeatReceiver {
+            receiver: None,
+            inner: self.inner.clone(),
+        };
+        recv.for_each(move |resp| {
+                f(resp);
+                Ok(())
+            })
+            .map_err(|e| panic!("unexpected error: {:?}", e))
+            .boxed()
+    }
+
     pub fn request<Req, Resp, F>(&self, req: Req, f: F, retry: usize) -> Request<Req, Resp, F>
         where Req: Clone + 'static,
-              F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
+              F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static
     {
         Request {
             reconnect_count: retry,
             request_sent: 0,
-            timer: Timer::default(),
-            client: LeaderClient { inner: self.inner.clone() },
+            client: LeaderClient {
+                timer: self.timer.clone(),
+                inner: self.inner.clone(),
+            },
             req: req,
             resp: None,
             func: f,
+            timer: None,
         }
     }
 
@@ -90,11 +156,17 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
-            (try!(try_connect_leader(&inner.members)), start)
+            (try!(try_connect_leader(inner.env.clone(), &inner.members)), start)
         };
 
         {
             let mut inner = self.inner.wl();
+            let (tx, rx) = client.region_heartbeat();
+            inner.hb_sender = Either::Left(Some(tx));
+            if let Either::Right(ref mut task) = inner.hb_receiver {
+                task.notify();
+            }
+            inner.hb_receiver = Either::Left(Some(rx));
             inner.client = client;
             inner.members = members;
             inner.last_update = Instant::now();
@@ -110,13 +182,14 @@ const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 pub struct Request<Req, Resp, F> {
     reconnect_count: usize,
     request_sent: usize,
-    timer: Timer,
 
     client: LeaderClient,
 
     req: Req,
     resp: Option<Result<Resp>>,
     func: F,
+
+    timer: Option<HistogramTimer>,
 }
 
 const MAX_REQUEST_COUNT: usize = 5;
@@ -124,7 +197,7 @@ const MAX_REQUEST_COUNT: usize = 5;
 impl<Req, Resp, F> Request<Req, Resp, F>
     where Req: Clone + Send + 'static,
           Resp: Send + 'static,
-          F: FnMut(&PDAsyncClient, Req) -> PdFuture<Resp> + Send + 'static
+          F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static
 {
     fn reconnect_if_needed(mut self) -> BoxFuture<Self, Self> {
         debug!("reconnect remains: {}", self.reconnect_count);
@@ -144,7 +217,8 @@ impl<Req, Resp, F> Request<Req, Resp, F>
                 ok(self).boxed()
             }
             Err(_) => {
-                self.timer
+                self.client
+                    .timer
                     .sleep(Duration::from_secs(RECONNECT_INTERVAL_SEC))
                     .then(|_| Err(self))
                     .boxed()
@@ -156,18 +230,25 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
-        let req = (self.func)(&self.client.inner.rl().client, r);
-        req.then(|resp| {
-                match resp {
-                    Ok(resp) => {
-                        self.resp = Some(Ok(resp));
-                        Ok(self)
+
+        ok(self)
+            .and_then(|mut ctx| {
+                ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_timer());
+                let req = (ctx.func)(&ctx.client.inner, r);
+                req.then(|resp| {
+                    // Observe on dropping, schedule time will be recorded too.
+                    ctx.timer.take();
+                    match resp {
+                        Ok(resp) => {
+                            ctx.resp = Some(Ok(resp));
+                            Ok(ctx)
+                        }
+                        Err(err) => {
+                            error!("request failed: {:?}", err);
+                            Err(ctx)
+                        }
                     }
-                    Err(err) => {
-                        error!("request failed: {:?}", err);
-                        Err(self)
-                    }
-                }
+                })
             })
             .boxed()
     }
@@ -205,13 +286,12 @@ impl<Req, Resp, F> Request<Req, Resp, F>
 
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
-    where F: Fn(&PDAsyncClient) -> GrpcFutureSend<R>
+    where F: Fn(&PdClient) -> GrpcResult<R>
 {
     for _ in 0..retry {
         let r = {
             let _timer = PD_SEND_MSG_HISTOGRAM.start_timer(); // observe on dropping.
-            let f = func(&client.inner.rl().client);
-            f.wait()
+            func(&client.inner.rl().client).map_err(Error::Grpc)
         };
 
         match r {
@@ -230,7 +310,9 @@ pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Resul
     Err(box_err!("fail to request"))
 }
 
-pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMembersResponse)> {
+pub fn validate_endpoints(env: Arc<Environment>,
+                          endpoints: &[String])
+                          -> Result<(PdClient, GetMembersResponse)> {
     if endpoints.is_empty() {
         return Err(box_err!("empty PD endpoints"));
     }
@@ -245,7 +327,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMem
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match connect(ep) {
+        let (_, resp) = match connect(env.clone(), ep) {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -274,7 +356,7 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMem
 
     match members {
         Some(members) => {
-            let (client, members) = try!(try_connect_leader(&members));
+            let (client, members) = try!(try_connect_leader(env.clone(), &members));
             info!("All PD endpoints are consistent: {:?}", endpoints);
             Ok((client, members))
         }
@@ -282,42 +364,42 @@ pub fn validate_endpoints(endpoints: &[String]) -> Result<(PDAsyncClient, GetMem
     }
 }
 
-fn connect(addr: &str) -> Result<(PDAsyncClient, GetMembersResponse)> {
+fn connect(env: Arc<Environment>, addr: &str) -> Result<(PdClient, GetMembersResponse)> {
     debug!("connect to PD endpoint: {:?}", addr);
-    let ep = box_try!(Url::parse(addr));
-    let host = ep.host_str().unwrap();
-    let port = ep.port().unwrap();
-
-    let mut conf: grpc::client::GrpcClientConf = Default::default();
-    conf.http.no_delay = Some(true);
-
-    // TODO: It seems that `new` always return an Ok(_).
-    PDAsyncClient::new(host, port, false, conf)
-        .and_then(|client| {
-            // try request.
-            match client.GetMembers(GetMembersRequest::new()).wait() {
-                Ok(resp) => Ok((client, resp)),
-                Err(e) => Err(e),
-            }
-        })
-        .map_err(Error::Grpc)
+    let addr = addr.trim_left_matches("http://");
+    let channel = ChannelBuilder::new(env).connect(addr);
+    let client = PdClient::new(channel);
+    match client.get_members(GetMembersRequest::new()) {
+        Ok(resp) => Ok((client, resp)),
+        Err(e) => Err(Error::Grpc(e)),
+    }
 }
 
-pub fn try_connect_leader(previous: &GetMembersResponse)
-                          -> Result<(PDAsyncClient, GetMembersResponse)> {
+pub fn try_connect_leader(env: Arc<Environment>,
+                          previous: &GetMembersResponse)
+                          -> Result<(PdClient, GetMembersResponse)> {
     // Try to connect other members.
     // Randomize endpoints.
     let members = previous.get_members();
     let mut indexes: Vec<usize> = (0..members.len()).collect();
     rand::thread_rng().shuffle(&mut indexes);
 
+    let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
     'outer: for i in indexes {
         for ep in members[i].get_client_urls() {
-            match connect(ep.as_str()) {
+            match connect(env.clone(), ep.as_str()) {
                 Ok((_, r)) => {
-                    resp = Some(r);
-                    break 'outer;
+                    let new_cluster_id = r.get_header().get_cluster_id();
+                    if new_cluster_id == cluster_id {
+                        resp = Some(r);
+                        break 'outer;
+                    } else {
+                        panic!("{} no longer belongs to cluster {}, it is in {}",
+                               ep,
+                               cluster_id,
+                               new_cluster_id);
+                    }
                 }
                 Err(e) => {
                     error!("failed to connect to {}, {:?}", ep, e);
@@ -331,7 +413,7 @@ pub fn try_connect_leader(previous: &GetMembersResponse)
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(ep.as_str()) {
+            if let Ok((client, _)) = connect(env.clone(), ep.as_str()) {
                 info!("connect to PD leader {:?}", ep);
                 return Ok((client, resp));
             }

@@ -39,7 +39,7 @@ use raft::errors::{Result, Error, StorageError};
 use raft::raft_log::{self, RaftLog};
 use raft::read_only::{ReadOnlyOption, ReadState, ReadOnly};
 
-use super::HashMap;
+use super::FlatMap;
 
 // CAMPAIGN_PRE_ELECTION represents the first phase of a normal election when
 // Config.pre_vote is true.
@@ -124,6 +124,11 @@ pub struct Config {
     /// read_only_option specifies how the read only request is processed.
     pub read_only_option: ReadOnlyOption,
 
+    // Don't broadcast an empty raft entry to notify follower to commit an entry.
+    // This may make follower wait a longer time to apply an entry. This configuration
+    // May affect proposal forwarding and follower read.
+    pub skip_bcast_commit: bool,
+
     /// tag is only used for logging
     pub tag: String,
 }
@@ -174,11 +179,11 @@ pub struct Raft<T: Storage> {
 
     pub max_inflight: usize,
     pub max_msg_size: u64,
-    pub prs: HashMap<u64, Progress>,
+    pub prs: FlatMap<u64, Progress>,
 
     pub state: StateRole,
 
-    pub votes: HashMap<u64, bool>,
+    pub votes: FlatMap<u64, bool>,
 
     pub msgs: Vec<Message>,
 
@@ -206,6 +211,7 @@ pub struct Raft<T: Storage> {
 
     pub check_quorum: bool,
     pre_vote: bool,
+    skip_bcast_commit: bool,
 
     heartbeat_timeout: usize,
     election_timeout: usize,
@@ -277,7 +283,7 @@ impl<T: Storage> Raft<T> {
             raft_log: raft_log,
             max_inflight: c.max_inflight_msgs,
             max_msg_size: c.max_size_per_msg,
-            prs: HashMap::with_capacity(peers.len()),
+            prs: FlatMap::with_capacity(peers.len()),
             state: StateRole::Follower,
             check_quorum: c.check_quorum,
             pre_vote: c.pre_vote,
@@ -295,6 +301,7 @@ impl<T: Storage> Raft<T> {
             vote: Default::default(),
             heartbeat_elapsed: Default::default(),
             randomized_election_timeout: 0,
+            skip_bcast_commit: c.skip_bcast_commit,
             tag: c.tag.to_owned(),
         };
         for p in peers {
@@ -592,7 +599,7 @@ impl<T: Storage> Raft<T> {
 
         self.abort_leader_transfer();
 
-        self.votes = HashMap::default();
+        self.votes = FlatMap::default();
         let (last_index, max_inflight) = (self.raft_log.last_index(), self.max_inflight);
         let self_id = self.id;
         for (id, p) in &mut self.prs {
@@ -1311,7 +1318,9 @@ impl<T: Storage> Raft<T> {
                                          &mut more_to_send);
         if maybe_commit {
             if self.maybe_commit() {
-                self.bcast_append();
+                if !self.skip_bcast_commit {
+                    self.bcast_append();
+                }
             } else if old_paused {
                 // update() reset the wait state on this node. If we had delayed sending
                 // an update before, send it now.
@@ -1570,7 +1579,7 @@ impl<T: Storage> Raft<T> {
               self.raft_log.last_term(),
               meta.get_index(),
               meta.get_term());
-        self.prs = HashMap::with_capacity(meta.get_conf_state().get_nodes().len());
+        self.prs = FlatMap::with_capacity(meta.get_conf_state().get_nodes().len());
         for &n in meta.get_conf_state().get_nodes() {
             let next_idx = self.raft_log.last_index() + 1;
             let matched = if n == self.id { next_idx - 1 } else { 0 };
@@ -1624,7 +1633,7 @@ impl<T: Storage> Raft<T> {
 
         // The quorum size is now smaller, so see if any pending entries can
         // be committed.
-        if self.maybe_commit() {
+        if self.maybe_commit() && !self.skip_bcast_commit {
             self.bcast_append();
         }
         // If the removed node is the lead_transferee, then abort the leadership transferring.

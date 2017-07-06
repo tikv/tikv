@@ -18,7 +18,6 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::collections::VecDeque;
 
 use rocksdb::{DB, WriteBatch, Writable};
-use uuid::Uuid;
 use protobuf::RepeatedField;
 
 use kvproto::metapb::{Peer as PeerMeta, Region};
@@ -32,6 +31,7 @@ use util::{SlowTimer, rocksdb, escape};
 use util::collections::{HashMap, HashMapEntry as MapEntry};
 use storage::{CF_LOCK, CF_RAFT};
 use raftstore::{Result, Error};
+use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
 use raftstore::store::msg::Callback;
 use raftstore::store::engine::{Snapshot, Peekable, Mutable};
@@ -39,18 +39,21 @@ use raftstore::store::peer_storage::{self, write_initial_state, write_peer_state
 use raftstore::store::peer::{parse_data_at, check_epoch, Peer};
 use raftstore::store::metrics::*;
 
+use super::metrics::*;
+
 const WRITE_BATCH_MAX_KEYS: usize = 128;
+const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 
 pub struct PendingCmd {
-    pub uuid: Uuid,
+    pub index: u64,
     pub term: u64,
     pub cb: Option<Callback>,
 }
 
 impl PendingCmd {
-    fn new(uuid: Uuid, term: u64, cb: Callback) -> PendingCmd {
+    fn new(index: u64, term: u64, cb: Callback) -> PendingCmd {
         PendingCmd {
-            uuid: uuid,
+            index: index,
             term: term,
             cb: Some(cb),
         }
@@ -60,7 +63,9 @@ impl PendingCmd {
 impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
-            panic!("callback of pending command {} is leak.", self.uuid);
+            panic!("callback of pending command at [index: {}, term: {}] is leak.",
+                   self.index,
+                   self.term);
         }
     }
 }
@@ -68,8 +73,8 @@ impl Drop for PendingCmd {
 impl Debug for PendingCmd {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f,
-               "PendingCmd [uuid: {}, term: {}, has_cb: {}]",
-               self.uuid,
+               "PendingCmd [index: {}, term: {}, has_cb: {}]",
+               self.index,
                self.term,
                self.cb.is_some())
     }
@@ -135,17 +140,19 @@ pub enum ExecResult {
     VerifyHash { index: u64, hash: Vec<u8> },
 }
 
-struct ApplyContext {
+struct ApplyContext<'a> {
+    pub host: &'a CoprocessorHost,
     pub wb: Option<WriteBatch>,
     pub cbs: Vec<(Callback, RaftCmdResponse)>,
     pub wb_last_bytes: u64,
     pub wb_last_keys: u64,
 }
 
-impl ApplyContext {
-    fn new() -> ApplyContext {
+impl<'a> ApplyContext<'a> {
+    fn new(host: &CoprocessorHost) -> ApplyContext {
         ApplyContext {
-            wb: Some(WriteBatch::new()),
+            host: host,
+            wb: Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE)),
             cbs: vec![],
             wb_last_bytes: 0,
             wb_last_keys: 0,
@@ -174,7 +181,7 @@ impl ApplyContext {
     }
 }
 
-impl Drop for ApplyContext {
+impl<'a> Drop for ApplyContext<'a> {
     fn drop(&mut self) {
         if !self.cbs.is_empty() {
             panic!("callback of apply context is leak");
@@ -184,32 +191,31 @@ impl Drop for ApplyContext {
 
 /// Call the callback of `cmd` that the region is removed.
 fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
-    notify_req_region_removed(region_id, peer_id, cmd.uuid, cmd.cb.take().unwrap());
-}
-
-pub fn notify_req_region_removed(region_id: u64, peer_id: u64, uuid: Uuid, cb: Callback) {
-    let region_not_found = Error::RegionNotFound(region_id);
-    let mut resp = cmd_resp::new_error(region_not_found);
-    cmd_resp::bind_uuid(&mut resp, uuid);
-    debug!("[region {}] {} is removed, notify {}.",
+    debug!("[region {}] {} is removed, notify cmd at [index: {}, term: {}].",
            region_id,
            peer_id,
-           uuid);
+           cmd.index,
+           cmd.term);
+    notify_req_region_removed(region_id, cmd.cb.take().unwrap());
+}
+
+pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
+    let region_not_found = Error::RegionNotFound(region_id);
+    let resp = cmd_resp::new_error(region_not_found);
     cb(resp);
 }
 
 /// Call the callback of `cmd` when it can not be processed further.
 fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
-    notify_stale_req(tag, term, cmd.uuid, cmd.cb.take().unwrap())
+    info!("{} command at [index: {}, term: {}] is stale, skip",
+          tag,
+          cmd.index,
+          cmd.term);
+    notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-fn gen_stale_req(tag: &str, uuid: Uuid, term: u64) -> RaftCmdResponse {
-    info!("{} command {} is stale, skip", tag, uuid);
-    cmd_resp::err_resp(Error::StaleCommand, uuid, term)
-}
-
-pub fn notify_stale_req(tag: &str, term: u64, uuid: Uuid, cb: Callback) {
-    let resp = gen_stale_req(tag, uuid, term);
+pub fn notify_stale_req(term: u64, cb: Callback) {
+    let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb(resp);
 }
 
@@ -373,7 +379,7 @@ impl ApplyDelegate {
                 for (cb, resp) in apply_ctx.cbs.drain(..) {
                     cb(resp);
                 }
-                apply_ctx.wb = Some(WriteBatch::new());
+                apply_ctx.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
                 apply_ctx.mark_last_bytes_and_keys();
             }
 
@@ -389,7 +395,7 @@ impl ApplyDelegate {
         while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
             // apprently, all the callbacks whose term is less than entry's term are stale.
             apply_ctx.cbs
-                .push((cmd.cb.take().unwrap(), gen_stale_req(&self.tag, cmd.uuid, cmd.term)));
+                .push((cmd.cb.take().unwrap(), cmd_resp::err_resp(Error::StaleCommand, term)));
         }
         None
     }
@@ -421,10 +427,10 @@ impl ApplyDelegate {
             }))
     }
 
-    fn find_cb(&mut self, uuid: Uuid, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
+    fn find_cb(&mut self, index: u64, term: u64, cmd: &RaftCmdRequest) -> Option<Callback> {
         if get_change_peer_cmd(cmd).is_some() {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
-                if cmd.uuid == uuid {
+                if cmd.index == index && cmd.term == term {
                     return Some(cmd.cb.take().unwrap());
                 } else {
                     notify_stale_command(&self.tag, self.term, cmd);
@@ -433,12 +439,11 @@ impl ApplyDelegate {
             return None;
         }
         while let Some(mut head) = self.pending_cmds.pop_normal(term) {
-            if head.uuid == uuid {
+            if head.index == index && head.term == term {
                 return Some(head.cb.take().unwrap());
             }
             // Because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
-            // TODO: call coprocessor with uuid instead.
             notify_stale_command(&self.tag, self.term, head);
         }
         None
@@ -448,21 +453,18 @@ impl ApplyDelegate {
                         apply_ctx: &mut ApplyContext,
                         index: u64,
                         term: u64,
-                        cmd: RaftCmdRequest)
+                        mut cmd: RaftCmdRequest)
                         -> Option<ExecResult> {
         if index == 0 {
             panic!("{} processing raft command needs a none zero index",
                    self.tag);
         }
 
-        let uuid = util::get_uuid_from_req(&cmd).unwrap();
-        let cmd_cb = self.find_cb(uuid, term, &cmd);
+        let cmd_cb = self.find_cb(index, term, &cmd);
+        apply_ctx.host.pre_apply(&self.region, &mut cmd);
         let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx.wb_mut(), index, term, &cmd);
 
-        debug!("{} applied command with uuid {:?} at log index {}",
-               self.tag,
-               uuid,
-               index);
+        debug!("{} applied command at log index {}", self.tag, index);
 
         let cb = match cmd_cb {
             None => return exec_result,
@@ -472,8 +474,6 @@ impl ApplyDelegate {
         // TODO: Involve post apply hook.
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
-        // Bind uuid here.
-        cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term);
         apply_ctx.cbs.push((cb, resp));
 
@@ -579,7 +579,6 @@ impl ApplyDelegate {
                    req: &'a RaftCmdRequest)
                    -> ExecContext<'a> {
         ExecContext {
-            snap: Snapshot::new(self.engine.clone()),
             apply_state: self.apply_state.clone(),
             wb: wb,
             req: req,
@@ -590,7 +589,6 @@ impl ApplyDelegate {
 }
 
 struct ExecContext<'a> {
-    snap: Snapshot,
     apply_state: RaftApplyState,
     wb: &'a mut WriteBatch,
     req: &'a RaftCmdRequest,
@@ -877,11 +875,19 @@ impl ApplyDelegate {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
-                CmdType::Get => self.handle_get(ctx, req),
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::Snap => self.handle_snap(ctx, req),
-                CmdType::Invalid => Err(box_err!("invalid cmd type, message maybe currupted")),
+                // Readonly commands are handled in raftstore directly.
+                // Don't panic here in case there are old entries need to be applied.
+                // It's also safe to skip them here, because a restart must have happened,
+                // hence there is no callback to be called.
+                CmdType::Snap | CmdType::Get => {
+                    warn!("{} skip readonly command: {:?}", self.tag, req);
+                    continue;
+                }
+                CmdType::Prewrite | CmdType::Invalid => {
+                    Err(box_err!("invalid cmd type, message maybe currupted"))
+                }
             });
 
             resp.set_cmd_type(cmd_type);
@@ -892,10 +898,6 @@ impl ApplyDelegate {
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(RepeatedField::from_vec(responses));
         Ok(resp)
-    }
-
-    fn handle_get(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
-        do_get(&self.tag, &self.region, &ctx.snap, req)
     }
 
     fn handle_put(&mut self, ctx: &ExecContext, req: &Request) -> Result<Response> {
@@ -968,10 +970,6 @@ impl ApplyDelegate {
 
         Ok(resp)
     }
-
-    fn handle_snap(&mut self, _: &ExecContext, _: &Request) -> Result<Response> {
-        do_snap(self.region.clone())
-    }
 }
 
 pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
@@ -996,7 +994,7 @@ fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
 pub fn do_get(tag: &str, region: &Region, snap: &Snapshot, req: &Request) -> Result<Response> {
     // TODO: the get_get looks wried, maybe we should figure out a better name later.
     let key = req.get_get().get_key();
-    try!(check_data_key(key, &region));
+    try!(check_data_key(key, region));
 
     let mut resp = Response::new();
     let res = if req.get_get().has_cf() {
@@ -1098,24 +1096,39 @@ impl Registration {
     }
 }
 
-pub struct Propose {
-    id: u64,
-    region_id: u64,
+pub struct Proposal {
     is_conf_change: bool,
-    uuid: Uuid,
+    index: u64,
     term: u64,
-    cb: Callback,
+    pub cb: Callback,
+}
+
+impl Proposal {
+    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback) -> Proposal {
+        Proposal {
+            is_conf_change: is_conf_change,
+            index: index,
+            term: term,
+            cb: cb,
+        }
+    }
 }
 
 pub struct Destroy {
     region_id: u64,
 }
 
+pub struct Proposals {
+    id: u64,
+    region_id: u64,
+    props: Vec<Proposal>,
+}
+
 /// region related task.
 pub enum Task {
     Applies(Vec<Apply>),
     Registration(Registration),
-    Propose(Propose),
+    Proposals(Proposals),
     Destroy(Destroy),
 }
 
@@ -1128,20 +1141,11 @@ impl Task {
         Task::Registration(Registration::new(peer))
     }
 
-    pub fn propose(id: u64,
-                   region_id: u64,
-                   uuid: Uuid,
-                   is_conf_change: bool,
-                   term: u64,
-                   cb: Callback)
-                   -> Task {
-        Task::Propose(Propose {
+    pub fn proposals(id: u64, region_id: u64, props: Vec<Proposal>) -> Task {
+        Task::Proposals(Proposals {
             id: id,
             region_id: region_id,
-            uuid: uuid,
-            term: term,
-            is_conf_change: is_conf_change,
-            cb: cb,
+            props: props,
         })
     }
 
@@ -1154,7 +1158,7 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Task::Applies(ref a) => write!(f, "async applys count {}", a.len()),
-            Task::Propose(ref p) => write!(f, "[region {}] propose", p.region_id),
+            Task::Proposals(ref p) => write!(f, "[region {}] proposals", p.region_id),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
@@ -1193,6 +1197,7 @@ pub enum TaskRes {
 // TODO: use threadpool to do task concurrently
 pub struct Runner {
     db: Arc<DB>,
+    host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
 }
@@ -1205,6 +1210,7 @@ impl Runner {
         }
         Runner {
             db: store.engine(),
+            host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
         }
@@ -1214,7 +1220,7 @@ impl Runner {
         let _timer = STORE_APPLY_LOG_HISTOGRAM.start_timer();
 
         let mut applys_res = Vec::with_capacity(applys.len());
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(self.host.as_ref());
         for apply in applys {
             if apply.entries.is_empty() {
                 continue;
@@ -1264,27 +1270,33 @@ impl Runner {
         }
     }
 
-    fn handle_propose(&mut self, p: Propose) {
-        let cmd = PendingCmd::new(p.uuid, p.term, p.cb);
-        let delegate = match self.delegates.get_mut(&p.region_id) {
+    fn handle_proposals(&mut self, proposals: Proposals) {
+        APPLY_PROPOSAL.observe(proposals.props.len() as f64);
+        let delegate = match self.delegates.get_mut(&proposals.region_id) {
             Some(d) => d,
             None => {
-                notify_region_removed(p.region_id, p.id, cmd);
+                for p in proposals.props {
+                    let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                    notify_region_removed(proposals.region_id, proposals.id, cmd);
+                }
                 return;
             }
         };
-        assert_eq!(delegate.id, p.id);
-        if p.is_conf_change {
-            if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
-                // if it loses leadership before conf change is replicated, there may be
-                // a stale pending conf change before next conf change is applied. If it
-                // becomes leader again with the stale pending conf change, will enter
-                // this block, so we notify leadership may have been changed.
-                notify_stale_command(&delegate.tag, delegate.term, cmd);
+        assert_eq!(delegate.id, proposals.id);
+        for p in proposals.props {
+            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            if p.is_conf_change {
+                if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
+                    // if it loses leadership before conf change is replicated, there may be
+                    // a stale pending conf change before next conf change is applied. If it
+                    // becomes leader again with the stale pending conf change, will enter
+                    // this block, so we notify leadership may have been changed.
+                    notify_stale_command(&delegate.tag, delegate.term, cmd);
+                }
+                delegate.pending_cmds.set_conf_change(cmd);
+            } else {
+                delegate.pending_cmds.append_normal(cmd);
             }
-            delegate.pending_cmds.set_conf_change(cmd);
-        } else {
-            delegate.pending_cmds.append_normal(cmd);
         }
     }
 
@@ -1324,7 +1336,7 @@ impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         match task {
             Task::Applies(a) => self.handle_applies(a),
-            Task::Propose(p) => self.handle_propose(p),
+            Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
         }
@@ -1355,9 +1367,10 @@ mod tests {
         (path, db)
     }
 
-    fn new_runner(db: Arc<DB>, tx: Sender<TaskRes>) -> Runner {
+    fn new_runner(db: Arc<DB>, host: Arc<CoprocessorHost>, tx: Sender<TaskRes>) -> Runner {
         Runner {
             db: db,
+            host: host,
             delegates: HashMap::new(),
             notifier: tx,
         }
@@ -1402,7 +1415,8 @@ mod tests {
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
         let (_tmp, db) = create_tmp_engine("apply-basic");
-        let mut runner = new_runner(db.clone(), tx);
+        let host = Arc::new(CoprocessorHost::new());
+        let mut runner = new_runner(db.clone(), host, tx);
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -1424,49 +1438,43 @@ mod tests {
         }
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        runner.run(Task::propose(1,
-                                 1,
-                                 Uuid::new_v4(),
-                                 false,
-                                 0,
-                                 box move |resp| {
-                                     resp_tx.send(resp).unwrap();
-                                 }));
+        let p = Proposal::new(false,
+                              1,
+                              0,
+                              box move |resp| {
+                                  resp_tx.send(resp).unwrap();
+                              });
+        runner.run(Task::proposals(1, 1, vec![p]));
         // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_region_not_found());
 
-        let normal_uuid = Uuid::new_v4();
-        runner.run(Task::propose(1, 2, normal_uuid, false, 0, box |_| {}));
+        let (cc_tx, cc_rx) = mpsc::channel();
+        let t = Task::proposals(1,
+                                2,
+                                vec![
+            Proposal::new(false, 2, 0, box |_| {}),
+            Proposal::new(true, 3, 0, box move |resp| { cc_tx.send(resp).unwrap(); }),
+        ]);
+        runner.run(t);
         assert!(rx.try_recv().is_err());
         {
             let normals = &runner.delegates[&2].pending_cmds.normals;
-            assert_eq!(normals.back().map(|c| c.uuid), Some(normal_uuid));
+            assert_eq!(normals.back().map(|c| c.index), Some(2));
         }
-
-        let (cc_tx, cc_rx) = mpsc::channel();
-        let cc_uuid = Uuid::new_v4();
-        runner.run(Task::propose(1,
-                                 2,
-                                 cc_uuid,
-                                 true,
-                                 0,
-                                 box move |resp| {
-                                     cc_tx.send(resp).unwrap();
-                                 }));
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2].pending_cmds.conf_change;
-            assert_eq!(cc.as_ref().map(|c| c.uuid), Some(cc_uuid));
+            assert_eq!(cc.as_ref().map(|c| c.index), Some(3));
         }
 
-        let cc_uuid2 = Uuid::new_v4();
-        runner.run(Task::propose(1, 2, cc_uuid2, true, 0, box move |_| {}));
+        let p = Proposal::new(true, 4, 0, box move |_| {});
+        runner.run(Task::proposals(1, 2, vec![p]));
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2].pending_cmds.conf_change;
-            assert_eq!(cc.as_ref().map(|c| c.uuid), Some(cc_uuid2));
+            assert_eq!(cc.as_ref().map(|c| c.index), Some(4));
         }
         // propose another conf change should mark previous stale.
         let cc_resp = cc_rx.try_recv().unwrap();
@@ -1524,8 +1532,7 @@ mod tests {
 
     impl EntryBuilder {
         fn new(index: u64, term: u64) -> EntryBuilder {
-            let mut req = RaftCmdRequest::new();
-            req.mut_header().set_uuid(Uuid::new_v4().as_bytes().to_vec());
+            let req = RaftCmdRequest::new();
             let mut entry = Entry::new();
             entry.set_index(index);
             entry.set_term(term);
@@ -1539,8 +1546,7 @@ mod tests {
                         delegate: &mut ApplyDelegate,
                         tx: Sender<RaftCmdResponse>)
                         -> EntryBuilder {
-            let uuid = Uuid::from_bytes(self.req.get_header().get_uuid()).unwrap();
-            let cmd = PendingCmd::new(uuid,
+            let cmd = PendingCmd::new(self.entry.get_index(),
                                       self.entry.get_term(),
                                       box move |r| tx.send(r).unwrap());
             delegate.pending_cmds.append_normal(cmd);
@@ -1614,7 +1620,8 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new();
+        let host = CoprocessorHost::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         let res = delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1634,7 +1641,7 @@ mod tests {
         let written_keys = delegate.metrics.written_keys;
         let size_diff_hint = delegate.metrics.size_diff_hint;
         let put_entry = EntryBuilder::new(2, 2).put_cf(CF_LOCK, b"k1", b"v1").epoch(1, 3).build();
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1655,7 +1662,7 @@ mod tests {
             .epoch(1, 1)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1672,7 +1679,7 @@ mod tests {
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1687,7 +1694,7 @@ mod tests {
         assert!(db.get(&dk_k3).unwrap().is_none());
 
         EntryBuilder::new(5, 2).capture_resp(&mut delegate, tx.clone()).build();
-        let put_entry = EntryBuilder::new(5, 2)
+        let put_entry = EntryBuilder::new(5, 3)
             .delete(b"k1")
             .delete_cf(CF_LOCK, b"k1")
             .delete_cf(CF_WRITE, b"k1")
@@ -1697,7 +1704,7 @@ mod tests {
         let lock_written_bytes = delegate.metrics.lock_cf_written_bytes;
         let delete_keys_hint = delegate.metrics.delete_keys_hint;
         let size_diff_hint = delegate.metrics.size_diff_hint;
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![put_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1714,12 +1721,12 @@ mod tests {
         assert_eq!(delegate.metrics.delete_keys_hint, delete_keys_hint + 2);
         assert_eq!(delegate.metrics.size_diff_hint, size_diff_hint - 9);
 
-        let delete_entry = EntryBuilder::new(6, 2)
+        let delete_entry = EntryBuilder::new(6, 3)
             .delete(b"k5")
             .epoch(1, 3)
             .capture_resp(&mut delegate, tx.clone())
             .build();
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, vec![delete_entry]);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {
@@ -1737,7 +1744,7 @@ mod tests {
                 .build();
             entries.push(put_entry);
         }
-        let mut apply_ctx = ApplyContext::new();
+        let mut apply_ctx = ApplyContext::new(&host);
         delegate.handle_raft_committed_entries(&mut apply_ctx, entries);
         db.write(apply_ctx.wb.take().unwrap()).unwrap();
         for (cb, resp) in apply_ctx.cbs.drain(..) {

@@ -21,8 +21,6 @@
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 #![feature(btree_range, collections_bound)]
 #![allow(new_without_default)]
-// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
-#![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
 #[macro_use]
@@ -33,11 +31,12 @@ extern crate tikv;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate uuid;
 extern crate test;
 extern crate kvproto;
 extern crate time;
 extern crate futures;
+extern crate tokio_core;
+extern crate grpc;
 
 #[allow(dead_code)]
 #[path="../../tests/util.rs"]

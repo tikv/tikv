@@ -16,6 +16,7 @@ use kvproto::eraftpb::MessageType;
 use tikv::raftstore::{Result, Error};
 use tikv::raftstore::store::{Msg as StoreMsg, Transport};
 use tikv::server::transport::*;
+use tikv::server::StoreAddrResolver;
 use tikv::util::{HandyRwLock, transport, Either};
 
 use rand;
@@ -29,11 +30,19 @@ use std::sync::atomic::*;
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;
+    fn flush(&mut self) {}
 }
 
-impl Channel<RaftMessage> for ServerTransport {
+impl<T, S> Channel<RaftMessage> for ServerTransport<T, S>
+    where T: RaftStoreRouter,
+          S: StoreAddrResolver
+{
     fn send(&self, m: RaftMessage) -> Result<()> {
         Transport::send(self, m)
+    }
+
+    fn flush(&mut self) {
+        self.flush_raft_client();
     }
 }
 
@@ -163,6 +172,10 @@ impl<M, C: Channel<M>> Clone for SimulateTransport<M, C> {
 impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
     fn send(&self, m: RaftMessage) -> Result<()> {
         Channel::send(self, m)
+    }
+
+    fn flush(&mut self) {
+        self.ch.flush();
     }
 }
 

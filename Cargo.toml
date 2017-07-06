@@ -37,7 +37,6 @@ byteorder = "0.5"
 rand = "0.3"
 quick-error = "0.2"
 tempdir = "0.3"
-uuid = { version = "0.3", features = ["v4"] }
 time = "0.1"
 threadpool = "1.0.0"
 toml = "0.1"
@@ -46,8 +45,7 @@ libc = "0.2"
 crc = "1.2"
 fs2 = "0.4"
 clippy = {version = "*", optional = true}
-rustc-serialize = "0.3"
-protobuf = "1.2.1"
+protobuf = "1.4"
 nix = "0.6.0"
 utime = "0.1"
 chrono = "0.2"
@@ -59,10 +57,13 @@ regex = "0.1"
 fnv = "1.0"
 sys-info = "0.4.1"
 ordermap = "0.2"
+flat_map = "0.0.4"
 mio = "0.5"
 futures = "0.1"
 tokio-core = "0.1"
 tokio-timer = "0.1"
+serde = "1.0"
+serde_json = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.2"
@@ -82,13 +83,16 @@ default-features = false
 features = ["nightly", "push", "process"]
 
 [dependencies.grpc]
-git = "https://github.com/stepancheg/grpc-rust.git"
+git = "https://github.com/pingcap/grpc-rs.git"
 
 [dependencies.jemallocator]
 git = "https://github.com/busyjay/jemallocator.git"
 branch = "dev"
 features = ["profiling"]
 optional = true
+
+[dev-dependencies]
+futures-cpupool = "0.1"
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with

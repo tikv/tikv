@@ -17,13 +17,18 @@ use std::result;
 use std::io::Error as IoError;
 use std::net::AddrParseError;
 
+use futures::Canceled;
 use protobuf::ProtobufError;
+use grpc::Error as GrpcError;
 
 use util::codec::Error as CodecError;
+use util::worker::Stopped;
 use raftstore::Error as RaftServerError;
 use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
+use super::snap::Task as SnapTask;
+use coprocessor::EndPointTask;
 
 quick_error!{
     #[derive(Debug)]
@@ -38,6 +43,7 @@ quick_error!{
         Io(err: IoError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Protobuf(err: ProtobufError) {
@@ -45,34 +51,63 @@ quick_error!{
             cause(err)
             description(err.description())
         }
+        Grpc(err: GrpcError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
         Codec(err: CodecError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         AddrParse(err: AddrParseError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         RaftServer(err: RaftServerError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Engine(err: EngineError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Storage(err: StorageError) {
             from()
             cause(err)
+            display("{:?}", err)
             description(err.description())
         }
         Pd(err: PdError) {
             from()
             cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
+        SnapWorkerStopped(err: Stopped<SnapTask>) {
+            from()
+            display("{:?}", err)
+        }
+        EndPointStopped(err: Stopped<EndPointTask>) {
+            from()
+            display("{:?}", err)
+        }
+        Sink {
+            description("failed to poll from mpsc receiver")
+        }
+        Canceled(err: Canceled) {
+            from()
+            cause(err)
+            display("{:?}", err)
             description(err.description())
         }
     }
