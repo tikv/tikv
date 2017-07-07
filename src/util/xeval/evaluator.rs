@@ -137,6 +137,7 @@ impl Evaluator {
             ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
+            ExprType::JsonUnquote => self.eval_json_unquote(ctx, expr),
             ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
             ExprType::JsonType => self.eval_json_type(ctx, expr),
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
@@ -235,8 +236,7 @@ impl Evaluator {
                                            expr.get_tp(),
                                            children.len())));
         }
-        let child = try!(self.eval(ctx, &children[0]));
-        Ok(child)
+        self.eval(ctx, &children[0])
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
@@ -414,6 +414,23 @@ impl Evaluator {
         } else {
             Ok(left)
         }
+    }
+
+    fn eval_json_unquote(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr));
+        if child == Datum::Null {
+            return Ok(Datum::Null);
+        }
+        // here Datum::Byte(bs) should be converted into Json::String(bs)
+        // select JSON_UNQUOTE('{"a":   "b"}');
+        // +------------------------------+
+        // | JSON_UNQUOTE('{"a":   "b"}') |
+        // +------------------------------+
+        // | {"a":   "b"}                 |
+        // +------------------------------+
+        let json = try!(child.into_json());
+        let unquote_data = try!(json.unquote());
+        Ok(Datum::Bytes(unquote_data.into_bytes()))
     }
 
     fn eval_json_extract(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -1090,6 +1107,21 @@ mod test {
         build_expr(datums, tp)
     }
 
+    test_eval!(test_eval_json_unquote,
+               vec![
+            (build_expr(vec![Datum::Null], ExprType::JsonUnquote),
+                        Datum::Null),
+            (build_byte_datums_expr(&[b"a"], ExprType::JsonUnquote),
+                        Datum::Bytes(b"a".to_vec())),
+            (build_byte_datums_expr(&[br#"\"3\""#], ExprType::JsonUnquote),
+                        Datum::Bytes(br#""3""#.to_vec())),
+            (build_byte_datums_expr(&[br#"{"a":  "b"}"#], ExprType::JsonUnquote),
+                        Datum::Bytes(br#"{"a":  "b"}"#.to_vec())),
+            (build_byte_datums_expr(&[br#"hello,\"quoted string\",world"#],
+                                    ExprType::JsonUnquote),
+                        Datum::Bytes(br#"hello,"quoted string",world"#.to_vec())),
+               ]);
+
     test_eval!(test_eval_json_extract,
                vec![(build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonExtract),
                      Datum::Null),
@@ -1129,6 +1161,8 @@ mod test {
 
     test_eval_err!(test_eval_json_err,
                    vec![
+          build_expr(vec![], ExprType::JsonUnquote),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonUnquote),
           build_expr(vec![], ExprType::JsonExtract),
           build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#],
                                 ExprType::JsonExtract),
@@ -1139,5 +1173,4 @@ mod test {
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
      ]);
-
 }
