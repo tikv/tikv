@@ -457,6 +457,7 @@ impl Evaluator {
         try!(json.modify(&keys, values, mt));
         Ok(Datum::Json(json))
     }
+
     fn eval_json_unquote(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let child = try!(self.eval_one_child(ctx, expr));
         if child == Datum::Null {
