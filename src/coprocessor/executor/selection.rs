@@ -24,6 +24,7 @@ use util::xeval::{Evaluator, EvalContext};
 use super::super::Result;
 use super::{Row, Executor, ExprColumnRefVisitor};
 use super::super::endpoint::inflate_with_col;
+use coprocessor::metrics::*;
 
 pub struct SelectionExecutor<'a> {
     conditions: Vec<Expr>,
@@ -48,6 +49,7 @@ impl<'a> SelectionExecutor<'a> {
             .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect::<Vec<ColumnInfo>>();
+        COPR_DIFF_EXEC_REQS.with_label_values(&["selection"]).inc();
         Ok(SelectionExecutor {
             conditions: conditions,
             columns: columns,

@@ -14,6 +14,7 @@
 
 use coprocessor::endpoint::prefix_next;
 use coprocessor::Result;
+use coprocessor::metrics::*;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::KeyRange;
@@ -52,6 +53,7 @@ impl<'a> IndexScanExec<'a> {
             .map(|c| c.get_column_id())
             .collect();
         let scanner = Scanner::new(desc, false, snapshot, statistics, start_ts, isolation_level);
+        COPR_DIFF_EXEC_REQS.with_label_values(&["idxscan"]).inc();
         IndexScanExec {
             desc: desc,
             col_ids: col_ids,
@@ -109,6 +111,7 @@ impl<'a> Executor for IndexScanExec<'a> {
         while self.cursor < self.key_ranges.len() {
             let data = box_try!(self.get_row_from_range());
             if data.is_none() {
+                COPR_POINT_AND_RANGE_QUERIES.with_label_values(&["range"]).inc();
                 self.scanner.set_seek_key(None);
                 self.cursor += 1;
                 continue;

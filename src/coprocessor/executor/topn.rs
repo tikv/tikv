@@ -21,6 +21,7 @@ use std::vec::IntoIter;
 use super::{Executor, Row, ExprColumnRefVisitor};
 use super::super::Result;
 use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
+use coprocessor::metrics::*;
 use util::xeval::{Evaluator, EvalContext};
 
 use tipb::executor::TopN;
@@ -53,7 +54,7 @@ impl<'a> TopNExecutor<'a> {
             .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect();
-
+        COPR_DIFF_EXEC_REQS.with_label_values(&["topn"]).inc();
         Ok(TopNExecutor {
             order_by: Rc::new(order_by),
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),

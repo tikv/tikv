@@ -16,6 +16,7 @@
 
 use super::{Row, Executor};
 use super::super::Result;
+use coprocessor::metrics::*;
 use tipb::executor::Limit;
 
 struct LimitExecutor<'a> {
@@ -26,6 +27,7 @@ struct LimitExecutor<'a> {
 
 impl<'a> LimitExecutor<'a> {
     fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+        COPR_DIFF_EXEC_REQS.with_label_values(&["limit"]).inc();
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
