@@ -745,11 +745,12 @@ impl SelectContextCore {
             Either::Right(cols.iter().map(|c| c.get_column_id()).collect())
         };
 
-        let mut aggr = false;
-        if !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty() {
+        let aggr = if !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty() {
             COPR_DIFF_EXEC_REQS.with_label_values(&["aggregation"]).inc();
-            aggr = true;
-        }
+            true
+        } else {
+            false
+        };
 
         Ok(SelectContextCore {
             ctx: Rc::new(box_try!(EvalContext::new(&sel))),
