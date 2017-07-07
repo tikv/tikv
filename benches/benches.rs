@@ -28,10 +28,13 @@ extern crate tempdir;
 extern crate rocksdb;
 extern crate protobuf;
 extern crate kvproto;
+extern crate grpc;
+extern crate futures;
 
 mod channel;
 mod writebatch;
 mod serialization;
+mod rpc;
 
 #[allow(dead_code)]
 #[path="../tests/util.rs"]
