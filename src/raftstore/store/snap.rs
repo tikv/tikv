@@ -838,7 +838,7 @@ mod v2 {
         cf_index: usize,
         meta_file: MetaFile,
         size_track: Arc<RwLock<u64>>,
-        snap_compression: DBCompressionType,
+        compression_type: DBCompressionType,
     }
 
     impl Snap {
@@ -892,7 +892,7 @@ mod v2 {
                 cf_index: 0,
                 meta_file: meta_file,
                 size_track: size_track,
-                snap_compression: compression,
+                compression_type: compression,
             };
 
             // load snapshot meta if meta_file exists
@@ -923,7 +923,7 @@ mod v2 {
                                                   compression: DBCompressionType)
                                                   -> RaftStoreResult<Snap> {
             let mut s = try!(Snap::new(dir, key, size_track, true, true, deleter, compression));
-            try!(s.init_for_building(snap, compression));
+            try!(s.init_for_building(snap));
             Ok(s)
         }
 
@@ -989,10 +989,7 @@ mod v2 {
             Ok(s)
         }
 
-        fn init_for_building(&mut self,
-                             snap: &DbSnapshot,
-                             compression: DBCompressionType)
-                             -> RaftStoreResult<()> {
+        fn init_for_building(&mut self, snap: &DbSnapshot) -> RaftStoreResult<()> {
             if self.exists() {
                 return Ok(());
             }
@@ -1008,7 +1005,10 @@ mod v2 {
                     let handle = snap.cf_handle(cf_file.cf)?;
                     let old_options = snap.get_db().get_options_cf(handle);
                     let mut io_options = old_options.clone();
-                    io_options.compression(compression);
+                    io_options.compression(self.compression_type);
+                    // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
+                    // compression_per_level first, so to make sure our specified compression type
+                    // being used, we must set them empty or disabled.
                     io_options.compression_per_level(&[]);
                     io_options.bottommost_compression(DBCompressionType::DBDisableCompression);
                     let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
@@ -1173,8 +1173,7 @@ mod v2 {
                                    self.path());
                             return Err(e);
                         }
-                        let compression = self.snap_compression;
-                        try!(self.init_for_building(snap, compression));
+                        try!(self.init_for_building(snap));
                     }
                 }
             }
