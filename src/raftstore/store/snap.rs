@@ -1002,8 +1002,8 @@ mod v2 {
                         .open(&cf_file.tmp_path));
                     cf_file.file = Some(f);
                 } else {
-                    let mut io_options =
-                        snap.get_db().get_options_cf(snap.cf_handle(cf_file.cf)?).clone();
+                    let handle = snap.cf_handle(cf_file.cf)?;
+                    let mut io_options = snap.get_db().get_options_cf(handle).clone();
                     io_options.compression(self.compression_type);
                     // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
                     // compression_per_level first, so to make sure our specified compression type
