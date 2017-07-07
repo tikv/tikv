@@ -16,6 +16,17 @@ use util::codec::datum::Datum;
 use util::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP};
 use super::{Evaluator, EvalContext, Result, Error};
 
+fn invalid_type_error(datum: &Datum) -> Result<Datum> {
+    Err(Error::Eval(format!("invalid expr type: {:?}, expect to be int", datum)))
+}
+
+fn check_datum_int(datum: &Datum) -> Result<()> {
+    match *datum {
+        Datum::I64(_) | Datum::U64(_) => Ok(()),
+        _ => Err(Error::Eval(format!("invalid expr type: {:?}, expect to be int", datum))),
+    }
+}
+
 impl Evaluator {
     pub fn cast_int_as_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let child = try!(self.get_one_child(expr));
@@ -23,7 +34,7 @@ impl Evaluator {
         match d {
             Datum::I64(_) => Ok(d),
             Datum::U64(_) => Ok(Datum::I64(d.i64())),
-            _ => Err(Error::Eval(format!("invalid expr type: {:?}, expect to be int", d))),
+            _ => invalid_type_error(&d),
         }
     }
 
@@ -33,7 +44,7 @@ impl Evaluator {
         match d {
             Datum::I64(i) => Ok(Datum::F64(i as f64)),
             Datum::U64(u) => Ok(Datum::F64(u as f64)),
-            _ => Err(Error::Eval(format!("invalid datum type: {:?}, expect to be int", d))),
+            _ => invalid_type_error(&d),
         }
     }
 
@@ -42,7 +53,7 @@ impl Evaluator {
         let d = try!(self.eval(ctx, child));
         match d {
             Datum::I64(_) | Datum::U64(_) => {}
-            _ => return Err(Error::Eval(format!("invalid datum type: {:?}, expect to be int", d))),
+            _ => return invalid_type_error(&d),
         }
         let s = try!(d.into_string());
         Ok(Datum::Bytes(s.into_bytes()))
@@ -54,10 +65,7 @@ impl Evaluator {
         let decimal = match datum {
             Datum::I64(_) => Decimal::from(datum.i64()),
             Datum::U64(_) => Decimal::from(datum.u64()),
-            _ => {
-                return Err(Error::Eval(format!("invalid datum type: {:?}o expect to be int",
-                                               datum)))
-            }
+            _ => return invalid_type_error(&datum),
         };
         Ok(Datum::Dec(decimal))
     }
@@ -65,10 +73,7 @@ impl Evaluator {
     pub fn cast_int_as_time(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
-        match d {
-            Datum::I64(_) | Datum::U64(_) => {}
-            _ => return Err(Error::Eval(format!("invalid datum type: {:?}, expect to be int", d))),
-        }
+        try!(check_datum_int(&d));
         let s = try!(d.into_string());
         let t = try!(Time::parse_datetime(&s, DEFAULT_FSP, &ctx.tz));
         Ok(Datum::Time(t))
@@ -77,10 +82,7 @@ impl Evaluator {
     pub fn cast_int_as_duration(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
-        match d {
-            Datum::I64(_) | Datum::U64(_) => {}
-            _ => return Err(Error::Eval(format!("invalid datum type: {:?}, expect to be int", d))),
-        }
+        try!(check_datum_int(&d));
         let s = try!(d.into_string());
         let duration = try!(Duration::parse(s.as_bytes(), DEFAULT_FSP));
         Ok(Datum::Dur(duration))
