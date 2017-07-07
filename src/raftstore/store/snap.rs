@@ -1002,9 +1002,8 @@ mod v2 {
                         .open(&cf_file.tmp_path));
                     cf_file.file = Some(f);
                 } else {
-                    let handle = snap.cf_handle(cf_file.cf)?;
-                    let old_options = snap.get_db().get_options_cf(handle);
-                    let mut io_options = old_options.clone();
+                    let mut io_options =
+                        snap.get_db().get_options_cf(snap.cf_handle(cf_file.cf)?).clone();
                     io_options.compression(self.compression_type);
                     // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
                     // compression_per_level first, so to make sure our specified compression type
@@ -2095,7 +2094,7 @@ struct SnapManagerCore {
     use_sst_file_snapshot: bool,
     // put snap_size under core so we don't need to worry about deadlock.
     snap_size: Arc<RwLock<u64>>,
-    snap_compression: DBCompressionType,
+    compression_type: DBCompressionType,
 }
 
 fn notify_stats(ch: Option<&SendCh<Msg>>) {
@@ -2126,7 +2125,7 @@ impl SnapManager {
                 registry: map![],
                 use_sst_file_snapshot: use_sst_file_snapshot,
                 snap_size: Arc::new(RwLock::new(0)),
-                snap_compression: compression,
+                compression_type: compression,
             })),
             ch: ch,
         }
@@ -2218,12 +2217,12 @@ impl SnapManager {
                                      key: &SnapKey,
                                      snap: &DbSnapshot)
                                      -> RaftStoreResult<Box<Snapshot>> {
-        let (use_sst_file_snapshot, dir, snap_size, snap_compression) = {
+        let (use_sst_file_snapshot, dir, snap_size, snap_compression_type) = {
             let core = self.core.rl();
             (core.use_sst_file_snapshot,
              core.base.clone(),
              core.snap_size.clone(),
-             core.snap_compression)
+             core.compression_type)
         };
         if use_sst_file_snapshot {
             let f = try!(v2::Snap::new_for_building(dir,
@@ -2231,7 +2230,7 @@ impl SnapManager {
                                                     snap,
                                                     snap_size,
                                                     Box::new(self.clone()),
-                                                    snap_compression));
+                                                    snap_compression_type));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(dir, snap_size, true, key));
@@ -2250,7 +2249,7 @@ impl SnapManager {
                                                key,
                                                core.snap_size.clone(),
                                                Box::new(self.clone()),
-                                               core.snap_compression));
+                                               core.compression_type));
         Ok(Box::new(s))
     }
 
@@ -2267,7 +2266,7 @@ impl SnapManager {
                                                      snapshot_data.take_meta(),
                                                      core.snap_size.clone(),
                                                      Box::new(self.clone()),
-                                                     core.snap_compression));
+                                                     core.compression_type));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), false, key));
@@ -2281,7 +2280,7 @@ impl SnapManager {
                                                   key,
                                                   core.snap_size.clone(),
                                                   Box::new(self.clone()),
-                                                  core.snap_compression) {
+                                                  core.compression_type) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
