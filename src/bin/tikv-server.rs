@@ -85,6 +85,10 @@ const LOCKCF_MAX_MEM: u64 = GB;
 const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.25, 0.15, 0.02, 0.02];
 const SEC_TO_MS: i64 = 1000;
 
+// Zlib and bzip2 are too slow.
+const COMPRESSION_PRIORITY: [DBCompressionType; 3] =
+    [DBCompressionType::DBLz4, DBCompressionType::DBSnappy, DBCompressionType::DBZstd];
+
 fn sanitize_memory_usage() -> bool {
     let mut ratio = 0.0;
     for v in DEFAULT_BLOCK_CACHE_RATIO {
@@ -818,10 +822,7 @@ fn check_compression_available(compression: DBCompressionType) -> bool {
 }
 
 fn get_fastest_supported_compression_type() -> DBCompressionType {
-    // Zlib and bzip2 are too slow.
-    let compression_priority =
-        [DBCompressionType::DBLz4, DBCompressionType::DBSnappy, DBCompressionType::DBZstd];
-    *compression_priority.into_iter()
+    *COMPRESSION_PRIORITY.into_iter()
         .find(|&&c| check_compression_available(c))
         .unwrap_or(&DBCompressionType::DBNo)
 }
