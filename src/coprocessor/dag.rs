@@ -64,7 +64,7 @@ impl<'s> DAGContext<'s> {
     pub fn validate_dag(&mut self) -> Result<()> {
         let execs = self.req.get_executors();
         let first = try!(execs.first()
-            .ok_or_else(|| Error::Other(box_err!("dag copr has not executor"))));
+            .ok_or_else(|| Error::Other(box_err!("has not executor"))));
         // check whether first exec is *scan and get the column info
         match first.get_tp() {
             ExecType::TypeTableScan => {
@@ -85,8 +85,8 @@ impl<'s> DAGContext<'s> {
         Ok(())
     }
 
-    // FIXME seperate first exec build action from `build_dag`
-    // since it will generte some mutable conflict when putting together
+    // seperate first exec build action from `build_dag`
+    // since it will generte mutable conflict when putting together
     pub fn build_first(&'s self,
                        mut first: Executor,
                        statistics: &'s mut Statistics)

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use coprocessor::endpoint::prefix_next;
 use coprocessor::Result;
 use tipb::executor::IndexScan;
@@ -34,7 +33,6 @@ pub struct IndexScanExecutor<'a> {
 }
 
 impl<'a> IndexScanExecutor<'a> {
-    #[allow(dead_code)] //TODO:remove it
     pub fn new(mut meta: IndexScan,
                key_ranges: Vec<KeyRange>,
                snapshot: &'a Snapshot,

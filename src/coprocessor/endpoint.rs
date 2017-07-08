@@ -403,29 +403,26 @@ impl TiDbEndPoint {
             REQ_TYPE_INDEX => ctx.get_rows_from_idx(range),
             _ => unreachable!(),
         };
+        let mut resp = Response::new();
+        let mut sel_resp = SelectResponse::new();
         match res {
             Ok(()) => {
-                let mut resp = Response::new();
-                let mut sel_resp = SelectResponse::new();
                 sel_resp.set_chunks(RepeatedField::from_vec(ctx.core.chunks));
                 let data = box_try!(sel_resp.write_to_bytes());
                 resp.set_data(data);
-                Ok(resp)
             }
             Err(e) => {
                 if let Error::Other(_) = e {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
                     sel_resp.set_error(to_pb_error(&e));
                     resp.set_data(box_try!(sel_resp.write_to_bytes()));
                     resp.set_other_error(format!("{}", e));
                     COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
-                    Ok(resp)
                 } else {
-                    Err(e)
+                    return Err(e);
                 }
             }
         }
+        return Ok(resp);
     }
 
     pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
