@@ -43,7 +43,7 @@ use kvproto::kvrpcpb::{Context, LockInfo, CommandPri};
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode, Statistics};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
-use storage::{Key, Value, KvPair, CMD_TAG_GC};
+use storage::{Key, Value, KvPair, MvccPair, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
 use raftstore::store::engine::IterOption;
 use util::transport::{SyncSendCh, Error as TransportError};
@@ -66,6 +66,8 @@ pub enum ProcessResult {
     Res,
     MultiRes { results: Vec<StorageResult<()>> },
     MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
+    MvccPairs { pairs: Vec<MvccPair> },
+    StarttsMvccPair { pair: (Key, Vec<MvccPair>) },
     Value { value: Option<Value> },
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
@@ -116,7 +118,7 @@ impl Debug for Msg {
     }
 }
 
-/// Delivers the process result of a command to the storage callback.
+/// Delivers the process result of a command to the storage callback.g
 fn execute_callback(callback: StorageCb, pr: ProcessResult) {
     match callback {
         StorageCb::Boolean(cb) => {
@@ -143,6 +145,20 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
         StorageCb::KvPairs(cb) => {
             match pr {
                 ProcessResult::MultiKvpairs { pairs } => cb(Ok(pairs)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::MvccPairs(cb) => {
+            match pr {
+                ProcessResult::MvccPairs { pairs } => cb(Ok(pairs)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            }
+        }
+        StorageCb::StarttsMvccPair(cb) => {
+            match pr {
+                ProcessResult::StarttsMvccPair { pair } => cb(Ok(pair)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
@@ -338,6 +354,81 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
                 Err(e) => ProcessResult::Failed { err: e.into() },
+            }
+        }
+        Command::KeyMvcc { ref ctx, ref key } => {
+            let mut reader = MvccReader::new(snapshot.as_ref(),
+                                             &mut statistics,
+                                             Some(ScanMode::Forward),
+                                             true,
+                                             None,
+                                             ctx.get_isolation_level());
+            let mut ts: u64 = 0;
+            let mut mvccs = vec![];
+            let mut err: Option<StorageError> = None;
+            loop {
+                match reader.seek_write(key, ts).map_err(StorageError::from) {
+                    Err(e) => {
+                        err = Some(e);
+                        break;
+                    }
+                    Ok(opt) => {
+                        match opt {
+                            Some((commit_ts, write)) => {
+                                mvccs.push((commit_ts, write) as MvccPair);
+                                ts = write.start_ts + 1;
+                            }
+                            None => break,
+                        }
+                    }
+                };
+            }
+            match err {
+                Some(e) => ProcessResult::Failed { err: e.into() },
+                None => ProcessResult::MvccPairs { pairs: mvccs },
+            }
+        }
+        Command::StarttsMvcc { ref ctx, start_ts } => {
+            let mut reader = MvccReader::new(snapshot.as_ref(),
+                                             &mut statistics,
+                                             Some(ScanMode::Forward),
+                                             true,
+                                             None,
+                                             ctx.get_isolation_level());
+            match reader.seek(Key::from_raw(&[]), start_ts)
+                .map_err(StorageError::from) {
+                Err(e) => ProcessResult::Failed { err: e.into() },
+                Ok(opt) => {
+                    match opt {
+                        Some((key, _)) => {
+                            let mut ts: u64 = 0;
+                            let mut mvccs = vec![];
+                            let mut err: Option<StorageError> = None;
+                            loop {
+                                match reader.seek_write(key, ts).map_err(StorageError::from) {
+                                    Err(e) => {
+                                        err = Some(e);
+                                        break;
+                                    }
+                                    Ok(opt) => {
+                                        match opt {
+                                            Some((commit_ts, write)) => {
+                                                mvccs.push((commit_ts, write) as MvccPair);
+                                                ts = write.start_ts + 1;
+                                            }
+                                            None => break,
+                                        }
+                                    }
+                                };
+                            }
+                            match err {
+                                Some(e) => ProcessResult::Failed { err: e.into() },
+                                None => ProcessResult::StarttsMvccPair { pair: Some((key, mvccs)) },
+                            }
+                        }
+                        None => ProcessResult::StarttsMvccPair { pair: None },
+                    };
+                }
             }
         }
         // Scans locks with timestamp <= `max_ts`

@@ -32,6 +32,7 @@ use util::buf::PipeBuffer;
 use storage::{self, Storage, Key, Options, Mutation};
 use storage::txn::Error as TxnError;
 use storage::mvcc::Error as MvccError;
+use storage::mvcc::WriteType;
 use storage::engine::Error as EngineError;
 use super::transport::RaftStoreRouter;
 use coprocessor::{RequestTask, EndPointTask};
@@ -700,18 +701,89 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .then(|_| future::ok::<_, ()>(())));
     }
 
-    fn mvcc_get_by_key(&self,
-                       _: RpcContext,
-                       _: MvccGetByKeyRequest,
-                       _: UnarySink<MvccGetByKeyResponse>) {
-        unimplemented!();
+    fn key_mvcc(&self,
+                ctx: RpcContext,
+                mut req: KeyMvccRequest,
+                sink: UnarySink<KeyMvccResponse>) {
+        let label = "key_mvcc";
+        let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
+
+        let storage = self.storage.clone();
+
+        let (cb, future) = make_callback();
+        let res = storage.async_key_mvcc(req.take_context(), Key::from_raw(req.get_key()), cb);
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future.map_err(Error::from)
+            .map(|v| {
+                let mut resp = KeyMvccResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else {
+                    match v {
+                        Ok(vv) => resp.set_pairs(RepeatedField::from_vec(extract_mvcc_pairs(vv))),
+                        Err(e) => resp.set_error(format!("{}", e)),
+                    };
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+
+        ctx.spawn(future);
     }
 
-    fn mvcc_get_by_start_ts(&self,
-                            _: RpcContext,
-                            _: MvccGetByStartTsRequest,
-                            _: UnarySink<MvccGetByStartTsResponse>) {
-        unimplemented!();
+    fn startts_mvcc(&self,
+                    ctx: RpcContext,
+                    mut req: StarttsMvccRequest,
+                    sink: UnarySink<StarttsMvccResponse>) {
+        let label = "startts_mvcc";
+        let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
+
+        let storage = self.storage.clone();
+
+        let (cb, future) = make_callback();
+
+        let res = storage.async_startts_mvcc(req.take_context(), req.get_start_ts(), cb);
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future.map_err(Error::from)
+            .map(|v| {
+                let mut resp = StarttsMvccResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else {
+                    match v {
+                        Ok(Some((k, vv))) => {
+                            resp.set_key(k);
+                            resp.set_pairs(RepeatedField::from_vec(extract_mvcc_pairs(vv)))
+                        }
+                        Ok(None) => {
+                            resp.set_key(vec![]);
+                            resp.set_pairs(RepeatedField::from_vec(vec![]))
+                        }
+                        Err(e) => resp.set_error(format!("{}", e)),
+                    }
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+        ctx.spawn(future);
     }
 }
 
@@ -794,6 +866,32 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
             vec![pair]
         }
     }
+}
+
+fn extract_mvcc_pairs(res: Vec<storage::MvccPair>) -> Vec<MvccPair> {
+    res.into_iter()
+        .map(|r| match r {
+            (commit_ts, write) => {
+                let mut pair = MvccPair::new();
+                pair.set_start_ts(write.start_ts);
+                let op = match write.write_type {
+                    WriteType::Put => Op::Put,
+                    WriteType::Delete => Op::Del,
+                    WriteType::Lock => Op::Lock,
+                    WriteType::Rollback => Op::Rollback,
+                };
+                pair.set_field_type(op);
+                pair.set_commit_ts(commit_ts);
+                match write.short_value {
+                    Some(v) => {
+                        pair.set_short_values(v as Vec<u8>);
+                    }
+                    None => {}
+                };
+                pair
+            }
+        })
+        .collect()
 }
 
 fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {

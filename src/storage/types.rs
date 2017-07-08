@@ -21,6 +21,8 @@ use util::{escape, codec};
 use util::codec::number::{self, NumberEncoder, NumberDecoder};
 use util::codec::bytes::BytesDecoder;
 
+use storage::mvcc::Write;
+
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
@@ -29,6 +31,9 @@ pub type Value = Vec<u8>;
 /// The value is simply raw bytes; the key is a little bit tricky, which is
 /// encoded bytes.
 pub type KvPair = (Vec<u8>, Value);
+
+/// MvccPair commit_ts-Write pair type.
+pub type MvccPair = (u64, Write);
 
 /// Key type.
 ///
