@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use coprocessor::endpoint::{prefix_next, is_point};
-use coprocessor::Result;
-use coprocessor::metrics::*;
 use tipb::executor::TableScan;
 use kvproto::coprocessor::KeyRange;
 use kvproto::kvrpcpb::IsolationLevel;
@@ -22,7 +19,9 @@ use util::collections::HashSet;
 use storage::{Snapshot, Statistics};
 use super::{Executor, Row};
 use super::scanner::Scanner;
-
+use super::super::endpoint::{prefix_next, is_point};
+use super::super::Result;
+use super::super::metrics::*;
 
 pub struct TableScanExecutor<'a> {
     meta: TableScan,
@@ -52,7 +51,7 @@ impl<'a> TableScanExecutor<'a> {
                                    statistics,
                                    start_ts,
                                    isolation_level);
-        COPR_DIFF_EXEC_REQS.with_label_values(&["tblscan"]).inc();
+        COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
         TableScanExecutor {
             meta: meta,
             col_ids: col_ids,
@@ -96,7 +95,7 @@ impl<'a> Executor for TableScanExecutor<'a> {
     fn next(&mut self) -> Result<Option<Row>> {
         while self.cursor < self.key_ranges.len() {
             if is_point(&self.key_ranges[self.cursor]) {
-                COPR_POINT_AND_RANGE_QUERIES.with_label_values(&["point"]).inc();
+                CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
                 let data = try!(self.get_row_from_point());
                 self.scanner.set_seek_key(None);
                 self.cursor += 1;
@@ -105,7 +104,7 @@ impl<'a> Executor for TableScanExecutor<'a> {
 
             let data = try!(self.get_row_from_range());
             if data.is_none() {
-                COPR_POINT_AND_RANGE_QUERIES.with_label_values(&["range"]).inc();
+                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 self.scanner.set_seek_key(None);
                 self.cursor += 1;
                 continue;
