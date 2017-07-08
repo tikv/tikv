@@ -67,7 +67,7 @@ pub enum ProcessResult {
     MultiRes { results: Vec<StorageResult<()>> },
     MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
     MvccPairs { pairs: Vec<MvccPair> },
-    StarttsMvccPair { pair: (Key, Vec<MvccPair>) },
+    StarttsMvccPair { pair: Option<(Key, Vec<MvccPair>)> },
     Value { value: Option<Value> },
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
@@ -375,8 +375,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                     Ok(opt) => {
                         match opt {
                             Some((commit_ts, write)) => {
-                                mvccs.push((commit_ts, write) as MvccPair);
                                 ts = write.start_ts + 1;
+                                mvccs.push((commit_ts, write) as MvccPair);
                             }
                             None => break,
                         }
@@ -405,7 +405,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                             let mut mvccs = vec![];
                             let mut err: Option<StorageError> = None;
                             loop {
-                                match reader.seek_write(key, ts).map_err(StorageError::from) {
+                                match reader.seek_write(&key, ts).map_err(StorageError::from) {
                                     Err(e) => {
                                         err = Some(e);
                                         break;
@@ -413,8 +413,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                     Ok(opt) => {
                                         match opt {
                                             Some((commit_ts, write)) => {
-                                                mvccs.push((commit_ts, write) as MvccPair);
                                                 ts = write.start_ts + 1;
+                                                mvccs.push((commit_ts, write) as MvccPair);
                                             }
                                             None => break,
                                         }
@@ -427,7 +427,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                             }
                         }
                         None => ProcessResult::StarttsMvccPair { pair: None },
-                    };
+                    }
                 }
             }
         }

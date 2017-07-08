@@ -79,8 +79,8 @@ pub enum StorageCb {
     Booleans(Callback<Vec<Result<()>>>),
     SingleValue(Callback<Option<Value>>),
     KvPairs(Callback<Vec<Result<KvPair>>>),
-    MvccPairs(Callback<Result<Vec<MvccPair>>>),
-    StarttsMvccPair(Callback<Result<Option<(u64, Vec<MvccPair>)>>>),
+    MvccPairs(Callback<Vec<MvccPair>>),
+    StarttsMvccPair(Callback<Option<(Key, Vec<MvccPair>)>>),
     Locks(Callback<Vec<LockInfo>>),
 }
 
@@ -733,7 +733,7 @@ impl Storage {
     pub fn async_key_mvcc(&self,
                           ctx: Context,
                           key: Key,
-                          callback: Callback<Result<Vec<MvccPair>>>)
+                          callback: Callback<Vec<MvccPair>>)
                           -> Result<()> {
         let cmd = Command::KeyMvcc {
             ctx: ctx,
@@ -748,7 +748,7 @@ impl Storage {
     pub fn async_startts_mvcc(&self,
                               ctx: Context,
                               start_ts: u64,
-                              callback: Callback<Result<Option<(u64, Vec<MvccPair>)>>>)
+                              callback: Callback<Option<(Key, Vec<MvccPair>)>>)
                               -> Result<()> {
         let cmd = Command::StarttsMvcc {
             ctx: ctx,
