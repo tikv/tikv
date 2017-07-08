@@ -725,7 +725,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                     resp.set_region_error(err);
                 } else {
                     match v {
-                        Ok(vv) => resp.set_pairs(RepeatedField::from_vec(extract_mvcc_pairs(vv))),
+                        Ok(vv) => resp.set_infos(RepeatedField::from_vec(extract_mvcc_infos(vv))),
                         Err(e) => resp.set_error(format!("{}", e)),
                     };
                 }
@@ -767,11 +767,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                     match v {
                         Ok(Some((k, vv))) => {
                             resp.set_key(escape(k.encoded()).into_bytes());
-                            resp.set_pairs(RepeatedField::from_vec(extract_mvcc_pairs(vv)))
+                            resp.set_infos(RepeatedField::from_vec(extract_mvcc_infos(vv)))
                         }
                         Ok(None) => {
                             resp.set_key(vec![]);
-                            resp.set_pairs(RepeatedField::from_vec(vec![]))
+                            resp.set_infos(RepeatedField::from_vec(vec![]))
                         }
                         Err(e) => resp.set_error(format!("{}", e)),
                     }
@@ -869,11 +869,11 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
     }
 }
 
-fn extract_mvcc_pairs(res: Vec<storage::MvccPair>) -> Vec<MvccPair> {
+fn extract_mvcc_infos(res: Vec<storage::MvccPair>) -> Vec<MvccInfo> {
     res.into_iter()
         .map(|r| match r {
             (commit_ts, write) => {
-                let mut pair = MvccPair::new();
+                let mut pair = MvccInfo::new();
                 pair.set_start_ts(write.start_ts);
                 let op = match write.write_type {
                     WriteType::Put => Op::Put,
