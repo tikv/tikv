@@ -413,9 +413,9 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              None,
                                              ctx.get_isolation_level());
             // scan_key is used as start_key here,and Range start gc with scan_key=none.
-            let is_range_start_key = scan_key.is_none();
-            let res = if !reader.need_gc(safe_point) {
-                // This is an optimization to skip gc before scanning all data.
+            let is_range_start_gc = scan_key.is_none();
+            // This is an optimization to skip gc before scanning all data.
+            let res = if is_range_start_gc && !reader.need_gc(safe_point) {
                 KV_COMMAND_GC_SKIPPED_COUNTER.inc();
                 Ok(None)
             } else {
@@ -426,7 +426,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                             .observe(keys.len() as f64);
                         if keys.is_empty() {
                             // empty range
-                            if is_range_start_key {
+                            if is_range_start_gc {
                                 KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
                             }
                             Ok(None)

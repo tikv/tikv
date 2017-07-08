@@ -19,6 +19,7 @@ use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
 use kvproto::kvrpcpb::IsolationLevel;
+use util::rocksdb::GetPropertiesOptions;
 
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
@@ -429,24 +430,23 @@ impl<'a> MvccReader<'a> {
     // Returns true if it needs gc.
     // This is for optimization purpose, does not mean to be accurate.
     pub fn need_gc(&self, safe_point: u64) -> bool {
-        let props = match self.snapshot.get_properties_cf(CF_WRITE) {
-            Ok(props) => props,
+        let mut opts = GetPropertiesOptions::default();
+        opts.max_ts = Some(safe_point);
+        let props = match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
+            Ok(v) => v,
             Err(_) => return true,
         };
-        if props.num_keys == 0 {
-            // For compatibility, just return true if no properties.
-            return true;
-        }
         // We don't need gc if:
         // 1. min_ts > safe_point:
         //    No data older than safe_point to gc.
-        // 2. num_keys >= num_versions:
-        //    No keys have more than one versions.
-        //    Notice: Since the properties are file-based, this can be false positive.
-        //    For example, if multiple files have a different version of the same key,
-        //    the result will be `num_keys == num_versions`, but it doesn't mean that
-        //    we don't need gc. Can we rely on the compaction to solve this?
-        !(props.min_ts > safe_point || props.num_keys >= props.num_versions())
+        if props.min_ts > safe_point {
+            return false;
+        }
+        // 2. num_keys == num_versions && num_puts == num_versions:
+        //    No keys have more than one versions, and the version is effective.
+        //    Notice: Since the properties are file-based, it can be false positive.
+        //    For example, if multiple files have a different version of the same key.
+        !(props.num_keys == props.num_versions && props.num_puts == props.num_versions)
     }
 }
 
@@ -481,6 +481,12 @@ mod tests {
 
         pub fn put(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let m = Mutation::Put((make_key(pk), vec![]));
+            self.prewrite(m, pk, start_ts);
+            self.commit(pk, start_ts, commit_ts);
+        }
+
+        pub fn lock(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
+            let m = Mutation::Lock(make_key(pk));
             self.prewrite(m, pk, start_ts);
             self.commit(pk, start_ts, commit_ts);
         }
@@ -641,13 +647,13 @@ mod tests {
             // We gc the two deleted keys manually.
             engine.gc(&[5], 10);
             engine.gc(&[6], 10);
-            engine.flush();
-            // After this flush, all versions of keys 5,6 are deleted,
+            engine.compact();
+            // After this compact, all versions of keys 5,6 are deleted,
             // no keys have more than one versions, so we don't need gc.
             check_need_gc(db.clone(), region.clone(), 10, false);
 
-            // A single delete version need gc.
-            engine.delete(&[7], 9, 9);
+            // A single lock version need gc.
+            engine.lock(&[7], 9, 9);
             engine.flush();
             check_need_gc(db.clone(), region.clone(), 10, true);
         }
