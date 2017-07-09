@@ -35,6 +35,7 @@ use std::fmt::{self, Formatter, Debug};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::thread;
+use std::u64;
 
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
@@ -363,7 +364,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              true,
                                              None,
                                              ctx.get_isolation_level());
-            let mut ts: u64 = 0;
+            let mut ts: u64 = u64::MAX;
             let mut mvccs = vec![];
             let mut err: Option<StorageError> = None;
             loop {
@@ -375,7 +376,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                     Ok(opt) => {
                         match opt {
                             Some((commit_ts, write)) => {
-                                ts = write.start_ts + 1;
+                                ts = commit_ts - 1;
                                 mvccs.push((commit_ts, write) as MvccPair);
                             }
                             None => break,
@@ -401,7 +402,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Ok(opt) => {
                     match opt {
                         Some((key, _)) => {
-                            let mut ts: u64 = 0;
+                            let mut ts: u64 = u64::MAX;
                             let mut mvccs = vec![];
                             let mut err: Option<StorageError> = None;
                             loop {
@@ -413,7 +414,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                     Ok(opt) => {
                                         match opt {
                                             Some((commit_ts, write)) => {
-                                                ts = write.start_ts + 1;
+                                                ts = commit_ts - 1;
                                                 mvccs.push((commit_ts, write) as MvccPair);
                                             }
                                             None => break,
