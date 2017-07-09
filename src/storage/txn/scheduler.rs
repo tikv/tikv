@@ -68,7 +68,7 @@ pub enum ProcessResult {
     MultiRes { results: Vec<StorageResult<()>> },
     MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
     MvccPairs { pairs: Vec<MvccPair> },
-    StarttsMvccPair { pair: Option<(Key, Vec<MvccPair>)> },
+    StartTsMvccPair { pair: Option<(Key, Vec<MvccPair>)> },
     Value { value: Option<Value> },
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
@@ -157,9 +157,9 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
                 _ => panic!("process result mismatch"),
             }
         }
-        StorageCb::StarttsMvccPair(cb) => {
+        StorageCb::StartTsMvccPair(cb) => {
             match pr {
-                ProcessResult::StarttsMvccPair { pair } => cb(Ok(pair)),
+                ProcessResult::StartTsMvccPair { pair } => cb(Ok(pair)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
@@ -389,7 +389,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 None => ProcessResult::MvccPairs { pairs: mvccs },
             }
         }
-        Command::StarttsMvcc { ref ctx, start_ts } => {
+        Command::StartTsMvcc { ref ctx, start_ts } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
                                              &mut statistics,
                                              Some(ScanMode::Forward),
@@ -424,10 +424,10 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                             }
                             match err {
                                 Some(e) => ProcessResult::Failed { err: e.into() },
-                                None => ProcessResult::StarttsMvccPair { pair: Some((key, mvccs)) },
+                                None => ProcessResult::StartTsMvccPair { pair: Some((key, mvccs)) },
                             }
                         }
-                        None => ProcessResult::StarttsMvccPair { pair: None },
+                        None => ProcessResult::StartTsMvccPair { pair: None },
                     }
                 }
             }

@@ -741,18 +741,18 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
-    fn startts_mvcc(&self,
+    fn start_ts_mvcc(&self,
                     ctx: RpcContext,
-                    mut req: StarttsMvccRequest,
-                    sink: UnarySink<StarttsMvccResponse>) {
-        let label = "startts_mvcc";
+                    mut req: StartTsMvccRequest,
+                    sink: UnarySink<StartTsMvccResponse>) {
+        let label = "start_ts_mvcc";
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
 
         let storage = self.storage.clone();
 
         let (cb, future) = make_callback();
 
-        let res = storage.async_startts_mvcc(req.take_context(), req.get_start_ts(), cb);
+        let res = storage.async_start_ts_mvcc(req.take_context(), req.get_start_ts(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -760,7 +760,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let future = future.map_err(Error::from)
             .map(|v| {
-                let mut resp = StarttsMvccResponse::new();
+                let mut resp = StartTsMvccResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
