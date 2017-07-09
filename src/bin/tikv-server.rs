@@ -64,7 +64,6 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
-use tikv::util::rocksdb::get_fastest_supported_compression_type;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -860,11 +859,9 @@ fn run_raft_server(pd_client: RpcClient,
     let pd_client = Arc::new(pd_client);
     let resolver = PdStoreAddrResolver::new(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-    let snap_compression = get_fastest_supported_compression_type();
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
                                     Some(store_sendch),
-                                    cfg.raft_store.use_sst_file_snapshot,
-                                    snap_compression);
+                                    cfg.raft_store.use_sst_file_snapshot);
     let mut server = Server::new(&cfg,
                                  storage.clone(),
                                  raft_router,

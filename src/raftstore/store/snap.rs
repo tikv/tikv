@@ -24,7 +24,7 @@ use std::time;
 use std::thread;
 
 use protobuf::Message;
-use rocksdb::{DB, DBCompressionType};
+use rocksdb::DB;
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -720,6 +720,7 @@ mod v2 {
     use storage::{CfName, CF_LOCK};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
     use util::file::{get_file_size, file_exists, delete_file_if_exist};
+    use util::rocksdb::get_fastest_supported_compression_type;
     use raftstore::Result as RaftStoreResult;
 
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
@@ -838,7 +839,6 @@ mod v2 {
         cf_index: usize,
         meta_file: MetaFile,
         size_track: Arc<RwLock<u64>>,
-        compression_type: DBCompressionType,
     }
 
     impl Snap {
@@ -847,8 +847,7 @@ mod v2 {
                                  size_track: Arc<RwLock<u64>>,
                                  is_sending: bool,
                                  to_build: bool,
-                                 deleter: Box<SnapshotDeleter>,
-                                 compression: DBCompressionType)
+                                 deleter: Box<SnapshotDeleter>)
                                  -> RaftStoreResult<Snap> {
             let dir_path = dir.into();
             if !dir_path.exists() {
@@ -892,7 +891,6 @@ mod v2 {
                 cf_index: 0,
                 meta_file: meta_file,
                 size_track: size_track,
-                compression_type: compression,
             };
 
             // load snapshot meta if meta_file exists
@@ -919,10 +917,9 @@ mod v2 {
                                                   key: &SnapKey,
                                                   snap: &DbSnapshot,
                                                   size_track: Arc<RwLock<u64>>,
-                                                  deleter: Box<SnapshotDeleter>,
-                                                  compression: DBCompressionType)
+                                                  deleter: Box<SnapshotDeleter>)
                                                   -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, true, true, deleter, compression));
+            let mut s = try!(Snap::new(dir, key, size_track, true, true, deleter));
             try!(s.init_for_building(snap));
             Ok(s)
         }
@@ -930,10 +927,9 @@ mod v2 {
         pub fn new_for_sending<T: Into<PathBuf>>(dir: T,
                                                  key: &SnapKey,
                                                  size_track: Arc<RwLock<u64>>,
-                                                 deleter: Box<SnapshotDeleter>,
-                                                 compression: DBCompressionType)
+                                                 deleter: Box<SnapshotDeleter>)
                                                  -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, true, false, deleter, compression));
+            let mut s = try!(Snap::new(dir, key, size_track, true, false, deleter));
 
             if !s.exists() {
                 // Skip the initialization below if it doesn't exists.
@@ -953,10 +949,9 @@ mod v2 {
                                                    key: &SnapKey,
                                                    snapshot_meta: SnapshotMeta,
                                                    size_track: Arc<RwLock<u64>>,
-                                                   deleter: Box<SnapshotDeleter>,
-                                                   compression: DBCompressionType)
+                                                   deleter: Box<SnapshotDeleter>)
                                                    -> RaftStoreResult<Snap> {
-            let mut s = try!(Snap::new(dir, key, size_track, false, false, deleter, compression));
+            let mut s = try!(Snap::new(dir, key, size_track, false, false, deleter));
             try!(s.set_snapshot_meta(snapshot_meta));
 
             if s.exists() {
@@ -982,10 +977,9 @@ mod v2 {
         pub fn new_for_applying<T: Into<PathBuf>>(dir: T,
                                                   key: &SnapKey,
                                                   size_track: Arc<RwLock<u64>>,
-                                                  deleter: Box<SnapshotDeleter>,
-                                                  compression: DBCompressionType)
+                                                  deleter: Box<SnapshotDeleter>)
                                                   -> RaftStoreResult<Snap> {
-            let s = try!(Snap::new(dir, key, size_track, false, false, deleter, compression));
+            let s = try!(Snap::new(dir, key, size_track, false, false, deleter));
             Ok(s)
         }
 
@@ -1004,7 +998,7 @@ mod v2 {
                 } else {
                     let handle = snap.cf_handle(cf_file.cf)?;
                     let mut io_options = snap.get_db().get_options_cf(handle).clone();
-                    io_options.compression(self.compression_type);
+                    io_options.compression(get_fastest_supported_compression_type());
                     // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
                     // compression_per_level first, so to make sure our specified compression type
                     // being used, we must set them empty or disabled.
@@ -1454,7 +1448,7 @@ mod v2 {
         use protobuf::Message;
         use kvproto::metapb::{Peer, Region};
         use kvproto::raft_serverpb::{SnapshotMeta, RaftSnapshotData};
-        use rocksdb::{DB, DBCompressionType};
+        use rocksdb::DB;
 
         use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
         use util::{rocksdb, HandyRwLock};
@@ -1623,8 +1617,7 @@ mod v2 {
                                                 &key,
                                                 &snapshot,
                                                 size_track.clone(),
-                                                deleter.clone(),
-                                                DBCompressionType::DBNo)
+                                                deleter.clone())
                 .unwrap();
             // Ensure that this snapshot file doesn't exist before being built.
             assert!(!s1.exists());
@@ -1650,12 +1643,9 @@ mod v2 {
             assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
             // Ensure this snapshot could be read for sending.
-            let mut s2 = Snap::new_for_sending(src_dir.path(),
-                                               &key,
-                                               size_track.clone(),
-                                               deleter.clone(),
-                                               DBCompressionType::DBNo)
-                .unwrap();
+            let mut s2 =
+                Snap::new_for_sending(src_dir.path(), &key, size_track.clone(), deleter.clone())
+                    .unwrap();
             assert!(s2.exists());
 
             // TODO check meta data correct.
@@ -1667,8 +1657,7 @@ mod v2 {
                                                  &key,
                                                  snap_data.take_meta(),
                                                  size_track.clone(),
-                                                 deleter.clone(),
-                                                 DBCompressionType::DBNo)
+                                                 deleter.clone())
                 .unwrap();
             assert!(!s3.exists());
 
@@ -1689,11 +1678,7 @@ mod v2 {
             assert_eq!(*size_track.rl(), size);
 
             // Ensure a snapshot could be applied to DB.
-            let mut s4 = Snap::new_for_applying(dst_dir.path(),
-                                                &key,
-                                                size_track.clone(),
-                                                deleter,
-                                                DBCompressionType::DBNo)
+            let mut s4 = Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter)
                 .unwrap();
             assert!(s4.exists());
 
@@ -1746,8 +1731,7 @@ mod v2 {
                                                 &key,
                                                 &snapshot,
                                                 size_track.clone(),
-                                                deleter.clone(),
-                                                DBCompressionType::DBNo)
+                                                deleter.clone())
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1766,8 +1750,7 @@ mod v2 {
                                                 &key,
                                                 &snapshot,
                                                 size_track.clone(),
-                                                deleter.clone(),
-                                                DBCompressionType::DBNo)
+                                                deleter.clone())
                 .unwrap();
             assert!(s2.exists());
 
@@ -1865,20 +1848,16 @@ mod v2 {
                          size_track: Arc<RwLock<u64>>,
                          snapshot_meta: SnapshotMeta,
                          deleter: Box<DummyDeleter>) {
-            let mut from = Snap::new_for_sending(from_dir.path(),
-                                                 key,
-                                                 size_track.clone(),
-                                                 deleter.clone(),
-                                                 DBCompressionType::DBNo)
-                .unwrap();
+            let mut from =
+                Snap::new_for_sending(from_dir.path(), key, size_track.clone(), deleter.clone())
+                    .unwrap();
             assert!(from.exists());
 
             let mut to = Snap::new_for_receiving(to_dir.path(),
                                                  key,
                                                  snapshot_meta,
                                                  size_track.clone(),
-                                                 deleter,
-                                                 DBCompressionType::DBNo)
+                                                 deleter)
                 .unwrap();
 
             assert!(!to.exists());
@@ -1903,8 +1882,7 @@ mod v2 {
                                                 &key,
                                                 &snapshot,
                                                 size_track.clone(),
-                                                deleter.clone(),
-                                                DBCompressionType::DBNo)
+                                                deleter.clone())
                 .unwrap();
             assert!(!s1.exists());
 
@@ -1921,19 +1899,14 @@ mod v2 {
 
             corrupt_snapshot_size_in(dir.path());
 
-            assert!(Snap::new_for_sending(dir.path(),
-                                          &key,
-                                          size_track.clone(),
-                                          deleter.clone(),
-                                          DBCompressionType::DBNo)
+            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone(), deleter.clone())
                 .is_err());
 
             let mut s2 = Snap::new_for_building(dir.path(),
                                                 &key,
                                                 &snapshot,
                                                 size_track.clone(),
-                                                deleter.clone(),
-                                                DBCompressionType::DBNo)
+                                                deleter.clone())
                 .unwrap();
             assert!(!s2.exists());
             s2.build(&snapshot,
@@ -1956,12 +1929,9 @@ mod v2 {
             assert_eq!(1, metas.len());
             let snap_meta = metas.pop().unwrap();
 
-            let mut s5 = Snap::new_for_applying(dst_dir.path(),
-                                                &key,
-                                                size_track.clone(),
-                                                deleter.clone(),
-                                                DBCompressionType::DBNo)
-                .unwrap();
+            let mut s5 =
+                Snap::new_for_applying(dst_dir.path(), &key, size_track.clone(), deleter.clone())
+                    .unwrap();
             assert!(s5.exists());
 
             let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
@@ -1979,14 +1949,12 @@ mod v2 {
                                             &key,
                                             snap_meta,
                                             size_track.clone(),
-                                            deleter.clone(),
-                                            DBCompressionType::DBNo)
+                                            deleter.clone())
                 .is_err());
             assert!(Snap::new_for_applying(dst_dir.path(),
                                            &key,
                                            size_track.clone(),
-                                           deleter.clone(),
-                                           DBCompressionType::DBNo)
+                                           deleter.clone())
                 .is_err());
         }
 
@@ -2006,8 +1974,7 @@ mod v2 {
                                                 &key,
                                                 &snapshot,
                                                 size_track.clone(),
-                                                deleter.clone(),
-                                                DBCompressionType::DBNo)
+                                                deleter.clone())
                 .unwrap();
             assert!(!s1.exists());
 
@@ -2024,19 +1991,14 @@ mod v2 {
 
             assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-            assert!(Snap::new_for_sending(dir.path(),
-                                          &key,
-                                          size_track.clone(),
-                                          deleter.clone(),
-                                          DBCompressionType::DBNo)
+            assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone(), deleter.clone())
                 .is_err());
 
             let mut s2 = Snap::new_for_building(dir.path(),
                                                 &key,
                                                 &snapshot,
                                                 size_track.clone(),
-                                                deleter.clone(),
-                                                DBCompressionType::DBNo)
+                                                deleter.clone())
                 .unwrap();
             assert!(!s2.exists());
             s2.build(&snapshot,
@@ -2060,15 +2022,13 @@ mod v2 {
             assert!(Snap::new_for_applying(dst_dir.path(),
                                            &key,
                                            size_track.clone(),
-                                           deleter.clone(),
-                                           DBCompressionType::DBNo)
+                                           deleter.clone())
                 .is_err());
             assert!(Snap::new_for_receiving(dst_dir.path(),
                                             &key,
                                             snap_data.take_meta(),
                                             size_track.clone(),
-                                            deleter.clone(),
-                                            DBCompressionType::DBNo)
+                                            deleter.clone())
                 .is_err());
         }
     }
@@ -2094,7 +2054,6 @@ struct SnapManagerCore {
     use_sst_file_snapshot: bool,
     // put snap_size under core so we don't need to worry about deadlock.
     snap_size: Arc<RwLock<u64>>,
-    compression_type: DBCompressionType,
 }
 
 fn notify_stats(ch: Option<&SendCh<Msg>>) {
@@ -2116,8 +2075,7 @@ pub struct SnapManager {
 impl SnapManager {
     pub fn new<T: Into<String>>(path: T,
                                 ch: Option<SendCh<Msg>>,
-                                use_sst_file_snapshot: bool,
-                                compression: DBCompressionType)
+                                use_sst_file_snapshot: bool)
                                 -> SnapManager {
         SnapManager {
             core: Arc::new(RwLock::new(SnapManagerCore {
@@ -2125,7 +2083,6 @@ impl SnapManager {
                 registry: map![],
                 use_sst_file_snapshot: use_sst_file_snapshot,
                 snap_size: Arc::new(RwLock::new(0)),
-                compression_type: compression,
             })),
             ch: ch,
         }
@@ -2217,20 +2174,13 @@ impl SnapManager {
                                      key: &SnapKey,
                                      snap: &DbSnapshot)
                                      -> RaftStoreResult<Box<Snapshot>> {
-        let (use_sst_file_snapshot, dir, snap_size, snap_compression_type) = {
+        let (use_sst_file_snapshot, dir, snap_size) = {
             let core = self.core.rl();
-            (core.use_sst_file_snapshot,
-             core.base.clone(),
-             core.snap_size.clone(),
-             core.compression_type)
+            (core.use_sst_file_snapshot, core.base.clone(), core.snap_size.clone())
         };
         if use_sst_file_snapshot {
-            let f = try!(v2::Snap::new_for_building(dir,
-                                                    key,
-                                                    snap,
-                                                    snap_size,
-                                                    Box::new(self.clone()),
-                                                    snap_compression_type));
+            let f =
+                try!(v2::Snap::new_for_building(dir, key, snap, snap_size, Box::new(self.clone())));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(dir, snap_size, true, key));
@@ -2248,8 +2198,7 @@ impl SnapManager {
         let s = try!(v2::Snap::new_for_sending(&core.base,
                                                key,
                                                core.snap_size.clone(),
-                                               Box::new(self.clone()),
-                                               core.compression_type));
+                                               Box::new(self.clone())));
         Ok(Box::new(s))
     }
 
@@ -2265,8 +2214,7 @@ impl SnapManager {
                                                      key,
                                                      snapshot_data.take_meta(),
                                                      core.snap_size.clone(),
-                                                     Box::new(self.clone()),
-                                                     core.compression_type));
+                                                     Box::new(self.clone())));
             Ok(Box::new(f))
         } else {
             let f = try!(v1::Snap::new_for_writing(&core.base, core.snap_size.clone(), false, key));
@@ -2279,8 +2227,7 @@ impl SnapManager {
         if let Ok(s) = v2::Snap::new_for_applying(&core.base,
                                                   key,
                                                   core.snap_size.clone(),
-                                                  Box::new(self.clone()),
-                                                  core.compression_type) {
+                                                  Box::new(self.clone())) {
             if s.exists() {
                 return Ok(Box::new(s));
             }
@@ -2398,7 +2345,6 @@ mod test {
     use tempdir::TempDir;
     use protobuf::Message;
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use rocksdb::DBCompressionType;
 
     use storage::ALL_CFS;
     use util::rocksdb;
@@ -2416,7 +2362,7 @@ mod test {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let mut mgr = SnapManager::new(path, None, false, DBCompressionType::DBNo);
+        let mut mgr = SnapManager::new(path, None, false);
         mgr.init().unwrap();
         assert!(temp_path.exists());
 
@@ -2424,7 +2370,7 @@ mod test {
         let temp_path2 = temp_dir.path().join("snap2");
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
-        mgr = SnapManager::new(path2, None, false, DBCompressionType::DBNo);
+        mgr = SnapManager::new(path2, None, false);
         assert!(mgr.init().is_err());
     }
 
@@ -2433,7 +2379,7 @@ mod test {
         // Ensure `mgr` is of size 0 when it's initialized.
         let temp_dir = TempDir::new("test-snap-mgr-v1").unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::new(path.clone(), None, false, DBCompressionType::DBNo);
+        let mgr = SnapManager::new(path.clone(), None, false);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2458,7 +2404,7 @@ mod test {
         assert!(!s4.exists());
 
         // Ensure `mgr` would delete all the temporary files on initialization if they exist.
-        let mgr = SnapManager::new(path, None, false, DBCompressionType::DBNo);
+        let mgr = SnapManager::new(path, None, false);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2478,7 +2424,7 @@ mod test {
     fn test_snap_mgr_v2() {
         let temp_dir = TempDir::new("test-snap-mgr-v2").unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::new(path.clone(), None, true, DBCompressionType::DBNo);
+        let mgr = SnapManager::new(path.clone(), None, true);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2487,13 +2433,9 @@ mod test {
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
         let deleter = Box::new(mgr.clone());
-        let mut s1 = SnapV2::new_for_building(&path,
-                                              &key1,
-                                              &snapshot,
-                                              size_track.clone(),
-                                              deleter.clone(),
-                                              DBCompressionType::DBNo)
-            .unwrap();
+        let mut s1 =
+            SnapV2::new_for_building(&path, &key1, &snapshot, size_track.clone(), deleter.clone())
+                .unwrap();
         let mut region = v2::test::get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
@@ -2504,19 +2446,14 @@ mod test {
                    &mut stat,
                    deleter.clone())
             .unwrap();
-        let mut s = SnapV2::new_for_sending(&path,
-                                            &key1,
-                                            size_track.clone(),
-                                            deleter.clone(),
-                                            DBCompressionType::DBNo)
+        let mut s = SnapV2::new_for_sending(&path, &key1, size_track.clone(), deleter.clone())
             .unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = SnapV2::new_for_receiving(&path,
                                                &key1,
                                                snap_data.get_meta().clone(),
                                                size_track.clone(),
-                                               deleter.clone(),
-                                               DBCompressionType::DBNo)
+                                               deleter.clone())
             .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
         assert_eq!(n, expected_size);
@@ -2525,19 +2462,14 @@ mod test {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 = SnapV2::new_for_building(&path,
-                                          &key2,
-                                          &snapshot,
-                                          size_track.clone(),
-                                          deleter.clone(),
-                                          DBCompressionType::DBNo)
-            .unwrap();
+        let s3 =
+            SnapV2::new_for_building(&path, &key2, &snapshot, size_track.clone(), deleter.clone())
+                .unwrap();
         let s4 = SnapV2::new_for_receiving(&path,
                                            &key2,
                                            snap_data.take_meta(),
                                            size_track.clone(),
-                                           deleter.clone(),
-                                           DBCompressionType::DBNo)
+                                           deleter.clone())
             .unwrap();
 
         assert!(s1.exists());
@@ -2545,7 +2477,7 @@ mod test {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let mgr = SnapManager::new(path, None, true, DBCompressionType::DBNo);
+        let mgr = SnapManager::new(path, None, true);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2566,7 +2498,7 @@ mod test {
         // running v2 code could receive and apply the snapshot sent from a sender running v1 code.
         let src_temp_dir = TempDir::new("test-snap-v1-v2-compatible-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path, None, false, DBCompressionType::DBNo);
+        let src_mgr = SnapManager::new(src_path, None, false);
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-v1-v2-compatible-src-db").unwrap();
@@ -2592,7 +2524,7 @@ mod test {
 
         let dst_temp_dir = TempDir::new("test-snap-v1-v2-compatible-dst").unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path, None, true, DBCompressionType::DBNo);
+        let dst_mgr = SnapManager::new(dst_path, None, true);
         dst_mgr.init().unwrap();
 
         let mut s3 = dst_mgr.get_snapshot_for_receiving(&key, &v[..]).unwrap();
@@ -2636,10 +2568,7 @@ mod test {
     fn test_snap_deletion_on_registry_impl(use_sst_file_snapshot: bool) {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path.clone(),
-                                       None,
-                                       use_sst_file_snapshot,
-                                       DBCompressionType::DBNo);
+        let src_mgr = SnapManager::new(src_path.clone(), None, use_sst_file_snapshot);
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
@@ -2673,10 +2602,7 @@ mod test {
 
         let dst_temp_dir = TempDir::new("test-snap-deletion-on-registry-dst").unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path.clone(),
-                                       None,
-                                       use_sst_file_snapshot,
-                                       DBCompressionType::DBNo);
+        let dst_mgr = SnapManager::new(dst_path.clone(), None, use_sst_file_snapshot);
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.

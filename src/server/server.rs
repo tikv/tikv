@@ -161,7 +161,6 @@ mod tests {
     use super::super::resolve::{StoreAddrResolver, Callback as ResolveCallback};
     use storage::Storage;
     use kvproto::raft_serverpb::RaftMessage;
-    use rocksdb::DBCompressionType;
     use raftstore::Result as RaftStoreResult;
     use raftstore::store::Msg as StoreMsg;
     use raftstore::store::transport::Transport;
@@ -224,16 +223,14 @@ mod tests {
         let (snapshot_status_sender, _) = mpsc::channel();
 
         let addr = Arc::new(Mutex::new(None));
-        let mut server = Server::new(&cfg,
-                                     storage,
-                                     router,
-                                     snapshot_status_sender,
-                                     MockResolver { addr: addr.clone() },
-                                     SnapManager::new("",
-                                                      None,
-                                                      cfg.raft_store.use_sst_file_snapshot,
-                                                      DBCompressionType::DBNo))
-            .unwrap();
+        let mut server =
+            Server::new(&cfg,
+                        storage,
+                        router,
+                        snapshot_status_sender,
+                        MockResolver { addr: addr.clone() },
+                        SnapManager::new("", None, cfg.raft_store.use_sst_file_snapshot))
+                .unwrap();
         *addr.lock().unwrap() = Some(server.listening_addr());
 
         server.start(&cfg).unwrap();

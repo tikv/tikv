@@ -1165,7 +1165,7 @@ mod test {
     use util::rocksdb::new_engine;
     use storage::ALL_CFS;
     use kvproto::eraftpb::HardState;
-    use rocksdb::{WriteBatch, DBCompressionType};
+    use rocksdb::WriteBatch;
 
     use super::*;
 
@@ -1342,8 +1342,7 @@ mod test {
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
                                    None,
-                                   use_sst_file_snapshot,
-                                   DBCompressionType::DBNo);
+                                   use_sst_file_snapshot);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
@@ -1623,8 +1622,7 @@ mod test {
         let snap_dir = TempDir::new("snap").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(),
                                    None,
-                                   use_sst_file_snapshot,
-                                   DBCompressionType::DBNo);
+                                   use_sst_file_snapshot);
         let mut worker = Worker::new("snap_manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
