@@ -54,8 +54,7 @@ use std::time::Duration;
 use std::env;
 
 use clap::{Arg, App, ArgMatches};
-use rocksdb::{Options as RocksdbOptions, BlockBasedOptions, DBCompressionType};
-use rocksdb::rocksdb::supported_compression;
+use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
@@ -65,6 +64,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
+use tikv::util::rocksdb::get_fastest_supported_compression_type;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -84,10 +84,6 @@ const LOCKCF_MAX_MEM: u64 = GB;
 // [default cf, write cf, raft cf, lock cf]
 const DEFAULT_BLOCK_CACHE_RATIO: &'static [f64] = &[0.25, 0.15, 0.02, 0.02];
 const SEC_TO_MS: i64 = 1000;
-
-// Zlib and bzip2 are too slow.
-const COMPRESSION_PRIORITY: [DBCompressionType; 3] =
-    [DBCompressionType::DBLz4, DBCompressionType::DBSnappy, DBCompressionType::DBZstd];
 
 fn sanitize_memory_usage() -> bool {
     let mut ratio = 0.0;
@@ -815,16 +811,6 @@ fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<Strin
         .unwrap_or_default();
     util::config::parse_store_labels(&labels)
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)))
-}
-
-fn check_compression_available(compression: DBCompressionType) -> bool {
-    supported_compression().contains(&compression)
-}
-
-fn get_fastest_supported_compression_type() -> DBCompressionType {
-    *COMPRESSION_PRIORITY.into_iter()
-        .find(|&&c| check_compression_available(c))
-        .unwrap_or(&DBCompressionType::DBNo)
 }
 
 fn run_raft_server(pd_client: RpcClient,
