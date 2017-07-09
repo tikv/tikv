@@ -29,7 +29,7 @@ const COMPRESSION_PRIORITY: [DBCompressionType; 3] =
 pub fn get_fastest_supported_compression_type() -> DBCompressionType {
     let all_supported_compression = supported_compression();
     *COMPRESSION_PRIORITY.into_iter()
-        .find(|&&c| all_supported_compression.contains(&c))
+        .find(|c| all_supported_compression.contains(c))
         .unwrap_or(&DBCompressionType::DBNo)
 }
 
