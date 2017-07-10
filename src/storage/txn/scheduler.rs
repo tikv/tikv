@@ -46,6 +46,7 @@ use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
+use raftstore::store::engine::IterOption;
 use util::transport::{SyncSendCh, Error as TransportError};
 use util::SlowTimer;
 use util::collections::HashMap;
@@ -440,6 +441,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
             }
         }
+        Command::RawScan { ref start_key, limit, .. } => {
+            match process_rawscan(snapshot, start_key, limit, &mut statistics) {
+                Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
+                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+            }
+        }
         Command::Pause { duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
             ProcessResult::Res
@@ -451,6 +458,23 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
         // Todo: if this happens we need to clean up command's context
         panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
+}
+
+fn process_rawscan(snapshot: Box<Snapshot>,
+                   start_key: &Key,
+                   limit: usize,
+                   stats: &mut Statistics)
+                   -> Result<Vec<StorageResult<KvPair>>> {
+    let mut cursor = try!(snapshot.iter(IterOption::default(), ScanMode::Forward));
+    if !try!(cursor.seek(start_key, stats)) {
+        return Ok(vec![]);
+    }
+    let mut pairs = vec![];
+    while cursor.valid() && pairs.len() < limit {
+        pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
+        cursor.next(stats);
+    }
+    Ok(pairs)
 }
 
 /// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`

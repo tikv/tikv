@@ -328,6 +328,18 @@ impl AssertionStorage {
         self.store.raw_delete(self.ctx.clone(), key).unwrap()
     }
 
+    pub fn raw_scan_ok(&self, start_key: Vec<u8>, limit: usize, expect: Vec<(&[u8], &[u8])>) {
+        let result: Vec<KvPair> = self.store
+            .raw_scan(self.ctx.clone(), start_key, limit)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        let expect: Vec<KvPair> =
+            expect.into_iter().map(|(k, v)| (k.to_vec(), v.to_vec())).collect();
+        assert_eq!(result, expect);
+    }
+
     pub fn test_txn_store_gc(&self, key: &str) {
         let key_bytes = key.as_bytes();
         self.put_ok(key_bytes, b"v1", 5, 10);

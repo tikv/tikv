@@ -428,6 +428,17 @@ fn test_txn_store_rawkv() {
     store.raw_get_ok(b"key".to_vec(), Some(b"v2".to_vec()));
     store.raw_delete_ok(b"key".to_vec());
     store.raw_get_ok(b"key".to_vec(), None);
+
+    store.raw_put_ok(b"k1".to_vec(), b"v1".to_vec());
+    store.raw_put_ok(b"k2".to_vec(), b"v2".to_vec());
+    store.raw_put_ok(b"k3".to_vec(), b"v3".to_vec());
+    store.raw_scan_ok(b"".to_vec(), 1, vec![(b"k1", b"v1")]);
+    store.raw_scan_ok(b"k1".to_vec(), 1, vec![(b"k1", b"v1")]);
+    store.raw_scan_ok(b"k10".to_vec(), 1, vec![(b"k2", b"v2")]);
+    store.raw_scan_ok(b"".to_vec(), 2, vec![(b"k1", b"v1"), (b"k2", b"v2")]);
+    store.raw_scan_ok(b"k1".to_vec(),
+                      5,
+                      vec![(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")]);
 }
 
 #[test]
