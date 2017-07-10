@@ -116,7 +116,7 @@ impl<'s> DAGContext<'s> {
         let mut execs = self.req.get_executors().to_vec().into_iter();
         let mut src = self.build_first(execs.next().unwrap(), statistics);
         for mut exec in execs {
-            let src: Box<DAGExecutor> = match exec.get_tp() {
+            let curr: Box<DAGExecutor> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"))
                 }
@@ -140,6 +140,7 @@ impl<'s> DAGContext<'s> {
                 }
                 ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
             };
+            src = curr;
         }
         Ok(src)
     }

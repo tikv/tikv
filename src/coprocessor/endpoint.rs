@@ -25,7 +25,6 @@ use protobuf::{Message as PbMsg, RepeatedField};
 use byteorder::{BigEndian, ReadBytesExt};
 use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
-use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
 use util::codec::table::{RowColsDict, TableDecoder};
@@ -393,7 +392,7 @@ impl TiDbEndPoint {
     pub fn handle_select(&self, sel: SelectRequest, t: &mut RequestTask) -> Result<Response> {
         let snap = SnapshotStore::new(self.snap.as_ref(),
                                       sel.get_start_ts(),
-                                      t.get_context().get_isolation_level());
+                                      t.req.get_context().get_isolation_level());
         let mut ctx = try!(SelectContext::new(sel, snap, t.deadline, &mut t.statistics));
         let mut range = t.req.get_ranges().to_vec();
         debug!("scanning range: {:?}", range);
@@ -424,7 +423,7 @@ impl TiDbEndPoint {
                 }
             }
         }
-        Ok(resp);
+        Ok(resp)
     }
 
     pub fn handle_dag(&self, dag: DAGRequest, t: &mut RequestTask) -> Result<Response> {
