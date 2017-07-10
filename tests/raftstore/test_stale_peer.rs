@@ -120,6 +120,7 @@ fn test_server_stale_peer_out_of_region() {
 /// as stale peer directly and should not impact other region data on the same store.
 fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.

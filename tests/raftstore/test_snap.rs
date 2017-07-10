@@ -335,6 +335,7 @@ fn test_node_stale_snap() {
     // disable compact log to make snapshot only be sent when peer is first added.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.

@@ -410,6 +410,7 @@ fn test_server_apply_new_version_snapshot() {
 fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = 60000;
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.

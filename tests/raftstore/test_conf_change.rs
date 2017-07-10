@@ -35,6 +35,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let r1 = cluster.run_conf_change();
 
@@ -149,6 +150,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
     pd_client.disable_default_rule();
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     cluster.start();
 
@@ -274,6 +276,7 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
 }
 
 fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.raft_store.allow_remove_leader = true;
     cluster.start();
 
     let pd_client = cluster.pd_client.clone();

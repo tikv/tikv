@@ -28,6 +28,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_rule();
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let r1 = cluster.run_conf_change();
 
@@ -184,6 +185,7 @@ fn test_readd_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.
     pd_client.disable_default_rule();
+    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let r1 = cluster.run_conf_change();
 
