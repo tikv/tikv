@@ -23,12 +23,10 @@ use std::thread;
 use std::u64;
 
 use rocksdb::{DB, DBStatisticsTickerType as TickerType};
-use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
 use time::{self, Timespec};
-
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
@@ -904,11 +902,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
 
         if !wb.is_empty() {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.cfg.sync_log);
-            self.engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
+            self.engine.write(wb).unwrap_or_else(|e| {
                 panic!("{} failed to save append result: {:?}", self.tag, e);
             });
+            if self.cfg.sync_log {
+                self.engine.sync_wal().unwrap_or_else(|e| {
+                    panic!("{} failed to sync log: {:?}", self.tag, e);
+                });
+            }
         }
 
         let mut ready_results = Vec::with_capacity(append_res.len());
