@@ -36,6 +36,7 @@ pub enum Tick {
     CompactLockCf,
     ConsistencyCheck,
     ReportRegionFlow,
+    PollRegionRes,
 }
 
 pub struct SnapshotStatusMsg {

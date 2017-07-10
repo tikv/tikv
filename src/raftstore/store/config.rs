@@ -57,6 +57,8 @@ const DEFAULT_CONSISTENCY_CHECK_INTERVAL: u64 = 0;
 
 const DEFAULT_REPORT_REGION_FLOW_INTERVAL: u64 = 60000; // 60 seconds
 
+const DEFAULT_POLL_REGION_RESULT_INTERVAL: u64 = 5 * 60 * 1000; // 5 min
+
 const DEFAULT_RAFT_STORE_LEASE_SEC: i64 = 9; // 9 seconds
 
 const DEFAULT_USE_SST_FILE_SNAPSHOT: bool = true;
@@ -131,6 +133,8 @@ pub struct Config {
 
     pub report_region_flow_interval: u64,
 
+    pub poll_region_result_interval: u64,
+
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: TimeDuration,
 
@@ -174,6 +178,7 @@ impl Default for Config {
             lock_cf_compact_bytes_threshold: DEFAULT_LOCK_CF_COMPACT_BYTES_THRESHOLD,
             consistency_check_tick_interval: DEFAULT_CONSISTENCY_CHECK_INTERVAL,
             report_region_flow_interval: DEFAULT_REPORT_REGION_FLOW_INTERVAL,
+            poll_region_result_interval: DEFAULT_POLL_REGION_RESULT_INTERVAL,
             raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),
             use_sst_file_snapshot: DEFAULT_USE_SST_FILE_SNAPSHOT,
             right_derive_when_split: true,
