@@ -29,6 +29,7 @@ use super::super::Result;
 use super::{Executor, Row, ExprColumnRefVisitor};
 use super::super::endpoint::{inflate_with_col, SINGLE_GROUP};
 use super::super::aggregate::{self, AggrFunc};
+use super::super::metrics::*;
 
 struct AggregationExecutor<'a> {
     group_by: Vec<Expr>,
@@ -59,7 +60,7 @@ impl<'a> AggregationExecutor<'a> {
             .filter(|col| visitor.col_ids.contains(&col.get_column_id()))
             .cloned()
             .collect();
-
+        COPR_EXECUTOR_COUNT.with_label_values(&["aggregation"]).inc();
         Ok(AggregationExecutor {
             group_by: group_by,
             aggr_func: aggr_func,
