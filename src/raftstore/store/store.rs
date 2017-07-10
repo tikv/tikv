@@ -1624,6 +1624,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::new();
+        let t = SlowTimer::new();
         let disk_stats = match fs2::statvfs(self.engine.path()) {
             Err(e) => {
                 error!("{} get disk stat for rocksdb {} failed: {}",
@@ -1634,6 +1635,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
             Ok(stats) => stats,
         };
+        slow_log!(t, "{} fetch disk usage", self.tag);
 
         let disk_cap = disk_stats.total_space();
         let capacity = if self.cfg.capacity == 0 || disk_cap < self.cfg.capacity {
