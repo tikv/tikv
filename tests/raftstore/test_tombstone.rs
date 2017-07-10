@@ -132,6 +132,8 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable default max peer number check.
     pd_client.disable_default_rule();
 
+    cluster.cfg.raft_store.allow_remove_leader = true;
+
     cluster.run();
     cluster.must_put(b"k1", b"v1");
 
