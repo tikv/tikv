@@ -905,7 +905,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.engine.write(wb).unwrap_or_else(|e| {
                 panic!("{} failed to save append result: {:?}", self.tag, e);
             });
-            if self.cfg.sync_log == true {
+            if self.cfg.sync_log {
                 self.engine.sync_wal().unwrap_or_else(|e| {
                     panic!("{} failed to sync log: {:?}", self.tag, e);
                 });
