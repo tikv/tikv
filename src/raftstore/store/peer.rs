@@ -1091,12 +1091,21 @@ impl Peer {
     ///    Then at least '(total + 1)/2 + 1' nodes need to be up to date for now.
     /// 2. A `RemoveNode` request
     ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
-    ///    need to be up to date for now.
+    ///    need to be up to date for now. If 'allow_remove_leader' is false then
+    ///    the peer to be removed should not be the leader.
     fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
         let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
 
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
+
+        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader &&
+           peer.get_id() == self.peer_id() {
+            warn!("{} rejects remove leader request {:?}",
+                  self.tag,
+                  change_peer);
+            return Err(box_err!("ignore remove leader"));
+        }
 
         let mut status = self.raft_group.status();
         let total = status.progress.len();
