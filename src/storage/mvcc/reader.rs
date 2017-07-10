@@ -80,19 +80,19 @@ impl<'a> MvccReader<'a> {
 
         let k = key.append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
-            match try!(cursor.get(&k, self.statistics)) {
+            match try!(cursor.get(&k, &mut self.statistics.data)) {
                 None => panic!("key {} not found, ts {}", key, ts),
                 Some(v) => v.to_vec(),
             }
         } else {
-            self.statistics.get += 1;
+            self.statistics.data.get += 1;
             match try!(self.snapshot.get(&k)) {
                 None => panic!("key {} not found, ts: {}", key, ts),
                 Some(v) => v,
             }
         };
 
-        self.statistics.processed += 1;
+        self.statistics.data.processed += 1;
 
         Ok(res)
     }
@@ -105,12 +105,12 @@ impl<'a> MvccReader<'a> {
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
-            match try!(cursor.get(key, self.statistics)) {
+            match try!(cursor.get(key, &mut self.statistics.lock)) {
                 Some(v) => Some(try!(Lock::parse(v))),
                 None => None,
             }
         } else {
-            self.statistics.get += 1;
+            self.statistics.lock.get += 1;
             match try!(self.snapshot.get_cf(CF_LOCK, key)) {
                 Some(v) => Some(try!(Lock::parse(&v))),
                 None => None,
@@ -118,7 +118,7 @@ impl<'a> MvccReader<'a> {
         };
 
         if res.is_some() {
-            self.statistics.processed += 1;
+            self.statistics.lock.processed += 1;
         }
 
         Ok(res)
@@ -161,9 +161,9 @@ impl<'a> MvccReader<'a> {
 
         let mut cursor = self.write_cursor.as_mut().unwrap();
         let ok = if reverse {
-            try!(cursor.near_seek_for_prev(&key.append_ts(ts), self.statistics))
+            try!(cursor.near_seek_for_prev(&key.append_ts(ts), &mut self.statistics.write))
         } else {
-            try!(cursor.near_seek(&key.append_ts(ts), self.statistics))
+            try!(cursor.near_seek(&key.append_ts(ts), &mut self.statistics.write))
         };
         if !ok {
             return Ok(None);
@@ -216,6 +216,7 @@ impl<'a> MvccReader<'a> {
                     match write.write_type {
                         WriteType::Put => {
                             if write.short_value.is_some() {
+                                self.statistics.write.processed += 1;
                                 if self.key_only {
                                     return Ok(Some(vec![]));
                                 }
@@ -223,7 +224,10 @@ impl<'a> MvccReader<'a> {
                             }
                             return self.load_data(key, write.start_ts).map(Some);
                         }
-                        WriteType::Delete => return Ok(None),
+                        WriteType::Delete => {
+                            self.statistics.write.processed += 1;
+                            return Ok(None);
+                        }
                         WriteType::Lock | WriteType::Rollback => ts = commit_ts - 1,
                     }
                 }
@@ -239,6 +243,7 @@ impl<'a> MvccReader<'a> {
         let mut seek_ts = start_ts;
         while let Some((commit_ts, write)) = try!(self.reverse_seek_write(key, seek_ts)) {
             if write.start_ts == start_ts {
+                self.statistics.write.processed += 1;
                 return Ok(Some((commit_ts, write.write_type)));
             }
             seek_ts = commit_ts + 1;
@@ -277,7 +282,7 @@ impl<'a> MvccReader<'a> {
                 let mut l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
-                    if try!(w_cur.near_seek(&key, self.statistics)) {
+                    if try!(w_cur.near_seek(&key, &mut self.statistics.write)) {
                         w_key = Some(w_cur.key());
                     } else {
                         w_key = None;
@@ -285,7 +290,7 @@ impl<'a> MvccReader<'a> {
                     }
                 }
                 if lock_valid {
-                    if try!(l_cur.near_seek(&key, self.statistics)) {
+                    if try!(l_cur.near_seek(&key, &mut self.statistics.lock)) {
                         l_key = Some(l_cur.key());
                     } else {
                         l_key = None;
@@ -325,7 +330,7 @@ impl<'a> MvccReader<'a> {
                 let mut l_cur = self.lock_cursor.as_mut().unwrap();
                 let (mut w_key, mut l_key) = (None, None);
                 if write_valid {
-                    if try!(w_cur.near_reverse_seek(&key, self.statistics)) {
+                    if try!(w_cur.near_reverse_seek(&key, &mut self.statistics.write)) {
                         w_key = Some(w_cur.key());
                     } else {
                         w_key = None;
@@ -333,7 +338,7 @@ impl<'a> MvccReader<'a> {
                     }
                 }
                 if lock_valid {
-                    if try!(l_cur.near_reverse_seek(&key, self.statistics)) {
+                    if try!(l_cur.near_reverse_seek(&key, &mut self.statistics.lock)) {
                         l_key = Some(l_cur.key());
                     } else {
                         l_key = None;
@@ -370,8 +375,8 @@ impl<'a> MvccReader<'a> {
         try!(self.create_lock_cursor());
         let mut cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
-            Some(ref x) => try!(cursor.seek(x, self.statistics)),
-            None => cursor.seek_to_first(self.statistics),
+            Some(ref x) => try!(cursor.seek(x, &mut self.statistics.lock)),
+            None => cursor.seek_to_first(&mut self.statistics.lock),
         };
         if !ok {
             return Ok((vec![], None));
@@ -388,8 +393,9 @@ impl<'a> MvccReader<'a> {
                     }
                 }
             }
-            cursor.next(self.statistics);
+            cursor.next(&mut self.statistics.lock);
         }
+        self.statistics.lock.processed += locks.len();
         Ok((locks, None))
     }
 
@@ -403,13 +409,14 @@ impl<'a> MvccReader<'a> {
         let mut keys = vec![];
         loop {
             let ok = match start {
-                Some(ref x) => try!(cursor.near_seek(x, self.statistics)),
-                None => cursor.seek_to_first(self.statistics),
+                Some(ref x) => try!(cursor.near_seek(x, &mut self.statistics.write)),
+                None => cursor.seek_to_first(&mut self.statistics.write),
             };
             if !ok {
                 return Ok((keys, None));
             }
             if keys.len() >= limit {
+                self.statistics.write.processed += keys.len();
                 return Ok((keys, start));
             }
             let key = try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts());

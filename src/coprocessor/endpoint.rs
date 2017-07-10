@@ -173,10 +173,15 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME.with_label_values(&["select", type_str])
             .observe(handle_time - wait_time);
 
-        let scanned_keys = self.statistics.total_op_count() as f64;
-        COPR_SCAN_KEYS.with_label_values(&["select", type_str]).observe(scanned_keys);
-        let inefficiency = self.statistics.inefficiency();
-        COPR_SCAN_INEFFICIENCY.with_label_values(&["select", type_str]).observe(inefficiency);
+        for (cf, total_op_count) in self.statistics.total_op_count() {
+            COPR_SCAN_KEYS.with_label_values(&["select", type_str, cf])
+                .observe(total_op_count as f64);
+        }
+
+        for (cf, inefficiency) in self.statistics.inefficiency() {
+            COPR_SCAN_INEFFICIENCY.with_label_values(&["select", type_str, cf])
+                .observe(inefficiency);
+        }
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
@@ -186,8 +191,8 @@ impl RequestTask {
                   type_str,
                   handle_time,
                   wait_time,
-                  scanned_keys,
-                  inefficiency,
+                  self.statistics.write.total_op_count(),
+                  self.statistics.write.inefficiency(),
                   self.req.get_ranges().len(),
                   self.req.get_ranges().get(0));
         }

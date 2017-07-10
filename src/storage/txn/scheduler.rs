@@ -328,7 +328,11 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                         .observe(results.len() as f64);
                     Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
                 });
-            KV_COMMAND_SCAN_INEFFICIENCY.observe(statistics.inefficiency());
+
+            for (cf, inefficiency) in statistics.inefficiency() {
+                KV_COMMAND_SCAN_INEFFICIENCY.with_label_values(&[cf]).observe(inefficiency);
+            }
+
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
                 Err(e) => ProcessResult::Failed { err: e.into() },
