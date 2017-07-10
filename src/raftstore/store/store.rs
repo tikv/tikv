@@ -27,7 +27,6 @@ use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
 use fs2;
 use time::{self, Timespec};
-
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
 use kvproto::eraftpb::{ConfChangeType, MessageType};
@@ -906,7 +905,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             self.engine.write(wb).unwrap_or_else(|e| {
                 panic!("{} failed to save append result: {:?}", self.tag, e);
             });
-
             if self.cfg.sync_log == true {
                 self.engine.sync_wal().unwrap_or_else(|e| {
                     panic!("{} failed to sync log: {:?}", self.tag, e);
