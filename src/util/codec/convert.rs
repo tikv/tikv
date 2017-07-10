@@ -17,6 +17,15 @@ use std::borrow::Cow;
 use util::xeval::EvalContext;
 use super::Result;
 
+// `convert` converts an uint value to an int value.
+pub fn convert_uint_to_int(val: u64, upper_bound: i64) -> Result<i64> {
+    if val > upper_bound as u64 {
+        return Err(box_err!("constant {} overflows {}", val, upper_bound));
+    }
+    Ok(val as i64)
+}
+
+
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
 /// Note that it does NOT handle overflow.

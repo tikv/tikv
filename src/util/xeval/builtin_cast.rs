@@ -11,9 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::i64;
 use tipb::expression::Expr;
 use util::codec::datum::Datum;
 use util::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP};
+use util::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error};
 
 const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
@@ -35,7 +37,10 @@ impl Evaluator {
         let d = try!(self.eval(ctx, child));
         match d {
             Datum::I64(_) => Ok(d),
-            Datum::U64(_) => Ok(Datum::I64(d.i64())),
+            Datum::U64(u) => {
+                let i = try!(convert::convert_uint_to_int(u, i64::MAX));
+                Ok(Datum::I64(i))
+            }
             _ => invalid_type_error(&d),
         }
     }
@@ -243,7 +248,6 @@ impl Evaluator {
 
 #[cfg(test)]
 mod test {
-    use std::u64;
     use tipb::expression::{ExprType, ScalarFuncSig};
     use util::codec::datum::Datum;
     use util::codec::mysql::{Decimal, Time, Duration};
@@ -281,10 +285,6 @@ mod test {
                                          ScalarFuncSig::CastIntAsInt),
                      Datum::I64(1)),
                     (build_expr_with_sig(vec![Datum::I64(-1)],
-                                         ExprType::ScalarFunc,
-                                         ScalarFuncSig::CastIntAsInt),
-                     Datum::I64(-1)),
-                    (build_expr_with_sig(vec![Datum::U64(u64::MAX)],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CastIntAsInt),
                      Datum::I64(-1))]);
