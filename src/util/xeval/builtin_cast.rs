@@ -19,9 +19,10 @@ use util::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error};
 
 const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
+const TYPE_INT: &'static str = "int";
 
-fn invalid_type_error(datum: &Datum) -> Result<Datum> {
-    Err(Error::Eval(format!("invalid expr type: {:?}, expect to be int", datum)))
+fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
+    Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
 }
 
 fn check_datum_int(datum: &Datum) -> Result<()> {
@@ -41,7 +42,7 @@ impl Evaluator {
                 let i = try!(convert::convert_uint_to_int(u, i64::MAX));
                 Ok(Datum::I64(i))
             }
-            _ => invalid_type_error(&d),
+            _ => invalid_type_error(&d, TYPE_INT),
         }
     }
 
@@ -51,7 +52,7 @@ impl Evaluator {
         match d {
             Datum::I64(i) => Ok(Datum::F64(i as f64)),
             Datum::U64(u) => Ok(Datum::F64(u as f64)),
-            _ => invalid_type_error(&d),
+            _ => invalid_type_error(&d, TYPE_INT),
         }
     }
 
@@ -60,7 +61,7 @@ impl Evaluator {
         let d = try!(self.eval(ctx, child));
         match d {
             Datum::I64(_) | Datum::U64(_) => {}
-            _ => return invalid_type_error(&d),
+            _ => return invalid_type_error(&d, TYPE_INT),
         }
         let s = try!(d.into_string());
         Ok(Datum::Bytes(s.into_bytes()))
@@ -72,7 +73,7 @@ impl Evaluator {
         let decimal = match datum {
             Datum::I64(_) => Decimal::from(datum.i64()),
             Datum::U64(_) => Decimal::from(datum.u64()),
-            _ => return invalid_type_error(&datum),
+            _ => return invalid_type_error(&datum, TYPE_INT),
         };
         Ok(Datum::Dec(decimal))
     }
