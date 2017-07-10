@@ -274,12 +274,20 @@ pub struct GetPropertiesOptions {
     pub max_ts: Option<u64>,
 }
 
+const PROP_MIN_TS: &'static str = "tikv.min_ts";
+const PROP_MAX_TS: &'static str = "tikv.max_ts";
+const PROP_NUM_ROWS: &'static str = "tikv.num_rows";
+const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
+const PROP_NUM_DELETES: &'static str = "tikv.num_delets";
+const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
+
 #[derive(Clone, Debug, Default)]
 pub struct UserProperties {
     pub min_ts: u64,
     pub max_ts: u64,
-    pub num_keys: u64,
+    pub num_rows: u64,
     pub num_puts: u64,
+    pub num_deletes: u64,
     pub num_versions: u64,
 }
 
@@ -288,8 +296,9 @@ impl UserProperties {
         UserProperties {
             min_ts: u64::MAX,
             max_ts: u64::MIN,
-            num_keys: 0,
+            num_rows: 0,
             num_puts: 0,
+            num_deletes: 0,
             num_versions: 0,
         }
     }
@@ -297,17 +306,19 @@ impl UserProperties {
     pub fn add(&mut self, other: &UserProperties) {
         self.min_ts = cmp::min(self.min_ts, other.min_ts);
         self.max_ts = cmp::max(self.max_ts, other.max_ts);
-        self.num_keys += other.num_keys;
+        self.num_rows += other.num_rows;
         self.num_puts += other.num_puts;
+        self.num_deletes += other.num_deletes;
         self.num_versions += other.num_versions;
     }
 
     pub fn encode(&self) -> HashMap<Vec<u8>, Vec<u8>> {
-        let items = [("tikv.min_ts", self.min_ts),
-                     ("tikv.max_ts", self.max_ts),
-                     ("tikv.num_keys", self.num_keys),
-                     ("tikv.num_puts", self.num_puts),
-                     ("tikv.num_versions", self.num_versions)];
+        let items = [(PROP_MIN_TS, self.min_ts),
+                     (PROP_MAX_TS, self.max_ts),
+                     (PROP_NUM_ROWS, self.num_rows),
+                     (PROP_NUM_PUTS, self.num_puts),
+                     (PROP_NUM_DELETES, self.num_deletes),
+                     (PROP_NUM_VERSIONS, self.num_versions)];
         items.iter()
             .map(|&(k, v)| {
                 let mut buf = Vec::with_capacity(8);
@@ -319,11 +330,12 @@ impl UserProperties {
 
     pub fn decode<T: DecodeU64>(props: &T) -> Result<UserProperties, codec::Error> {
         let mut res = UserProperties::new();
-        res.min_ts = try!(props.decode_u64("tikv.min_ts"));
-        res.max_ts = try!(props.decode_u64("tikv.max_ts"));
-        res.num_keys = try!(props.decode_u64("tikv.num_keys"));
-        res.num_puts = try!(props.decode_u64("tikv.num_puts"));
-        res.num_versions = try!(props.decode_u64("tikv.num_versions"));
+        res.min_ts = try!(props.decode_u64(PROP_MIN_TS));
+        res.max_ts = try!(props.decode_u64(PROP_MAX_TS));
+        res.num_rows = try!(props.decode_u64(PROP_NUM_ROWS));
+        res.num_puts = try!(props.decode_u64(PROP_NUM_PUTS));
+        res.num_deletes = try!(props.decode_u64(PROP_NUM_DELETES));
+        res.num_versions = try!(props.decode_u64(PROP_NUM_VERSIONS));
         Ok(res)
     }
 }
@@ -361,7 +373,7 @@ impl TablePropertiesCollector for UserPropertiesCollector {
         }
 
         if k != self.last_key.as_slice() {
-            self.props.num_keys += 1;
+            self.props.num_rows += 1;
             self.last_key.clear();
             self.last_key.extend_from_slice(k);
         }
@@ -370,8 +382,10 @@ impl TablePropertiesCollector for UserPropertiesCollector {
             Ok(v) => v,
             Err(_) => return,   // Ignore error
         };
-        if v.write_type == WriteType::Put {
-            self.props.num_puts += 1;
+        match v.write_type {
+            WriteType::Put => self.props.num_puts += 1,
+            WriteType::Delete => self.props.num_deletes += 1,
+            _ => {}
         }
     }
 
@@ -462,8 +476,9 @@ mod tests {
         let props = UserProperties::decode(&collector.finish()).unwrap();
         assert_eq!(props.min_ts, 1);
         assert_eq!(props.max_ts, 6);
-        assert_eq!(props.num_keys, 4);
+        assert_eq!(props.num_rows, 4);
         assert_eq!(props.num_puts, 3);
+        assert_eq!(props.num_deletes, 3);
         assert_eq!(props.num_versions, 6);
     }
 }

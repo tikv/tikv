@@ -442,11 +442,11 @@ impl<'a> MvccReader<'a> {
         if props.min_ts > safe_point {
             return false;
         }
-        // 2. num_keys == num_versions && num_puts == num_versions:
-        //    No keys have more than one versions, and the version is effective.
+        // 2. num_rows == num_versions && num_puts == num_versions:
+        //    No rows have more than one versions, and the version is effective.
         //    Notice: Since the properties are file-based, it can be false positive.
-        //    For example, if multiple files have a different version of the same key.
-        !(props.num_keys == props.num_versions && props.num_puts == props.num_versions)
+        //    For example, if multiple files have a different version of the same row.
+        !(props.num_rows == props.num_versions && props.num_puts == props.num_versions)
     }
 }
 

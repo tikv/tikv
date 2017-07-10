@@ -155,7 +155,7 @@ mod tests {
     fn test_split_ts() {
         let k = b"k";
         let ts = 123;
-        assert_eq!(split_encoded_key_on_ts(k).is_err(), true);
+        assert!(split_encoded_key_on_ts(k).is_err());
         let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
         let res = split_encoded_key_on_ts(enc.encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));
