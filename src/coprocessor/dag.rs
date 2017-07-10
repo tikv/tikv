@@ -32,14 +32,14 @@ use super::executor::topn::TopNExecutor;
 use super::executor::limit::LimitExecutor;
 
 pub struct DAGContext<'s> {
-    req: DAGRequest,
     pub deadline: Instant,
     pub columns: Vec<ColumnInfo>,
+    pub has_aggr: bool,
+    pub chunks: Vec<Chunk>,
+    req: DAGRequest,
     ranges: Vec<KeyRange>,
     snap: &'s Snapshot,
-    pub has_aggr: bool,
     eval_ctx: Rc<EvalContext>,
-    pub chunks: Vec<Chunk>,
 }
 
 impl<'s> DAGContext<'s> {
@@ -64,7 +64,7 @@ impl<'s> DAGContext<'s> {
     pub fn validate_dag(&mut self) -> Result<()> {
         let execs = self.req.get_executors();
         let first = try!(execs.first()
-            .ok_or_else(|| Error::Other(box_err!("has not executor"))));
+            .ok_or_else(|| Error::Other(box_err!("has no executor"))));
         // check whether first exec is *scan and get the column info
         match first.get_tp() {
             ExecType::TypeTableScan => {
@@ -79,7 +79,7 @@ impl<'s> DAGContext<'s> {
             }
         }
         // check whether dag has a aggregation action and take a flag
-        if execs.iter().rev().any(|ref exec| exec.get_tp() == ExecType::TypeAggregation) {
+        if execs.iter().rev().any(|exec| exec.get_tp() == ExecType::TypeAggregation) {
             self.has_aggr = true;
         }
         Ok(())
@@ -116,7 +116,7 @@ impl<'s> DAGContext<'s> {
         let mut execs = self.req.get_executors().to_vec().into_iter();
         let mut src = self.build_first(execs.next().unwrap(), statistics);
         for mut exec in execs {
-            let curr: Box<DAGExecutor> = match exec.get_tp() {
+            let src: Box<DAGExecutor> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"))
                 }
@@ -140,7 +140,6 @@ impl<'s> DAGContext<'s> {
                 }
                 ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
             };
-            src = curr;
         }
         Ok(src)
     }
