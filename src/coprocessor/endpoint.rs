@@ -675,12 +675,17 @@ impl SelectContextCore {
         let mut aggr_cols = vec![];
         {
             let select_cols = if sel.has_table_info() {
+                COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
                 sel.get_table_info().get_columns()
             } else {
+                COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
                 sel.get_index_info().get_columns()
             };
             let mut cond_col_map = HashMap::default();
-            try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
+            if sel.has_field_where() {
+                COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+                try!(collect_col_in_expr(&mut cond_col_map, select_cols, sel.get_field_where()));
+            }
             let mut aggr_cols_map = HashMap::default();
             for aggr in sel.get_aggregates() {
                 try!(collect_col_in_expr(&mut aggr_cols_map, select_cols, aggr));
@@ -706,6 +711,7 @@ impl SelectContextCore {
         }
 
         let limit = if sel.has_limit() {
+            COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
             sel.get_limit() as usize
         } else {
             usize::MAX
@@ -719,6 +725,7 @@ impl SelectContextCore {
             if !sel.get_order_by()[0].has_expr() {
                 desc_can = sel.get_order_by().first().map_or(false, |o| o.get_desc());
             } else {
+                COPR_EXECUTOR_COUNT.with_label_values(&["topn"]).inc();
                 topn = true;
             }
         }
@@ -738,9 +745,16 @@ impl SelectContextCore {
             Either::Right(cols.iter().map(|c| c.get_column_id()).collect())
         };
 
+        let aggr = if !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty() {
+            COPR_EXECUTOR_COUNT.with_label_values(&["aggregation"]).inc();
+            true
+        } else {
+            false
+        };
+
         Ok(SelectContextCore {
             ctx: Rc::new(box_try!(EvalContext::new(&sel))),
-            aggr: !sel.get_aggregates().is_empty() || !sel.get_group_by().is_empty(),
+            aggr: aggr,
             aggr_cols: aggr_cols,
             topn_cols: topn_cols,
             sel: sel,
@@ -999,6 +1013,7 @@ impl<'a> SelectContext<'a> {
     fn get_rows_from_range(&mut self, range: KeyRange) -> Result<usize> {
         let mut row_count = 0;
         if is_point(&range) {
+            CORP_GET_OR_SCAN_COUNT.with_label_values(&["point"]).inc();
             let value = match try!(self.snap
                 .get(&Key::from_raw(range.get_start()), &mut self.statistics)) {
                 None => return Ok(0),
@@ -1011,6 +1026,7 @@ impl<'a> SelectContext<'a> {
             let h = box_try!(table::decode_handle(range.get_start()));
             row_count += try!(self.core.handle_row(h, values));
         } else {
+            CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
             let mut seek_key = if self.core.desc_scan {
                 range.get_end().to_vec()
             } else {
@@ -1090,6 +1106,7 @@ impl<'a> SelectContext<'a> {
         } else {
             r.get_start().to_vec()
         };
+        CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
         let upper_bound = if !self.core.desc_scan && !r.get_end().is_empty() {
             Some(Key::from_raw(r.get_end()).encoded().clone())
         } else {

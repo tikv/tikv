@@ -18,14 +18,15 @@ use std::usize;
 use std::rc::Rc;
 use std::vec::IntoIter;
 
-use super::{Executor, Row, ExprColumnRefVisitor};
-use super::super::Result;
-use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
-use util::xeval::{Evaluator, EvalContext};
-
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
+
+use util::xeval::{Evaluator, EvalContext};
+use super::{Executor, Row, ExprColumnRefVisitor};
+use super::super::Result;
+use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
+use super::super::metrics::*;
 
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
@@ -53,7 +54,7 @@ impl<'a> TopNExecutor<'a> {
             .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect();
-
+        COPR_EXECUTOR_COUNT.with_label_values(&["topn"]).inc();
         Ok(TopNExecutor {
             order_by: Rc::new(order_by),
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
