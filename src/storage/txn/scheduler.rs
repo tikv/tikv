@@ -269,11 +269,13 @@ pub struct Scheduler {
     running_write_count: usize,
 }
 
-fn find_mvcc_infos_by_key
-    (reader: &mut MvccReader,
-     key: &Key,
-     mut ts: u64)
-     -> (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>, Option<StorageError>) {
+// Make clippy happy.
+type MultipleReturnValue = (Option<MvccLock>,
+                            Vec<(u64, Write)>,
+                            Vec<(u64, Value)>,
+                            Option<StorageError>);
+
+fn find_mvcc_infos_by_key(reader: &mut MvccReader, key: &Key, mut ts: u64) -> MultipleReturnValue {
     let mut writes = vec![];
     let mut values = vec![];
     let mut lock: Option<MvccLock> = None;

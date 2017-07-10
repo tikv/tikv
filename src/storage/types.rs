@@ -32,8 +32,8 @@ pub type Value = Vec<u8>;
 /// encoded bytes.
 pub type KvPair = (Vec<u8>, Value);
 
-/// MvccInfo store all mvcc information of given key.
-/// Used by MvccGetByKey and MvccGetByStartTs.
+/// `MvccInfo` store all mvcc information of given key.
+/// Used by `MvccGetByKey` and `MvccGetByStartTs`.
 #[derive(Debug)]
 pub struct MvccInfo {
     pub lock: Option<Lock>,

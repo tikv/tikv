@@ -873,15 +873,12 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
 fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
     let mut mvcc_info = MvccInfo::new();
     let mut lock_info = LockInfo::new();
-    match mvcc.lock {
-        Some(lock) => {
-            lock_info.set_primary_lock(lock.primary);
-            lock_info.set_key(key.raw().unwrap());
-            lock_info.set_lock_ttl(lock.ttl);
-            lock_info.set_lock_version(lock.ts);
-        }
-        None => {}
-    };
+    if let Some(lock) = mvcc.lock {
+        lock_info.set_primary_lock(lock.primary);
+        lock_info.set_key(key.raw().unwrap());
+        lock_info.set_lock_ttl(lock.ttl);
+        lock_info.set_lock_version(lock.ts);
+    }
     mvcc_info.set_lock(lock_info);
     mvcc_info.set_writes(RepeatedField::from_vec(extract_writes(mvcc.writes)));
     mvcc_info.set_values(RepeatedField::from_vec(extract_values(mvcc.values)));
@@ -902,12 +899,9 @@ fn extract_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
                 };
                 write_info.set_field_type(op);
                 write_info.set_commit_ts(commit_ts);
-                match write.short_value {
-                    Some(v) => {
-                        write_info.set_short_values(v);
-                    }
-                    None => {}
-                };
+                if let Some(v) = write.short_value {
+                    write_info.set_short_values(v);
+                }
                 write_info
             }
         })
