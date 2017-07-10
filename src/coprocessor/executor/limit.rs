@@ -14,9 +14,11 @@
 // remove later
 #![allow(dead_code)]
 
+use tipb::executor::Limit;
+
 use super::{Row, Executor};
 use super::super::Result;
-use tipb::executor::Limit;
+use super::super::metrics::*;
 
 struct LimitExecutor<'a> {
     limit: u64,
@@ -26,6 +28,7 @@ struct LimitExecutor<'a> {
 
 impl<'a> LimitExecutor<'a> {
     fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+        COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
