@@ -89,6 +89,7 @@ pub fn new_store_cfg() -> Config {
         report_region_flow_interval: 100, // 100ms
         raft_store_max_leader_lease: TimeDuration::milliseconds(25 * 10),
         use_sst_file_snapshot: true,
+        allow_remove_leader: true,
         ..Config::default()
     }
 }
