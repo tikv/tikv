@@ -43,8 +43,9 @@ use kvproto::kvrpcpb::{Context, LockInfo, CommandPri};
 
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode, Statistics};
-use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
-use storage::{Key, Value, KvPair, MvccPair, CMD_TAG_GC};
+use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE, Write,
+                    Lock as MvccLock};
+use storage::{Key, Value, KvPair, MvccInfo, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
 use raftstore::store::engine::IterOption;
 use util::transport::{SyncSendCh, Error as TransportError};
@@ -67,8 +68,8 @@ pub enum ProcessResult {
     Res,
     MultiRes { results: Vec<StorageResult<()>> },
     MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
-    MvccPairs { pairs: Vec<MvccPair> },
-    StartTsMvccPair { pair: Option<(Key, Vec<MvccPair>)> },
+    MvccKey { mvcc: MvccInfo },
+    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
     Value { value: Option<Value> },
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
@@ -150,16 +151,16 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
                 _ => panic!("process result mismatch"),
             }
         }
-        StorageCb::MvccPairs(cb) => {
+        StorageCb::MvccInfo(cb) => {
             match pr {
-                ProcessResult::MvccPairs { pairs } => cb(Ok(pairs)),
+                ProcessResult::MvccKey { mvcc } => cb(Ok(mvcc)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
         }
-        StorageCb::StartTsMvccPair(cb) => {
+        StorageCb::StartTsMvccInfo(cb) => {
             match pr {
-                ProcessResult::StartTsMvccPair { pair } => cb(Ok(pair)),
+                ProcessResult::MvccStartTs { mvcc } => cb(Ok(mvcc)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
@@ -268,6 +269,56 @@ pub struct Scheduler {
     running_write_count: usize,
 }
 
+fn find_mvcc_infos_by_key
+    (reader: &mut MvccReader,
+     key: &Key,
+     mut ts: u64)
+     -> (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>, Option<StorageError>) {
+    let mut writes = vec![];
+    let mut values = vec![];
+    let mut lock: Option<MvccLock> = None;
+    let mut err: Option<StorageError> = None;
+    loop {
+        match reader.seek_write(key, ts).map_err(StorageError::from) {
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+            Ok(opt) => {
+                match opt {
+                    Some((commit_ts, write)) => {
+                        ts = commit_ts - 1;
+                        writes.push((commit_ts, write));
+                    }
+                    None => break,
+                }
+            }
+        };
+        match reader.load_lock(key).map_err(StorageError::from) {
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+            Ok(opt) => lock = opt,
+        }
+        let write = writes[writes.len() - 1].1.clone();
+        match reader.get(key, write.start_ts).map_err(StorageError::from) {
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+            Ok(opt) => {
+                match opt {
+                    Some(v) => values.push((write.start_ts, v)),
+                    // Can be found in CF_WRITE but cannot get the value, panic at once.
+                    None => panic!("Data in CF_WRITE and CF_DEFAULT are not consistent!"),
+                }
+            }
+        }
+    }
+    (lock, writes, values, err)
+}
+
 impl Scheduler {
     /// Creates a scheduler.
     pub fn new(engine: Box<Engine>,
@@ -364,29 +415,19 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              true,
                                              None,
                                              ctx.get_isolation_level());
-            let mut ts: u64 = u64::MAX;
-            let mut mvccs = vec![];
-            let mut err: Option<StorageError> = None;
-            loop {
-                match reader.seek_write(key, ts).map_err(StorageError::from) {
-                    Err(e) => {
-                        err = Some(e);
-                        break;
-                    }
-                    Ok(opt) => {
-                        match opt {
-                            Some((commit_ts, write)) => {
-                                ts = commit_ts - 1;
-                                mvccs.push((commit_ts, write) as MvccPair);
-                            }
-                            None => break,
-                        }
-                    }
-                };
-            }
+            let ts: u64 = u64::MAX;
+            let (lock, writes, values, err) = find_mvcc_infos_by_key(&mut reader, key, ts);
             match err {
                 Some(e) => ProcessResult::Failed { err: e.into() },
-                None => ProcessResult::MvccPairs { pairs: mvccs },
+                None => {
+                    ProcessResult::MvccKey {
+                        mvcc: MvccInfo {
+                            lock: lock,
+                            writes: writes,
+                            values: values,
+                        },
+                    }
+                }
             }
         }
         Command::StartTsMvcc { ref ctx, start_ts } => {
@@ -402,32 +443,23 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Ok(opt) => {
                     match opt {
                         Some((key, _)) => {
-                            let mut ts: u64 = u64::MAX;
-                            let mut mvccs = vec![];
-                            let mut err: Option<StorageError> = None;
-                            loop {
-                                match reader.seek_write(&key, ts).map_err(StorageError::from) {
-                                    Err(e) => {
-                                        err = Some(e);
-                                        break;
-                                    }
-                                    Ok(opt) => {
-                                        match opt {
-                                            Some((commit_ts, write)) => {
-                                                ts = commit_ts - 1;
-                                                mvccs.push((commit_ts, write) as MvccPair);
-                                            }
-                                            None => break,
-                                        }
-                                    }
-                                };
-                            }
+                            let (lock, writes, values, err) =
+                                find_mvcc_infos_by_key(&mut reader, &key, start_ts);
                             match err {
                                 Some(e) => ProcessResult::Failed { err: e.into() },
-                                None => ProcessResult::StartTsMvccPair { pair: Some((key, mvccs)) },
+                                None => {
+                                    ProcessResult::MvccStartTs {
+                                        mvcc: Some((key,
+                                                    MvccInfo {
+                                            lock: lock,
+                                            writes: writes,
+                                            values: values,
+                                        })),
+                                    }
+                                }
                             }
                         }
-                        None => ProcessResult::StartTsMvccPair { pair: None },
+                        None => ProcessResult::MvccStartTs { mvcc: None },
                     }
                 }
             }

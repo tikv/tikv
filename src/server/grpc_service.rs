@@ -29,11 +29,9 @@ use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
 use util::worker::Scheduler;
 use util::buf::PipeBuffer;
-use util::escape;
-use storage::{self, Storage, Key, Options, Mutation};
+use storage::{self, Storage, Key, Options, Mutation, Value};
 use storage::txn::Error as TxnError;
-use storage::mvcc::Error as MvccError;
-use storage::mvcc::WriteType;
+use storage::mvcc::{Error as MvccError, WriteType, Write as MvccWrite};
 use storage::engine::Error as EngineError;
 use super::transport::RaftStoreRouter;
 use coprocessor::{RequestTask, EndPointTask};
@@ -702,17 +700,18 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             .then(|_| future::ok::<_, ()>(())));
     }
 
-    fn key_mvcc(&self,
-                ctx: RpcContext,
-                mut req: KeyMvccRequest,
-                sink: UnarySink<KeyMvccResponse>) {
-        let label = "key_mvcc";
+    fn mvcc_get_by_key(&self,
+                       ctx: RpcContext,
+                       mut req: MvccGetByKeyRequest,
+                       sink: UnarySink<MvccGetByKeyResponse>) {
+        let label = "mvcc_get_by_key";
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
 
         let storage = self.storage.clone();
 
+        let key = Key::from_raw(req.get_key());
         let (cb, future) = make_callback();
-        let res = storage.async_key_mvcc(req.take_context(), Key::from_raw(req.get_key()), cb);
+        let res = storage.async_key_mvcc(req.take_context(), key.clone(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -720,12 +719,14 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let future = future.map_err(Error::from)
             .map(|v| {
-                let mut resp = KeyMvccResponse::new();
+                let mut resp = MvccGetByKeyResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
                     match v {
-                        Ok(vv) => resp.set_infos(RepeatedField::from_vec(extract_mvcc_infos(vv))),
+                        Ok(mvcc) => {
+                            resp.set_info(extract_mvcc_info(key, mvcc));
+                        }
                         Err(e) => resp.set_error(format!("{}", e)),
                     };
                 }
@@ -741,11 +742,11 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
-    fn start_ts_mvcc(&self,
-                    ctx: RpcContext,
-                    mut req: StartTsMvccRequest,
-                    sink: UnarySink<StartTsMvccResponse>) {
-        let label = "start_ts_mvcc";
+    fn mvcc_get_by_start_ts(&self,
+                            ctx: RpcContext,
+                            mut req: MvccGetByStartTsRequest,
+                            sink: UnarySink<MvccGetByStartTsResponse>) {
+        let label = "mvcc_get_by_start_ts";
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
 
         let storage = self.storage.clone();
@@ -760,18 +761,18 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let future = future.map_err(Error::from)
             .map(|v| {
-                let mut resp = StartTsMvccResponse::new();
+                let mut resp = MvccGetByStartTsResponse::new();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
                     match v {
                         Ok(Some((k, vv))) => {
-                            resp.set_key(escape(k.encoded()).into_bytes());
-                            resp.set_infos(RepeatedField::from_vec(extract_mvcc_infos(vv)))
+                            resp.set_key(k.raw().unwrap());
+                            resp.set_info(extract_mvcc_info(k, vv));
                         }
                         Ok(None) => {
                             resp.set_key(vec![]);
-                            resp.set_infos(RepeatedField::from_vec(vec![]))
+                            resp.set_info(Default::default());
                         }
                         Err(e) => resp.set_error(format!("{}", e)),
                     }
@@ -869,27 +870,58 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
     }
 }
 
-fn extract_mvcc_infos(res: Vec<storage::MvccPair>) -> Vec<MvccInfo> {
+fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
+    let mut mvcc_info = MvccInfo::new();
+    let mut lock_info = LockInfo::new();
+    match mvcc.lock {
+        Some(lock) => {
+            lock_info.set_primary_lock(lock.primary);
+            lock_info.set_key(key.raw().unwrap());
+            lock_info.set_lock_ttl(lock.ttl);
+            lock_info.set_lock_version(lock.ts);
+        }
+        None => {}
+    };
+    mvcc_info.set_lock(lock_info);
+    mvcc_info.set_writes(RepeatedField::from_vec(extract_writes(mvcc.writes)));
+    mvcc_info.set_values(RepeatedField::from_vec(extract_values(mvcc.values)));
+    mvcc_info
+}
+
+fn extract_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
     res.into_iter()
         .map(|r| match r {
             (commit_ts, write) => {
-                let mut pair = MvccInfo::new();
-                pair.set_start_ts(write.start_ts);
+                let mut write_info = WriteInfo::new();
+                write_info.set_start_ts(write.start_ts);
                 let op = match write.write_type {
                     WriteType::Put => Op::Put,
                     WriteType::Delete => Op::Del,
                     WriteType::Lock => Op::Lock,
                     WriteType::Rollback => Op::Rollback,
                 };
-                pair.set_field_type(op);
-                pair.set_commit_ts(commit_ts);
+                write_info.set_field_type(op);
+                write_info.set_commit_ts(commit_ts);
                 match write.short_value {
                     Some(v) => {
-                        pair.set_short_values(v as Vec<u8>);
+                        write_info.set_short_values(v);
                     }
                     None => {}
                 };
-                pair
+                write_info
+            }
+        })
+        .collect()
+}
+
+fn extract_values(res: Vec<(u64, Value)>) -> Vec<ValueInfo> {
+    res.into_iter()
+        .map(|r| match r {
+            (start_ts, v) => {
+                let mut value = ValueInfo::new();
+                value.set_ts(start_ts);
+                value.set_value(v);
+                value
             }
         })
         .collect()

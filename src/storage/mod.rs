@@ -34,7 +34,7 @@ pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cur
                        Error as EngineError, ScanMode, Statistics, CFStatistics};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
-pub use self::types::{Key, Value, KvPair, MvccPair, make_key};
+pub use self::types::{Key, Value, KvPair, MvccInfo, make_key};
 pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
@@ -79,8 +79,8 @@ pub enum StorageCb {
     Booleans(Callback<Vec<Result<()>>>),
     SingleValue(Callback<Option<Value>>),
     KvPairs(Callback<Vec<Result<KvPair>>>),
-    MvccPairs(Callback<Vec<MvccPair>>),
-    StartTsMvccPair(Callback<Option<(Key, Vec<MvccPair>)>>),
+    MvccInfo(Callback<MvccInfo>),
+    StartTsMvccInfo(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
 }
 
@@ -723,14 +723,14 @@ impl Storage {
     pub fn async_key_mvcc(&self,
                           ctx: Context,
                           key: Key,
-                          callback: Callback<Vec<MvccPair>>)
+                          callback: Callback<MvccInfo>)
                           -> Result<()> {
         let cmd = Command::KeyMvcc {
             ctx: ctx,
             key: key,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::MvccPairs(callback))?;
+        self.send(cmd, StorageCb::MvccInfo(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -738,14 +738,14 @@ impl Storage {
     pub fn async_start_ts_mvcc(&self,
                                ctx: Context,
                                start_ts: u64,
-                               callback: Callback<Option<(Key, Vec<MvccPair>)>>)
+                               callback: Callback<Option<(Key, MvccInfo)>>)
                                -> Result<()> {
         let cmd = Command::StartTsMvcc {
             ctx: ctx,
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::StartTsMvccPair(callback))?;
+        self.send(cmd, StorageCb::StartTsMvccInfo(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
