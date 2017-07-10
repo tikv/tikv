@@ -15,8 +15,6 @@
 #![cfg_attr(feature = "dev", plugin(clippy))]
 #![cfg_attr(not(feature = "dev"), allow(unknown_lints))]
 
-// TODO: deny it once Manishearth/rust-clippy#1586 is fixed.
-#![allow(never_loop)]
 #![allow(needless_pass_by_value)]
 
 extern crate tikv;
@@ -75,6 +73,12 @@ fn main() {
                     .short("s")
                     .takes_value(false)
                     .help("skip tombstone region."))))
+        .subcommand(SubCommand::with_name("size")
+            .about("print region size")
+            .arg(Arg::with_name("region")
+                .short("r")
+                .takes_value(true)
+                .help("set the region id, if not specified, print all regions.")))
         .subcommand(SubCommand::with_name("scan")
             .about("print the range db range")
             .arg(Arg::with_name("from")
@@ -154,12 +158,21 @@ fn main() {
             let skip_tombstone = matches.is_present("skip-tombstone");
             match matches.value_of("region") {
                 Some(id) => {
-                    dump_region_info(&db, String::from(id).parse().unwrap(), skip_tombstone)
+                    dump_region_info(&db, id.parse().unwrap(), skip_tombstone);
                 }
-                None => dump_all_region_info(db, skip_tombstone),
+                None => {
+                    dump_all_region_info(&db, skip_tombstone);
+                }
             }
         } else {
             panic!("Currently only support raft log entry and scan.")
+        }
+    } else if let Some(matches) = matches.subcommand_matches("size") {
+        match matches.value_of("region") {
+            Some(id) => {
+                dump_region_size(&db, id.parse().unwrap());
+            }
+            None => dump_all_region_size(&db),
         }
     } else if let Some(matches) = matches.subcommand_matches("scan") {
         let from = String::from(matches.value_of("from").unwrap());
@@ -355,21 +368,92 @@ fn dump_region_info(db: &DB, region_id: u64, skip_tombstone: bool) {
     println!("apply state: {:?}", apply_state);
 }
 
-fn dump_all_region_info(db: DB, skip_tombstone: bool) {
+fn convert_gbmb(mut bytes: u64) -> String {
+    const GB: u64 = 1024 * 1024 * 1024;
+    const MB: u64 = 1024 * 1024;
+    let mb = if bytes % GB == 0 {
+        String::from("")
+    } else {
+        format!("{:.3} MB ", (bytes % GB) as f64 / MB as f64)
+    };
+    bytes /= GB;
+    let gb = if bytes == 0 {
+        String::from("")
+    } else {
+        format!("{} GB ", bytes)
+    };
+    format!("{}{}", gb, mb)
+}
+
+fn dump_region_size(db: &DB, region_id: u64) {
+    println!("region id: {}", region_id);
+    let size = get_region_size(db, region_id);
+    println!("region size: {}", convert_gbmb(size));
+}
+
+fn dump_all_region_info(db: &DB, skip_tombstone: bool) {
+    let region_ids = get_all_region_ids(db);
+    for region_id in region_ids {
+        dump_region_info(db, region_id, skip_tombstone);
+    }
+}
+
+fn dump_all_region_size(db: &DB) {
+    let mut region_ids = get_all_region_ids(db);
+    let mut region_sizes: Vec<u64> =
+        region_ids.iter().map(|&region_id| get_region_size(db, region_id)).collect();
+    let region_number = region_ids.len();
+    let total_size = region_sizes.iter().sum();
+    let mut v: Vec<(u64, u64)> = region_sizes.drain(..).zip(region_ids.drain(..)).collect();
+    v.sort();
+    v.reverse();
+    println!("total region number: {}", region_number);
+    println!("total region size: {}", convert_gbmb(total_size));
+    for (size, id) in v {
+        println!("region_id: {}", id);
+        println!("region size: {}", convert_gbmb(size));
+    }
+}
+
+fn get_all_region_ids(db: &DB) -> Vec<u64> {
     let start_key = keys::REGION_META_MIN_KEY;
     let end_key = keys::REGION_META_MAX_KEY;
+    let mut region_ids = vec![];
     db.scan(start_key,
               end_key,
               false,
               &mut |key, _| {
-            let (region_id, suffix) = try!(keys::decode_region_meta_key(key));
+            let (region_id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
-            dump_region_info(&db, region_id, skip_tombstone);
+            region_ids.push(region_id);
             Ok(true)
         })
         .unwrap();
+    region_ids
+}
+
+fn get_region_size(db: &DB, region_id: u64) -> u64 {
+    let region_state_key = keys::region_state_key(region_id);
+    let region_state: RegionLocalState = db.get_msg(&region_state_key).unwrap().unwrap();
+    let region = region_state.get_region();
+    let start_key = &keys::data_key(region.get_start_key());
+    let end_key = &keys::data_end_key(region.get_end_key());
+    let mut size: u64 = 0;
+    let cf_arr = [CF_DEFAULT, CF_WRITE, CF_LOCK];
+    for cf in &cf_arr {
+        db.scan_cf(cf,
+                     start_key,
+                     end_key,
+                     true,
+                     &mut |_, v| {
+                         size += v.len() as u64;
+                         Ok(true)
+                     })
+            .unwrap();
+    }
+    size
 }
 
 fn parse_ts_key_from_key(encode_key: Vec<u8>) -> (u64, Vec<u8>) {

@@ -20,22 +20,18 @@ use std::collections::HashSet;
 
 use futures::{Future, BoxFuture, Stream, Async, task, Poll};
 use futures::task::Task;
-use futures::future::ok;
-use futures::future::{loop_fn, Loop};
+use futures::future::{loop_fn, Loop, ok};
 use futures::sync::mpsc::UnboundedSender;
-use grpc::{ClientDuplexSender, ClientDuplexReceiver};
-
+use grpc::{Environment, ChannelBuilder, Result as GrpcResult, ClientDuplexSender,
+           ClientDuplexReceiver};
 use tokio_timer::Timer;
-
-use grpc::{Environment, ChannelBuilder, Result as GrpcResult};
 use rand::{self, Rng};
-
 use kvproto::pdpb::{ResponseHeader, ErrorType, GetMembersRequest, GetMembersResponse, Member,
                     RegionHeartbeatRequest, RegionHeartbeatResponse};
 use kvproto::pdpb_grpc::PdClient;
+use prometheus::HistogramTimer;
 
 use util::{HandyRwLock, Either};
-
 use pd::{Result, Error, PdFuture};
 use pd::metrics::PD_SEND_MSG_HISTOGRAM;
 
@@ -142,6 +138,7 @@ impl LeaderClient {
             req: req,
             resp: None,
             func: f,
+            timer: None,
         }
     }
 
@@ -191,6 +188,8 @@ pub struct Request<Req, Resp, F> {
     req: Req,
     resp: Option<Result<Resp>>,
     func: F,
+
+    timer: Option<HistogramTimer>,
 }
 
 const MAX_REQUEST_COUNT: usize = 5;
@@ -231,18 +230,25 @@ impl<Req, Resp, F> Request<Req, Resp, F>
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
-        let req = (self.func)(&self.client.inner, r);
-        req.then(|resp| {
-                match resp {
-                    Ok(resp) => {
-                        self.resp = Some(Ok(resp));
-                        Ok(self)
+
+        ok(self)
+            .and_then(|mut ctx| {
+                ctx.timer = Some(PD_SEND_MSG_HISTOGRAM.start_timer());
+                let req = (ctx.func)(&ctx.client.inner, r);
+                req.then(|resp| {
+                    // Observe on dropping, schedule time will be recorded too.
+                    ctx.timer.take();
+                    match resp {
+                        Ok(resp) => {
+                            ctx.resp = Some(Ok(resp));
+                            Ok(ctx)
+                        }
+                        Err(err) => {
+                            error!("request failed: {:?}", err);
+                            Err(ctx)
+                        }
                     }
-                    Err(err) => {
-                        error!("request failed: {:?}", err);
-                        Err(self)
-                    }
-                }
+                })
             })
             .boxed()
     }
