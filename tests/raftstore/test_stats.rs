@@ -99,7 +99,6 @@ fn test_node_simple_store_stats() {
 fn test_server_store_snap_stats() {
     let mut cluster = new_server_cluster(0, 2);
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = 600000;
-    cluster.cfg.raft_store.allow_remove_leader = true;
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer number check.

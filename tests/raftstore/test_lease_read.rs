@@ -363,7 +363,6 @@ fn test_node_lease_unsafe_during_leader_transfers() {
 fn test_node_callback_when_destroyed() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    cluster.cfg.raft_store.allow_remove_leader = true;
     cluster.run();
     cluster.must_put(b"k1", b"v1");
     let leader = cluster.leader_of_region(1).unwrap();
