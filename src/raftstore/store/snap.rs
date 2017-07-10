@@ -716,10 +716,11 @@ mod v2 {
     use protobuf::{Message, RepeatedField};
     use kvproto::metapb::Region;
     use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta, RaftSnapshotData};
-    use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions};
+    use rocksdb::{EnvOptions, SstFileWriter, IngestExternalFileOptions, DBCompressionType};
     use storage::{CfName, CF_LOCK};
     use util::{HandyRwLock, rocksdb, duration_to_sec};
     use util::file::{get_file_size, file_exists, delete_file_if_exist};
+    use util::rocksdb::get_fastest_supported_compression_type;
     use raftstore::Result as RaftStoreResult;
 
     use super::super::engine::{Snapshot as DbSnapshot, Iterable};
@@ -995,11 +996,15 @@ mod v2 {
                         .open(&cf_file.tmp_path));
                     cf_file.file = Some(f);
                 } else {
-                    // initialize sst file writer
-                    let handle = try!(snap.cf_handle(cf_file.cf));
-                    let env_opt = EnvOptions::new();
-                    let io_options = snap.get_db().get_options_cf(handle);
-                    let mut writer = SstFileWriter::new(env_opt, io_options);
+                    let handle = snap.cf_handle(cf_file.cf)?;
+                    let mut io_options = snap.get_db().get_options_cf(handle).clone();
+                    io_options.compression(get_fastest_supported_compression_type());
+                    // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
+                    // compression_per_level first, so to make sure our specified compression type
+                    // being used, we must set them empty or disabled.
+                    io_options.compression_per_level(&[]);
+                    io_options.bottommost_compression(DBCompressionType::DBDisableCompression);
+                    let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
                 }
@@ -1988,6 +1993,7 @@ mod v2 {
 
             assert!(Snap::new_for_sending(dir.path(), &key, size_track.clone(), deleter.clone())
                 .is_err());
+
             let mut s2 = Snap::new_for_building(dir.path(),
                                                 &key,
                                                 &snapshot,
