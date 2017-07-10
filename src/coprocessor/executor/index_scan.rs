@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-use coprocessor::endpoint::prefix_next;
-use coprocessor::Result;
 use tipb::executor::IndexScan;
 use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::KeyRange;
@@ -23,6 +20,9 @@ use util::codec::{table, datum, mysql};
 use byteorder::{BigEndian, ReadBytesExt};
 use super::{Executor, Row};
 use super::scanner::Scanner;
+use super::super::endpoint::prefix_next;
+use super::super::Result;
+use super::super::metrics::*;
 
 pub struct IndexScanExec<'a> {
     desc: bool,
@@ -52,6 +52,7 @@ impl<'a> IndexScanExec<'a> {
             .map(|c| c.get_column_id())
             .collect();
         let scanner = Scanner::new(desc, false, snapshot, statistics, start_ts, isolation_level);
+        COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
         IndexScanExec {
             desc: desc,
             col_ids: col_ids,
@@ -109,6 +110,7 @@ impl<'a> Executor for IndexScanExec<'a> {
         while self.cursor < self.key_ranges.len() {
             let data = box_try!(self.get_row_from_range());
             if data.is_none() {
+                CORP_GET_OR_SCAN_COUNT.with_label_values(&["range"]).inc();
                 self.scanner.set_seek_key(None);
                 self.cursor += 1;
                 continue;

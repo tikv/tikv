@@ -15,11 +15,23 @@ use std::fs;
 use std::path::Path;
 
 use storage::CF_DEFAULT;
-use rocksdb::{DB, Options, SliceTransform};
+use rocksdb::{DB, Options, SliceTransform, DBCompressionType};
+use rocksdb::rocksdb::supported_compression;
 
 pub use rocksdb::CFHandle;
 
 use super::cfs_diff;
+
+// Zlib and bzip2 are too slow.
+const COMPRESSION_PRIORITY: [DBCompressionType; 3] =
+    [DBCompressionType::DBLz4, DBCompressionType::DBSnappy, DBCompressionType::DBZstd];
+
+pub fn get_fastest_supported_compression_type() -> DBCompressionType {
+    let all_supported_compression = supported_compression();
+    *COMPRESSION_PRIORITY.into_iter()
+        .find(|c| all_supported_compression.contains(c))
+        .unwrap_or(&DBCompressionType::DBNo)
+}
 
 pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
     db.cf_handle(cf)

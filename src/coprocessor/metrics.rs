@@ -71,4 +71,18 @@ lazy_static! {
             &["type", "req"],
             vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         ).unwrap();
+
+    pub static ref COPR_EXECUTOR_COUNT: CounterVec =
+        register_counter_vec!(
+            "tikv_coprocessor_executor_count",
+            "Total number of each executor",
+            &["type"]
+        ).unwrap();
+
+    pub static ref CORP_GET_OR_SCAN_COUNT: CounterVec =
+        register_counter_vec!(
+            "tikv_coprocessor_get_or_scan_count",
+            "Total number of rocksdb query of get or scan count",
+            &["type"]
+        ).unwrap();
 }
