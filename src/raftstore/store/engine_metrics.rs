@@ -16,7 +16,7 @@ use prometheus::{Gauge, GaugeVec};
 use rocksdb::{DB, DBStatisticsTickerType as TickerType, DBStatisticsHistogramType as HistType,
               HistogramData};
 use storage::ALL_CFS;
-use util::rocksdb;
+use util::{rocksdb, SlowTimer};
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &'static str = "rocksdb.estimate-table-readers-mem";
@@ -153,13 +153,18 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
     for cf in ALL_CFS {
         let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        let t = SlowTimer::new();
         let cf_used_size = engine.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .expect("rocksdb is too old, missing total-sst-files-size property");
+        slow_log!(t, "get total sst files size too slow");
+
 
         // For block cache usage
+        let t2 = SlowTimer::new();
         let block_cache_usage = engine.get_block_cache_usage_cf(handle);
         STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC.with_label_values(&[cf])
             .set(block_cache_usage as f64);
+        slow_log!(t2, "get block cache usage too slow");
 
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
         // families.
@@ -185,17 +190,21 @@ pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>) -> u64 {
 
         // TODO: add cache usage and pinned usage.
 
+        let t3 = SlowTimer::new();
         if let Some(num_keys) = engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
             STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC.with_label_values(&[cf])
                 .set(num_keys as f64);
         }
+        slow_log!(t3, "get estimate num keys too slow");
 
         // Pending compaction bytes
+        let t4 = SlowTimer::new();
         if let Some(pending_compaction_bytes) =
                engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_PENDING_COMPACTION_BYTES) {
             STORE_ENGINE_PENDING_COMACTION_BYTES_VEC.with_label_values(&[cf])
                 .set(pending_compaction_bytes as f64);
         }
+        slow_log!(t4, "get estimate pending compaction bytes too slow");
     }
     used_size
 }
