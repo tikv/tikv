@@ -351,7 +351,8 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engine in self.engines.values() {
-            try!(write_prepare_bootstrap(engine, &region));
+            // TODO(lishuai):
+            try!(write_prepare_bootstrap(engine, engine, &region));
         }
 
         self.bootstrap_cluster(region);
@@ -371,7 +372,8 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        let region = prepare_bootstrap(&self.engines[&node_id], 1, 1, 1).unwrap();
+        // TODO(lishuai):
+        let region = prepare_bootstrap(&self.engines[&node_id], &self.engines[&node_id], 1, 1, 1).unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid
