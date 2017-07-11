@@ -1649,7 +1649,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
+        let t2 = SlowTimer::new();
         let mut used_size = flush_engine_properties_and_get_used_size(self.engine.clone());
+        slow_log!(t2, "{} flush engine properties ans get used size", self.tag);
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);
