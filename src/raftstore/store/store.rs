@@ -48,8 +48,8 @@ use util::collections::{HashMap, HashSet};
 use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionTaskRes, RegionRunner,
-                    CompactTask, CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
+use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
+                    CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
                     ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
@@ -117,8 +117,6 @@ pub struct Store<T, C: 'static> {
     split_check_worker: Worker<SplitCheckTask>,
 
     region_worker: Worker<RegionTask>,
-    region_res_receiver: Option<StdReceiver<RegionTaskRes>>,
-    pending_compact_tasks: Vec<CompactTask>,
 
     raftlog_gc_worker: Worker<RaftlogGcTask>,
     compact_worker: Worker<CompactTask>,
@@ -204,8 +202,6 @@ impl<T, C> Store<T, C> {
             pending_raft_groups: HashSet::default(),
             split_check_worker: Worker::new("split check worker"),
             region_worker: Worker::new("snapshot worker"),
-            region_res_receiver: None,
-            pending_compact_tasks: vec![],
             raftlog_gc_worker: Worker::new("raft gc worker"),
             compact_worker: Worker::new("compact worker"),
             pd_worker: FutureWorker::new("pd worker"),
@@ -408,7 +404,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
         self.register_report_region_flow_tick(event_loop);
-        self.register_poll_region_result_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.engine.clone(),
                                                        self.sendch.clone(),
@@ -416,12 +411,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                                        self.cfg.region_split_size);
         box_try!(self.split_check_worker.start(split_check_runner));
 
-        let (tx, rx) = mpsc::channel();
         let runner = RegionRunner::new(self.engine.clone(),
                                        self.snap_mgr.clone(),
-                                       self.cfg.snap_apply_batch_size,
-                                       Some(tx));
-        self.region_res_receiver = Some(rx);
+                                       self.cfg.snap_apply_batch_size);
         box_try!(self.region_worker.start(runner));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
@@ -563,33 +555,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Err(e) => panic!("unexpected error {:?}", e),
             }
         }
-    }
-
-    fn poll_region_result(&mut self) {
-        let mut compact_tasks = vec![];
-        loop {
-            match self.region_res_receiver.as_ref().unwrap().try_recv() {
-                Ok(RegionTaskRes::NeedCompactRange { cf, start_key, end_key }) => {
-                    compact_tasks.push(CompactTask {
-                        cf_name: cf,
-                        start_key: Some(start_key),
-                        end_key: Some(end_key),
-                    });
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(e) => panic!("unexpected error {:?}", e),
-            }
-        }
-
-        // We need to delay the manual compact after we have deleted a huge range which use
-        // delete_range, because the existing snapshot may make the manual compaction useless.
-        STORE_COMPACT_RANGE_TASKS_BATCH_HISTOGRAM.observe(self.pending_compact_tasks.len() as f64);
-        for task in self.pending_compact_tasks.drain(..) {
-            info!("send compact range task for cf {} to compact_worker.",
-                  task.cf_name);
-            self.compact_worker.schedule(task).unwrap();
-        }
-        self.pending_compact_tasks = compact_tasks;
     }
 
     /// If target peer doesn't exist, create it.
@@ -1395,20 +1360,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_report_region_flow_tick(event_loop);
     }
 
-    fn register_poll_region_result_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(event_loop,
-                                       Tick::PollRegionRes,
-                                       self.cfg.poll_region_result_interval) {
-            error!("{} register poll region result tick err: {:?}", self.tag, e);
-        };
-    }
-
-    fn on_poll_region_result_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        self.poll_region_result();
-
-        self.register_poll_region_result_tick(event_loop);
-    }
-
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let mut total_gc_logs = 0;
@@ -2110,7 +2061,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
             Tick::ReportRegionFlow => self.on_report_region_flow(event_loop),
-            Tick::PollRegionRes => self.on_poll_region_result_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

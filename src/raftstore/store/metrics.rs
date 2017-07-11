@@ -84,13 +84,6 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_COMPACT_RANGE_TASKS_BATCH_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_compact_range_tasks_batch_size",
-            "Bucketed histogram of compact range tasks batch size",
-            exponential_buckets(1.0, 2.0, 10).unwrap()
-        ).unwrap();
-
     pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_raft_process_duration_secs",

@@ -14,7 +14,7 @@
 
 use std::fmt::{self, Formatter, Display};
 use std::sync::Arc;
-use std::sync::mpsc::{SyncSender, Sender};
+use std::sync::mpsc::SyncSender;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use std::str;
@@ -58,14 +58,6 @@ pub enum Task {
     },
 }
 
-pub enum TaskRes {
-    NeedCompactRange {
-        cf: String,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    },
-}
-
 impl Task {
     pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
         Task::Destroy {
@@ -97,7 +89,6 @@ struct SnapContext {
     db: Arc<DB>,
     batch_size: usize,
     mgr: SnapManager,
-    res_notifier: Option<Sender<TaskRes>>,
 }
 
 impl SnapContext {
@@ -130,7 +121,6 @@ impl SnapContext {
     }
 
     fn delete_all_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut post_delete = vec![];
         let wb = WriteBatch::new();
         for cf in self.db.cf_names() {
             let iter_opt = IterOption::new(Some(end_key.to_vec()), false);
@@ -145,30 +135,14 @@ impl SnapContext {
                     // FixedSuffixSliceTransform, if the length of start key less than 8, we
                     // will encounter index out of range error.
                     box_try!(wb.delete_range_cf(handle, it.key(), end_key));
-                    post_delete.push(TaskRes::NeedCompactRange {
-                        cf: String::from(cf),
-                        start_key: it.key().to_vec(),
-                        end_key: end_key.to_vec(),
-                    });
                 } else {
                     box_try!(wb.delete_range_cf(handle, start_key, end_key));
-                    post_delete.push(TaskRes::NeedCompactRange {
-                        cf: String::from(cf),
-                        start_key: start_key.to_vec(),
-                        end_key: end_key.to_vec(),
-                    });
                 }
             }
         }
 
         if wb.count() > 0 {
             box_try!(self.db.write(wb));
-        }
-
-        if !post_delete.is_empty() && self.res_notifier.is_some() {
-            for res in post_delete.drain(..) {
-                self.res_notifier.as_ref().unwrap().send(res).unwrap();
-            }
         }
 
         Ok(())
@@ -271,18 +245,13 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(db: Arc<DB>,
-               mgr: SnapManager,
-               batch_size: usize,
-               res_notifier: Option<Sender<TaskRes>>)
-               -> Runner {
+    pub fn new(db: Arc<DB>, mgr: SnapManager, batch_size: usize) -> Runner {
         Runner {
             pool: ThreadPool::new_with_name(thd_name!("snap generator"), GENERATE_POOL_SIZE),
             ctx: SnapContext {
                 db: db,
                 mgr: mgr,
                 batch_size: batch_size,
-                res_notifier: res_notifier,
             },
         }
     }
