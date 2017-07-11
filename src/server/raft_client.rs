@@ -30,7 +30,7 @@ use super::{Error, Result, Config};
 
 struct Conn {
     stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
-    buffer: Vec<(RaftMessage, WriteFlags)>,
+    buffer: Option<Vec<(RaftMessage, WriteFlags)>>,
     store_id: u64,
 
     _client: TikvClient,
@@ -53,7 +53,7 @@ impl Conn {
         client.spawn(rx_close.map_err(|_| ())
             .select(sink.sink_map_err(Error::from)
                 .send_all(rx.map(|msgs: Vec<(RaftMessage, WriteFlags)>| {
-                        stream::iter(msgs.into_iter().map(Ok)).map_err(|_: ()| ())
+                        stream::iter::<_, _, ()>(msgs.into_iter().map(Ok))
                     })
                     .flatten()
                     .map_err(|_| Error::Sink))
@@ -63,7 +63,7 @@ impl Conn {
             .map_err(|_| ()));
         Conn {
             stream: tx,
-            buffer: Vec::with_capacity(INITIAL_BUFFER_CAP),
+            buffer: Some(Vec::with_capacity(INITIAL_BUFFER_CAP)),
             store_id: store_id,
 
             _client: client,
@@ -101,7 +101,7 @@ impl RaftClient {
 
     pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
         let mut conn = self.get_conn(addr, msg.region_id, store_id);
-        conn.buffer.push((msg, WriteFlags::default().buffer_hint(true)));
+        conn.buffer.as_mut().unwrap().push((msg, WriteFlags::default().buffer_hint(true)));
         Ok(())
     }
 
@@ -109,10 +109,11 @@ impl RaftClient {
     pub fn flush(&mut self) {
         let mut dead_conns = Vec::new();
         for (key, conn) in &mut self.conns {
-            if conn.buffer.is_empty() {
+            if conn.buffer.as_ref().unwrap().is_empty() {
                 continue;
             }
-            let mut msgs = conn.buffer.split_off(0);
+
+            let mut msgs = conn.buffer.take().unwrap();
             msgs.last_mut().unwrap().1 = WriteFlags::default();
             if let Err(e) = UnboundedSender::send(&conn.stream, msgs) {
                 error!("server: drop conn with tikv endpoint {} flush conn error: {:?}",
@@ -120,6 +121,8 @@ impl RaftClient {
                        e);
                 dead_conns.push(key.clone());
             }
+
+            conn.buffer = Some(Vec::with_capacity(INITIAL_BUFFER_CAP));
         }
 
         for key in dead_conns {
