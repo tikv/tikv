@@ -29,9 +29,9 @@ use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
 use util::worker::Scheduler;
 use util::buf::PipeBuffer;
-use storage::{self, Storage, Key, Options, Mutation, Value};
+use storage::{self, Storage, Key, Options, Mutation};
 use storage::txn::Error as TxnError;
-use storage::mvcc::{Error as MvccError, WriteType, Write as MvccWrite};
+use storage::mvcc::{Error as MvccError, WriteType};
 use storage::engine::Error as EngineError;
 use super::transport::RaftStoreRouter;
 use coprocessor::{RequestTask, EndPointTask};
@@ -873,52 +873,49 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
 fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
     let mut mvcc_info = MvccInfo::new();
     let mut lock_info = LockInfo::new();
-    if let Some(lock) = mvcc.lock {
-        lock_info.set_primary_lock(lock.primary);
+    if let Some(ref lock) = mvcc.lock {
+        lock_info.set_primary_lock(lock.primary.clone());
         lock_info.set_key(key.raw().unwrap());
         lock_info.set_lock_ttl(lock.ttl);
         lock_info.set_lock_version(lock.ts);
     }
     mvcc_info.set_lock(lock_info);
-    mvcc_info.set_writes(RepeatedField::from_vec(extract_writes(mvcc.writes)));
-    mvcc_info.set_values(RepeatedField::from_vec(extract_values(mvcc.values)));
+    let (vw, vv) = extract_vectors(mvcc);
+    mvcc_info.set_writes(RepeatedField::from_vec(vw));
+    mvcc_info.set_values(RepeatedField::from_vec(vv));
     mvcc_info
 }
 
-fn extract_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
-    res.into_iter()
-        .map(|r| match r {
-            (commit_ts, write) => {
-                let mut write_info = WriteInfo::new();
-                write_info.set_start_ts(write.start_ts);
-                let op = match write.write_type {
-                    WriteType::Put => Op::Put,
-                    WriteType::Delete => Op::Del,
-                    WriteType::Lock => Op::Lock,
-                    WriteType::Rollback => Op::Rollback,
-                };
-                write_info.set_field_type(op);
-                write_info.set_commit_ts(commit_ts);
-                if let Some(v) = write.short_value {
-                    write_info.set_short_values(v);
-                }
-                write_info
-            }
-        })
-        .collect()
-}
+fn extract_vectors(res: storage::MvccInfo) -> (Vec<WriteInfo>, Vec<ValueInfo>) {
+    assert_eq!(res.writes.len(), res.values.len());
+    let mut vw: Vec<WriteInfo> = vec![];
+    let mut vv: Vec<ValueInfo> = vec![];
+    for i in 0..res.writes.len() {
+        let (ref start_ts, ref v) = res.values[i];
+        let mut value = ValueInfo::new();
+        value.set_ts(start_ts);
+        value.set_value(v.clone());
+        if res.writes[i].1.short_value.is_some() {
+            value.set_is_short_value(true);
+        } else {
+            value.set_is_short_value(false);
+        }
+        vv.push(value);
 
-fn extract_values(res: Vec<(u64, Value)>) -> Vec<ValueInfo> {
-    res.into_iter()
-        .map(|r| match r {
-            (start_ts, v) => {
-                let mut value = ValueInfo::new();
-                value.set_ts(start_ts);
-                value.set_value(v);
-                value
-            }
-        })
-        .collect()
+        let (ref commit_ts, ref write) = res.writes[i];
+        let mut write_info = WriteInfo::new();
+        write_info.set_start_ts(write.start_ts);
+        let op = match write.write_type {
+            WriteType::Put => Op::Put,
+            WriteType::Delete => Op::Del,
+            WriteType::Lock => Op::Lock,
+            WriteType::Rollback => Op::Rollback,
+        };
+        write_info.set_field_type(op);
+        write_info.set_commit_ts(*commit_ts);
+        vw.push(write_info);
+    }
+    (vw, vv)
 }
 
 fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {
