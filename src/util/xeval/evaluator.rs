@@ -144,6 +144,8 @@ impl Evaluator {
             ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
             ExprType::JsonType => self.eval_json_type(ctx, expr),
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
+            ExprType::JsonObject => self.eval_json_object(ctx, expr),
+            ExprType::JsonArray => self.eval_json_array(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -511,6 +513,18 @@ impl Evaluator {
         let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json())
             .collect());
         Ok(Datum::Json(first.merge(suffixes)))
+    }
+
+    fn eval_json_object(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 0));
+        let obj = try!(Json::to_object(&children));
+        Ok(Datum::Json(obj))
+    }
+
+    fn eval_json_array(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 0));
+        let arr = try!(Json::to_array(&children));
+        Ok(Datum::Json(arr))
     }
 
     fn eval_logic<F>(&mut self,
@@ -1240,5 +1254,23 @@ mod test {
           build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
-     ]);
+    ]);
+
+    test_eval!(test_eval_json_object,
+               vec![
+        (build_expr(vec![], ExprType::JsonObject), Datum::Json("{}".parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null], ExprType::JsonObject),
+            Datum::Json(r#"{"1":null}"#.parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::U64(2), Datum::Bytes(b"sdf".to_vec()),
+                Datum::Bytes(b"k1".to_vec()), Datum::Bytes(b"v1".to_vec())], ExprType::JsonObject),
+            Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_json_array,
+               vec![
+        (build_expr(vec![], ExprType::JsonArray), Datum::Json("[]".parse().unwrap())),
+        (build_expr(vec![Datum::Null],ExprType::JsonArray), Datum::Json("[null]".parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())], ExprType::JsonArray),
+            Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap())),
+    ]);
 }

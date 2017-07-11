@@ -10,8 +10,10 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 // FIXME(shirly): remove following later
 #![allow(dead_code)]
+
 mod binary;
 mod comparison;
 mod serde;
@@ -21,6 +23,8 @@ mod json_merge;
 mod json_modify;
 mod json_type;
 mod json_unquote;
+mod json_object;
+mod json_array;
 mod path_expr;
 
 use std::collections::BTreeMap;

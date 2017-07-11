@@ -22,8 +22,6 @@ use std::str::FromStr;
 
 use super::Json;
 
-const ERR_CONVERT_FAILED: &str = "Can not covert from ";
-
 impl Json {
     pub fn to_string(&self) -> String {
         serde_json::to_string(self).unwrap()
