@@ -15,6 +15,7 @@ use tipb::expression::Expr;
 use util::codec::datum::Datum;
 use super::{Evaluator, EvalContext, Result, Error};
 
+const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
 pub const TYPE_INT: &'static str = "int";
 
 pub fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
@@ -36,6 +37,31 @@ impl Evaluator {
             Datum::U64(_) => Ok(d),
             _ => invalid_type_error(&d, TYPE_INT),
         }
+    }
+
+    pub fn abs_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO add impl
+        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    }
+
+    pub fn ceil_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO add impl
+        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    }
+
+    pub fn ceil_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO add impl
+        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    }
+
+    pub fn floor_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO add impl
+        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    }
+
+    pub fn floor_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        // TODO add impl
+        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 }
 
