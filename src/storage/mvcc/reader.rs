@@ -429,24 +429,13 @@ impl<'a> MvccReader<'a> {
 
     // Returns true if it needs gc.
     // This is for optimization purpose, does not mean to be accurate.
-    pub fn need_gc(&self, safe_point: u64) -> bool {
+    pub fn need_gc(&self, safe_point: u64, ratio_threshold: f64) -> bool {
         let mut opts = GetPropertiesOptions::default();
         opts.max_ts = Some(safe_point);
-        let props = match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
-            Ok(v) => v,
-            Err(_) => return true,
-        };
-        // We don't need gc if:
-        // 1. min_ts > safe_point:
-        //    No data older than safe_point to gc.
-        if props.min_ts > safe_point {
-            return false;
+        match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
+            Ok(v) => v.need_gc(safe_point, ratio_threshold),
+            Err(_) => true,
         }
-        // 2. num_rows == num_versions && num_puts == num_versions:
-        //    No rows have more than one versions, and the version is effective.
-        //    Notice: Since the properties are file-based, it can be false positive.
-        //    For example, if multiple files have a different version of the same row.
-        !(props.num_rows == props.num_versions && props.num_puts == props.num_versions)
     }
 }
 
@@ -562,7 +551,7 @@ mod tests {
         let db_opts = rocksdb::Options::new();
         let mut cf_opts = rocksdb::Options::new();
         if with_properties {
-            let f = Box::new(UserPropertiesCollectorFactory::new());
+            let f = Box::new(UserPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::Options::new()),
@@ -588,7 +577,7 @@ mod tests {
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
         let mut stat = Statistics::default();
         let reader = MvccReader::new(&snap, &mut stat, None, false, None, IsolationLevel::SI);
-        assert_eq!(reader.need_gc(safe_point), need_gc);
+        assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
     }
 
     #[test]

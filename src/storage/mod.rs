@@ -136,6 +136,7 @@ pub enum Command {
         safe_point: u64,
         scan_key: Option<Key>,
         keys: Vec<Key>,
+        options: Options,
     },
     RawGet { ctx: Context, key: Key },
     RawScan {
@@ -341,19 +342,25 @@ impl Command {
 
 use util::transport::SyncSendCh;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Options {
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
     pub key_only: bool,
+    pub gc_ratio_threshold: f64,
 }
 
 impl Options {
-    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
+    pub fn new(lock_ttl: u64,
+               skip_constraint_check: bool,
+               key_only: bool,
+               gc_ratio_threshold: f64)
+               -> Options {
         Options {
             lock_ttl: lock_ttl,
             skip_constraint_check: skip_constraint_check,
             key_only: key_only,
+            gc_ratio_threshold: gc_ratio_threshold,
         }
     }
 }
@@ -367,12 +374,16 @@ pub struct Storage {
     engine: Box<Engine>,
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
+    options: Options,
 }
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let (tx, rx) = mpsc::sync_channel(config.sched_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
+
+        let mut options = Options::default();
+        options.gc_ratio_threshold = config.gc_ratio_threshold;
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
@@ -382,6 +393,7 @@ impl Storage {
                 handle: None,
                 receiver: Some(rx),
             })),
+            options: options,
         })
     }
 
@@ -626,6 +638,7 @@ impl Storage {
             safe_point: safe_point,
             scan_key: None,
             keys: vec![],
+            options: self.options.clone(),
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
@@ -701,6 +714,7 @@ impl Clone for Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
+            options: self.options.clone(),
         }
     }
 }

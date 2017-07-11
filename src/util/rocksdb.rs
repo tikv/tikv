@@ -278,17 +278,17 @@ const PROP_MIN_TS: &'static str = "tikv.min_ts";
 const PROP_MAX_TS: &'static str = "tikv.max_ts";
 const PROP_NUM_ROWS: &'static str = "tikv.num_rows";
 const PROP_NUM_PUTS: &'static str = "tikv.num_puts";
-const PROP_NUM_DELETES: &'static str = "tikv.num_delets";
 const PROP_NUM_VERSIONS: &'static str = "tikv.num_versions";
+const PROP_MAX_ROW_VERSIONS: &'static str = "tikv.max_row_versions";
 
 #[derive(Clone, Debug, Default)]
 pub struct UserProperties {
-    pub min_ts: u64,
-    pub max_ts: u64,
-    pub num_rows: u64,
-    pub num_puts: u64,
-    pub num_deletes: u64,
-    pub num_versions: u64,
+    pub min_ts: u64, // The minimal timestamp.
+    pub max_ts: u64, // The maximal timestamp.
+    pub num_rows: u64, // The number of rows.
+    pub num_puts: u64, // The number of MVCC puts of all rows.
+    pub num_versions: u64, // The number of MVCC versions of all rows.
+    pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
 }
 
 impl UserProperties {
@@ -298,8 +298,8 @@ impl UserProperties {
             max_ts: u64::MIN,
             num_rows: 0,
             num_puts: 0,
-            num_deletes: 0,
             num_versions: 0,
+            max_row_versions: 0,
         }
     }
 
@@ -308,8 +308,8 @@ impl UserProperties {
         self.max_ts = cmp::max(self.max_ts, other.max_ts);
         self.num_rows += other.num_rows;
         self.num_puts += other.num_puts;
-        self.num_deletes += other.num_deletes;
         self.num_versions += other.num_versions;
+        self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
     }
 
     pub fn encode(&self) -> HashMap<Vec<u8>, Vec<u8>> {
@@ -317,8 +317,8 @@ impl UserProperties {
                      (PROP_MAX_TS, self.max_ts),
                      (PROP_NUM_ROWS, self.num_rows),
                      (PROP_NUM_PUTS, self.num_puts),
-                     (PROP_NUM_DELETES, self.num_deletes),
-                     (PROP_NUM_VERSIONS, self.num_versions)];
+                     (PROP_NUM_VERSIONS, self.num_versions),
+                     (PROP_MAX_ROW_VERSIONS, self.max_row_versions)];
         items.iter()
             .map(|&(k, v)| {
                 let mut buf = Vec::with_capacity(8);
@@ -334,22 +334,48 @@ impl UserProperties {
         res.max_ts = try!(props.decode_u64(PROP_MAX_TS));
         res.num_rows = try!(props.decode_u64(PROP_NUM_ROWS));
         res.num_puts = try!(props.decode_u64(PROP_NUM_PUTS));
-        res.num_deletes = try!(props.decode_u64(PROP_NUM_DELETES));
         res.num_versions = try!(props.decode_u64(PROP_NUM_VERSIONS));
+        res.max_row_versions = try!(props.decode_u64(PROP_MAX_ROW_VERSIONS));
         Ok(res)
+    }
+
+    pub fn need_gc(&self, safe_point: u64, ratio_threshold: f64) -> bool {
+        // Always GC.
+        if ratio_threshold < 1.0 {
+            return true;
+        }
+        // No data older than safe_point to GC.
+        if self.min_ts > safe_point {
+            return false;
+        }
+
+        // Note: Since the properties are file-based, it can be false positive.
+        // For example, multiple files can have a different version of the same row.
+
+        // There are a lot of MVCC versions to GC.
+        if self.num_versions as f64 > self.num_rows as f64 * ratio_threshold {
+            return true;
+        }
+        // There are a lot of non-effective MVCC versions to GC.
+        if self.num_versions as f64 > self.num_puts as f64 * ratio_threshold {
+            return true;
+        }
+        false
     }
 }
 
 pub struct UserPropertiesCollector {
     props: UserProperties,
-    last_key: Vec<u8>,
+    last_row: Vec<u8>,
+    row_versions: u64,
 }
 
-impl UserPropertiesCollector {
-    fn new() -> UserPropertiesCollector {
+impl Default for UserPropertiesCollector {
+    fn default() -> UserPropertiesCollector {
         UserPropertiesCollector {
             props: UserProperties::new(),
-            last_key: Vec::new(),
+            last_row: Vec::new(),
+            row_versions: 0,
         }
     }
 }
@@ -372,10 +398,16 @@ impl TablePropertiesCollector for UserPropertiesCollector {
             _ => return,
         }
 
-        if k != self.last_key.as_slice() {
+        if k != self.last_row.as_slice() {
             self.props.num_rows += 1;
-            self.last_key.clear();
-            self.last_key.extend_from_slice(k);
+            self.row_versions = 1;
+            self.last_row.clear();
+            self.last_row.extend_from_slice(k);
+        } else {
+            self.row_versions += 1;
+        }
+        if self.row_versions > self.props.max_row_versions {
+            self.props.max_row_versions = self.row_versions;
         }
 
         let v = match Write::parse(value) {
@@ -384,7 +416,6 @@ impl TablePropertiesCollector for UserPropertiesCollector {
         };
         match v.write_type {
             WriteType::Put => self.props.num_puts += 1,
-            WriteType::Delete => self.props.num_deletes += 1,
             _ => {}
         }
     }
@@ -397,15 +428,9 @@ impl TablePropertiesCollector for UserPropertiesCollector {
 #[derive(Default)]
 pub struct UserPropertiesCollectorFactory {}
 
-impl UserPropertiesCollectorFactory {
-    pub fn new() -> UserPropertiesCollectorFactory {
-        UserPropertiesCollectorFactory {}
-    }
-}
-
 impl TablePropertiesCollectorFactory for UserPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
-        Box::new(UserPropertiesCollector::new())
+        Box::new(UserPropertiesCollector::default())
     }
 }
 
@@ -461,12 +486,13 @@ mod tests {
         let cases = [("ab", 2, WriteType::Put, DBEntryType::Put),
                      ("ab", 1, WriteType::Delete, DBEntryType::Put),
                      ("ab", 1, WriteType::Delete, DBEntryType::Delete),
-                     ("cd", 4, WriteType::Delete, DBEntryType::Put),
+                     ("cd", 5, WriteType::Delete, DBEntryType::Put),
+                     ("cd", 4, WriteType::Put, DBEntryType::Put),
                      ("cd", 3, WriteType::Put, DBEntryType::Put),
-                     ("ef", 5, WriteType::Put, DBEntryType::Put),
-                     ("ef", 5, WriteType::Put, DBEntryType::Delete),
-                     ("gh", 6, WriteType::Delete, DBEntryType::Put)];
-        let mut collector = UserPropertiesCollector::new();
+                     ("ef", 6, WriteType::Put, DBEntryType::Put),
+                     ("ef", 6, WriteType::Put, DBEntryType::Delete),
+                     ("gh", 7, WriteType::Delete, DBEntryType::Put)];
+        let mut collector = UserPropertiesCollector::default();
         for &(key, ts, write_type, entry_type) in &cases {
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.encoded());
@@ -475,10 +501,10 @@ mod tests {
         }
         let props = UserProperties::decode(&collector.finish()).unwrap();
         assert_eq!(props.min_ts, 1);
-        assert_eq!(props.max_ts, 6);
+        assert_eq!(props.max_ts, 7);
         assert_eq!(props.num_rows, 4);
-        assert_eq!(props.num_puts, 3);
-        assert_eq!(props.num_deletes, 3);
-        assert_eq!(props.num_versions, 6);
+        assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_versions, 7);
+        assert_eq!(props.max_row_versions, 3);
     }
 }
