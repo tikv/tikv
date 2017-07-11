@@ -227,7 +227,7 @@ impl Evaluator {
     pub fn get_one_child<'a>(&mut self, expr: &'a Expr) -> Result<&'a Expr> {
         let l = expr.get_children().len();
         if l != 1 {
-            return Err(Error::Expr(format!("{:?} need 1 operand but got {}", expr.get_tp(), 1)));
+            return Err(Error::Expr(format!("{:?} need 1 operand but got {}", expr.get_tp(), l)));
         }
         let children = expr.get_children();
         Ok(&children[0])
