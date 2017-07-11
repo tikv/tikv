@@ -155,9 +155,9 @@ fn main() {
             let skip_tombstone = matches.is_present("skip-tombstone");
             match matches.value_of("region") {
                 Some(id) => {
-                    dump_region_info(&raft_db, String::from(id).parse().unwrap(), skip_tombstone)
+                    dump_region_info(&raft_db, &kv_db, String::from(id).parse().unwrap(), skip_tombstone)
                 }
-                None => dump_all_region_info(raft_db, skip_tombstone),
+                None => dump_all_region_info(raft_db, kv_db, skip_tombstone),
             }
         } else {
             panic!("Currently only support raft log entry and scan.")
@@ -335,7 +335,7 @@ fn dump_raft_log_entry(raft_db: DB, idx_key: &[u8]) {
     println!("{:?}", msg);
 }
 
-fn dump_region_info(raft_db: &DB, region_id: u64, skip_tombstone: bool) {
+fn dump_region_info(raft_db: &DB, kv_db: &DB, region_id: u64, skip_tombstone: bool) {
     let region_state_key = keys::region_state_key(region_id);
     let region_state: Option<RegionLocalState> = raft_db.get_msg(&region_state_key).unwrap();
     if skip_tombstone &&
@@ -352,11 +352,11 @@ fn dump_region_info(raft_db: &DB, region_id: u64, skip_tombstone: bool) {
 
     let apply_state_key = keys::apply_state_key(region_id);
     println!("apply state key: {}", escape(&apply_state_key));
-    let apply_state: Option<RaftApplyState> = raft_db.get_msg_cf(CF_RAFT, &apply_state_key).unwrap();
+    let apply_state: Option<RaftApplyState> = kv_db.get_msg(&apply_state_key).unwrap();
     println!("apply state: {:?}", apply_state);
 }
 
-fn dump_all_region_info(raft_db: DB, skip_tombstone: bool) {
+fn dump_all_region_info(raft_db: DB, kv_db: DB, skip_tombstone: bool) {
     let start_key = keys::REGION_META_MIN_KEY;
     let end_key = keys::REGION_META_MAX_KEY;
     raft_db.scan(start_key,
@@ -367,7 +367,7 @@ fn dump_all_region_info(raft_db: DB, skip_tombstone: bool) {
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
-            dump_region_info(&raft_db, region_id, skip_tombstone);
+            dump_region_info(&raft_db, &kv_db, region_id, skip_tombstone);
             Ok(true)
         })
         .unwrap();

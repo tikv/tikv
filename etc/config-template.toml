@@ -12,6 +12,8 @@ addr = "127.0.0.1:20160"
 #advertise-addr = ""
 # set the path to rocksdb directory.
 data-dir = "/tmp/tikv/store"
+# set the path to raft rocksdb directory.
+raft-data-dir = "/tmp2/tikv/store"
 # set attributes about this server, e.g. "zone=us-west-1,disk=ssd".
 labels = ""
 # log level: trace, debug, info, warn, error, off.

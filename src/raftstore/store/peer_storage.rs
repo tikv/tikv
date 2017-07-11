@@ -237,6 +237,7 @@ impl CacheQueryStats {
 
 pub struct PeerStorage {
     pub raft_engine: Arc<DB>,
+    pub kv_engine: Arc<DB>,
 
     pub region: metapb::Region,
     pub raft_state: RaftLocalState,
@@ -312,10 +313,8 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_apply_to(&self, raft_db: &DB, wb: &mut WriteBatch) -> Result<()> {
-        let handle = try!(rocksdb::get_cf_handle(raft_db, CF_RAFT));
-        try!(wb.put_msg_cf(handle,
-                           &keys::apply_state_key(self.region_id),
+    pub fn save_apply_to(&self, kv_wb: &mut WriteBatch) -> Result<()> {
+        try!(kv_wb.put_msg(&keys::apply_state_key(self.region_id),
                            &self.apply_state));
         Ok(())
     }
@@ -334,8 +333,8 @@ fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> 
     })
 }
 
-fn init_apply_state(raft_engine: &DB, region: &Region) -> Result<RaftApplyState> {
-    Ok(match try!(raft_engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))) {
+fn init_apply_state(kv_engine: &DB, region: &Region) -> Result<RaftApplyState> {
+    Ok(match try!(kv_engine.get_msg(&keys::apply_state_key(region.get_id()))) {
         Some(s) => s,
         None => {
             let mut apply_state = RaftApplyState::new();
@@ -378,6 +377,7 @@ fn init_last_term(raft_engine: &DB,
 
 impl PeerStorage {
     pub fn new(raft_engine: Arc<DB>,
+               kv_engine: Arc<DB>,
                region: &metapb::Region,
                region_sched: Scheduler<RegionTask>,
                tag: String,
@@ -385,11 +385,12 @@ impl PeerStorage {
                -> Result<PeerStorage> {
         debug!("creating storage on {} for {:?}", raft_engine.path(), region);
         let raft_state = try!(init_raft_state(&raft_engine, region));
-        let apply_state = try!(init_apply_state(&raft_engine, region));
+        let apply_state = try!(init_apply_state(&kv_engine, region));
         let last_term = try!(init_last_term(&raft_engine, region, &raft_state, &apply_state));
 
         Ok(PeerStorage {
             raft_engine: raft_engine,
+            kv_engine: kv_engine,
             region: region.clone(),
             raft_state: raft_state,
             apply_state: apply_state,
@@ -977,8 +978,9 @@ impl PeerStorage {
             try!(ctx.save_raft_to(&self.raft_engine, &mut ready_ctx.wb));
         }
 
+        // only when apply_snapshot
         if ctx.apply_state != self.apply_state {
-            try!(ctx.save_apply_to(&self.raft_engine, &mut ready_ctx.wb));
+            try!(ctx.save_apply_to(&mut ready_ctx.kv_wb));
         }
 
         Ok(ctx)
@@ -1023,7 +1025,7 @@ pub fn do_snapshot(mgr: SnapManager, raft_snap: &DbSnapshot, kv_snap: &DbSnapsho
     debug!("[region {}] begin to generate a snapshot", region_id);
 
     let apply_state: RaftApplyState =
-        match try!(raft_snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))) {
+        match try!(kv_snap.get_msg(&keys::apply_state_key(region_id))) {
             None => return Err(box_err!("could not load raft state of region {}", region_id)),
             Some(state) => state,
         };
@@ -1090,7 +1092,10 @@ pub fn do_snapshot(mgr: SnapManager, raft_snap: &DbSnapshot, kv_snap: &DbSnapsho
 
 // When we bootstrap the region or handling split new region, we must
 // call this to initialize region local state first.
-pub fn write_initial_state<T: Mutable>(raft_engine: &DB, w: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_state<T: Mutable>(raft_engine: &DB,
+                                       w: &T,
+                                       kv_w: &T,
+                                       region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::new();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -1103,7 +1108,8 @@ pub fn write_initial_state<T: Mutable>(raft_engine: &DB, w: &T, region_id: u64) 
 
     let raft_cf = try!(rocksdb::get_cf_handle(raft_engine, CF_RAFT));
     try!(w.put_msg_cf(raft_cf, &keys::raft_state_key(region_id), &raft_state));
-    try!(w.put_msg_cf(raft_cf, &keys::apply_state_key(region_id), &apply_state));
+
+    try!(kv_w.put_msg(&keys::apply_state_key(region_id), &apply_state));
 
     Ok(())
 }

@@ -141,6 +141,7 @@ impl ProposalQueue {
 
 pub struct ReadyContext<'a, T: 'a> {
     pub wb: WriteBatch,
+    pub kv_wb: WriteBatch,
     pub metrics: &'a mut RaftMetrics,
     pub trans: &'a T,
     pub ready_res: Vec<(Ready, InvokeContext)>,
@@ -150,6 +151,7 @@ impl<'a, T> ReadyContext<'a, T> {
     pub fn new(metrics: &'a mut RaftMetrics, t: &'a T, cap: usize) -> ReadyContext<'a, T> {
         ReadyContext {
             wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
+            kv_wb: WriteBatch::with_capacity(DEFAULT_APPEND_WB_SIZE),
             metrics: metrics,
             trans: t,
             ready_res: Vec::with_capacity(cap),
@@ -295,6 +297,7 @@ impl Peer {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
         let ps = try!(PeerStorage::new(store.raft_engine(),
+                                       store.kv_engine(),
                                        region,
                                        sched,
                                        tag.clone(),

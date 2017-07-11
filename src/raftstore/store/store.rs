@@ -84,7 +84,6 @@ pub struct StoreStat {
     pub lock_cf_bytes_written: u64,
     pub engine_total_bytes_written: u64,
     pub engine_total_keys_written: u64,
-    pub bytes_written: u64,
 }
 
 impl Default for StoreStat {
@@ -95,7 +94,6 @@ impl Default for StoreStat {
             lock_cf_bytes_written: 0,
             engine_total_bytes_written: 0,
             engine_total_keys_written: 0,
-            bytes_written: 0,
         }
     }
 }
@@ -413,7 +411,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
         self.register_report_region_flow_tick(event_loop);
-        self.register_flush_applied_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.kv_engine.clone(),
                                                        self.sendch.clone(),
@@ -555,18 +552,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                             p.post_apply(&res, &mut self.pending_raft_groups);
                         }
                         self.store_stat.lock_cf_bytes_written += res.metrics.lock_cf_written_bytes;
-                        self.store_stat.bytes_written += res.metrics.written_bytes;
                         self.on_ready_result(res.region_id, res.exec_res);
                     }
                 }
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
                     self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
-                }
-                Ok(ApplyTaskRes::FlushApplied(res)) => {
-                    for (region_id, exec_res) in res {
-                        self.on_ready_result(region_id, vec![exec_res]);
-                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -907,7 +898,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
-        let (wb, append_res) = {
+        let (wb, kv_wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
@@ -915,7 +906,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
-            (ctx.wb, ctx.ready_res)
+            (ctx.wb, ctx.kv_wb, ctx.ready_res)
         };
 
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
@@ -924,7 +915,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.cfg.sync_log);
             self.raft_engine.write_opt(wb, &write_opts).unwrap_or_else(|e| {
-                panic!("{} failed to save append result: {:?}", self.tag, e);
+                panic!("{} failed to save raft append result: {:?}", self.tag, e);
+            });
+        }
+
+        if !kv_wb.is_empty() {
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(self.cfg.sync_log);
+            self.kv_engine.write_opt(kv_wb, &write_opts).unwrap_or_else(|e| {
+                panic!("{} failed to save kv append result: {:?}", self.tag, e);
             });
         }
 
@@ -1786,15 +1785,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
     }
 
-    fn on_flush_applied_check_tick(&mut self, event_loop: &mut EventLoop<Self>) {
-        if self.store_stat.bytes_written > self.cfg.flush_applied_threshold {
-            self.store_stat.bytes_written = 0;
-            self.apply_worker.schedule(ApplyTask::flush_applied()).unwrap();
-        }
-
-        self.register_flush_applied_tick(event_loop);
-    }
-
     fn register_pd_store_heartbeat_tick(&self, event_loop: &mut EventLoop<Self>) {
         if let Err(e) = register_timer(event_loop,
                                        Tick::PdStoreHeartbeat,
@@ -1815,14 +1805,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         if let Err(e) = register_timer(event_loop,
                                        Tick::CompactLockCf,
                                        self.cfg.lock_cf_compact_interval) {
-            error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
-        }
-    }
-
-    fn register_flush_applied_tick(&self, event_loop: &mut EventLoop<Self>) {
-        if let Err(e) = register_timer(event_loop,
-                                       Tick::FlushAppliedCheck,
-                                       self.cfg.flush_applied_interval) {
             error!("{} register compact cf-lock tick err: {:?}", self.tag, e);
         }
     }
@@ -2088,7 +2070,6 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
             Tick::CompactLockCf => self.on_compact_lock_cf(event_loop),
             Tick::ConsistencyCheck => self.on_consistency_check_tick(event_loop),
             Tick::ReportRegionFlow => self.on_report_region_flow(event_loop),
-            Tick::FlushAppliedCheck => self.on_flush_applied_check_tick(event_loop),
         }
         slow_log!(t, "{} handle timeout {:?}", self.tag, timeout);
     }

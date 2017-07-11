@@ -810,6 +810,19 @@ fn get_data_and_backup_dirs(matches: &ArgMatches, config: &toml::Value) -> (Stri
     }
 }
 
+fn get_raft_rocksdb_data_dir(store_dir: &String, config: &toml::Value) -> String {
+    // raft rocksdb data path
+    let abs_data_dir = get_toml_string_opt(config, "server.raft-data-dir")
+        .map(|s| canonicalize_path(&s))
+        .unwrap_or_else(|| {
+            warn!("raft rocksdb dir not set, use default dir {}", store_dir);
+            store_dir.clone()
+        });
+    info!("server.raft-data-dir uses {:?}", abs_data_dir);
+
+    abs_data_dir
+}
+
 fn get_store_labels(matches: &ArgMatches, config: &toml::Value) -> HashMap<String, String> {
     let labels = matches.value_of("labels")
         .map(|s| s.to_owned())
@@ -876,9 +889,11 @@ fn run_raft_server(pd_client: RpcClient,
     let trans = server.transport();
 
     // Create raft_cf engine.
+    let raft_rocksdb_dir = get_raft_rocksdb_data_dir(&cfg.storage.path, config);
+    let raft_path = Path::new(&raft_rocksdb_dir);
+    let raft_db_path = raft_path.join(Path::new("raft_db"));
     let mut raft_db_opts = get_rocksdb_db_option(config);
     get_concurrent_write_option(&mut raft_db_opts, config);
-    let raft_db_path = store_path.join(Path::new("db_raft"));
     let raft_cf_opts =
         vec![rocksdb_util::CFOptions::new(CF_DEFAULT,
                                           get_rocksdb_default_cf_option(config, total_mem)),

@@ -32,7 +32,6 @@ use raftstore::store::peer_storage::{JOB_STATUS_FINISHED, JOB_STATUS_CANCELLED, 
 use raftstore::store::{self, check_abort, SnapManager, SnapKey, SnapEntry, ApplyOptions, keys,
                        Peekable};
 use raftstore::store::snap::{Error, Result};
-use storage::CF_RAFT;
 
 use super::metrics::*;
 
@@ -225,7 +224,7 @@ impl SnapContext {
         box_try!(self.delete_all_in_range(&start_key, &end_key, &abort));
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState = match box_try!(self.raft_db.get_msg_cf(CF_RAFT, &state_key)) {
+        let apply_state: RaftApplyState = match box_try!(self.kv_db.get_msg(&state_key)) {
             Some(state) => state,
             None => return Err(box_err!("failed to get raftstate from {}", escape(&state_key))),
         };

@@ -27,8 +27,8 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, ChangePeerRequest, Cm
 
 use util::worker::Runnable;
 use util::{SlowTimer, rocksdb, escape};
-use util::collections::{HashMap, HashMapEntry as MapEntry, HashSet};
-use storage::{CF_LOCK, CF_RAFT};
+use util::collections::{HashMap, HashMapEntry as MapEntry};
+use storage::CF_LOCK;
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{Store, cmd_resp, keys, util};
@@ -251,17 +251,11 @@ pub struct ApplyDelegate {
     // if we remove ourself in ChangePeer remove, we should set this flag, then
     // any following committed logs in same Ready should be applied failed.
     pending_remove: bool,
-    pub apply_state: RaftApplyState,
-    pub applied_index_term: u64,
+    apply_state: RaftApplyState,
+    applied_index_term: u64,
     term: u64,
     pending_cmds: PendingCmdQueue,
     metrics: ApplyMetrics,
-    // we can't compact index larger than last_flushed_index, so we record
-    // compact_index, and do compact after flush.
-    last_flushed_index: u64,
-    last_flushed_term: u64,
-    pending_compact_index: u64,
-    pending_compact_term: u64,
 }
 
 impl ApplyDelegate {
@@ -286,15 +280,11 @@ impl ApplyDelegate {
             raft_engine: raft_db,
             region: reg.region,
             pending_remove: false,
-            last_flushed_index: reg.apply_state.get_applied_index(),
-            last_flushed_term: reg.applied_index_term,
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             pending_cmds: Default::default(),
             metrics: Default::default(),
-            pending_compact_index: 0,
-            pending_compact_term: 0,
         }
     }
 
@@ -335,6 +325,10 @@ impl ApplyDelegate {
             }
         }
 
+        if !self.pending_remove {
+            self.write_apply_state(apply_ctx.wb_mut());
+        }
+
         self.update_metrics(apply_ctx);
         apply_ctx.mark_last_bytes_and_keys();
 
@@ -350,14 +344,8 @@ impl ApplyDelegate {
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, raft_wb: &WriteBatch) {
-        rocksdb::get_cf_handle(&self.raft_engine, CF_RAFT)
-            .map_err(From::from)
-            .and_then(|handle| {
-                raft_wb.put_msg_cf(handle,
-                                   &keys::apply_state_key(self.region.get_id()),
-                                   &self.apply_state)
-            })
+    fn write_apply_state(&self, wb: &WriteBatch) {
+        wb.put_msg(&keys::apply_state_key(self.region.get_id()), &self.apply_state)
             .unwrap_or_else(|e| {
                 panic!("{} failed to save apply state to write batch, error: {:?}",
                        self.tag,
@@ -377,6 +365,8 @@ impl ApplyDelegate {
             let cmd = parse_data_at(data, index, &self.tag);
 
             if should_flush_to_engine(&cmd, apply_ctx.wb_ref().count()) {
+                self.write_apply_state(apply_ctx.wb_mut());
+
                 self.update_metrics(apply_ctx);
 
                 // flush to engine
@@ -653,7 +643,7 @@ impl ApplyDelegate {
 
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(raft_wb, request),
-            AdminCmdType::Split => self.exec_split(raft_wb, request),
+            AdminCmdType::Split => self.exec_split(ctx, raft_wb, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
@@ -764,6 +754,7 @@ impl ApplyDelegate {
     }
 
     fn exec_split(&mut self,
+                  ctx: &ExecContext,
                   raft_wb: &WriteBatch,
                   req: &AdminRequest)
                   -> Result<(AdminResponse, Option<ExecResult>)> {
@@ -821,7 +812,10 @@ impl ApplyDelegate {
         new_region.mut_region_epoch().set_version(region_ver);
         write_peer_state(raft_wb, &region, PeerState::Normal)
             .and_then(|_| write_peer_state(raft_wb, &new_region, PeerState::Normal))
-            .and_then(|_| write_initial_state(self.raft_engine.as_ref(), raft_wb, new_region.get_id()))
+            .and_then(|_| write_initial_state(self.raft_engine.as_ref(),
+                                              raft_wb,
+                                              ctx.wb,
+                                              new_region.get_id()))
             .unwrap_or_else(|e| {
                 panic!("{} failed to save split region {:?}: {:?}",
                        self.tag,
@@ -863,19 +857,8 @@ impl ApplyDelegate {
                         -> Result<(AdminResponse, Option<ExecResult>)> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
 
-        let resp = AdminResponse::new();
         let compact_index = req.get_compact_log().get_compact_index();
-        let compact_term = req.get_compact_log().get_compact_term();
-
-        if compact_index >= self.last_flushed_index {
-            self.pending_compact_index = compact_index;
-            self.pending_compact_term = compact_term;
-            debug!("{} compact index {} >= last flushed index {}, delay compact",
-                   self.tag,
-                   compact_index,
-                   self.last_flushed_index);
-            return Ok((resp, None));
-        }
+        let resp = AdminResponse::new();
 
         let first_index = peer_storage::first_index(&ctx.apply_state);
         if compact_index <= first_index {
@@ -886,6 +869,7 @@ impl ApplyDelegate {
             return Ok((resp, None));
         }
 
+        let compact_term = req.get_compact_log().get_compact_term();
         // TODO: add unit tests to cover all the message integrity checks.
         if compact_term == 0 {
             info!("{} compact term missing in {:?}, skip.",
@@ -905,53 +889,6 @@ impl ApplyDelegate {
             state: ctx.apply_state.get_truncated_state().clone(),
             first_index: first_index,
         })))
-    }
-
-    pub fn flush_pending_compact(&mut self) -> Option<ExecResult> {
-        self.last_flushed_index = self.apply_state.get_applied_index();
-        self.last_flushed_term = self.applied_index_term;
-
-        if self.pending_compact_index == 0 {
-            return None;
-        }
-        assert!(self.last_flushed_index > self.pending_compact_index);
-
-        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
-
-        let compact_index = self.pending_compact_index;
-        self.pending_compact_index = 0;
-
-        let first_index = peer_storage::first_index(&self.apply_state);
-        if compact_index <= first_index {
-            debug!("{} compact index {} <= first index {}, no need to compact",
-                   self.tag,
-                   compact_index,
-                   first_index);
-            return None;
-        }
-
-        let compact_term = self.pending_compact_term;
-        // TODO: add unit tests to cover all the message integrity checks.
-        if compact_term == 0 {
-            info!("{} compact term missing, skip.", self.tag);
-            // old format compact log command, safe to ignore.
-            return None;
-        }
-
-        // compact failure is safe to be omitted, no need to assert.
-        if compact_raft_log(&self.tag,
-                            &mut self.apply_state,
-                            compact_index,
-                            compact_term).is_err() {
-            return None;
-        }
-
-        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
-
-        Some(ExecResult::CompactLog {
-            state: self.apply_state.get_truncated_state().clone(),
-            first_index: first_index,
-        })
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
@@ -1216,7 +1153,6 @@ pub enum Task {
     Registration(Registration),
     Proposals(Proposals),
     Destroy(Destroy),
-    FlushApplied(()),
 }
 
 impl Task {
@@ -1239,10 +1175,6 @@ impl Task {
     pub fn destroy(region_id: u64) -> Task {
         Task::Destroy(Destroy { region_id: region_id })
     }
-
-    pub fn flush_applied() -> Task {
-        Task::FlushApplied(())
-    }
 }
 
 impl Display for Task {
@@ -1254,7 +1186,6 @@ impl Display for Task {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
-            Task::FlushApplied(()) => write!(f, "flush applies"),
         }
     }
 }
@@ -1284,7 +1215,6 @@ pub struct ApplyRes {
 pub enum TaskRes {
     Applys(Vec<ApplyRes>),
     Destroy(ApplyDelegate),
-    FlushApplied(Vec<(u64, ExecResult)>),
 }
 
 // TODO: use threadpool to do task concurrently
@@ -1294,9 +1224,6 @@ pub struct Runner {
     host: Arc<CoprocessorHost>,
     delegates: HashMap<u64, ApplyDelegate>,
     notifier: Sender<TaskRes>,
-
-    // When receive AdvanceApplies command, flush applied index to db.
-    regions_need_flush_applied: HashSet<u64>,
 }
 
 impl Runner {
@@ -1311,7 +1238,6 @@ impl Runner {
             host: store.coprocessor_host.clone(),
             delegates: delegates,
             notifier: notifier,
-            regions_need_flush_applied: HashSet::default(),
         }
     }
 
@@ -1351,8 +1277,6 @@ impl Runner {
             }
             if e.get().pending_remove {
                 e.remove();
-            } else {
-                self.regions_need_flush_applied.insert(apply.region_id);
             }
         }
 
@@ -1428,41 +1352,11 @@ impl Runner {
         if let Some(mut meta) = self.delegates.remove(&d.region_id) {
             info!("{} remove from apply delegates", meta.tag);
             meta.destroy();
-            self.regions_need_flush_applied.remove(&d.region_id);
             self.notifier.send(TaskRes::Destroy(meta)).unwrap();
         }
     }
 
-    fn handle_flush_applied(&mut self) {
-        let raft_wb = WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE);
-        let mut res = Vec::with_capacity(self.regions_need_flush_applied.len());
-        for region_id in self.regions_need_flush_applied.drain() {
-            let delegate = self.delegates.get_mut(&region_id).unwrap();
-            let compact_exec_result = delegate.flush_pending_compact();
-            if compact_exec_result.is_some() {
-                res.push((region_id, compact_exec_result.unwrap()));
-            }
-            delegate.write_apply_state(&raft_wb);
-        }
-
-        // Sync kv engine WAL
-        self.db.sync_wal().unwrap_or_else(|e| {
-            panic!("failed to sync kv engine wal, error: {:?}", e);
-        });
-
-        // Write apply state with WAL.
-        self.raft_db.write(raft_wb).unwrap_or_else(|e| {
-            panic!("failed to flush applied state, error: {:?}", e);
-        });
-
-        // Send result to raftstore.
-        self.notifier.send(TaskRes::FlushApplied(res)).unwrap();
-    }
-
     fn handle_shutdown(&mut self) {
-        // Flush applied states to db before shutdown.
-        self.handle_flush_applied();
-
         for p in self.delegates.values_mut() {
             p.clear_pending_commands();
         }
@@ -1476,7 +1370,6 @@ impl Runnable<Task> for Runner {
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
-            Task::FlushApplied(()) => self.handle_flush_applied(),
         }
     }
 
@@ -1511,7 +1404,6 @@ mod tests {
             host: host,
             delegates: HashMap::new(),
             notifier: tx,
-            regions_need_flush_applied: HashSet::default(),
         }
     }
 
@@ -1649,7 +1541,7 @@ mod tests {
             assert_eq!(delegate.applied_index_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
             let apply_state: RaftApplyState =
-                db.get_msg_cf(CF_RAFT, &apply_state_key).unwrap().unwrap();
+                db.get_msg(&apply_state_key).unwrap().unwrap();
             assert_eq!(apply_state, delegate.apply_state);
         }
 

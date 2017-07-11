@@ -132,12 +132,12 @@ impl<C> Node<C>
         }
 
         self.store.set_id(store_id);
-        try!(self.check_prepare_bootstrap_cluster(&raft_engine));
+        try!(self.check_prepare_bootstrap_cluster(&raft_engine, &kv_engine));
         if !bootstrapped {
             // cluster is not bootstrapped, and we choose first store to bootstrap
             // prepare bootstrap.
-            let region = try!(self.prepare_bootstrap_cluster(&raft_engine, store_id));
-            try!(self.bootstrap_cluster(&raft_engine, region));
+            let region = try!(self.prepare_bootstrap_cluster(&raft_engine, &kv_engine, store_id));
+            try!(self.bootstrap_cluster(&raft_engine, &kv_engine, region));
         }
 
         // inform pd.
@@ -200,7 +200,7 @@ impl<C> Node<C>
         Ok(store_id)
     }
 
-    pub fn prepare_bootstrap_cluster(&self, raft_engine: &DB, store_id: u64)
+    pub fn prepare_bootstrap_cluster(&self, raft_engine: &DB, kv_engine: &DB, store_id: u64)
                                      -> Result<metapb::Region> {
         let region_id = try!(self.alloc_id());
         info!("alloc first region id {} for cluster {}, store {}",
@@ -212,11 +212,11 @@ impl<C> Node<C>
               peer_id,
               region_id);
 
-        let region = try!(store::prepare_bootstrap(raft_engine, store_id, region_id, peer_id));
+        let region = try!(store::prepare_bootstrap(raft_engine, kv_engine, store_id, region_id, peer_id));
         Ok(region)
     }
 
-    fn check_prepare_bootstrap_cluster(&self, raft_engine: &DB) -> Result<()> {
+    fn check_prepare_bootstrap_cluster(&self, raft_engine: &DB, kv_engine: &DB) -> Result<()> {
         let res = try!(raft_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key()));
         if res.is_none() {
             return Ok(());
@@ -230,7 +230,9 @@ impl<C> Node<C>
                         try!(check_region_epoch(&region, &first_region));
                         try!(store::clear_prepare_bootstrap_state(raft_engine));
                     } else {
-                        try!(store::clear_prepare_bootstrap(raft_engine, first_region.get_id()));
+                        try!(store::clear_prepare_bootstrap(raft_engine,
+                                                            kv_engine,
+                                                            first_region.get_id()));
                     }
                     return Ok(());
                 }
@@ -244,12 +246,12 @@ impl<C> Node<C>
         Err(box_err!("check cluster prepare bootstrapped failed"))
     }
 
-    fn bootstrap_cluster(&mut self, raft_engine: &DB, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(&mut self, raft_engine: &DB, kv_engine: &DB, region: metapb::Region) -> Result<()> {
         let region_id = region.get_id();
         match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
                 error!("cluster {} is already bootstrapped", self.cluster_id);
-                try!(store::clear_prepare_bootstrap(raft_engine, region_id));
+                try!(store::clear_prepare_bootstrap(raft_engine, kv_engine, region_id));
                 Ok(())
             }
             // TODO: should we clean region for other errors too?
