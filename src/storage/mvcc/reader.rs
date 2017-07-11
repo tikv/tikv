@@ -175,6 +175,7 @@ impl<'a> MvccReader<'a> {
             return Ok(None);
         }
         let write = try!(Write::parse(cursor.value()));
+        self.statistics.write.processed += 1;
         Ok(Some((commit_ts, write)))
     }
 
@@ -215,8 +216,8 @@ impl<'a> MvccReader<'a> {
                 Some((commit_ts, mut write)) => {
                     match write.write_type {
                         WriteType::Put => {
+                            self.statistics.write.processed += 1;
                             if write.short_value.is_some() {
-                                self.statistics.write.processed += 1;
                                 if self.key_only {
                                     return Ok(Some(vec![]));
                                 }
