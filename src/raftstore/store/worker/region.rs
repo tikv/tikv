@@ -149,14 +149,14 @@ impl SnapContext {
                         cf: String::from(cf),
                         start_key: it.key().to_vec(),
                         end_key: end_key.to_vec(),
-                    })
+                    });
                 } else {
                     box_try!(wb.delete_range_cf(handle, start_key, end_key));
                     post_delete.push(TaskRes::NeedCompactRange {
                         cf: String::from(cf),
                         start_key: start_key.to_vec(),
                         end_key: end_key.to_vec(),
-                    })
+                    });
                 }
             }
         }

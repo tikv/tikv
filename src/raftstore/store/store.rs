@@ -408,6 +408,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         self.register_compact_lock_cf_tick(event_loop);
         self.register_consistency_check_tick(event_loop);
         self.register_report_region_flow_tick(event_loop);
+        self.register_poll_region_result_tick(event_loop);
 
         let split_check_runner = SplitCheckRunner::new(self.engine.clone(),
                                                        self.sendch.clone(),
@@ -582,7 +583,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         // We need to delay the manual compact after we have deleted a huge range which use
         // delete_range, because the existing snapshot may make the manual compaction useless.
+        STORE_COMPACT_RANGE_TASKS_BATCH_HISTOGRAM.observe(self.pending_compact_tasks.len() as f64);
         for task in self.pending_compact_tasks.drain(..) {
+            info!("send compact range task for cf {} to compact_worker.",
+                  task.cf_name);
             self.compact_worker.schedule(task).unwrap();
         }
         self.pending_compact_tasks = compact_tasks;
