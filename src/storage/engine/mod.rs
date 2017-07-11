@@ -34,6 +34,14 @@ pub const TEMP_DIR: &'static str = "";
 const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
+const ST_TOTAL: &'static str = "total";
+const ST_PROCESSED: &'static str = "processed";
+const ST_GET: &'static str = "get";
+const ST_NEXT: &'static str = "next";
+const ST_PREV: &'static str = "prev";
+const ST_SEEK: &'static str = "seek";
+const ST_SEEK_FOR_PREV: &'static str = "seek_for_prev";
+
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 
 pub struct CbContext {
@@ -162,15 +170,14 @@ impl CFStatistics {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
-    // Calculate how the operation performs.
-    #[inline]
-    pub fn inefficiency(&self) -> f64 {
-        let total_op_cnt = self.total_op_count();
-        if total_op_cnt == 0 {
-            0f64
-        } else {
-            (total_op_cnt as f64 - self.processed as f64) / total_op_cnt as f64
-        }
+    pub fn details(&self) -> Vec<(&str, usize)> {
+        vec![(ST_TOTAL, self.total_op_count()),
+             (ST_PROCESSED, self.processed),
+             (ST_GET, self.get),
+             (ST_NEXT, self.next),
+             (ST_PREV, self.prev),
+             (ST_SEEK, self.seek),
+             (ST_SEEK_FOR_PREV, self.seek_for_prev)]
     }
 }
 
@@ -182,16 +189,18 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    pub fn total_op_count(&self) -> Vec<(&str, usize)> {
-        vec![(CF_DEFAULT, self.data.total_op_count()),
-             (CF_LOCK, self.lock.total_op_count()),
-             (CF_WRITE, self.write.total_op_count())]
+    pub fn total_op_count(&self) -> usize {
+        self.lock.total_op_count() + self.write.total_op_count() + self.data.total_op_count()
     }
 
-    pub fn inefficiency(&self) -> Vec<(&str, f64)> {
-        vec![(CF_DEFAULT, self.data.inefficiency()),
-             (CF_LOCK, self.lock.inefficiency()),
-             (CF_WRITE, self.write.inefficiency())]
+    pub fn total_processed(&self) -> usize {
+        self.lock.processed + self.write.processed + self.data.processed
+    }
+
+    pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
+        vec![(CF_DEFAULT, self.data.details()),
+             (CF_LOCK, self.lock.details()),
+             (CF_WRITE, self.write.details())]
     }
 }
 

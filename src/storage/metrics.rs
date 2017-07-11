@@ -79,12 +79,12 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 
-    pub static ref KV_COMMAND_SCAN_INEFFICIENCY: HistogramVec =
+    pub static ref KV_COMMAND_SCAN_STATISTICS: HistogramVec =
         register_histogram_vec!(
-            "tikv_scheudler_kv_scan_inefficiency",
+            "tikv_scheudler_kv_scan_statistics",
             "Bucketed histogram of kv keys scan inefficiency",
-            &["cf"],
-            vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+            &["cf","tag"],
+              exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref RAWKV_COMMAND_COUNTER_VEC: CounterVec =

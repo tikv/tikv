@@ -59,17 +59,17 @@ lazy_static! {
     pub static ref COPR_SCAN_KEYS: HistogramVec =
         register_histogram_vec!(
             "tikv_coprocessor_scan_keys",
-            "Bucketed histogram of coprocessor per request scan keys for each CF",
-            &["type", "req","cf"],
+            "Bucketed histogram of coprocessor per request scan keys",
+            &["type", "req"],
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref COPR_SCAN_INEFFICIENCY: HistogramVec =
+    pub static ref COPR_SCAN_STATISTICS: HistogramVec =
         register_histogram_vec!(
-            "tikv_coprocessor_scan_inefficiency",
-            "Bucketed histogram of coprocessor scan inefficiency for each CF",
-            &["type", "req","cf"],
-            vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+            "tikv_coprocessor_scan_statistics",
+            "Bucketed histogram of coprocessor scan statistics for each CF",
+            &["req", "cf", "tag"],
+             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref COPR_EXECUTOR_COUNT: CounterVec =

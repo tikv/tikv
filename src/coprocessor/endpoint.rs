@@ -173,14 +173,15 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME.with_label_values(&["select", type_str])
             .observe(handle_time - wait_time);
 
-        for (cf, total_op_count) in self.statistics.total_op_count() {
-            COPR_SCAN_KEYS.with_label_values(&["select", type_str, cf])
-                .observe(total_op_count as f64);
-        }
 
-        for (cf, inefficiency) in self.statistics.inefficiency() {
-            COPR_SCAN_INEFFICIENCY.with_label_values(&["select", type_str, cf])
-                .observe(inefficiency);
+        COPR_SCAN_KEYS.with_label_values(&["select", type_str])
+            .observe(self.statistics.total_op_count() as f64);
+
+        for (cf, details) in self.statistics.details() {
+            for (tag, count) in details {
+                COPR_SCAN_STATISTICS.with_label_values(&[type_str, cf, tag])
+                    .observe(count as f64);
+            }
         }
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
@@ -191,8 +192,8 @@ impl RequestTask {
                   type_str,
                   handle_time,
                   wait_time,
-                  self.statistics.write.total_op_count(),
-                  self.statistics.write.inefficiency(),
+                  self.statistics.total_op_count(),
+                  self.statistics.total_processed(),
                   self.req.get_ranges().len(),
                   self.req.get_ranges().get(0));
         }
