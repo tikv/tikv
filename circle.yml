@@ -53,12 +53,12 @@ dependencies:
         make install;
       fi
     - |
-      if [[ ! -e $HOME/.local/lib/librocksdb.so.5.4.5 ]]; then
+      if [[ ! -e $HOME/.local/lib/librocksdb.so.5.5.1 ]]; then
         export CPLUS_INCLUDE_PATH="${LOCAL_PREFIX}/include" && \
         cd /tmp && \
-        curl -L https://github.com/facebook/rocksdb/archive/v5.4.5.tar.gz -o rocksdb.tar.gz && \
+        curl -L https://github.com/facebook/rocksdb/archive/v5.5.1.tar.gz -o rocksdb.tar.gz && \
         tar xf rocksdb.tar.gz && \
-        cd rocksdb-5.4.5 && \
+        cd rocksdb-5.5.1 && \
         INSTALL_PATH=${LOCAL_PREFIX} make -j install-shared;
       fi
   post:
