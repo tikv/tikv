@@ -23,8 +23,9 @@ use kvproto::tikvpb_grpc::TikvClient;
 
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 10 * 1024 * 1024;
+const INITIAL_BUFFER_CAP: usize = 1024;
 
-use util::collections::{HashMap, HashSet};
+use util::collections::HashMap;
 use super::{Error, Result, Config};
 
 struct Conn {
@@ -62,7 +63,7 @@ impl Conn {
             .map_err(|_| ()));
         Conn {
             stream: tx,
-            buffer: Vec::new(),
+            buffer: Vec::with_capacity(INITIAL_BUFFER_CAP),
             store_id: store_id,
 
             _client: client,
