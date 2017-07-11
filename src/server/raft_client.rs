@@ -90,24 +90,24 @@ impl RaftClient {
         }
     }
 
-    fn get_conn(&mut self, addr: SocketAddr, store_id: u64) -> &mut Conn {
+    fn get_conn(&mut self, addr: SocketAddr, region_id: u64, store_id: u64) -> &mut Conn {
         let env = self.env.clone();
         let cfg = self.cfg.clone();
-        let index = store_id as usize % cfg.grpc_raft_conn_num;
+        let index = region_id as usize % cfg.grpc_raft_conn_num;
         self.conns
             .entry((addr, index))
             .or_insert_with(|| Conn::new(env, addr, &cfg, store_id))
     }
 
     pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
-        let mut conn = self.get_conn(addr, store_id);
+        let mut conn = self.get_conn(addr, msg.region_id, store_id);
         conn.buffer.push((msg, WriteFlags::default().buffer_hint(true)));
         Ok(())
     }
 
 
     pub fn flush(&mut self) {
-        let mut dead_conns = Vec::with_capacity(self.conns.len());
+        let mut dead_conns = Vec::new();
         for (key, conn) in &mut self.conns {
             if conn.buffer.is_empty() {
                 continue;
