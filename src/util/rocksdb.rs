@@ -338,30 +338,6 @@ impl UserProperties {
         res.max_row_versions = try!(props.decode_u64(PROP_MAX_ROW_VERSIONS));
         Ok(res)
     }
-
-    pub fn need_gc(&self, safe_point: u64, ratio_threshold: f64) -> bool {
-        // Always GC.
-        if ratio_threshold < 1.0 {
-            return true;
-        }
-        // No data older than safe_point to GC.
-        if self.min_ts > safe_point {
-            return false;
-        }
-
-        // Note: Since the properties are file-based, it can be false positive.
-        // For example, multiple files can have a different version of the same row.
-
-        // There are a lot of MVCC versions to GC.
-        if self.num_versions as f64 > self.num_rows as f64 * ratio_threshold {
-            return true;
-        }
-        // There are a lot of non-effective MVCC versions to GC.
-        if self.num_versions as f64 > self.num_puts as f64 * ratio_threshold {
-            return true;
-        }
-        false
-    }
 }
 
 pub struct UserPropertiesCollector {
@@ -414,9 +390,9 @@ impl TablePropertiesCollector for UserPropertiesCollector {
             Ok(v) => v,
             Err(_) => return,   // Ignore error
         };
-        match v.write_type {
-            WriteType::Put => self.props.num_puts += 1,
-            _ => {}
+
+        if v.write_type == WriteType::Put {
+            self.props.num_puts += 1;
         }
     }
 

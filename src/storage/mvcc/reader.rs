@@ -21,6 +21,8 @@ use std::u64;
 use kvproto::kvrpcpb::IsolationLevel;
 use util::rocksdb::GetPropertiesOptions;
 
+const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
+
 pub struct MvccReader<'a> {
     snapshot: &'a Snapshot,
     statistics: &'a mut Statistics,
@@ -430,12 +432,37 @@ impl<'a> MvccReader<'a> {
     // Returns true if it needs gc.
     // This is for optimization purpose, does not mean to be accurate.
     pub fn need_gc(&self, safe_point: u64, ratio_threshold: f64) -> bool {
+        // Always GC.
+        if ratio_threshold < 1.0 {
+            return true;
+        }
+
         let mut opts = GetPropertiesOptions::default();
         opts.max_ts = Some(safe_point);
-        match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
-            Ok(v) => v.need_gc(safe_point, ratio_threshold),
-            Err(_) => true,
+        let props = match self.snapshot.get_properties_cf(CF_WRITE, &opts) {
+            Ok(v) => v,
+            Err(_) => return true,
+        };
+
+        // No data older than safe_point to GC.
+        if props.min_ts > safe_point {
+            return false;
         }
+
+        // Note: Since the properties are file-based, it can be false positive.
+        // For example, multiple files can have a different version of the same row.
+
+        // A lot of MVCC versions to GC.
+        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
+            return true;
+        }
+        // A lot of non-effective MVCC versions to GC.
+        if props.num_versions as f64 > props.num_puts as f64 * ratio_threshold {
+            return true;
+        }
+
+        // A lot of MVCC versions of a single row to GC.
+        props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
     }
 }
 
