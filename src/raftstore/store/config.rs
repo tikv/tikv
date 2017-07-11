@@ -142,6 +142,8 @@ pub struct Config {
 
     // Right region derive origin region id when split.
     pub right_derive_when_split: bool,
+
+    pub allow_remove_leader: bool,
 }
 
 impl Default for Config {
@@ -182,6 +184,7 @@ impl Default for Config {
             raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),
             use_sst_file_snapshot: DEFAULT_USE_SST_FILE_SNAPSHOT,
             right_derive_when_split: true,
+            allow_remove_leader: false,
         }
     }
 }
