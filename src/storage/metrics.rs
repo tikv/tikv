@@ -79,10 +79,10 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 
-    pub static ref KV_COMMAND_SCAN_STATISTICS: HistogramVec =
+    pub static ref KV_COMMAND_SCAN_DETAILS: HistogramVec =
         register_histogram_vec!(
-            "tikv_scheudler_kv_scan_statistics",
-            "Bucketed histogram of kv keys scan inefficiency",
+            "tikv_scheudler_kv_scan_details",
+            "Bucketed histogram of kv keys scan details for each cf",
             &["cf","tag"],
               exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();

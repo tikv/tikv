@@ -64,10 +64,10 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref COPR_SCAN_STATISTICS: HistogramVec =
+    pub static ref COPR_SCAN_DETAILS: HistogramVec =
         register_histogram_vec!(
-            "tikv_coprocessor_scan_statistics",
-            "Bucketed histogram of coprocessor scan statistics for each CF",
+            "tikv_coprocessor_scan_details",
+            "Bucketed histogram of coprocessor scan details for each CF",
             &["req", "cf", "tag"],
              exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
