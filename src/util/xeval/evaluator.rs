@@ -16,7 +16,7 @@ use std::ascii::AsciiExt;
 use std::str;
 
 use chrono::FixedOffset;
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
@@ -144,6 +144,7 @@ impl Evaluator {
             ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
             ExprType::JsonType => self.eval_json_type(ctx, expr),
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
+            ExprType::ScalarFunc => self.eval_scalar_function(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -223,6 +224,15 @@ impl Evaluator {
         left.cmp(ctx, &right).map(Some).map_err(From::from)
     }
 
+    pub fn get_one_child<'a>(&mut self, expr: &'a Expr) -> Result<&'a Expr> {
+        let l = expr.get_children().len();
+        if l != 1 {
+            return Err(Error::Expr(format!("{:?} need 1 operand but got {}", expr.get_tp(), l)));
+        }
+        let children = expr.get_children();
+        Ok(&children[0])
+    }
+
     fn get_two_children<'a>(&mut self, expr: &'a Expr) -> Result<(&'a Expr, &'a Expr)> {
         let l = expr.get_children().len();
         if l != 2 {
@@ -233,13 +243,8 @@ impl Evaluator {
     }
 
     fn eval_one_child(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = expr.get_children();
-        if children.len() != 1 {
-            return Err(Error::Expr(format!("{:?} need 1 operands but got {}",
-                                           expr.get_tp(),
-                                           children.len())));
-        }
-        self.eval(ctx, &children[0])
+        let child_expr = try!(self.get_one_child(expr));
+        self.eval(ctx, child_expr)
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
@@ -513,6 +518,13 @@ impl Evaluator {
         Ok(Datum::Json(first.merge(suffixes)))
     }
 
+    fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        match expr.get_sig() {
+            ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
+            _ => Err(Error::Expr(format!("unsupported scalar function: {:?}", expr.get_sig()))),
+        }
+    }
+
     fn eval_logic<F>(&mut self,
                      ctx: &EvalContext,
                      expr: &Expr,
@@ -593,7 +605,7 @@ fn is_even(n: i64) -> bool {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
     use util::codec::{Datum, datum};
@@ -660,6 +672,12 @@ mod test {
 
     fn bin_expr(left: Datum, right: Datum, tp: ExprType) -> Expr {
         build_expr(vec![left, right], tp)
+    }
+
+    pub fn build_expr_with_sig(children: Vec<Datum>, tp: ExprType, sig: ScalarFuncSig) -> Expr {
+        let mut expr = build_expr(children, tp);
+        expr.set_sig(sig);
+        expr
     }
 
     fn build_expr(children: Vec<Datum>, tp: ExprType) -> Expr {
@@ -834,7 +852,7 @@ mod test {
     // TODO: test time
     test_eval!(test_eval_plus,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Plus), Datum::U64(2)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Plus), Datum::F64(2.0)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Plus), Datum::F64(0.0)),
@@ -860,7 +878,7 @@ mod test {
 
     test_eval!(test_eval_div,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div), Datum::Dec(1.into())),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div), Datum::Dec(1.into())),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Div), Datum::Dec(1.into())),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Div), Datum::F64(1f64)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Div), Datum::F64(-1f64)),
@@ -913,7 +931,7 @@ mod test {
 
     test_eval!(test_eval_mul,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Mul), Datum::U64(1)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Mul), Datum::F64(1f64)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Mul), Datum::F64(-1f64)),
@@ -937,7 +955,7 @@ mod test {
 
     test_eval!(test_eval_int_div,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::IntDiv), Datum::Null),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::IntDiv), Datum::U64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::IntDiv), Datum::Null),
@@ -966,7 +984,7 @@ mod test {
     test_eval!(test_eval_rem,
                vec![
         (bin_expr(Datum::I64(3), Datum::I64(1), ExprType::Mod), Datum::I64(0)),
-		(bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
+        (bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::Mod), Datum::Null),
         (bin_expr(Datum::I64(3), Datum::U64(2), ExprType::Mod), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::Mod), Datum::Null),
