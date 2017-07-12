@@ -14,7 +14,7 @@
 use std::{self, str, i64};
 use std::borrow::Cow;
 
-use util::xeval::EvalContext;
+use coprocessor::xeval::EvalContext;
 use super::Result;
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
@@ -219,7 +219,7 @@ mod test {
 
     use chrono::FixedOffset;
 
-    use util::xeval::EvalContext;
+    use coprocessor::xeval::EvalContext;
 
     #[test]
     fn test_bytes_to_i64() {

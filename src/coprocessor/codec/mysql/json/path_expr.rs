@@ -40,7 +40,7 @@
 use std::ops::Index;
 use std::ascii::AsciiExt;
 use regex::Regex;
-use super::super::Result;
+use super::super::super::Result;
 use super::json_unquote::unquote_string;
 
 pub const PATH_EXPR_ASTERISK: &'static str = "*";

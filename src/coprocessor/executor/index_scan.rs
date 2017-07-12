@@ -16,10 +16,10 @@ use tipb::schema::ColumnInfo;
 use kvproto::coprocessor::KeyRange;
 use kvproto::kvrpcpb::IsolationLevel;
 use storage::{Snapshot, Statistics};
-use util::codec::{table, datum, mysql};
 use byteorder::{BigEndian, ReadBytesExt};
 use super::{Executor, Row};
 use super::scanner::Scanner;
+use super::super::codec::{table, datum, mysql};
 use super::super::endpoint::prefix_next;
 use super::super::Result;
 use super::super::metrics::*;
@@ -125,8 +125,8 @@ impl<'a> Executor for IndexScanExec<'a> {
 mod test {
     use super::*;
     use super::super::scanner::test::{Data, TestStore, new_col_info};
-    use util::codec::mysql::types;
-    use util::codec::datum::{self, Datum};
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::datum::{self, Datum};
     use util::codec::number::NumberEncoder;
     use util::collections::HashMap;
     use std::i64;

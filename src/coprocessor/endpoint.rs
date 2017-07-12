@@ -27,19 +27,20 @@ use kvproto::coprocessor::{Request, Response, KeyRange};
 use kvproto::errorpb::{self, ServerIsBusy};
 
 use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
-use util::codec::table::{RowColsDict, TableDecoder};
+
 use util::codec::number::NumberDecoder;
-use util::codec::{Datum, table, datum, mysql};
-use util::xeval::{Evaluator, EvalContext};
 use util::{escape, duration_to_ms, duration_to_sec, Either};
 use util::worker::{BatchRunnable, Scheduler};
 use util::collections::{HashMap, HashMapEntry as Entry, HashSet};
 use util::threadpool::{ThreadPool, SmallGroupFirstQueue};
 use server::OnResponse;
 
-use super::{Error, Result};
+use super::codec::table::{RowColsDict, TableDecoder};
+use super::codec::{Datum, table, datum, mysql};
+use super::xeval::{Evaluator, EvalContext};
 use super::aggregate::{self, AggrFunc};
 use super::metrics::*;
+use super::{Error, Result};
 
 pub const REQ_TYPE_SELECT: i64 = 101;
 pub const REQ_TYPE_INDEX: i64 = 102;
@@ -1186,11 +1187,11 @@ mod tests {
 
     use tipb::expression::{Expr, ExprType, ByItem};
 
-    use util::codec::number::*;
-    use util::codec::Datum;
-    use util::xeval::EvalContext;
-    use util::codec::table::RowColsDict;
     use util::collections::HashMap;
+    use util::codec::number::*;
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::table::RowColsDict;
+    use coprocessor::xeval::EvalContext;
 
     use std::rc::Rc;
     use std::sync::*;

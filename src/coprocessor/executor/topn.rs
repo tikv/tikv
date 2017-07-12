@@ -22,9 +22,9 @@ use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
 
-use util::xeval::{Evaluator, EvalContext};
 use super::{Executor, Row, ExprColumnRefVisitor};
 use super::super::Result;
+use super::super::xeval::{Evaluator, EvalContext};
 use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
 use super::super::metrics::*;
 
@@ -109,11 +109,11 @@ pub mod test {
     use super::*;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
-    use util::codec::Datum;
     use util::collections::HashMap;
-    use util::codec::table::{self, RowColsDict};
     use util::codec::number::NumberEncoder;
-    use util::codec::mysql::types;
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::table::{self, RowColsDict};
+    use coprocessor::codec::mysql::types;
     use storage::Statistics;
 
     use tipb::executor::TableScan;

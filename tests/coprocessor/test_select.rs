@@ -1,7 +1,7 @@
 use tikv::coprocessor::*;
 use tikv::coprocessor;
 use kvproto::kvrpcpb::Context;
-use tikv::util::codec::{table, Datum, datum};
+use tikv::coprocessor::codec::{table, Datum, datum};
 use tikv::util::codec::number::*;
 use tikv::storage::{Mutation, Key, ALL_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
@@ -11,7 +11,7 @@ use tipb::select::{SelectRequest, SelectResponse, Chunk};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType, ByItem};
 use storage::sync_storage::SyncStorage;
-use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
+use tikv::coprocessor::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
 
 use std::collections::{HashMap, BTreeMap};
 use std::sync::mpsc;

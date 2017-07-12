@@ -20,11 +20,11 @@ use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
-use util::codec::datum::{Datum, DatumDecoder};
-use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression, ModifyType};
-use util::codec;
 use util::collections::{HashMap, HashMapEntry};
-
+use super::super::codec::datum::{Datum, DatumDecoder};
+use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
+                                 ModifyType};
+use super::super::codec;
 use super::{Result, Error};
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
@@ -608,8 +608,8 @@ fn is_even(n: i64) -> bool {
 pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
-    use util::codec::{Datum, datum};
-    use util::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
+    use coprocessor::codec::{Datum, datum};
+    use coprocessor::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
 
     use std::i32;
 

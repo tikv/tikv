@@ -15,9 +15,9 @@
 #![allow(dead_code)]
 
 use std::collections::HashSet;
-use util::codec::table::RowColsDict;
 use util::codec::number::NumberDecoder;
 use tipb::expression::{Expr, ExprType};
+use super::codec::table::RowColsDict;
 use super::Result;
 
 mod scanner;

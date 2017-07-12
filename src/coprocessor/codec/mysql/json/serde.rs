@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use util::codec::Error;
 use serde::ser::{Serialize, Serializer, SerializeTuple, SerializeMap};
 use serde::de::{self, Deserialize, Deserializer, Visitor, SeqAccess, MapAccess};
 use serde_json;
@@ -20,6 +19,7 @@ use std::fmt;
 use std::{str, f64};
 use std::str::FromStr;
 
+use super::super::super::Error;
 use super::Json;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";

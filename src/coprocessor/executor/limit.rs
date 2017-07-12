@@ -57,8 +57,8 @@ mod test {
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
     use super::super::topn::test::gen_table_data;
-    use util::codec::mysql::types;
-    use util::codec::datum::Datum;
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::datum::Datum;
     use storage::Statistics;
     use tipb::executor::TableScan;
     use protobuf::RepeatedField;

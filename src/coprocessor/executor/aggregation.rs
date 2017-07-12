@@ -21,12 +21,12 @@ use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 
 use util::collections::{HashMap, HashMapEntry as Entry};
-use util::codec::datum::{self, DatumEncoder, approximate_size};
-use util::codec::table::RowColsDict;
-use util::xeval::{Evaluator, EvalContext};
 
 use super::super::Result;
 use super::{Executor, Row, ExprColumnRefVisitor};
+use super::super::codec::table::RowColsDict;
+use super::super::codec::datum::{self, DatumEncoder, approximate_size};
+use super::super::xeval::{Evaluator, EvalContext};
 use super::super::endpoint::{inflate_with_col, SINGLE_GROUP};
 use super::super::aggregate::{self, AggrFunc};
 use super::super::metrics::*;
@@ -158,10 +158,10 @@ mod test {
 
     use super::*;
     use storage::Statistics;
-    use util::codec::datum::{Datum, DatumDecoder};
     use util::codec::number::NumberEncoder;
-    use util::codec::mysql::decimal::Decimal;
-    use util::codec::mysql::types;
+    use coprocessor::codec::datum::{Datum, DatumDecoder};
+    use coprocessor::codec::mysql::decimal::Decimal;
+    use coprocessor::codec::mysql::types;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
     use super::super::topn::test::gen_table_data;
