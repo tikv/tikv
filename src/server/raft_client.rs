@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::SocketAddr;
 
 use futures::sync::mpsc::{self, UnboundedSender};
@@ -32,6 +33,7 @@ struct Conn {
     stream: UnboundedSender<Vec<(RaftMessage, WriteFlags)>>,
     buffer: Option<Vec<(RaftMessage, WriteFlags)>>,
     store_id: u64,
+    alive: Arc<AtomicBool>,
 
     _client: TikvClient,
     _close: Sender<()>,
@@ -41,6 +43,8 @@ impl Conn {
     fn new(env: Arc<Environment>, addr: SocketAddr, cfg: &Config, store_id: u64) -> Conn {
         info!("server: new connection with tikv endpoint: {}", addr);
 
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive1 = alive.clone();
         let channel = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
@@ -58,13 +62,17 @@ impl Conn {
                     .flatten()
                     .map_err(|_| Error::Sink))
                 .map(|_| ())
-                .map_err(move |e| warn!("send raftmessage to {} failed: {:?}", addr, e)))
+                .map_err(move |e| {
+                    alive.store(false, Ordering::SeqCst);
+                    warn!("send raftmessage to {} failed: {:?}", addr, e)
+                }))
             .map(|_| ())
             .map_err(|_| ()));
         Conn {
             stream: tx,
             buffer: Some(Vec::with_capacity(INITIAL_BUFFER_CAP)),
             store_id: store_id,
+            alive: alive1,
 
             _client: client,
             _close: tx_close,
@@ -107,32 +115,31 @@ impl RaftClient {
 
 
     pub fn flush(&mut self) {
-        let mut dead_conns = Vec::new();
-        self.conns.retain(|&mut (addr, _), ref mut conn| {
-            let msgs = if conn.buffer.as_ref().unwrap().is_empty() {
-                // Avoid leaking dead and empty buffer conns.
-                vec![(RaftMessage::new(), WriteFlags::default())]
-            } else {
-                let mut msgs = conn.buffer.take().unwrap();
-                msgs.last_mut().unwrap().1 = WriteFlags::default();
-                msgs
-            };
+        let addrs = &mut self.addrs;
+        self.conns.retain(|&mut (addr, _), conn| {
+            let store_id = conn.store_id;
+            if !conn.alive.load(Ordering::SeqCst) {
+                addrs.remove(&store_id);
+                return false;
+            }
 
+            if conn.buffer.as_ref().unwrap().is_empty() {
+                return true;
+            }
+
+            let mut msgs = conn.buffer.take().unwrap();
+            msgs.last_mut().unwrap().1 = WriteFlags::default();
             if let Err(e) = UnboundedSender::send(&conn.stream, msgs) {
                 error!("server: drop conn with tikv endpoint {} flush conn error: {:?}",
                        addr,
                        e);
-                dead_conns.push(conn.store_id);
+                addrs.remove(&store_id);
                 return false;
             }
 
             conn.buffer = Some(Vec::with_capacity(INITIAL_BUFFER_CAP));
             true
         });
-
-        for key in dead_conns {
-            self.addrs.remove(&key);
-        }
     }
 }
 
