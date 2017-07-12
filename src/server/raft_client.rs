@@ -119,7 +119,7 @@ impl RaftClient {
                 error!("server: drop conn with tikv endpoint {} flush conn error: {:?}",
                        key.0,
                        e);
-                dead_conns.push(key.clone());
+                dead_conns.push(*key);
             }
 
             conn.buffer = Some(Vec::with_capacity(INITIAL_BUFFER_CAP));
