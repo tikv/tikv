@@ -61,11 +61,12 @@ impl Conn {
                     })
                     .flatten()
                     .map_err(|_| Error::Sink))
-                .map(|_| ())
-                .map_err(move |e| {
+                .then(move |r| {
                     alive.store(false, Ordering::SeqCst);
-                    warn!("send raftmessage to {} failed: {:?}", addr, e)
-                }))
+                    r
+                })
+                .map(|_| ())
+                .map_err(move |e| warn!("send raftmessage to {} failed: {:?}", addr, e)))
             .map(|_| ())
             .map_err(|_| ()));
         Conn {
@@ -119,7 +120,13 @@ impl RaftClient {
         self.conns.retain(|&mut (addr, _), conn| {
             let store_id = conn.store_id;
             if !conn.alive.load(Ordering::SeqCst) {
-                addrs.remove(&store_id);
+                if let Some(addr_current) = addrs.remove(&store_id) {
+                    if addr_current == addr {
+                        addrs.remove(&store_id);
+                    } else {
+                        addrs.insert(store_id, addr_current);
+                    }
+                }
                 return false;
             }
 
@@ -133,7 +140,14 @@ impl RaftClient {
                 error!("server: drop conn with tikv endpoint {} flush conn error: {:?}",
                        addr,
                        e);
-                addrs.remove(&store_id);
+
+                if let Some(addr_current) = addrs.remove(&store_id) {
+                    if addr_current == addr {
+                        addrs.remove(&store_id);
+                    } else {
+                        addrs.insert(store_id, addr_current);
+                    }
+                }
                 return false;
             }
 
