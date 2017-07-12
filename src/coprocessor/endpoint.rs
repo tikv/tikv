@@ -246,13 +246,12 @@ impl BatchRunnable<Task> for Host {
 
                     for req in reqs {
                         let type_str = get_req_type_str(req.req.get_tp());
-                        let labels = vec![type_str];
-                        COPR_PENDING_REQS.with_label_values(&labels).add(1.0);
+                        COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
                         let end_point = TiDbEndPoint::new(snap.clone());
                         let txn_id = req.start_ts.unwrap_or_default();
                         self.pool.execute(txn_id, move || {
                             end_point.handle_request(req);
-                            COPR_PENDING_REQS.with_label_values(&labels).sub(1.0);
+                            COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
                         });
                     }
                 }
