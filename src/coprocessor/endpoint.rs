@@ -173,7 +173,6 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME.with_label_values(&[type_str])
             .observe(handle_time - wait_time);
 
-
         let scanned_keys = self.statistics.total_op_count() as f64;
         COPR_SCAN_KEYS.with_label_values(&[type_str]).observe(scanned_keys);
         let inefficiency = self.statistics.inefficiency();
