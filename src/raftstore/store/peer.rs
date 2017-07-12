@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::{mem, slice};
+use std::{cmp, mem, slice};
 use std::time::{Instant, Duration};
 
 use time::Timespec;
@@ -839,13 +839,14 @@ impl Peer {
         self.peer_stat.written_keys += res.metrics.written_keys;
         self.peer_stat.written_bytes += res.metrics.written_bytes;
 
-        if has_split {
+        let diff = if has_split {
             self.delete_keys_hint = res.metrics.delete_keys_hint;
-            self.size_diff_hint = res.metrics.size_diff_hint as u64;
+            res.metrics.size_diff_hint
         } else {
             self.delete_keys_hint += res.metrics.delete_keys_hint;
-            self.size_diff_hint = (self.size_diff_hint as i64 + res.metrics.size_diff_hint) as u64;
-        }
+            self.size_diff_hint as i64 + res.metrics.size_diff_hint
+        };
+        self.size_diff_hint = cmp::max(diff, 0) as u64;
 
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
             self.mark_to_be_checked(groups);
