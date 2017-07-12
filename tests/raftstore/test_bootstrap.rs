@@ -54,9 +54,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(&mut event_loop, &cfg, pd_client.clone());
-    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(),
-                                    Some(node.get_sendch()),
-                                    cfg.raft_store.use_sst_file_snapshot);
+    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
     let (_, snapshot_status_receiver) = mpsc::channel();
 
 
