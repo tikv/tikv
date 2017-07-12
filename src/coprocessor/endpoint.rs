@@ -158,7 +158,7 @@ impl RequestTask {
             return;
         }
         let wait_time = duration_to_sec(self.timer.elapsed());
-        COPR_REQ_WAIT_TIME.with_label_values(&["select", get_req_type_str(self.req.get_tp())])
+        COPR_REQ_WAIT_TIME.with_label_values(&[get_req_type_str(self.req.get_tp())])
             .observe(wait_time);
         self.wait_time = Some(wait_time);
     }
@@ -168,15 +168,16 @@ impl RequestTask {
 
         let handle_time = duration_to_sec(self.timer.elapsed());
         let type_str = get_req_type_str(self.req.get_tp());
-        COPR_REQ_HISTOGRAM_VEC.with_label_values(&["select", type_str]).observe(handle_time);
+        COPR_REQ_HISTOGRAM_VEC.with_label_values(&[type_str]).observe(handle_time);
         let wait_time = self.wait_time.unwrap();
-        COPR_REQ_HANDLE_TIME.with_label_values(&["select", type_str])
+        COPR_REQ_HANDLE_TIME.with_label_values(&[type_str])
             .observe(handle_time - wait_time);
 
+
         let scanned_keys = self.statistics.total_op_count() as f64;
-        COPR_SCAN_KEYS.with_label_values(&["select", type_str]).observe(scanned_keys);
+        COPR_SCAN_KEYS.with_label_values(&[type_str]).observe(scanned_keys);
         let inefficiency = self.statistics.inefficiency();
-        COPR_SCAN_INEFFICIENCY.with_label_values(&["select", type_str]).observe(inefficiency);
+        COPR_SCAN_INEFFICIENCY.with_label_values(&[type_str]).observe(inefficiency);
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
@@ -237,19 +238,21 @@ impl BatchRunnable<Task> for Host {
                             continue;
                         }
                     };
-                    let len = reqs.len() as f64;
 
                     if self.pool.get_task_count() >= self.max_running_task_count {
                         notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
                         continue;
                     }
-                    COPR_PENDING_REQS.with_label_values(&["select"]).add(len);
+
                     for req in reqs {
+                        let type_str = get_req_type_str(req.req.get_tp());
+                        let labels = vec![type_str];
+                        COPR_PENDING_REQS.with_label_values(&labels).add(1.0);
                         let end_point = TiDbEndPoint::new(snap.clone());
                         let txn_id = req.start_ts.unwrap_or_default();
                         self.pool.execute(txn_id, move || {
                             end_point.handle_request(req);
-                            COPR_PENDING_REQS.with_label_values(&["select"]).sub(1.0);
+                            COPR_PENDING_REQS.with_label_values(&labels).sub(1.0);
                         });
                     }
                 }
@@ -283,29 +286,29 @@ fn err_resp(e: Error) -> Response {
     match e {
         Error::Region(e) => {
             let tag = storage::get_tag_from_header(&e);
-            COPR_REQ_ERROR.with_label_values(&["select", tag]).inc();
+            COPR_REQ_ERROR.with_label_values(&[tag]).inc();
             resp.set_region_error(e);
         }
         Error::Locked(info) => {
             resp.set_locked(info);
-            COPR_REQ_ERROR.with_label_values(&["select", "lock"]).inc();
+            COPR_REQ_ERROR.with_label_values(&["lock"]).inc();
         }
         Error::Other(_) => {
             resp.set_other_error(format!("{}", e));
-            COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
+            COPR_REQ_ERROR.with_label_values(&["other"]).inc();
         }
         Error::Outdated(deadline, now, tp) => {
             let t = get_req_type_str(tp);
             let elapsed = now.duration_since(deadline) +
                           Duration::from_secs(REQUEST_MAX_HANDLE_SECS);
-            COPR_REQ_ERROR.with_label_values(&["select", "outdated"]).inc();
-            OUTDATED_REQ_WAIT_TIME.with_label_values(&["select", t])
+            COPR_REQ_ERROR.with_label_values(&["outdated"]).inc();
+            OUTDATED_REQ_WAIT_TIME.with_label_values(&[t])
                 .observe(elapsed.as_secs() as f64);
 
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
         }
         Error::Full(allow) => {
-            COPR_REQ_ERROR.with_label_values(&["select", "full"]).inc();
+            COPR_REQ_ERROR.with_label_values(&["full"]).inc();
             let mut errorpb = errorpb::Error::new();
             errorpb.set_message(format!("running batches reach limit {}", allow));
             let mut server_is_busy_err = ServerIsBusy::new();
