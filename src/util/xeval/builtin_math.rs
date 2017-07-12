@@ -16,11 +16,6 @@ use util::codec::datum::Datum;
 use super::{Evaluator, EvalContext, Result, Error};
 
 const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
-pub const TYPE_INT: &'static str = "int";
-
-pub fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
-    Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
-}
 
 impl Evaluator {
     pub fn abs_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
