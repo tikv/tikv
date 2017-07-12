@@ -13,25 +13,26 @@
 
 
 pub mod evaluator;
+mod builtin_math;
 
 use util::codec;
 
 quick_error! {
-	#[derive(Debug)]
-	pub enum Error {
-		Codec(e: codec::Error) {
-			from()
-			description("codec failed")
-		}
-		Expr(s: String) {
-			description("invalid expression")
-			display("{}", s)
-		}
-		Eval(s: String) {
-			description("evaluation failed")
-			display("{}", s)
-		}
-	}
+    #[derive(Debug)]
+    pub enum Error {
+        Codec(e: codec::Error) {
+            from()
+            description("codec failed")
+        }
+        Expr(s: String) {
+            description("invalid expression")
+            display("{}", s)
+        }
+        Eval(s: String) {
+            description("evaluation failed")
+            display("{}", s)
+        }
+    }
 }
 
 use std::result;
