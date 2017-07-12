@@ -180,6 +180,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                     Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
                     Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
                     Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                    _ => panic!("mismatch Op in prewrite mutations"),
                 }
             })
             .collect();
@@ -697,6 +698,20 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             })
             .and_then(|_| sink.success(Done::new()).map_err(Error::from))
             .then(|_| future::ok::<_, ()>(())));
+    }
+
+    fn mvcc_get_by_key(&self,
+                       _: RpcContext,
+                       _: MvccGetByKeyRequest,
+                       _: UnarySink<MvccGetByKeyResponse>) {
+        unimplemented!();
+    }
+
+    fn mvcc_get_by_start_ts(&self,
+                            _: RpcContext,
+                            _: MvccGetByStartTsRequest,
+                            _: UnarySink<MvccGetByStartTsResponse>) {
+        unimplemented!();
     }
 }
 
