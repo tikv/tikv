@@ -121,9 +121,7 @@ impl RaftClient {
             let store_id = conn.store_id;
             if !conn.alive.load(Ordering::SeqCst) {
                 if let Some(addr_current) = addrs.remove(&store_id) {
-                    if addr_current == addr {
-                        addrs.remove(&store_id);
-                    } else {
+                    if addr_current != addr {
                         addrs.insert(store_id, addr_current);
                     }
                 }
@@ -142,9 +140,7 @@ impl RaftClient {
                        e);
 
                 if let Some(addr_current) = addrs.remove(&store_id) {
-                    if addr_current == addr {
-                        addrs.remove(&store_id);
-                    } else {
+                    if addr_current != addr {
                         addrs.insert(store_id, addr_current);
                     }
                 }
