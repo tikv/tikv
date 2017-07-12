@@ -108,27 +108,30 @@ impl RaftClient {
 
     pub fn flush(&mut self) {
         let mut dead_conns = Vec::new();
-        for (key, conn) in &mut self.conns {
-            if conn.buffer.as_ref().unwrap().is_empty() {
-                continue;
-            }
+        self.conns.retain(|&mut (addr, _), ref mut conn| {
+            let msgs = if conn.buffer.as_ref().unwrap().is_empty() {
+                // Avoid leaking dead and empty buffer conns.
+                vec![(RaftMessage::new(), WriteFlags::default())]
+            } else {
+                let mut msgs = conn.buffer.take().unwrap();
+                msgs.last_mut().unwrap().1 = WriteFlags::default();
+                msgs
+            };
 
-            let mut msgs = conn.buffer.take().unwrap();
-            msgs.last_mut().unwrap().1 = WriteFlags::default();
             if let Err(e) = UnboundedSender::send(&conn.stream, msgs) {
                 error!("server: drop conn with tikv endpoint {} flush conn error: {:?}",
-                       key.0,
+                       addr,
                        e);
-                dead_conns.push(*key);
+                dead_conns.push(conn.store_id);
+                return false;
             }
 
             conn.buffer = Some(Vec::with_capacity(INITIAL_BUFFER_CAP));
-        }
+            true
+        });
 
         for key in dead_conns {
-            if let Some(conn) = self.conns.remove(&key) {
-                self.addrs.remove(&conn.store_id);
-            }
+            self.addrs.remove(&key);
         }
     }
 }
