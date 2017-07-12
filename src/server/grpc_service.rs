@@ -711,7 +711,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let key = Key::from_raw(req.get_key());
         let (cb, future) = make_callback();
-        let res = storage.async_key_mvcc(req.take_context(), key.clone(), cb);
+        let res = storage.async_mvcc_by_key(req.take_context(), key.clone(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -753,7 +753,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (cb, future) = make_callback();
 
-        let res = storage.async_start_ts_mvcc(req.take_context(), req.get_start_ts(), cb);
+        let res = storage.async_mvcc_by_start_ts(req.take_context(), req.get_start_ts(), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
@@ -888,33 +888,32 @@ fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
 
 fn extract_vectors(res: storage::MvccInfo) -> (Vec<WriteInfo>, Vec<ValueInfo>) {
     assert_eq!(res.writes.len(), res.values.len());
-    let mut vw: Vec<WriteInfo> = vec![];
-    let mut vv: Vec<ValueInfo> = vec![];
-    for i in 0..res.writes.len() {
-        let (ref start_ts, ref v) = res.values[i];
-        let mut value = ValueInfo::new();
-        value.set_ts(start_ts);
-        value.set_value(v.clone());
-        if res.writes[i].1.short_value.is_some() {
-            value.set_is_short_value(true);
-        } else {
-            value.set_is_short_value(false);
-        }
-        vv.push(value);
-
-        let (ref commit_ts, ref write) = res.writes[i];
-        let mut write_info = WriteInfo::new();
-        write_info.set_start_ts(write.start_ts);
-        let op = match write.write_type {
-            WriteType::Put => Op::Put,
-            WriteType::Delete => Op::Del,
-            WriteType::Lock => Op::Lock,
-            WriteType::Rollback => Op::Rollback,
-        };
-        write_info.set_field_type(op);
-        write_info.set_commit_ts(*commit_ts);
-        vw.push(write_info);
-    }
+    let vv: Vec<ValueInfo> = res.values
+        .into_iter()
+        .map(|(start_ts, is_short, value)| {
+            let mut value_info = ValueInfo::new();
+            value_info.set_ts(start_ts);
+            value_info.set_value(value.clone());
+            value_info.set_is_short_value(is_short);
+            value_info
+        })
+        .collect();
+    let vw: Vec<WriteInfo> = res.writes
+        .into_iter()
+        .map(|(commit_ts, write)| {
+            let mut write_info = WriteInfo::new();
+            write_info.set_start_ts(write.start_ts);
+            let op = match write.write_type {
+                WriteType::Put => Op::Put,
+                WriteType::Delete => Op::Del,
+                WriteType::Lock => Op::Lock,
+                WriteType::Rollback => Op::Rollback,
+            };
+            write_info.set_field_type(op);
+            write_info.set_commit_ts(commit_ts);
+            write_info
+        })
+        .collect();
     (vw, vv)
 }
 

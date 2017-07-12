@@ -40,7 +40,7 @@ pub struct MvccInfo {
     /// commit_ts and write
     pub writes: Vec<(u64, Write)>,
     /// start_ts and value
-    pub values: Vec<(u64, Value)>,
+    pub values: Vec<(u64, bool, Value)>,
 }
 
 impl Default for MvccInfo {

@@ -120,7 +120,7 @@ impl Debug for Msg {
     }
 }
 
-/// Delivers the process result of a command to the storage callback.g
+/// Delivers the process result of a command to the storage callback.
 fn execute_callback(callback: StorageCb, pr: ProcessResult) {
     match callback {
         StorageCb::Boolean(cb) => {
@@ -151,14 +151,14 @@ fn execute_callback(callback: StorageCb, pr: ProcessResult) {
                 _ => panic!("process result mismatch"),
             }
         }
-        StorageCb::MvccInfo(cb) => {
+        StorageCb::MvccInfoByKey(cb) => {
             match pr {
                 ProcessResult::MvccKey { mvcc } => cb(Ok(mvcc)),
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             }
         }
-        StorageCb::StartTsMvccInfo(cb) => {
+        StorageCb::MvccInfoByStartTs(cb) => {
             match pr {
                 ProcessResult::MvccStartTs { mvcc } => cb(Ok(mvcc)),
                 ProcessResult::Failed { err } => cb(Err(err)),
@@ -272,7 +272,7 @@ pub struct Scheduler {
 // Make clippy happy.
 type MultipleReturnValue = (Option<MvccLock>,
                             Vec<(u64, Write)>,
-                            Vec<(u64, Value)>,
+                            Vec<(u64, bool, Value)>,
                             Option<StorageError>);
 
 fn find_mvcc_infos_by_key(reader: &mut MvccReader, key: &Key, mut ts: u64) -> MultipleReturnValue {
@@ -304,18 +304,15 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader, key: &Key, mut ts: u64) -> Mu
             Ok(opt) => lock = opt,
         }
         let write = writes[writes.len() - 1].1.clone();
-        match reader.get(key, write.start_ts).map_err(StorageError::from) {
+        if let Some(v) = write.short_value {
+            values.push((write.start_ts, true, v))
+        }
+        match reader.load_data(key, write.start_ts).map_err(StorageError::from) {
             Err(e) => {
                 err = Some(e);
                 break;
             }
-            Ok(opt) => {
-                match opt {
-                    Some(v) => values.push((write.start_ts, v)),
-                    // Can be found in CF_WRITE but cannot get the value, panic at once.
-                    None => panic!("Data in CF_WRITE and CF_DEFAULT are not consistent!"),
-                }
-            }
+            Ok(v) => values.push((write.start_ts, false, v)),
         }
     }
     (lock, writes, values, err)

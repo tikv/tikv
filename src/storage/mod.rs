@@ -79,8 +79,8 @@ pub enum StorageCb {
     Booleans(Callback<Vec<Result<()>>>),
     SingleValue(Callback<Option<Value>>),
     KvPairs(Callback<Vec<Result<KvPair>>>),
-    MvccInfo(Callback<MvccInfo>),
-    StartTsMvccInfo(Callback<Option<(Key, MvccInfo)>>),
+    MvccInfoByKey(Callback<MvccInfo>),
+    MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
 }
 
@@ -704,6 +704,7 @@ impl Storage {
         Ok(())
     }
 
+<<<<<<< HEAD
     pub fn async_raw_scan(&self,
                           ctx: Context,
                           key: Vec<u8>,
@@ -725,27 +726,34 @@ impl Storage {
                           key: Key,
                           callback: Callback<MvccInfo>)
                           -> Result<()> {
+=======
+    pub fn async_mvcc_by_key(&self,
+                             ctx: Context,
+                             key: Key,
+                             callback: Callback<MvccInfo>)
+                             -> Result<()> {
+>>>>>>> *: refactor
         let cmd = Command::KeyMvcc {
             ctx: ctx,
             key: key,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::MvccInfo(callback))?;
+        self.send(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
 
-    pub fn async_start_ts_mvcc(&self,
-                               ctx: Context,
-                               start_ts: u64,
-                               callback: Callback<Option<(Key, MvccInfo)>>)
-                               -> Result<()> {
+    pub fn async_mvcc_by_start_ts(&self,
+                                  ctx: Context,
+                                  start_ts: u64,
+                                  callback: Callback<Option<(Key, MvccInfo)>>)
+                                  -> Result<()> {
         let cmd = Command::StartTsMvcc {
             ctx: ctx,
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::StartTsMvccInfo(callback))?;
+        self.send(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
