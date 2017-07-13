@@ -305,7 +305,8 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader, key: &Key, mut ts: u64) -> Mu
         }
         let write = writes[writes.len() - 1].1.clone();
         if let Some(v) = write.short_value {
-            values.push((write.start_ts, true, v))
+            values.push((write.start_ts, true, v));
+            continue;
         }
         match reader.load_data(key, write.start_ts).map_err(StorageError::from) {
             Err(e) => {
