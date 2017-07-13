@@ -43,6 +43,13 @@ fn test_txn_store_get() {
 }
 
 #[test]
+fn test_import() {
+    let store = AssertionStorage::default();
+    store.import_ok(b"k", b"v", 5);
+    store.get_ok(b"k", 6, b"v");
+}
+
+#[test]
 fn test_txn_store_delete() {
     let store = AssertionStorage::default();
     store.put_ok(b"x", b"x5-10", 5, 10);
