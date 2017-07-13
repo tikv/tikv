@@ -180,6 +180,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                     Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
                     Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
                     Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+                    _ => panic!("mismatch Op in prewrite mutations"),
                 }
             })
             .collect();
@@ -517,6 +518,43 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
         ctx.spawn(future);
     }
 
+    fn raw_scan(&self,
+                ctx: RpcContext,
+                mut req: RawScanRequest,
+                sink: UnarySink<RawScanResponse>) {
+        let label = "raw_scan";
+        let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
+
+        let (cb, future) = make_callback();
+        let res = self.storage.async_raw_scan(req.take_context(),
+                                              req.take_start_key(),
+                                              req.get_limit() as usize,
+                                              cb);
+        if let Err(e) = res {
+            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
+            return;
+        }
+
+        let future = future.map_err(Error::from)
+            .map(|v| {
+                let mut resp = RawScanResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else {
+                    resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                }
+                resp
+            })
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", label, e);
+                GRPC_MSG_FAIL_COUNTER.with_label_values(&[label]).inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn raw_put(&self, ctx: RpcContext, mut req: RawPutRequest, sink: UnarySink<RawPutResponse>) {
         let label = "raw_put";
         let timer = GRPC_MSG_HISTOGRAM_VEC.with_label_values(&[label]).start_timer();
@@ -660,6 +698,20 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
             })
             .and_then(|_| sink.success(Done::new()).map_err(Error::from))
             .then(|_| future::ok::<_, ()>(())));
+    }
+
+    fn mvcc_get_by_key(&self,
+                       _: RpcContext,
+                       _: MvccGetByKeyRequest,
+                       _: UnarySink<MvccGetByKeyResponse>) {
+        unimplemented!();
+    }
+
+    fn mvcc_get_by_start_ts(&self,
+                            _: RpcContext,
+                            _: MvccGetByStartTsRequest,
+                            _: UnarySink<MvccGetByStartTsResponse>) {
+        unimplemented!();
     }
 }
 
