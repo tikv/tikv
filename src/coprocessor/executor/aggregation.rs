@@ -22,14 +22,14 @@ use tipb::expression::Expr;
 
 use util::collections::{HashMap, HashMapEntry as Entry};
 
-use super::super::Result;
-use super::{Executor, Row, ExprColumnRefVisitor};
 use super::super::codec::table::RowColsDict;
 use super::super::codec::datum::{self, DatumEncoder, approximate_size};
 use super::super::xeval::{Evaluator, EvalContext};
 use super::super::endpoint::{inflate_with_col, SINGLE_GROUP};
 use super::super::aggregate::{self, AggrFunc};
 use super::super::metrics::*;
+use super::super::Result;
+use super::{Executor, Row, ExprColumnRefVisitor};
 
 struct AggregationExecutor<'a> {
     group_by: Vec<Expr>,
