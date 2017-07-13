@@ -11,37 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io;
-
-use protobuf;
-
-const TEN_POW: &'static [u32] =
-    &[1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000];
-
-/// A shortcut to box an error.
-macro_rules! invalid_type {
-    ($e:expr) => ({
-        use util::codec::Error;
-        Error::InvalidDataType(($e).into())
-    });
-    ($f:tt, $($arg:expr),+) => ({
-        use util::codec::Error;
-        Error::InvalidDataType(format!($f, $($arg),+))
-    });
-}
 
 pub mod bytes;
 pub mod number;
-pub mod datum;
-pub mod table;
-pub mod convert;
-pub mod mysql;
 
-pub use self::datum::Datum;
-
+use std::io;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::error;
+use protobuf;
 
 quick_error! {
     #[derive(Debug)]
