@@ -499,6 +499,25 @@ impl Peer {
         Ok(())
     }
 
+    pub fn record_max_log_lag(&self) {
+        let replicated_idx = self.raft_group
+            .status()
+            .progress
+            .values()
+            .map(|p| p.matched)
+            .min()
+            .unwrap();
+        // When an election happened or a new peer is added, replicated_idx can be 0.
+        if replicated_idx > 0 {
+            let last_idx = self.raft_group.raft.raft_log.last_index();
+            assert!(last_idx >= replicated_idx,
+                    "expect last index {} >= replicated index {}",
+                    last_idx,
+                    replicated_idx);
+            REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+        }
+    }
+
     pub fn step(&mut self, m: eraftpb::Message) -> Result<()> {
         if self.is_leader() && m.get_from() != INVALID_ID {
             self.peer_heartbeats.insert(m.get_from(), Instant::now());

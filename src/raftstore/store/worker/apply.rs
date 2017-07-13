@@ -970,6 +970,42 @@ impl ApplyDelegate {
 
         Ok(resp)
     }
+
+    fn handle_local_compact_log(&mut self, compact_index: u64, compact_term: u64)
+                                -> Option<ExecResult> {
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
+
+        let first_index = peer_storage::first_index(&self.apply_state);
+        if compact_index <= first_index {
+            debug!("{} compact index {} <= first index {}, no need to compact",
+                   self.tag,
+                   compact_index,
+                   first_index);
+            return None;
+        }
+
+        // TODO: add unit tests to cover all the message integrity checks.
+        if compact_term == 0 {
+            info!("{} compact term missing in request, skip.", self.tag);
+            // old format compact log command, safe to ignore.
+            return None;
+        }
+
+        // compact failure is safe to be omitted, no need to assert.
+        if compact_raft_log(&self.tag,
+                            &mut self.apply_state,
+                            compact_index,
+                            compact_term).is_err() {
+            return None;
+        }
+
+        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
+
+        Some(ExecResult::CompactLog {
+            state: self.apply_state.get_truncated_state().clone(),
+            first_index: first_index,
+        })
+    }
 }
 
 pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
@@ -1124,12 +1160,29 @@ pub struct Proposals {
     props: Vec<Proposal>,
 }
 
+pub struct LocalCompactLog {
+    region_id: u64,
+    compact_index: u64,
+    compact_term: u64,
+}
+
+impl LocalCompactLog {
+    pub fn new(region_id: u64, index: u64, term: u64) -> LocalCompactLog {
+        LocalCompactLog {
+            region_id: region_id,
+            compact_index: index,
+            compact_term: term,
+        }
+    }
+}
+
 /// region related task.
 pub enum Task {
     Applies(Vec<Apply>),
     Registration(Registration),
     Proposals(Proposals),
     Destroy(Destroy),
+    LocalCompactLogs(Vec<LocalCompactLog>),
 }
 
 impl Task {
@@ -1152,6 +1205,10 @@ impl Task {
     pub fn destroy(region_id: u64) -> Task {
         Task::Destroy(Destroy { region_id: region_id })
     }
+
+    pub fn local_compact_logs(compacts: Vec<LocalCompactLog>) -> Task {
+        Task::LocalCompactLogs(compacts)
+    }
 }
 
 impl Display for Task {
@@ -1163,6 +1220,7 @@ impl Display for Task {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
             Task::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Task::LocalCompactLogs(ref a) => write!(f, "local compact logs count {}", a.len()),
         }
     }
 }
@@ -1189,9 +1247,17 @@ pub struct ApplyRes {
 }
 
 #[derive(Debug)]
+pub struct LocalCompactLogRes {
+    pub region_id: u64,
+    pub apply_state: RaftApplyState,
+    pub exec_res: Vec<ExecResult>,
+}
+
+#[derive(Debug)]
 pub enum TaskRes {
     Applys(Vec<ApplyRes>),
     Destroy(ApplyDelegate),
+    LocalCompactLogs(Vec<LocalCompactLogRes>),
 }
 
 // TODO: use threadpool to do task concurrently
@@ -1325,6 +1391,46 @@ impl Runner {
         }
     }
 
+    fn handle_local_compact_logs(&mut self, compacts: Vec<LocalCompactLog>) {
+        let wb = WriteBatch::with_capacity(compacts.len());
+        let mut res = Vec::with_capacity(compacts.len());
+        for compact in compacts {
+            let mut e = match self.delegates.entry(compact.region_id) {
+                MapEntry::Vacant(_) => {
+                    error!("[region {}] is missing", compact.region_id);
+                    continue;
+                }
+                MapEntry::Occupied(e) => e,
+            };
+
+            let delegate = e.get_mut();
+            let result = delegate.handle_local_compact_log(compact.compact_index,
+                                                           compact.compact_term);
+            if result.is_none() {
+                continue;
+            }
+
+            res.push(LocalCompactLogRes {
+                region_id: compact.region_id,
+                apply_state: delegate.apply_state.clone(),
+                exec_res: vec![result.unwrap()],
+            });
+
+            delegate.write_apply_state(&wb);
+        }
+
+        // Write to engine
+        if !wb.is_empty() {
+            self.db
+                .write(wb)
+                .unwrap_or_else(|e| panic!("failed to write to engine, error: {:?}", e));
+        }
+
+        if !res.is_empty() {
+            self.notifier.send(TaskRes::LocalCompactLogs(res)).unwrap();
+        }
+    }
+
     fn handle_shutdown(&mut self) {
         for p in self.delegates.values_mut() {
             p.clear_pending_commands();
@@ -1339,6 +1445,7 @@ impl Runnable<Task> for Runner {
             Task::Proposals(props) => self.handle_proposals(props),
             Task::Registration(s) => self.handle_registration(s),
             Task::Destroy(d) => self.handle_destroy(d),
+            Task::LocalCompactLogs(c) => self.handle_local_compact_logs(c),
         }
     }
 
