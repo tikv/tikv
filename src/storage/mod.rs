@@ -147,8 +147,8 @@ pub enum Command {
         limit: usize,
     },
     Pause { ctx: Context, duration: u64 },
-    KeyMvcc { ctx: Context, key: Key },
-    StartTsMvcc { ctx: Context, start_ts: u64 },
+    MvccByKey { ctx: Context, key: Key },
+    MvccByStartTs { ctx: Context, start_ts: u64 },
 }
 
 impl Display for Command {
@@ -227,10 +227,10 @@ impl Display for Command {
             Command::Pause { ref ctx, duration } => {
                 write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
             }
-            Command::KeyMvcc { ref ctx, ref key } => {
+            Command::MvccByKey { ref ctx, ref key } => {
                 write!(f, "kv::command::scanmvcc {:?} | {:?}", key, ctx)
             }
-            Command::StartTsMvcc { ref ctx, ref start_ts } => {
+            Command::MvccByStartTs { ref ctx, ref start_ts } => {
                 write!(f, "kv::command::starttsmvcc {:?} | {:?}", start_ts, ctx)
             }
         }
@@ -255,8 +255,8 @@ impl Command {
             Command::RawGet { .. } |
             Command::RawScan { .. } |
             Command::Pause { .. } |
-            Command::KeyMvcc { .. } |
-            Command::StartTsMvcc { .. } => true,
+            Command::MvccByKey { .. } |
+            Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
             _ => false,
@@ -294,8 +294,8 @@ impl Command {
             Command::RawGet { .. } => "raw_get",
             Command::RawScan { .. } => "raw_scan",
             Command::Pause { .. } => "pause",
-            Command::KeyMvcc { .. } => "key_mvcc",
-            Command::StartTsMvcc { .. } => "start_ts_mvcc",
+            Command::MvccByKey { .. } => "key_mvcc",
+            Command::MvccByStartTs { .. } => "start_ts_mvcc",
         }
     }
 
@@ -308,14 +308,14 @@ impl Command {
             Command::Cleanup { start_ts, .. } |
             Command::Rollback { start_ts, .. } |
             Command::ResolveLock { start_ts, .. } |
-            Command::StartTsMvcc { start_ts, .. } => start_ts,
+            Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
             Command::RawGet { .. } |
             Command::RawScan { .. } |
             Command::Pause { .. } |
-            Command::KeyMvcc { .. } => 0,
+            Command::MvccByKey { .. } => 0,
         }
     }
 
@@ -334,8 +334,8 @@ impl Command {
             Command::RawGet { ref ctx, .. } |
             Command::RawScan { ref ctx, .. } |
             Command::Pause { ref ctx, .. } |
-            Command::KeyMvcc { ref ctx, .. } |
-            Command::StartTsMvcc { ref ctx, .. } => ctx,
+            Command::MvccByKey { ref ctx, .. } |
+            Command::MvccByStartTs { ref ctx, .. } => ctx,
         }
     }
 
@@ -354,8 +354,8 @@ impl Command {
             Command::RawGet { ref mut ctx, .. } |
             Command::RawScan { ref mut ctx, .. } |
             Command::Pause { ref mut ctx, .. } |
-            Command::KeyMvcc { ref mut ctx, .. } |
-            Command::StartTsMvcc { ref mut ctx, .. } => ctx,
+            Command::MvccByKey { ref mut ctx, .. } |
+            Command::MvccByStartTs { ref mut ctx, .. } => ctx,
         }
     }
 }
@@ -704,7 +704,6 @@ impl Storage {
         Ok(())
     }
 
-<<<<<<< HEAD
     pub fn async_raw_scan(&self,
                           ctx: Context,
                           key: Vec<u8>,
@@ -721,19 +720,12 @@ impl Storage {
         Ok(())
     }
     
-    pub fn async_key_mvcc(&self,
-                          ctx: Context,
-                          key: Key,
-                          callback: Callback<MvccInfo>)
-                          -> Result<()> {
-=======
     pub fn async_mvcc_by_key(&self,
                              ctx: Context,
                              key: Key,
                              callback: Callback<MvccInfo>)
                              -> Result<()> {
->>>>>>> *: refactor
-        let cmd = Command::KeyMvcc {
+        let cmd = Command::MvccByKey {
             ctx: ctx,
             key: key,
         };
@@ -748,7 +740,7 @@ impl Storage {
                                   start_ts: u64,
                                   callback: Callback<Option<(Key, MvccInfo)>>)
                                   -> Result<()> {
-        let cmd = Command::StartTsMvcc {
+        let cmd = Command::MvccByStartTs {
             ctx: ctx,
             start_ts: start_ts,
         };
