@@ -709,9 +709,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let storage = self.storage.clone();
 
-        let key = Key::from_raw(req.get_key());
         let (cb, future) = make_callback();
-        let res = storage.async_mvcc_by_key(req.take_context(), key.clone(), cb);
+        let res = storage.async_mvcc_by_key(req.take_context(), Key::from_encoded(req.take_key()), cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
             return;
