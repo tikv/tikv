@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::cmp::Ordering;
 use std::str;
 use std::fmt::{self, Formatter, Display};
+use std::time::Duration as StdDuration;
 
-use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration, TimeZone};
+use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration as ChronoDuration, TimeZone};
 
 use util::codec::mysql::{self, types, parse_frac, check_fsp};
 use util::codec::mysql::Decimal;
 use util::codec::{Result, TEN_POW};
-
+use super::duration::Duration;
 
 const ZERO_DATETIME_STR: &'static str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &'static str = "0000-00-00";
@@ -53,7 +53,7 @@ fn ymd_hms_nanos<T: TimeZone>(tz: &T,
     tz.ymd_opt(year, month, day)
         .and_hms_opt(hour, min, secs)
         .single()
-        .and_then(|t| t.checked_add(Duration::nanoseconds(nanos as i64)))
+        .and_then(|t| t.checked_add(ChronoDuration::nanoseconds(nanos as i64)))
         .ok_or_else(|| {
             box_err!("'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime",
                      year,
@@ -140,6 +140,14 @@ impl Time {
                 format!("{}", s)
             }
         }
+    }
+
+    pub fn to_dur(&self) -> Result<Duration> {
+        if self.is_zero() {
+            return Ok(Duration::zero());
+        }
+        let d = StdDuration::new(self.time.timestamp() as u64, self.time.timestamp_subsec_nanos());
+        Duration::new(d, false, self.get_fsp() as i8)
     }
 
     pub fn to_decimal(&self) -> Result<Decimal> {
