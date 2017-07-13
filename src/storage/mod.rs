@@ -139,6 +139,11 @@ pub enum Command {
         keys: Vec<Key>,
     },
     RawGet { ctx: Context, key: Key },
+    RawScan {
+        ctx: Context,
+        start_key: Key,
+        limit: usize,
+    },
     DeleteRange {
         ctx: Context,
         start_key: Key,
@@ -213,6 +218,13 @@ impl Display for Command {
             Command::RawGet { ref ctx, ref key } => {
                 write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
             }
+            Command::RawScan { ref ctx, ref start_key, limit } => {
+                write!(f,
+                       "kv::command::rawscan {:?} {} | {:?}",
+                       start_key,
+                       limit,
+                       ctx)
+            }
             Command::DeleteRange { ref ctx, ref start_key, ref end_key } => {
                 write!(f,
                        "kv::command::delete range [{:?}, {:?}) | {:?}",
@@ -246,6 +258,7 @@ impl Command {
             Command::Scan { .. } |
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
+            Command::RawScan { .. } |
             Command::DeleteRange { .. } |
             Command::Pause { .. } => true,
             Command::ResolveLock { ref keys, .. } |
@@ -283,6 +296,7 @@ impl Command {
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
+            Command::RawScan { .. } => "raw_scan",
             Command::DeleteRange { .. } => "delete_range",
             Command::Pause { .. } => "pause",
         }
@@ -301,6 +315,7 @@ impl Command {
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
             Command::RawGet { .. } |
+            Command::RawScan { .. } |
             Command::DeleteRange { .. } |
             Command::Pause { .. } => 0,
         }
@@ -319,6 +334,7 @@ impl Command {
             Command::ResolveLock { ref ctx, .. } |
             Command::Gc { ref ctx, .. } |
             Command::RawGet { ref ctx, .. } |
+            Command::RawScan { ref ctx, .. } |
             Command::DeleteRange { ref ctx, .. } |
             Command::Pause { ref ctx, .. } => ctx,
         }
@@ -337,6 +353,7 @@ impl Command {
             Command::ResolveLock { ref mut ctx, .. } |
             Command::Gc { ref mut ctx, .. } |
             Command::RawGet { ref mut ctx, .. } |
+            Command::RawScan { ref mut ctx, .. } |
             Command::DeleteRange { ref mut ctx, .. } |
             Command::Pause { ref mut ctx, .. } => ctx,
         }
@@ -679,6 +696,22 @@ impl Storage {
                              callback(res.map_err(Error::from))
                          }));
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["delete"]).inc();
+        Ok(())
+    }
+
+    pub fn async_raw_scan(&self,
+                          ctx: Context,
+                          key: Vec<u8>,
+                          limit: usize,
+                          callback: Callback<Vec<Result<KvPair>>>)
+                          -> Result<()> {
+        let cmd = Command::RawScan {
+            ctx: ctx,
+            start_key: Key::from_encoded(key),
+            limit: limit,
+        };
+        try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
         Ok(())
     }
 
