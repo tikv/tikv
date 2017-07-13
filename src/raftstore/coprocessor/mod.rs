@@ -67,6 +67,6 @@ pub trait RegionObserver: Coprocessor {
 
     /// Hook to call before apply read/write request.
     ///
-    /// Please note that inproper implementation can lead to data inconsistency.
+    /// Please note that improper implementation can lead to data inconsistency.
     fn pre_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Request>) {}
 }

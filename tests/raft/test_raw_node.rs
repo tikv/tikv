@@ -391,3 +391,42 @@ fn test_raw_node_restart_from_snapshot() {
     raw_node.advance(rd);
     assert!(!raw_node.has_ready());
 }
+
+// test_skip_bcast_commit ensures that empty commit message is not sent out
+// when skip_bcast_commit is true.
+#[test]
+fn test_skip_bcast_commit() {
+    let mut config = new_test_config(1, vec![1, 2, 3], 10, 1);
+    config.skip_bcast_commit = true;
+    let r1 = new_test_raft_with_config(&config, new_storage());
+    let r2 = new_test_raft(2, vec![1, 2, 3], 10, 1, new_storage());
+    let r3 = new_test_raft(3, vec![1, 2, 3], 10, 1, new_storage());
+    let mut nt = Network::new(vec![Some(r1), Some(r2), Some(r3)]);
+
+    // elect r1 as leader
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+
+    // Without bcast commit, followers will not update its commit index immediately.
+    let mut test_entries = Entry::new();
+    test_entries.set_data(b"testdata".to_vec());
+    let msg = new_message_with_entries(1, 1, MessageType::MsgPropose, vec![test_entries.clone()]);
+    nt.send(vec![msg.clone()]);
+    assert_eq!(nt.peers[&1].raft_log.committed, 2);
+    assert_eq!(nt.peers[&2].raft_log.committed, 1);
+    assert_eq!(nt.peers[&3].raft_log.committed, 1);
+
+    // After bcast heartbeat, followers will be informed the actual commit index.
+    for _ in 0..nt.peers[&1].get_randomized_election_timeout() {
+        nt.peers.get_mut(&1).unwrap().tick();
+    }
+    nt.send(vec![new_message(1, 1, MessageType::MsgHup, 0)]);
+    assert_eq!(nt.peers[&2].raft_log.committed, 2);
+    assert_eq!(nt.peers[&3].raft_log.committed, 2);
+
+    // Later proposal should commit former proposal.
+    nt.send(vec![msg.clone()]);
+    nt.send(vec![msg]);
+    assert_eq!(nt.peers[&1].raft_log.committed, 4);
+    assert_eq!(nt.peers[&2].raft_log.committed, 3);
+    assert_eq!(nt.peers[&3].raft_log.committed, 3);
+}

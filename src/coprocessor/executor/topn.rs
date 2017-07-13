@@ -16,39 +16,17 @@
 
 use std::usize;
 use std::rc::Rc;
-use std::collections::HashSet;
 use std::vec::IntoIter;
 
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
-use tipb::expression::{Expr, ExprType, ByItem};
-use util::codec::number::NumberDecoder;
-use util::xeval::{Evaluator, EvalContext};
+use tipb::expression::ByItem;
 
-use super::{Executor, Row};
+use util::xeval::{Evaluator, EvalContext};
+use super::{Executor, Row, ExprColumnRefVisitor};
 use super::super::Result;
 use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
-
-struct ExprColumnRefVisitor {
-    col_ids: HashSet<i64>,
-}
-
-impl ExprColumnRefVisitor {
-    fn new() -> ExprColumnRefVisitor {
-        ExprColumnRefVisitor { col_ids: HashSet::new() }
-    }
-
-    fn visit(&mut self, expr: &Expr) -> Result<()> {
-        if expr.get_tp() == ExprType::ColumnRef {
-            self.col_ids.insert(box_try!(expr.get_val().decode_i64()));
-        } else {
-            for sub_expr in expr.get_children() {
-                try!(self.visit(sub_expr));
-            }
-        }
-        Ok(())
-    }
-}
+use super::super::metrics::*;
 
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
@@ -76,7 +54,7 @@ impl<'a> TopNExecutor<'a> {
             .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect();
-
+        COPR_EXECUTOR_COUNT.with_label_values(&["topn"]).inc();
         Ok(TopNExecutor {
             order_by: Rc::new(order_by),
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),

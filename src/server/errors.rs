@@ -28,7 +28,7 @@ use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
 use super::snap::Task as SnapTask;
-use super::coprocessor::EndPointTask;
+use coprocessor::EndPointTask;
 
 quick_error!{
     #[derive(Debug)]

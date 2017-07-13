@@ -121,7 +121,7 @@ pub mod test {
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, Snapshot};
     use storage::engine::{self, Engine, TEMP_DIR, Modify};
-    use server::coprocessor::endpoint::prefix_next;
+    use coprocessor::endpoint::prefix_next;
 
     pub fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();

@@ -279,18 +279,22 @@ impl<'a> RegionIterator<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
     use tempdir::TempDir;
     use rocksdb::{Writable, DB};
+    use kvproto::metapb::{Region, Peer};
+
     use raftstore::Result;
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
-    use raftstore::store::PeerStorage;
+    use raftstore::store::{PeerStorage, CacheQueryStats};
     use storage::{Cursor, Key, ALL_CFS, ScanMode, Statistics};
     use util::{worker, rocksdb, escape};
 
     use super::*;
-    use std::sync::Arc;
-    use kvproto::metapb::{Region, Peer};
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -299,7 +303,8 @@ mod tests {
     }
 
     fn new_peer_storage(engine: Arc<DB>, r: &Region) -> PeerStorage {
-        PeerStorage::new(engine, r, worker::dummy_scheduler(), "".to_owned()).unwrap()
+        let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
+        PeerStorage::new(engine, r, worker::dummy_scheduler(), "".to_owned(), metrics).unwrap()
     }
 
     fn load_default_dataset(engine: Arc<DB>) -> (PeerStorage, DataSet) {

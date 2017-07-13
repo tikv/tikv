@@ -11,10 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Json;
-use super::super::Result;
-use super::path_expr::{PathLeg, PathExpression};
 use std::mem;
+
+use super::Json;
+use super::path_expr::{PathLeg, PathExpression};
+use super::super::Result;
 
 /// `ModifyType` is for modify a JSON.
 #[derive(Clone, Copy, Debug, PartialEq)]

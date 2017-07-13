@@ -112,10 +112,7 @@ mod imp {
 
     use rocksdb::DB;
 
-    use tikv::server::Msg;
-    use tikv::util::transport::SendCh;
-
-    pub fn handle_signal(_: SendCh<Msg>, _: Arc<DB>, _: &str) {}
+    pub fn handle_signal(engine: Arc<DB>, _: &str) {}
 }
 
 pub use self::imp::handle_signal;

@@ -92,8 +92,9 @@ impl RaftClient {
     pub fn send(&mut self, store_id: u64, addr: SocketAddr, msg: RaftMessage) -> Result<()> {
         let index = msg.get_region_id() as usize % self.cfg.grpc_raft_conn_num;
         let res = {
-            let conn = self.get_conn(addr, index);
-            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default()))
+            let mut conn = self.get_conn(addr, index);
+            conn.active = true;
+            UnboundedSender::send(&conn.stream, (msg, WriteFlags::default().buffer_hint(true)))
         };
         if let Err(e) = res {
             warn!("server: drop conn with tikv endpoint {} error: {:?}",

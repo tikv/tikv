@@ -24,7 +24,7 @@ use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 
 use super::{Result, Config};
-use super::coprocessor::{EndPointHost, EndPointTask};
+use coprocessor::{EndPointHost, EndPointTask};
 use super::grpc_service::Service;
 use super::transport::{RaftStoreRouter, ServerTransport};
 use super::resolve::StoreAddrResolver;
@@ -235,7 +235,7 @@ mod tests {
 
         server.start(&cfg).unwrap();
 
-        let trans = server.transport();
+        let mut trans = server.transport();
         for i in 0..10 {
             if i % 2 == 1 {
                 trans.report_unreachable(RaftMessage::new());
@@ -245,6 +245,7 @@ mod tests {
         let mut msg = RaftMessage::new();
         msg.set_region_id(1);
         trans.send(msg).unwrap();
+        trans.flush();
         assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
         server.stop().unwrap();
     }
