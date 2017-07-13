@@ -16,12 +16,12 @@ use std::io::Write;
 use std::{cmp, u8};
 use tipb::schema::ColumnInfo;
 
-use util::xeval::EvalContext;
+use coprocessor::xeval::EvalContext;
 use util::escape;
 use util::collections::{HashMap, HashSet};
 
-use super::number::{NumberDecoder, NumberEncoder};
-use super::bytes::BytesDecoder;
+use util::codec::number::{NumberDecoder, NumberEncoder};
+use util::codec::bytes::BytesDecoder;
 use super::datum::DatumDecoder;
 use super::{Result, Datum, datum};
 use super::mysql::{types, Duration, Time};
@@ -339,8 +339,8 @@ mod test {
 
     use tipb::schema::ColumnInfo;
 
-    use util::codec::mysql::types;
-    use util::codec::datum::{self, Datum, DatumDecoder};
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::datum::{self, Datum, DatumDecoder};
     use util::codec::number::NumberEncoder;
     use util::collections::{HashMap, HashSet};
 

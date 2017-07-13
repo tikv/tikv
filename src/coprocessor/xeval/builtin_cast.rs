@@ -13,12 +13,11 @@
 
 use std::i64;
 use tipb::expression::Expr;
-use util::codec::datum::Datum;
-use util::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP};
-use util::codec::convert;
-use super::{Evaluator, EvalContext, Result, Error};
+use coprocessor::codec::datum::Datum;
+use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP};
+use coprocessor::codec::convert;
+use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
 
-const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
 const TYPE_INT: &'static str = "int";
 
 fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
@@ -250,8 +249,8 @@ impl Evaluator {
 #[cfg(test)]
 mod test {
     use tipb::expression::{ExprType, ScalarFuncSig};
-    use util::codec::datum::Datum;
-    use util::codec::mysql::{Decimal, Time, Duration};
+    use coprocessor::codec::datum::Datum;
+    use coprocessor::codec::mysql::{Decimal, Time, Duration};
     use super::super::Evaluator;
     use super::super::evaluator::test::build_expr_with_sig;
 

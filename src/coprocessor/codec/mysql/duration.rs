@@ -18,7 +18,7 @@ use std::fmt::{self, Display, Formatter};
 use std::{str, i64, u64};
 use std::io::Write;
 
-use util::codec::Result;
+use super::super::Result;
 use super::{Decimal, parse_frac, check_fsp};
 
 const NANOS_PER_SEC: i64 = 1_000_000_000;

@@ -14,7 +14,7 @@
 use std::{self, str, i64};
 use std::borrow::Cow;
 
-use util::xeval::EvalContext;
+use coprocessor::xeval::EvalContext;
 use super::Result;
 
 // `convert` converts an uint value to an int value.
@@ -228,7 +228,7 @@ mod test {
 
     use chrono::FixedOffset;
 
-    use util::xeval::EvalContext;
+    use coprocessor::xeval::EvalContext;
 
     #[test]
     fn test_bytes_to_i64() {

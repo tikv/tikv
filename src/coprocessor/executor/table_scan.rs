@@ -14,11 +14,11 @@
 use tipb::executor::TableScan;
 use kvproto::coprocessor::KeyRange;
 use kvproto::kvrpcpb::IsolationLevel;
-use util::codec::table;
 use util::collections::HashSet;
 use storage::{Snapshot, Statistics};
 use super::{Executor, Row};
 use super::scanner::Scanner;
+use super::super::codec::table;
 use super::super::endpoint::{prefix_next, is_point};
 use super::super::Result;
 use super::super::metrics::*;
