@@ -228,10 +228,10 @@ impl Display for Command {
                 write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
             }
             Command::MvccByKey { ref ctx, ref key } => {
-                write!(f, "kv::command::scanmvcc {:?} | {:?}", key, ctx)
+                write!(f, "kv::command::mvccbykey {:?} | {:?}", key, ctx)
             }
             Command::MvccByStartTs { ref ctx, ref start_ts } => {
-                write!(f, "kv::command::starttsmvcc {:?} | {:?}", start_ts, ctx)
+                write!(f, "kv::command::mvccbystartts {:?} | {:?}", start_ts, ctx)
             }
         }
     }
