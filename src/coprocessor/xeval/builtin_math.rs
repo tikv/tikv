@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use tipb::expression::Expr;
-use util::codec::datum::Datum;
+use super::super::codec::datum::Datum;
 use super::{Evaluator, EvalContext, Result, Error};
 
 const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";

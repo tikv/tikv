@@ -19,8 +19,7 @@ use std::rc::Rc;
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 use tipb::expression::Expr;
-use util::xeval::{Evaluator, EvalContext};
-
+use super::super::xeval::{Evaluator, EvalContext};
 use super::super::Result;
 use super::{Row, Executor, ExprColumnRefVisitor};
 use super::super::endpoint::inflate_with_col;
@@ -89,8 +88,8 @@ mod tests {
     use protobuf::RepeatedField;
     use util::codec::number::NumberEncoder;
     use tipb::expression::{Expr, ExprType};
-    use util::codec::mysql::types;
-    use util::codec::datum::Datum;
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::datum::Datum;
     use tipb::executor::TableScan;
     use kvproto::kvrpcpb::IsolationLevel;
 

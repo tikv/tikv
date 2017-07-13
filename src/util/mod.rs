@@ -32,7 +32,6 @@ pub mod logger;
 pub mod panic_hook;
 pub mod worker;
 pub mod codec;
-pub mod xeval;
 pub mod rocksdb;
 pub mod config;
 pub mod buf;
