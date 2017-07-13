@@ -44,7 +44,7 @@ use kvproto::kvrpcpb::{Context, LockInfo, CommandPri};
 use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode, Statistics};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE, Write,
-                    Lock as MvccLock};
+                    Lock as MvccLock, WriteType};
 use storage::{Key, Value, KvPair, MvccInfo, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
 use raftstore::store::engine::IterOption;
@@ -289,6 +289,9 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader, key: &Key, mut ts: u64) -> Mu
             Ok(opt) => {
                 match opt {
                     Some((commit_ts, write)) => {
+                        if write.write_type != WriteType::Put {
+                            continue;
+                        }
                         ts = commit_ts - 1;
                         writes.push((commit_ts, write));
                     }
