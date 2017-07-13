@@ -458,7 +458,6 @@ impl Snap {
         }
         for cf_file in &mut self.cf_files {
             // use sst for CF_LOCK to keep clean. Will Return to use plain file.
-
             let handle = snap.cf_handle(cf_file.cf)?;
             let mut io_options = snap.get_db().get_options_cf(handle).clone();
             io_options.compression(get_fastest_supported_compression_type());
