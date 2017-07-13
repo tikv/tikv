@@ -1703,11 +1703,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn handle_snap_mgr_gc(&mut self) -> Result<()> {
-        let mut snap_keys = try!(self.snap_mgr.list_idle_snap());
+        let snap_keys = try!(self.snap_mgr.list_idle_snap());
         if snap_keys.is_empty() {
             return Ok(());
         }
-        snap_keys.sort();
         let (mut last_region_id, mut compacted_idx, mut compacted_term) = (0, u64::MAX, u64::MAX);
         let mut is_applying_snap = false;
         for (key, is_sending) in snap_keys {
