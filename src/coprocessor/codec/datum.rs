@@ -21,10 +21,11 @@ use std::fmt::{self, Display, Formatter, Debug};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
 use util::escape;
-use util::xeval::EvalContext;
-use super::{number, Result, bytes, convert};
-use super::number::NumberDecoder;
-use super::bytes::BytesEncoder;
+use util::codec::{number, bytes};
+use util::codec::number::NumberDecoder;
+use util::codec::bytes::BytesEncoder;
+use super::super::xeval::EvalContext;
+use super::{Result, convert};
 use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
                    Time, Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr};
 
@@ -976,7 +977,7 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use util::codec::mysql::{MAX_FSP, Duration, Decimal, Time};
+    use coprocessor::codec::mysql::{MAX_FSP, Duration, Decimal, Time};
     use util::as_slice;
 
     use std::cmp::Ordering;
@@ -1327,7 +1328,7 @@ mod test {
             (Datum::Dec(0u64.into()), Some(false)),
         ];
         use chrono::FixedOffset;
-        use util::xeval::EvalContext;
+        use coprocessor::xeval::EvalContext;
 
         let ctx = EvalContext {
             tz: FixedOffset::east(0),
