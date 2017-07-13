@@ -15,6 +15,8 @@ mod endpoint;
 mod aggregate;
 mod metrics;
 mod executor;
+pub mod codec;
+pub mod xeval;
 
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::errorpb;

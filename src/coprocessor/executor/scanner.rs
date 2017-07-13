@@ -111,16 +111,16 @@ impl<'a> Scanner<'a> {
 pub mod test {
     use super::*;
     use std::i64;
-    use util::codec::mysql::types;
-    use util::codec::datum::{self, Datum};
-    use util::codec::number::NumberEncoder;
-    use util::codec::table;
     use util::collections::HashMap;
+    use util::codec::number::NumberEncoder;
     use tipb::schema::ColumnInfo;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use storage::mvcc::MvccTxn;
     use storage::{make_key, Mutation, ALL_CFS, Options, Statistics, Snapshot};
     use storage::engine::{self, Engine, TEMP_DIR, Modify};
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::datum::{self, Datum};
+    use coprocessor::codec::table;
     use coprocessor::endpoint::prefix_next;
 
     pub fn new_col_info(cid: i64, tp: u8) -> ColumnInfo {
