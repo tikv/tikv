@@ -971,7 +971,9 @@ impl ApplyDelegate {
         Ok(resp)
     }
 
-    fn handle_local_compact_log(&mut self, compact_index: u64, compact_term: u64)
+    fn handle_local_compact_log(&mut self,
+                                compact_index: u64,
+                                compact_term: u64)
                                 -> Option<ExecResult> {
         PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
 
@@ -995,7 +997,8 @@ impl ApplyDelegate {
         if compact_raft_log(&self.tag,
                             &mut self.apply_state,
                             compact_index,
-                            compact_term).is_err() {
+                            compact_term)
+            .is_err() {
             return None;
         }
 
@@ -1404,8 +1407,8 @@ impl Runner {
             };
 
             let delegate = e.get_mut();
-            let result = delegate.handle_local_compact_log(compact.compact_index,
-                                                           compact.compact_term);
+            let result =
+                delegate.handle_local_compact_log(compact.compact_index, compact.compact_term);
             if result.is_none() {
                 continue;
             }
