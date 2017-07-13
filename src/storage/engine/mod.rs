@@ -432,6 +432,17 @@ quick_error! {
     }
 }
 
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+        match *self {
+            Error::Request(ref e) => Some(Error::Request(e.clone())),
+            Error::RocksDb(ref msg) => Some(Error::RocksDb(msg.clone())),
+            Error::Timeout(d) => Some(Error::Timeout(d)),
+            Error::Other(_) => None,
+        }
+    }
+}
+
 pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
