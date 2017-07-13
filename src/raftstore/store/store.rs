@@ -51,7 +51,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
-                    ApplyTaskRes, CompactRange};
+                    ApplyTaskRes};
 use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
@@ -1071,17 +1071,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
     }
 
-    fn on_ready_compact_range(&mut self, range: CompactRange) {
-        let task = CompactTask {
-            cf_name: range.cf,
-            start_key: Some(range.start_key),
-            end_key: Some(range.end_key),
-        };
-        if let Err(e) = self.compact_worker.schedule(task) {
-            error!("{} failed to schedule compact task: {}", self.tag, e);
-        }
-    }
-
     fn on_ready_split_region(&mut self,
                              region_id: u64,
                              left: metapb::Region,
@@ -1234,10 +1223,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 ExecResult::VerifyHash { index, hash } => {
                     self.on_ready_verify_hash(region_id, index, hash)
                 }
-                ExecResult::CompactRanges { ranges } => {
-                    for range in ranges {
-                        self.on_ready_compact_range(range);
-                    }
+                ExecResult::RangesDeleted { .. } => {
+                    // TODO: reclaim disk space
                 }
             }
         }

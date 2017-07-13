@@ -121,15 +121,15 @@ pub struct ChangePeer {
 }
 
 #[derive(Debug)]
-pub struct CompactRange {
+pub struct RangeDeleted {
     pub cf: String,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
 }
 
-impl CompactRange {
-    fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> CompactRange {
-        CompactRange {
+impl RangeDeleted {
+    fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> RangeDeleted {
+        RangeDeleted {
             cf: cf,
             start_key: start_key,
             end_key: end_key,
@@ -155,7 +155,7 @@ pub enum ExecResult {
         snap: Snapshot,
     },
     VerifyHash { index: u64, hash: Vec<u8> },
-    CompactRanges { ranges: Vec<CompactRange> },
+    RangesDeleted { ranges: Vec<RangeDeleted> },
 }
 
 struct ApplyContext<'a> {
@@ -538,7 +538,7 @@ impl ApplyDelegate {
                 ExecResult::ComputeHash { .. } |
                 ExecResult::VerifyHash { .. } |
                 ExecResult::CompactLog { .. } |
-                ExecResult::CompactRanges { .. } => {}
+                ExecResult::RangesDeleted { .. } => {}
                 ExecResult::SplitRegion { ref left, ref right, right_derive } => {
                     if right_derive {
                         self.region = right.clone();
@@ -892,13 +892,13 @@ impl ApplyDelegate {
         let requests = ctx.req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
-        let mut compact_ranges = vec![];
+        let mut ranges_deleted = vec![];
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = try!(match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut compact_ranges),
+                CmdType::DeleteRange => self.handle_delete_range(ctx, req, &mut ranges_deleted),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -920,8 +920,8 @@ impl ApplyDelegate {
         let mut resp = RaftCmdResponse::new();
         resp.set_responses(RepeatedField::from_vec(responses));
 
-        let exec_res = if !compact_ranges.is_empty() {
-            Some(ExecResult::CompactRanges { ranges: compact_ranges })
+        let exec_res = if !ranges_deleted.is_empty() {
+            Some(ExecResult::RangesDeleted { ranges: ranges_deleted })
         } else {
             None
         };
@@ -1003,11 +1003,14 @@ impl ApplyDelegate {
     fn handle_delete_range(&mut self,
                            ctx: &ExecContext,
                            req: &Request,
-                           compact_ranges: &mut Vec<CompactRange>)
+                           ranges_deleted: &mut Vec<RangeDeleted>)
                            -> Result<Response> {
         let start_key = req.get_delete_range().get_start_key();
         let end_key = req.get_delete_range().get_end_key();
-        try!(check_data_range(start_key, end_key, &self.region));
+        try!(check_data_key(start_key, &self.region));
+        if end_key > self.region.get_end_key() {
+            return Err(Error::KeyNotInRegion(end_key.to_vec(), self.region.clone()));
+        }
 
         let resp = Response::new();
 
@@ -1023,7 +1026,7 @@ impl ApplyDelegate {
                        escape(&end_key),
                        e)
             });
-        compact_ranges.push(CompactRange::new(String::from(cf), start_key, end_key));
+        ranges_deleted.push(RangeDeleted::new(String::from(cf), start_key, end_key));
 
         Ok(resp)
     }
@@ -1044,12 +1047,6 @@ pub fn get_change_peer_cmd(msg: &RaftCmdRequest) -> Option<&ChangePeerRequest> {
 fn check_data_key(key: &[u8], region: &Region) -> Result<()> {
     // region key range has no data prefix, so we must use origin key to check.
     try!(util::check_key_in_region(key, region));
-
-    Ok(())
-}
-
-fn check_data_range(start_key: &[u8], end_key: &[u8], region: &Region) -> Result<()> {
-    try!(util::check_range_in_region(start_key, end_key, region));
 
     Ok(())
 }
