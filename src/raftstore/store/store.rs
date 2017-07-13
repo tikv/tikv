@@ -1378,8 +1378,25 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if peer.pending_remove {
                 continue;
             }
+
+            let mut replicated_idx = 0;
             if peer.is_leader() {
-                peer.record_max_log_lag();
+                replicated_idx = peer.raft_group
+                    .status()
+                    .progress
+                    .values()
+                    .map(|p| p.matched)
+                    .min()
+                    .unwrap();
+                // When an election happened or a new peer is added, replicated_idx can be 0.
+                if replicated_idx > 0 {
+                    let last_idx = peer.raft_group.raft.raft_log.last_index();
+                    assert!(last_idx >= replicated_idx,
+                            "expect last index {} >= replicated index {}",
+                            last_idx,
+                            replicated_idx);
+                    REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+                }
             }
             let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
@@ -1389,6 +1406,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 compact_idx = applied_idx;
             } else if peer.raft_log_size_hint >= self.cfg.raft_log_gc_size_limit {
                 compact_idx = applied_idx;
+            } else if replicated_idx > first_idx &&
+                      replicated_idx - first_idx > self.cfg.raft_log_gc_threshold {
+                compact_idx = replicated_idx;
             } else {
                 continue;
             }
