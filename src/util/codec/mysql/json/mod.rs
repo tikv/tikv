@@ -23,14 +23,16 @@ mod json_merge;
 mod json_modify;
 mod json_type;
 mod json_unquote;
-mod json_object;
-mod json_array;
 mod path_expr;
 
 use std::collections::BTreeMap;
 pub use self::binary::{JsonEncoder, JsonDecoder};
 pub use self::path_expr::{PathExpression, parse_json_path_expr};
 pub use self::json_modify::ModifyType;
+
+use util::is_even;
+use super::super::datum::Datum;
+use super::super::{Result, Error};
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
@@ -50,4 +52,79 @@ pub enum Json {
     String(String),
     Boolean(bool),
     None,
+}
+
+// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
+pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
+    let mut a = Vec::with_capacity(elems.len());
+    for elem in elems {
+        a.push(try!(elem.into_json()));
+    }
+    Ok(Json::Array(a))
+}
+
+// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object
+pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
+    let len = kvs.len();
+    if !is_even(len) {
+        return Err(Error::Other(box_err!("Incorrect parameter count in the call to native \
+                                          function 'JSON_OBJECT'")));
+    }
+    let mut map = BTreeMap::new();
+    let mut key = None;
+    for elem in kvs.into_iter() {
+        if key.is_none() {
+            // take elem as key
+            if elem == Datum::Null {
+                return Err(invalid_type!("JSON documents may not contain NULL member names"));
+            }
+            key = Some(try!(elem.into_string()));
+        } else {
+            // take elem as value
+            let val = try!(elem.into_json());
+            map.insert(key.take().unwrap(), val);
+        }
+    }
+    Ok(Json::Object(map))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_json_array() {
+        let d = vec![Datum::I64(1),
+                     Datum::Bytes(b"sdf".to_vec()),
+                     Datum::U64(2),
+                     Datum::Json(r#"[3,4]"#.parse().unwrap())];
+        let ep_json = r#"[1,"sdf",2,[3,4]]"#.parse().unwrap();
+        assert_eq!(json_array(d).unwrap(), ep_json);
+
+        let d = vec![];
+        let ep_json = "[]".parse().unwrap();
+        assert_eq!(json_array(d).unwrap(), ep_json);
+    }
+
+    #[test]
+    fn test_json_object() {
+        let d = vec![Datum::I64(1)];
+        assert!(json_object(d).is_err());
+
+        let d = vec![Datum::I64(1), Datum::Bytes(b"sdf".to_vec()), Datum::Null, Datum::U64(2)];
+        assert!(json_object(d).is_err());
+
+        let d = vec![Datum::I64(1),
+                     Datum::Bytes(b"sdf".to_vec()),
+                     Datum::Bytes(b"asd".to_vec()),
+                     Datum::Bytes(b"qwe".to_vec()),
+                     Datum::I64(2),
+                     Datum::Json(r#"{"3":4}"#.parse().unwrap())];
+        let ep_json = r#"{"1":"sdf","2":{"3":4},"asd":"qwe"}"#.parse().unwrap();
+        assert_eq!(json_object(d).unwrap(), ep_json);
+
+        let d = vec![];
+        let ep_json = "{}".parse().unwrap();
+        assert_eq!(json_object(d).unwrap(), ep_json);
+    }
 }

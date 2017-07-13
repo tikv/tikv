@@ -19,9 +19,11 @@ use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType};
 use tipb::select::SelectRequest;
 
+use util::is_even;
 use util::codec::number::NumberDecoder;
 use util::codec::datum::{Datum, DatumDecoder};
 use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression, ModifyType};
+use util::codec::mysql::json::{json_object, json_array};
 use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
@@ -427,7 +429,7 @@ impl Evaluator {
                         mt: ModifyType)
                         -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 2));
-        if is_even(children.len() as i64) {
+        if is_even(children.len()) {
             return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
         }
 
@@ -437,7 +439,7 @@ impl Evaluator {
             if *item != Datum::Null {
                 false
             } else {
-                index == 1 || is_even(index)
+                index == 1 || is_even(index as usize)
             }
         });
         if should_be_null {
@@ -517,13 +519,13 @@ impl Evaluator {
 
     fn eval_json_object(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 0));
-        let obj = try!(Json::to_object(&children));
+        let obj = try!(json_object(children));
         Ok(Datum::Json(obj))
     }
 
     fn eval_json_array(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 0));
-        let arr = try!(Json::to_array(&children));
+        let arr = try!(json_array(children));
         Ok(Datum::Json(arr))
     }
 
@@ -599,11 +601,6 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
         return Err(e.into());
     }
     Ok(pos.is_ok())
-}
-
-#[inline]
-fn is_even(n: i64) -> bool {
-    n & 1 == 0
 }
 
 #[cfg(test)]
