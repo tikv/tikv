@@ -19,7 +19,7 @@ use std::fmt;
 use std::{str, f64};
 use std::str::FromStr;
 
-use super::super::super::Error;
+use coprocessor::codec::Error;
 use super::Json;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
