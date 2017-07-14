@@ -134,9 +134,9 @@ pub enum Command {
     Gc {
         ctx: Context,
         safe_point: u64,
+        ratio_threshold: f64,
         scan_key: Option<Key>,
         keys: Vec<Key>,
-        options: Options,
     },
     RawGet { ctx: Context, key: Key },
     RawScan {
@@ -347,20 +347,14 @@ pub struct Options {
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
     pub key_only: bool,
-    pub gc_ratio_threshold: f64,
 }
 
 impl Options {
-    pub fn new(lock_ttl: u64,
-               skip_constraint_check: bool,
-               key_only: bool,
-               gc_ratio_threshold: f64)
-               -> Options {
+    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
         Options {
             lock_ttl: lock_ttl,
             skip_constraint_check: skip_constraint_check,
             key_only: key_only,
-            gc_ratio_threshold: gc_ratio_threshold,
         }
     }
 }
@@ -374,16 +368,15 @@ pub struct Storage {
     engine: Box<Engine>,
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
-    options: Options,
+
+    // Storage configurations.
+    gc_ratio_threshold: f64,
 }
 
 impl Storage {
     pub fn from_engine(engine: Box<Engine>, config: &Config) -> Result<Storage> {
         let (tx, rx) = mpsc::sync_channel(config.sched_notify_capacity);
         let sendch = SyncSendCh::new(tx, "kv-storage");
-
-        let mut options = Options::default();
-        options.gc_ratio_threshold = config.gc_ratio_threshold;
 
         info!("storage {:?} started.", engine);
         Ok(Storage {
@@ -393,7 +386,7 @@ impl Storage {
                 handle: None,
                 receiver: Some(rx),
             })),
-            options: options,
+            gc_ratio_threshold: config.gc_ratio_threshold,
         })
     }
 
@@ -636,9 +629,9 @@ impl Storage {
         let cmd = Command::Gc {
             ctx: ctx,
             safe_point: safe_point,
+            ratio_threshold: self.gc_ratio_threshold,
             scan_key: None,
             keys: vec![],
-            options: self.options.clone(),
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::Boolean(callback)));
@@ -714,7 +707,7 @@ impl Clone for Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
-            options: self.options.clone(),
+            gc_ratio_threshold: self.gc_ratio_threshold,
         }
     }
 }

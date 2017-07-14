@@ -405,7 +405,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Collects garbage.
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, ref options, .. } => {
+        Command::Gc { ref ctx, safe_point, ratio_threshold, ref mut scan_key, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
                                              &mut statistics,
                                              Some(ScanMode::Forward),
@@ -416,7 +416,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             let is_range_start_gc = scan_key.is_none();
             // This is an optimization to skip gc before scanning all data.
             let need_gc = if is_range_start_gc {
-                reader.need_gc(safe_point, options.gc_ratio_threshold)
+                reader.need_gc(safe_point, ratio_threshold)
             } else {
                 true
             };
@@ -439,9 +439,9 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                             Ok(Some(Command::Gc {
                                 ctx: ctx.clone(),
                                 safe_point: safe_point,
+                                ratio_threshold: ratio_threshold,
                                 scan_key: next_start,
                                 keys: keys,
-                                options: options.clone(),
                             }))
                         }
                     })
@@ -624,7 +624,7 @@ fn process_write_impl(cid: u64,
                 (pr, txn.modifies())
             }
         }
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys, ref options } => {
+        Command::Gc { ref ctx, safe_point, ratio_threshold, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(snapshot,
                                        &mut statistics,
@@ -645,9 +645,9 @@ fn process_write_impl(cid: u64,
                     cmd: Command::Gc {
                         ctx: ctx.clone(),
                         safe_point: safe_point,
+                        ratio_threshold: ratio_threshold,
                         scan_key: scan_key.take(),
                         keys: vec![],
-                        options: options.clone(),
                     },
                 };
                 (pr, txn.modifies())
@@ -1024,9 +1024,9 @@ mod tests {
                                  Command::Gc {
                                      ctx: Context::new(),
                                      safe_point: 5,
+                                     ratio_threshold: 0.0,
                                      scan_key: None,
                                      keys: vec![make_key(b"k")],
-                                     options: Options::default(),
                                  }];
         let write_cmds = vec![Command::Prewrite {
                                   ctx: Context::new(),

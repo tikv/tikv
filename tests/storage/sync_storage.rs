@@ -74,7 +74,7 @@ impl SyncStorage {
                                 key,
                                 limit,
                                 start_ts,
-                                Options::new(0, false, key_only, 0.0),
+                                Options::new(0, false, key_only),
                                 cb)
                     .unwrap()
             })
