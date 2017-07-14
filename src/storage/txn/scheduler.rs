@@ -472,13 +472,13 @@ fn process_rawscan(snapshot: Box<Snapshot>,
                    stats: &mut Statistics)
                    -> Result<Vec<StorageResult<KvPair>>> {
     let mut cursor = try!(snapshot.iter(IterOption::default(), ScanMode::Forward));
-    if !try!(cursor.seek(start_key, stats)) {
+    if !try!(cursor.seek(start_key, &mut stats.data)) {
         return Ok(vec![]);
     }
     let mut pairs = vec![];
     while cursor.valid() && pairs.len() < limit {
         pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
-        cursor.next(stats);
+        cursor.next(&mut stats.data);
     }
     Ok(pairs)
 }
