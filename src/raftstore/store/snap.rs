@@ -788,6 +788,7 @@ impl Snapshot for Snap {
             let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
 
             let ingest_opt = IngestExternalFileOptions::new();
+            ingest_opt.move_files(true);
             let path = cf_file.path.as_path().to_str().unwrap();
             box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
         }
