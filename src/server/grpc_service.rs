@@ -709,7 +709,7 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let storage = self.storage.clone();
 
-        let key = Key::from_encoded(req.take_key());
+        let key = Key::from_raw(req.get_key());
         let (cb, future) = make_callback();
         let res = storage.async_mvcc_by_key(req.take_context(), key.clone(), cb);
         if let Err(e) = res {
@@ -887,7 +887,6 @@ fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
 }
 
 fn extract_vectors(res: storage::MvccInfo) -> (Vec<WriteInfo>, Vec<ValueInfo>) {
-    assert_eq!(res.writes.len(), res.values.len());
     let vv: Vec<ValueInfo> = res.values
         .into_iter()
         .map(|(start_ts, is_short, value)| {

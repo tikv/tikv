@@ -283,11 +283,12 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
         let opt = reader.seek_write(key, ts)?;
         match opt {
             Some((commit_ts, write)) => {
-                if write.write_type != WriteType::Put {
+                ts = commit_ts - 1;
+                let write_type = write.write_type.clone();
+                writes.push((commit_ts, write));
+                if write_type != WriteType::Put {
                     continue;
                 }
-                ts = commit_ts - 1;
-                writes.push((commit_ts, write));
             }
             None => break,
         };
