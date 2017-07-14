@@ -31,7 +31,7 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 
 use raftstore::Result as RaftStoreResult;
 use raftstore::store::Msg;
-use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_INDEX};
 use util::transport::SendCh;
 use util::HandyRwLock;
 use util::collections::{HashMap, HashMapEntry as Entry};
@@ -40,7 +40,7 @@ use super::engine::Snapshot as DbSnapshot;
 use super::peer_storage::JOB_STATUS_CANCELLING;
 
 // Data in CF_RAFT should be excluded for a snapshot.
-pub const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const SNAPSHOT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_INDEX];
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &'static str = "gen";
@@ -1450,7 +1450,7 @@ mod v2 {
         use kvproto::raft_serverpb::{SnapshotMeta, RaftSnapshotData};
         use rocksdb::DB;
 
-        use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+        use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_INDEX, CF_RAFT};
         use util::{rocksdb, HandyRwLock};
         use raftstore::Result;
         use raftstore::store::keys;
@@ -1685,7 +1685,7 @@ mod v2 {
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
             let dst_db_path = dst_db_dir.path().to_str().unwrap();
             // Change arbitrarily the cf order of ALL_CFS at destination db.
-            let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
+            let dst_cfs = [CF_WRITE, CF_INDEX, CF_DEFAULT, CF_LOCK, CF_RAFT];
             let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs).unwrap());
             let options = ApplyOptions {
                 db: dst_db.clone(),

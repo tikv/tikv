@@ -259,7 +259,6 @@ mod tests {
         let ch = RetryableSendCh::new(tx, "test-split");
         let mut runnable = Runner::new(engine.clone(), ch, 100, 60);
 
-        // so split key will be z0006
         for i in 0..7 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put(&s, &s).unwrap();
@@ -272,6 +271,7 @@ mod tests {
             others => panic!("expect recv empty, but got {:?}", others),
         }
 
+        // 10 bytes for each kv pair, so split key will be z0006.
         for i in 7..11 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             engine.put(&s, &s).unwrap();
@@ -287,7 +287,7 @@ mod tests {
             others => panic!("expect split check result, but got {:?}", others),
         }
 
-        // So split key will be z0003
+        // So split key will be z0002 (CF_WRITE, CF_INDEX are counted).
         for i in 0..6 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
             for cf in ALL_CFS {
@@ -301,7 +301,7 @@ mod tests {
             Ok(Msg::SplitCheckResult { region_id, epoch, split_key }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(&epoch, region.get_region_epoch());
-                assert_eq!(split_key, keys::data_key(b"0003"));
+                assert_eq!(split_key, keys::data_key(b"0002"));
             }
             others => panic!("expect split check result, but got {:?}", others),
         }

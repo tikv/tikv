@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use std::fmt;
-use storage::{Key, Value, Mutation, CF_DEFAULT, CF_LOCK, CF_WRITE, Options, is_short_value,
-              Statistics};
+use storage::{Key, Value, Mutation, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_INDEX, Options,
+              is_short_value, Statistics};
 use storage::engine::{Snapshot, Modify, ScanMode};
 use super::reader::MvccReader;
 use super::lock::{LockType, Lock};
@@ -95,15 +95,17 @@ impl<'a> MvccTxn<'a> {
     }
 
     fn put_write(&mut self, key: &Key, ts: u64, value: Value) {
+        let cf = if key.is_index() { CF_INDEX } else { CF_WRITE };
         let key = key.append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_WRITE, key, value));
+        self.write_size += cf.len() + key.encoded().len() + value.len();
+        self.writes.push(Modify::Put(cf, key, value));
     }
 
     fn delete_write(&mut self, key: &Key, ts: u64) {
+        let cf = if key.is_index() { CF_INDEX } else { CF_WRITE };
         let key = key.append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.encoded().len();
-        self.writes.push(Modify::Delete(CF_WRITE, key));
+        self.write_size += cf.len() + key.encoded().len();
+        self.writes.push(Modify::Delete(cf, key));
     }
 
     pub fn get(&mut self, key: &Key) -> Result<Option<Value>> {

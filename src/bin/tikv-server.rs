@@ -58,7 +58,7 @@ use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
-use tikv::storage::{TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+use tikv::storage::{TEMP_DIR, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_INDEX, CF_RAFT};
 use tikv::util::{self, panic_hook, rocksdb as rocksdb_util};
 use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
@@ -847,6 +847,8 @@ fn run_raft_server(pd_client: RpcClient,
                                           get_rocksdb_default_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_LOCK, get_rocksdb_lock_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_WRITE,
+                                          get_rocksdb_write_cf_option(config, total_mem)),
+             rocksdb_util::CFOptions::new(CF_INDEX,
                                           get_rocksdb_write_cf_option(config, total_mem)),
              rocksdb_util::CFOptions::new(CF_RAFT,
                                           get_rocksdb_raftlog_cf_option(config, total_mem))];
