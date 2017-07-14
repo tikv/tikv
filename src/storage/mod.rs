@@ -573,6 +573,26 @@ impl Storage {
         Ok(())
     }
 
+    pub fn async_delete_range(&self,
+                              ctx: Context,
+                              start_key: Key,
+                              end_key: Key,
+                              callback: Callback<()>)
+                              -> Result<()> {
+        let mut modifies = vec![];
+        for cf in DATA_CFS {
+            modifies.push(Modify::DeleteRange(cf, start_key, end_key));
+        }
+
+        try!(self.engine.async_write(&ctx,
+                                     modifies,
+                                     box |(_, res): (_, engine::Result<_>)| {
+                                         callback(res.map_err(Error::from))
+                                     }));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&["delete_range"]).inc();
+        Ok(())
+    }
+
     pub fn async_cleanup(&self,
                          ctx: Context,
                          key: Key,
@@ -712,28 +732,6 @@ impl Storage {
         };
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
-        Ok(())
-    }
-
-    pub fn async_delete_range(&self,
-                              ctx: Context,
-                              start_key: Vec<u8>,
-                              end_key: Vec<u8>,
-                              callback: Callback<()>)
-                              -> Result<()> {
-        let mut modifies = vec![];
-        for cf in DATA_CFS {
-            modifies.push(Modify::DeleteRange(cf,
-                                              Key::from_encoded(start_key.clone()),
-                                              Key::from_encoded(end_key.clone())));
-        }
-
-        try!(self.engine.async_write(&ctx,
-                                     modifies,
-                                     box |(_, res): (_, engine::Result<_>)| {
-                                         callback(res.map_err(Error::from))
-                                     }));
-        KV_COMMAND_COUNTER_VEC.with_label_values(&["delete_range"]).inc();
         Ok(())
     }
 }

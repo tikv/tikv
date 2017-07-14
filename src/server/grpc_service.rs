@@ -492,8 +492,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
 
         let (cb, future) = make_callback();
         let res = self.storage.async_delete_range(req.take_context(),
-                                                  req.take_start_key(),
-                                                  req.take_end_key(),
+                                                  Key::from_raw(req.get_start_key()),
+                                                  Key::from_raw(req.get_end_key()),
                                                   cb);
         if let Err(e) = res {
             self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::ResourceExhausted);
