@@ -99,4 +99,10 @@ lazy_static! {
             "tikv_storage_gc_empty_range_total",
             "Total number of empty range found by gc"
         ).unwrap();
+
+    pub static ref BATCH_COMMANDS_GAUGE: Gauge =
+        register_gauge!(
+            "tikv_storage_batch_commands_total",
+            "Total number of commands in a batch"
+        ).unwrap();
 }

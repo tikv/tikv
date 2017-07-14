@@ -1032,15 +1032,18 @@ impl Scheduler {
                 }
             }
 
+            let mut total = 0;
             if !self.grouped_cmds.as_ref().unwrap().is_empty() {
                 let m = self.grouped_cmds.take().unwrap();
                 for (ctx, cids) in m {
                     if !cids.is_empty() {
+                        total += cids.len();
                         self.get_snapshot(&ctx.0, cids);
                     }
                 }
                 self.grouped_cmds = Some(HashMap::with_capacity(CMD_BATCH_SIZE));
             }
+            BATCH_COMMANDS_GAUGE.set(total as f64);
         }
     }
 }
