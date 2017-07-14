@@ -14,7 +14,7 @@
 use std::i64;
 use tipb::expression::Expr;
 use coprocessor::codec::datum::Datum;
-use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP};
+use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag};
 use coprocessor::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
 
@@ -36,10 +36,20 @@ impl Evaluator {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
         match d {
-            Datum::I64(_) => Ok(d),
+            Datum::I64(_) => {
+                if has_unsigned_flag(expr.get_field_type().get_flag() as u64) {
+                    Ok(Datum::U64(d.u64()))
+                } else {
+                    Ok(d)
+                }
+            }
             Datum::U64(u) => {
-                let i = try!(convert::convert_uint_to_int(u, i64::MAX));
-                Ok(Datum::I64(i))
+                if has_unsigned_flag(expr.get_field_type().get_flag() as u64) {
+                    Ok(d)
+                } else {
+                    let i = try!(convert::convert_uint_to_int(u, i64::MAX));
+                    Ok(Datum::I64(i))
+                }
             }
             _ => invalid_type_error(&d, TYPE_INT),
         }
