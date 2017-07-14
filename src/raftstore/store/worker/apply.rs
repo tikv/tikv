@@ -625,7 +625,7 @@ impl ApplyDelegate {
         let (mut response, exec_result) = try!(match cmd_type {
             AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
-            AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
+            AdminCmdType::CompactLog => self.exec_compact_log(),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
@@ -828,44 +828,11 @@ impl ApplyDelegate {
         }
     }
 
-    fn exec_compact_log(&mut self,
-                        ctx: &mut ExecContext,
-                        req: &AdminRequest)
-                        -> Result<(AdminResponse, Option<ExecResult>)> {
-        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "all"]).inc();
-
-        let compact_index = req.get_compact_log().get_compact_index();
+    fn exec_compact_log(&self) -> Result<(AdminResponse, Option<ExecResult>)> {
         let resp = AdminResponse::new();
-
-        let first_index = peer_storage::first_index(&ctx.apply_state);
-        if compact_index <= first_index {
-            debug!("{} compact index {} <= first index {}, no need to compact",
-                   self.tag,
-                   compact_index,
-                   first_index);
-            return Ok((resp, None));
-        }
-
-        let compact_term = req.get_compact_log().get_compact_term();
-        // TODO: add unit tests to cover all the message integrity checks.
-        if compact_term == 0 {
-            info!("{} compact term missing in {:?}, skip.",
-                  self.tag,
-                  req.get_compact_log());
-            // old format compact log command, safe to ignore.
-            return Err(box_err!("command format is outdated, please upgrade leader."));
-        }
-
-        // compact failure is safe to be omitted, no need to assert.
-        try!(compact_raft_log(&self.tag, &mut ctx.apply_state, compact_index, compact_term));
-
-        PEER_ADMIN_CMD_COUNTER_VEC.with_label_values(&["compact", "success"]).inc();
-
-        Ok((resp,
-            Some(ExecResult::CompactLog {
-            state: ctx.apply_state.get_truncated_state().clone(),
-            first_index: first_index,
-        })))
+        debug!("{} old CompactLog admin command, no need to handle",
+               self.tag);
+        return Ok((resp, None));
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
@@ -994,11 +961,11 @@ impl ApplyDelegate {
         }
 
         // compact failure is safe to be omitted, no need to assert.
-        if compact_raft_log(&self.tag,
-                            &mut self.apply_state,
-                            compact_index,
-                            compact_term)
-            .is_err() {
+        if let Err(e) = compact_raft_log(&self.tag,
+                                         &mut self.apply_state,
+                                         compact_index,
+                                         compact_term) {
+            error!("{} compact failure {:?}", self.tag, e);
             return None;
         }
 
