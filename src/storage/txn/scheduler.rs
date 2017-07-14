@@ -33,7 +33,7 @@
 
 use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 use std::thread;
 
@@ -223,12 +223,43 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SyncSendCh<Msg>) -> EngineCal
     })
 }
 
+use std::hash::{Hash, Hasher};
+
+#[derive(Clone)]
+struct HashableContext(Context);
+
+impl PartialEq for HashableContext {
+    fn eq(&self, other: &HashableContext) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Hash for HashableContext {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let key = {
+            let ctx = &self.0;
+            (ctx.get_region_id(),
+             ctx.get_region_epoch().get_conf_ver(),
+             ctx.get_region_epoch().get_version(),
+             ctx.get_peer().get_id(),
+             ctx.get_peer().get_store_id(),
+             ctx.get_priority())
+        };
+        Hash::hash(&key, state);
+    }
+}
+
+impl Eq for HashableContext {}
+
 /// Scheduler which schedules the execution of `storage::Command`s.
 pub struct Scheduler {
     engine: Box<Engine>,
 
-    // cid -> context
+    // cid -> RunningCtx
     cmd_ctxs: HashMap<u64, RunningCtx>,
+    // Context -> cids
+    // TODO: Option<HashMap>
+    grouped_cmds: HashMap<HashableContext, Vec<u64>>,
 
     schedch: SyncSendCh<Msg>,
 
@@ -263,6 +294,7 @@ impl Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: Default::default(),
+            grouped_cmds: Default::default(),
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
@@ -740,7 +772,7 @@ impl Scheduler {
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
     /// acquired,  the method initiates a get snapshot operation for furthur processing; otherwise,
     /// the method adds the command to the waiting queue(s).   The command will be handled later in
-    /// `lock_and_get_snapshot` when its turn comes.
+    /// `lock_and_register_get_snapshot` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
@@ -753,7 +785,7 @@ impl Scheduler {
         let lock = gen_command_lock(&self.latches, &cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
-        self.lock_and_get_snapshot(cid);
+        self.lock_and_register_get_snapshot(cid);
     }
 
     fn too_busy(&self) -> bool {
@@ -794,25 +826,38 @@ impl Scheduler {
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
-    fn get_snapshot(&mut self, cid: u64) {
-        SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot"]).inc();
+    fn get_snapshot(&mut self, ctx: &Context, cids: Vec<u64>) {
+        for cid in &cids {
+            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(*cid), "snapshot"]).inc();
+        }
+        let cids1 = cids.clone();
         let ch = self.schedch.clone();
-        let cb = box move |(cb_ctx, snapshot)| {
-            match ch.send(Msg::SnapshotFinished {
-                cid: cid,
-                cb_ctx: cb_ctx,
-                snapshot: snapshot,
-            }) {
-                Ok(_) => {}
-                e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-                Err(e) => panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e),
+        let cb = box move |(cb_ctx, snapshot): (CbContext, EngineResult<Box<Snapshot>>)| {
+            for cid in cids {
+                let snapshot1: EngineResult<Box<Snapshot>> = match snapshot {
+                    Ok(ref s) => Ok(Snapshot::clone(s.as_ref())),
+                    Err(ref e) => Err(e.maybe_clone().unwrap()),
+                };
+                // TODO: cid to cids.
+                match ch.send(Msg::SnapshotFinished {
+                    cid: cid,
+                    cb_ctx: cb_ctx.clone(),
+                    snapshot: snapshot1,
+                }) {
+                    Ok(_) => {}
+                    e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
+                    Err(e) => panic!("send SnapshotFinish failed cmd id {}, err {:?}", cid, e),
+                }
             }
         };
 
-        if let Err(e) = self.engine.async_snapshot(self.extract_context(cid), cb) {
-            SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
-                .inc();
-            self.finish_with_err(cid, Error::from(e));
+        if let Err(e) = self.engine.async_snapshot(ctx, cb) {
+            for cid in cids1 {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
+                    .inc();
+                self.finish_with_err(cid, Error::from(e.maybe_clone().unwrap()));
+            }
         }
     }
 
@@ -913,39 +958,72 @@ impl Scheduler {
     fn release_lock(&mut self, lock: &Lock, cid: u64) {
         let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
-            self.lock_and_get_snapshot(wcid);
+            self.lock_and_register_get_snapshot(wcid);
         }
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for furthur processing.
-    fn lock_and_get_snapshot(&mut self, cid: u64) {
+    fn lock_and_register_get_snapshot(&mut self, cid: u64) {
         if self.acquire_lock(cid) {
-            self.get_snapshot(cid);
+            let ctx = self.extract_context(cid).clone();
+            let mut group = self.grouped_cmds
+                .entry(HashableContext(ctx))
+                .or_insert_with(Vec::new);
+            group.push(cid);
         }
     }
 
     pub fn run(&mut self, receiver: Receiver<Msg>) -> Result<()> {
+        let mut msgs = vec![];
         loop {
             let msg = box_try!(receiver.recv());
-            match msg {
-                Msg::Quit => return Ok(()),
-                Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                Msg::SnapshotFinished { cid, cb_ctx, snapshot } => {
-                    self.on_snapshot_finished(cid, cb_ctx, snapshot)
+            msgs.push(msg);
+            loop {
+                match receiver.try_recv() {
+                    Ok(msg) => {
+                        msgs.push(msg);
+                        if msgs.len() >= CMD_BATCH_SIZE {
+                            break;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    _ => (),
                 }
-                Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
-                Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
-                    self.on_write_prepare_finished(cid, cmd, pr, to_be_write)
+            }
+
+            for msg in msgs.drain(..) {
+                match msg {
+                    Msg::Quit => return Ok(()),
+                    Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
+                    Msg::SnapshotFinished { cid, cb_ctx, snapshot } => {
+                        self.on_snapshot_finished(cid, cb_ctx, snapshot)
+                    }
+                    Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
+                    Msg::WritePrepareFinished { cid, cmd, pr, to_be_write } => {
+                        self.on_write_prepare_finished(cid, cmd, pr, to_be_write)
+                    }
+                    Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
+                    Msg::WriteFinished { cid, pr, result, .. } => {
+                        self.on_write_finished(cid, pr, result)
+                    }
                 }
-                Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
-                Msg::WriteFinished { cid, pr, result, .. } => {
-                    self.on_write_finished(cid, pr, result)
+            }
+
+            if !self.grouped_cmds.is_empty() {
+                let m = self.grouped_cmds.clone();
+                for (ctx, cids) in m {
+                    if !cids.is_empty() {
+                        self.get_snapshot(&ctx.0, cids);
+                    }
                 }
+                self.grouped_cmds.clear();
             }
         }
     }
 }
+
+const CMD_BATCH_SIZE: usize = 32;
 
 /// Generates the lock for a command.
 ///

@@ -36,6 +36,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 
+#[derive(Clone)]
 pub struct CbContext {
     pub term: Option<u64>,
 }
