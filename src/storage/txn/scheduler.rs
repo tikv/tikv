@@ -270,56 +270,37 @@ pub struct Scheduler {
 }
 
 // Make clippy happy.
-type MultipleReturnValue = (Option<MvccLock>,
-                            Vec<(u64, Write)>,
-                            Vec<(u64, bool, Value)>,
-                            Option<StorageError>);
+type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, bool, Value)>);
 
-fn find_mvcc_infos_by_key(reader: &mut MvccReader, key: &Key, mut ts: u64) -> MultipleReturnValue {
+fn find_mvcc_infos_by_key(reader: &mut MvccReader,
+                          key: &Key,
+                          mut ts: u64)
+                          -> Result<MultipleReturnValue> {
     let mut writes = vec![];
     let mut values = vec![];
     let mut lock: Option<MvccLock> = None;
-    let mut err: Option<StorageError> = None;
     loop {
-        match reader.seek_write(key, ts).map_err(StorageError::from) {
-            Err(e) => {
-                err = Some(e);
-                break;
-            }
-            Ok(opt) => {
-                match opt {
-                    Some((commit_ts, write)) => {
-                        if write.write_type != WriteType::Put {
-                            continue;
-                        }
-                        ts = commit_ts - 1;
-                        writes.push((commit_ts, write));
-                    }
-                    None => break,
+        let opt = reader.seek_write(key, ts)?;
+        match opt {
+            Some((commit_ts, write)) => {
+                if write.write_type != WriteType::Put {
+                    continue;
                 }
+                ts = commit_ts - 1;
+                writes.push((commit_ts, write));
             }
+            None => break,
         };
-        match reader.load_lock(key).map_err(StorageError::from) {
-            Err(e) => {
-                err = Some(e);
-                break;
-            }
-            Ok(opt) => lock = opt,
-        }
+        lock = reader.load_lock(key)?;
         let write = writes[writes.len() - 1].1.clone();
         if let Some(v) = write.short_value {
             values.push((write.start_ts, true, v));
             continue;
         }
-        match reader.load_data(key, write.start_ts).map_err(StorageError::from) {
-            Err(e) => {
-                err = Some(e);
-                break;
-            }
-            Ok(v) => values.push((write.start_ts, false, v)),
-        }
+        let v = reader.load_data(key, write.start_ts)?;
+        values.push((write.start_ts, false, v))
     }
-    (lock, writes, values, err)
+    Ok((lock, writes, values))
 }
 
 impl Scheduler {
@@ -419,10 +400,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              None,
                                              ctx.get_isolation_level());
             let ts: u64 = u64::MAX;
-            let (lock, writes, values, err) = find_mvcc_infos_by_key(&mut reader, key, ts);
-            match err {
-                Some(e) => ProcessResult::Failed { err: e.into() },
-                None => {
+            match find_mvcc_infos_by_key(&mut reader, key, ts) {
+                Ok((lock, writes, values)) => {
                     ProcessResult::MvccKey {
                         mvcc: MvccInfo {
                             lock: lock,
@@ -431,6 +410,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                         },
                     }
                 }
+                Err(e) => ProcessResult::Failed { err: e.into() },
             }
         }
         Command::MvccByStartTs { ref ctx, start_ts } => {
@@ -446,11 +426,8 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Ok(opt) => {
                     match opt {
                         Some((key, _)) => {
-                            let (lock, writes, values, err) =
-                                find_mvcc_infos_by_key(&mut reader, &key, start_ts);
-                            match err {
-                                Some(e) => ProcessResult::Failed { err: e.into() },
-                                None => {
+                            match find_mvcc_infos_by_key(&mut reader, &key, start_ts) {
+                                Ok((lock, writes, values)) => {
                                     ProcessResult::MvccStartTs {
                                         mvcc: Some((key,
                                                     MvccInfo {
@@ -460,6 +437,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                         })),
                                     }
                                 }
+                                Err(e) => ProcessResult::Failed { err: e.into() },
                             }
                         }
                         None => ProcessResult::MvccStartTs { mvcc: None },
