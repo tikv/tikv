@@ -161,6 +161,7 @@ enum SeekMode {
     Prefix,
 }
 
+#[derive(Clone)]
 pub struct IterOption {
     upper_bound: Option<Vec<u8>>,
     prefix_same_as_start: bool,

@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use storage::engine::{Snapshot, Cursor, ScanMode, Statistics};
-use storage::{Key, Value, CF_LOCK, CF_WRITE};
+use storage::{Key, Value, CF_LOCK, CF_WRITE, CF_INDEX};
 use super::{Error, Result};
 use super::lock::Lock;
 use super::write::{Write, WriteType};
@@ -27,6 +27,7 @@ pub struct MvccReader<'a> {
     data_cursor: Option<Cursor<'a>>,
     lock_cursor: Option<Cursor<'a>>,
     write_cursor: Option<Cursor<'a>>,
+    index_cursor: Option<Cursor<'a>>,
 
     scan_mode: Option<ScanMode>,
     key_only: bool,
@@ -50,6 +51,7 @@ impl<'a> MvccReader<'a> {
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
+            index_cursor: None,
             scan_mode: scan_mode,
             isolation_level: isolation_level,
             key_only: false,
@@ -63,6 +65,7 @@ impl<'a> MvccReader<'a> {
         self.data_cursor = None;
         self.lock_cursor = None;
         self.write_cursor = None;
+        self.index_cursor = None;
     }
 
     pub fn set_key_only(&mut self, key_only: bool) {
@@ -133,11 +136,19 @@ impl<'a> MvccReader<'a> {
     }
 
     pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        self.seek_write_impl(key, ts, false)
+        if key.is_index() {
+            self.seek_index_impl(key, ts, false)
+        } else {
+            self.seek_write_impl(key, ts, false)
+        }
     }
 
     pub fn reverse_seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
-        self.seek_write_impl(key, ts, true)
+        if key.is_index() {
+            self.seek_index_impl(key, ts, true)
+        } else {
+            self.seek_write_impl(key, ts, true)
+        }
     }
 
     fn seek_write_impl(&mut self,
@@ -160,6 +171,44 @@ impl<'a> MvccReader<'a> {
         }
 
         let mut cursor = self.write_cursor.as_mut().unwrap();
+        let ok = if reverse {
+            try!(cursor.near_seek_for_prev(&key.append_ts(ts), self.statistics))
+        } else {
+            try!(cursor.near_seek(&key.append_ts(ts), self.statistics))
+        };
+        if !ok {
+            return Ok(None);
+        }
+        let write_key = Key::from_encoded(cursor.key().to_vec());
+        let commit_ts = try!(write_key.decode_ts());
+        let k = try!(write_key.truncate_ts());
+        if &k != key {
+            return Ok(None);
+        }
+        let write = try!(Write::parse(cursor.value()));
+        Ok(Some((commit_ts, write)))
+    }
+
+    fn seek_index_impl(&mut self,
+                       key: &Key,
+                       ts: u64,
+                       reverse: bool)
+                       -> Result<Option<(u64, Write)>> {
+        if self.scan_mode.is_some() {
+            if self.index_cursor.is_none() {
+                let iter_opt = IterOption::new(None, self.fill_cache);
+                let iter = try!(self.snapshot
+                    .iter_cf(CF_INDEX, iter_opt, self.get_scan_mode(false)));
+                self.index_cursor = Some(iter);
+            }
+        } else {
+            // use prefix bloom filter
+            let iter_opt = IterOption::default().use_prefix_seek().set_prefix_same_as_start(true);
+            let iter = try!(self.snapshot.iter_cf(CF_INDEX, iter_opt, ScanMode::Mixed));
+            self.index_cursor = Some(iter);
+        }
+
+        let mut cursor = self.index_cursor.as_mut().unwrap();
         let ok = if reverse {
             try!(cursor.near_seek_for_prev(&key.append_ts(ts), self.statistics))
         } else {
@@ -255,6 +304,15 @@ impl<'a> MvccReader<'a> {
         Ok(())
     }
 
+    fn create_index_cursor(&mut self) -> Result<()> {
+        if self.index_cursor.is_none() {
+            let iter_opt = IterOption::new(self.upper_bound.as_ref().cloned(), self.fill_cache);
+            let iter = try!(self.snapshot.iter_cf(CF_INDEX, iter_opt, self.get_scan_mode(false)));
+            self.index_cursor = Some(iter);
+        }
+        Ok(())
+    }
+
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
             let iter_opt = IterOption::new(self.upper_bound.as_ref().cloned(), true);
@@ -267,42 +325,38 @@ impl<'a> MvccReader<'a> {
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());
+        try!(self.create_index_cursor());
         try!(self.create_lock_cursor());
 
-        let (mut write_valid, mut lock_valid) = (true, true);
-
+        let (mut write_valid, mut index_valid, mut lock_valid) = (true, true, true);
         loop {
             key = {
-                let mut w_cur = self.write_cursor.as_mut().unwrap();
-                let mut l_cur = self.lock_cursor.as_mut().unwrap();
-                let (mut w_key, mut l_key) = (None, None);
+                let mut mkey = None;
                 if write_valid {
-                    if try!(w_cur.near_seek(&key, self.statistics)) {
-                        w_key = Some(w_cur.key());
-                    } else {
-                        w_key = None;
-                        write_valid = false;
+                    let mut w_cur = self.write_cursor.as_mut().unwrap();
+                    write_valid = try!(w_cur.near_seek(&key, self.statistics));
+                    if write_valid {
+                        mkey = Some((w_cur.key(), true));
+                    }
+                }
+                if index_valid {
+                    let mut i_cur = self.index_cursor.as_mut().unwrap();
+                    index_valid = try!(i_cur.near_seek(&key, self.statistics));
+                    if index_valid && (mkey.is_none() || i_cur.key() < mkey.unwrap().0) {
+                        mkey = Some((i_cur.key(), true));
                     }
                 }
                 if lock_valid {
-                    if try!(l_cur.near_seek(&key, self.statistics)) {
-                        l_key = Some(l_cur.key());
-                    } else {
-                        l_key = None;
-                        lock_valid = false;
+                    let mut l_cur = self.lock_cursor.as_mut().unwrap();
+                    lock_valid = try!(l_cur.near_seek(&key, self.statistics));
+                    if lock_valid && (mkey.is_none() || l_cur.key() < mkey.unwrap().0) {
+                        mkey = Some((l_cur.key(), false));
                     }
                 }
-                match (w_key, l_key) {
-                    (None, None) => return Ok(None),
-                    (None, Some(k)) => Key::from_encoded(k.to_vec()),
-                    (Some(k), None) => try!(Key::from_encoded(k.to_vec()).truncate_ts()),
-                    (Some(wk), Some(lk)) => {
-                        if wk < lk {
-                            try!(Key::from_encoded(wk.to_vec()).truncate_ts())
-                        } else {
-                            Key::from_encoded(lk.to_vec())
-                        }
-                    }
+                match mkey {
+                    None => return Ok(None),
+                    Some((k, true)) => try!(Key::from_encoded(k.to_vec()).truncate_ts()),
+                    Some((k, false)) => Key::from_encoded(k.to_vec()),
                 }
             };
             if let Some(v) = try!(self.get(&key, ts)) {
@@ -315,42 +369,38 @@ impl<'a> MvccReader<'a> {
     pub fn reverse_seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());
+        try!(self.create_index_cursor());
         try!(self.create_lock_cursor());
 
-        let (mut write_valid, mut lock_valid) = (true, true);
-
+        let (mut write_valid, mut index_valid, mut lock_valid) = (true, true, true);
         loop {
             key = {
-                let mut w_cur = self.write_cursor.as_mut().unwrap();
-                let mut l_cur = self.lock_cursor.as_mut().unwrap();
-                let (mut w_key, mut l_key) = (None, None);
+                let mut mkey = None;
                 if write_valid {
-                    if try!(w_cur.near_reverse_seek(&key, self.statistics)) {
-                        w_key = Some(w_cur.key());
-                    } else {
-                        w_key = None;
-                        write_valid = false;
+                    let mut w_cur = self.write_cursor.as_mut().unwrap();
+                    write_valid = try!(w_cur.near_reverse_seek(&key, self.statistics));
+                    if write_valid {
+                        mkey = Some((w_cur.key(), true));
+                    }
+                }
+                if index_valid {
+                    let mut i_cur = self.index_cursor.as_mut().unwrap();
+                    index_valid = try!(i_cur.near_reverse_seek(&key, self.statistics));
+                    if index_valid && (mkey.is_none() || i_cur.key() > mkey.unwrap().0) {
+                        mkey = Some((i_cur.key(), true));
                     }
                 }
                 if lock_valid {
-                    if try!(l_cur.near_reverse_seek(&key, self.statistics)) {
-                        l_key = Some(l_cur.key());
-                    } else {
-                        l_key = None;
-                        lock_valid = false;
+                    let mut l_cur = self.lock_cursor.as_mut().unwrap();
+                    lock_valid = try!(l_cur.near_reverse_seek(&key, self.statistics));
+                    if lock_valid && (mkey.is_none() || l_cur.key() > mkey.unwrap().0) {
+                        mkey = Some((l_cur.key(), false));
                     }
                 }
-                match (w_key, l_key) {
-                    (None, None) => return Ok(None),
-                    (None, Some(k)) => Key::from_encoded(k.to_vec()),
-                    (Some(k), None) => try!(Key::from_encoded(k.to_vec()).truncate_ts()),
-                    (Some(wk), Some(lk)) => {
-                        if wk < lk {
-                            Key::from_encoded(lk.to_vec())
-                        } else {
-                            try!(Key::from_encoded(wk.to_vec()).truncate_ts())
-                        }
-                    }
+                match mkey {
+                    None => return Ok(None),
+                    Some((k, true)) => try!(Key::from_encoded(k.to_vec()).truncate_ts()),
+                    Some((k, false)) => Key::from_encoded(k.to_vec()),
                 }
             };
             if let Some(v) = try!(self.get(&key, ts)) {
@@ -399,20 +449,31 @@ impl<'a> MvccReader<'a> {
                      -> Result<(Vec<Key>, Option<Key>)> {
         let iter_opt = IterOption::new(None, self.fill_cache);
         let scan_mode = self.get_scan_mode(false);
-        let mut cursor = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode));
+        let mut write_cursor = try!(self.snapshot.iter_cf(CF_WRITE, iter_opt.clone(), scan_mode));
+        let mut index_cursor = try!(self.snapshot.iter_cf(CF_INDEX, iter_opt, scan_mode));
         let mut keys = vec![];
         loop {
-            let ok = match start {
-                Some(ref x) => try!(cursor.near_seek(x, self.statistics)),
-                None => cursor.seek_to_first(self.statistics),
+            let (write_ok, index_ok) = match start {
+                Some(ref x) => {
+                    (try!(write_cursor.near_seek(x, self.statistics)),
+                     try!(index_cursor.near_seek(x, self.statistics)))
+                }
+                None => {
+                    (write_cursor.seek_to_first(self.statistics),
+                     index_cursor.seek_to_first(self.statistics))
+                }
             };
-            if !ok {
+            let key = if write_ok && (!index_ok || write_cursor.key() < index_cursor.key()) {
+                write_cursor.key()
+            } else if index_ok {
+                index_cursor.key()
+            } else {
                 return Ok((keys, None));
-            }
+            };
             if keys.len() >= limit {
                 return Ok((keys, start));
             }
-            let key = try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts());
+            let key = try!(Key::from_encoded(key.to_vec()).truncate_ts());
             start = Some(key.append_ts(0));
             keys.push(key);
         }

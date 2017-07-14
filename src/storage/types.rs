@@ -106,6 +106,10 @@ impl Key {
         }
         Ok(Key::from_encoded(self.0[..len - number::U64_SIZE].to_vec()))
     }
+
+    pub fn is_index(&self) -> bool {
+        self.0.len() > 12 && self.0[0] == b't' && self.0[10] == b'_' && self.0[11] == b'i'
+    }
 }
 
 /// Hash for `Key`.
