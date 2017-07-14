@@ -34,13 +34,13 @@ pub const TEMP_DIR: &'static str = "";
 const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
-const ST_TOTAL: &'static str = "total";
-const ST_PROCESSED: &'static str = "processed";
-const ST_GET: &'static str = "get";
-const ST_NEXT: &'static str = "next";
-const ST_PREV: &'static str = "prev";
-const ST_SEEK: &'static str = "seek";
-const ST_SEEK_FOR_PREV: &'static str = "seek_for_prev";
+const STAT_TOTAL: &'static str = "total";
+const STAT_PROCESSED: &'static str = "processed";
+const STAT_GET: &'static str = "get";
+const STAT_NEXT: &'static str = "next";
+const STAT_PREV: &'static str = "prev";
+const STAT_SEEK: &'static str = "seek";
+const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 
@@ -171,13 +171,13 @@ impl CFStatistics {
     }
 
     pub fn details(&self) -> Vec<(&str, usize)> {
-        vec![(ST_TOTAL, self.total_op_count()),
-             (ST_PROCESSED, self.processed),
-             (ST_GET, self.get),
-             (ST_NEXT, self.next),
-             (ST_PREV, self.prev),
-             (ST_SEEK, self.seek),
-             (ST_SEEK_FOR_PREV, self.seek_for_prev)]
+        vec![(STAT_TOTAL, self.total_op_count()),
+             (STAT_PROCESSED, self.processed),
+             (STAT_GET, self.get),
+             (STAT_NEXT, self.next),
+             (STAT_PREV, self.prev),
+             (STAT_SEEK, self.seek),
+             (STAT_SEEK_FOR_PREV, self.seek_for_prev)]
     }
 }
 
