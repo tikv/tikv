@@ -249,10 +249,12 @@ fn test_server_stale_meta() {
     cluster.shutdown();
 
     let engine_3 = cluster.get_engine(3);
-    let mut state: RegionLocalState = engine_3.get_msg(&keys::region_state_key(1)).unwrap().unwrap();
+    let mut state: RegionLocalState =
+        engine_3.get_msg(&keys::region_state_key(1)).unwrap().unwrap();
     state.set_state(PeerState::Tombstone);
     engine_3.put_msg(&keys::region_state_key(1), &state).unwrap();
     cluster.clear_send_filters();
+
     // avoid TIMEWAIT
     sleep_ms(500);
     cluster.start();
