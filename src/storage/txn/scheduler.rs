@@ -45,7 +45,8 @@ use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
               Error as StorageError, ScanMode, Statistics};
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
-use storage::engine::{CbContext, Result as EngineResult, Error as EngineError, Callback as EngineCallback, Modify};
+use storage::engine::{CbContext, Result as EngineResult, Error as EngineError,
+                      Callback as EngineCallback, Modify};
 use raftstore::store::engine::IterOption;
 use util::transport::{SyncSendCh, Error as TransportError};
 use util::SlowTimer;
@@ -104,7 +105,9 @@ impl Debug for Msg {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
-            Msg::SnapshotFinished { ref cids, .. } => write!(f, "SnapshotFinished [cids={:?}]", cids),
+            Msg::SnapshotFinished { ref cids, .. } => {
+                write!(f, "SnapshotFinished [cids={:?}]", cids)
+            }
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WritePrepareFinished { cid, ref cmd, .. } => {
                 write!(f, "WritePrepareFinished [cid={}, cmd={:?}]", cid, cmd)
@@ -258,8 +261,7 @@ pub struct Scheduler {
     // cid -> RunningCtx
     cmd_ctxs: HashMap<u64, RunningCtx>,
     // Context -> cids
-    // TODO: Option<HashMap>
-    grouped_cmds: HashMap<HashableContext, Vec<u64>>,
+    grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
 
     schedch: SyncSendCh<Msg>,
 
@@ -294,7 +296,7 @@ impl Scheduler {
         Scheduler {
             engine: engine,
             cmd_ctxs: Default::default(),
-            grouped_cmds: Default::default(),
+            grouped_cmds: Some(HashMap::with_capacity(CMD_BATCH_SIZE)),
             schedch: schedch,
             id_alloc: 0,
             latches: Latches::new(concurrency),
@@ -841,7 +843,11 @@ impl Scheduler {
             }) {
                 Ok(_) => {}
                 e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-                Err(e) => panic!("send SnapshotFinish failed cmd ids {:?}, err {:?}", cids2, e),
+                Err(e) => {
+                    panic!("send SnapshotFinish failed cmd ids {:?}, err {:?}",
+                           cids2,
+                           e)
+                }
             }
         };
 
@@ -976,6 +982,8 @@ impl Scheduler {
         if self.acquire_lock(cid) {
             let ctx = self.extract_context(cid).clone();
             let mut group = self.grouped_cmds
+                .as_mut()
+                .unwrap()
                 .entry(HashableContext(ctx))
                 .or_insert_with(Vec::new);
             group.push(cid);
@@ -1018,14 +1026,14 @@ impl Scheduler {
                 }
             }
 
-            if !self.grouped_cmds.is_empty() {
-                let m = self.grouped_cmds.clone();
+            if !self.grouped_cmds.as_ref().unwrap().is_empty() {
+                let m = self.grouped_cmds.take().unwrap();
                 for (ctx, cids) in m {
                     if !cids.is_empty() {
                         self.get_snapshot(&ctx.0, cids);
                     }
                 }
-                self.grouped_cmds.clear();
+                self.grouped_cmds = Some(HashMap::with_capacity(CMD_BATCH_SIZE));
             }
         }
     }
