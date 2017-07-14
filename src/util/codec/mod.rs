@@ -55,6 +55,20 @@ quick_error! {
     }
 }
 
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+        match *self {
+            Error::KeyLength => Some(Error::KeyLength),
+            Error::KeyPadding => Some(Error::KeyPadding),
+            Error::InvalidDataType(ref r) => Some(Error::InvalidDataType(r.clone())),
+            Error::Encoding(e) => Some(Error::Encoding(e)),
+            Error::Protobuf(_) |
+            Error::Io(_) |
+            Error::Other(_) => None,
+        }
+    }
+}
+
 impl From<FromUtf8Error> for Error {
     fn from(err: FromUtf8Error) -> Error {
         err.utf8_error().into()
