@@ -329,7 +329,13 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                         .observe(results.len() as f64);
                     Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
                 });
-            KV_COMMAND_SCAN_INEFFICIENCY.observe(statistics.inefficiency());
+
+            for (cf, details) in statistics.details() {
+                for (tag, count) in details {
+                    KV_COMMAND_SCAN_DETAILS.with_label_values(&[cf, tag]).observe(count as f64);
+                }
+            }
+
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -466,13 +472,13 @@ fn process_rawscan(snapshot: Box<Snapshot>,
                    stats: &mut Statistics)
                    -> Result<Vec<StorageResult<KvPair>>> {
     let mut cursor = try!(snapshot.iter(IterOption::default(), ScanMode::Forward));
-    if !try!(cursor.seek(start_key, stats)) {
+    if !try!(cursor.seek(start_key, &mut stats.data)) {
         return Ok(vec![]);
     }
     let mut pairs = vec![];
     while cursor.valid() && pairs.len() < limit {
         pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
-        cursor.next(stats);
+        cursor.next(&mut stats.data);
     }
     Ok(pairs)
 }
