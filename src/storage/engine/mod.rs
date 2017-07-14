@@ -18,7 +18,7 @@ use std::boxed::FnBox;
 use std::time::Duration;
 
 use self::rocksdb::EngineRocksdb;
-use storage::{Key, Value, CfName, CF_DEFAULT};
+use storage::{Key, Value, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
 
@@ -33,6 +33,14 @@ pub const TEMP_DIR: &'static str = "";
 
 const SEEK_BOUND: usize = 30;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
+
+const STAT_TOTAL: &'static str = "total";
+const STAT_PROCESSED: &'static str = "processed";
+const STAT_GET: &'static str = "get";
+const STAT_NEXT: &'static str = "next";
+const STAT_PREV: &'static str = "prev";
+const STAT_SEEK: &'static str = "seek";
+const STAT_SEEK_FOR_PREV: &'static str = "seek_for_prev";
 
 pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
 
@@ -146,7 +154,7 @@ pub enum ScanMode {
 
 /// Statistics collects the ops taken when fetching data.
 #[derive(Default)]
-pub struct Statistics {
+pub struct CFStatistics {
     // How many keys that's effective to user. This counter should be increased
     // by the caller.
     pub processed: usize,
@@ -157,21 +165,43 @@ pub struct Statistics {
     pub seek_for_prev: usize,
 }
 
-impl Statistics {
+impl CFStatistics {
     #[inline]
     pub fn total_op_count(&self) -> usize {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
-    // Calculate how the operation performs.
-    #[inline]
-    pub fn inefficiency(&self) -> f64 {
-        let total_op_cnt = self.total_op_count();
-        if total_op_cnt == 0 {
-            0f64
-        } else {
-            (total_op_cnt as f64 - self.processed as f64) / total_op_cnt as f64
-        }
+    pub fn details(&self) -> Vec<(&str, usize)> {
+        vec![(STAT_TOTAL, self.total_op_count()),
+             (STAT_PROCESSED, self.processed),
+             (STAT_GET, self.get),
+             (STAT_NEXT, self.next),
+             (STAT_PREV, self.prev),
+             (STAT_SEEK, self.seek),
+             (STAT_SEEK_FOR_PREV, self.seek_for_prev)]
+    }
+}
+
+#[derive(Default)]
+pub struct Statistics {
+    pub lock: CFStatistics,
+    pub write: CFStatistics,
+    pub data: CFStatistics,
+}
+
+impl Statistics {
+    pub fn total_op_count(&self) -> usize {
+        self.lock.total_op_count() + self.write.total_op_count() + self.data.total_op_count()
+    }
+
+    pub fn total_processed(&self) -> usize {
+        self.lock.processed + self.write.processed + self.data.processed
+    }
+
+    pub fn details(&self) -> Vec<(&str, Vec<(&str, usize)>)> {
+        vec![(CF_DEFAULT, self.data.details()),
+             (CF_LOCK, self.lock.details()),
+             (CF_WRITE, self.write.details())]
     }
 }
 
@@ -193,7 +223,7 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    pub fn seek(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
+    pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self.max_key.as_ref().map_or(false, |k| k <= key.encoded()) {
             try!(self.iter.validate_key(key));
@@ -218,7 +248,7 @@ impl<'a> Cursor<'a> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
-    pub fn near_seek(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
+    pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if !self.iter.valid() {
             return self.seek(key, statistics);
@@ -259,7 +289,7 @@ impl<'a> Cursor<'a> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
-    pub fn get(&mut self, key: &Key, statistics: &mut Statistics) -> Result<Option<&[u8]>> {
+    pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
         if self.scan_mode != ScanMode::Backward {
             if try!(self.near_seek(key, statistics)) && self.iter.key() == &**key.encoded() {
                 return Ok(Some(self.iter.value()));
@@ -272,7 +302,7 @@ impl<'a> Cursor<'a> {
         Ok(None)
     }
 
-    fn seek_for_prev(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if self.min_key.as_ref().map_or(false, |k| k >= key.encoded()) {
             try!(self.iter.validate_key(key));
@@ -293,7 +323,7 @@ impl<'a> Cursor<'a> {
     }
 
     /// Find the largest key that is not greater than the specific key.
-    pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
+    pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if !self.iter.valid() {
             return self.seek_for_prev(key, statistics);
@@ -332,7 +362,7 @@ impl<'a> Cursor<'a> {
         Ok(true)
     }
 
-    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
+    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         if !try!(self.seek_for_prev(key, statistics)) {
             return Ok(false);
         }
@@ -350,7 +380,7 @@ impl<'a> Cursor<'a> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
-    pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut Statistics) -> Result<bool> {
+    pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         if !try!(self.near_seek_for_prev(key, statistics)) {
             return Ok(false);
         }
@@ -373,25 +403,25 @@ impl<'a> Cursor<'a> {
     }
 
     #[inline]
-    pub fn seek_to_first(&mut self, statistics: &mut Statistics) -> bool {
+    pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
         self.iter.seek_to_first()
     }
 
     #[inline]
-    pub fn seek_to_last(&mut self, statistics: &mut Statistics) -> bool {
+    pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
         self.iter.seek_to_last()
     }
 
     #[inline]
-    pub fn next(&mut self, statistics: &mut Statistics) -> bool {
+    pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
         self.iter.next()
     }
 
     #[inline]
-    pub fn prev(&mut self, statistics: &mut Statistics) -> bool {
+    pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.prev += 1;
         self.iter.prev()
     }
@@ -526,7 +556,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         iter.seek(&make_key(key), &mut statistics).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
@@ -536,14 +566,14 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         iter.reverse_seek(&make_key(key), &mut statistics).unwrap();
         assert_eq!((iter.key(), iter.value()),
                    (&*bytes::encode_bytes(pair.0), pair.1));
     }
 
     fn assert_near_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         assert!(cursor.near_seek(&make_key(key), &mut statistics).unwrap(),
                 escape(key));
         assert_eq!((cursor.key(), cursor.value()),
@@ -551,7 +581,7 @@ mod tests {
     }
 
     fn assert_near_reverse_seek(cursor: &mut Cursor, key: &[u8], pair: (&[u8], &[u8])) {
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         assert!(cursor.near_reverse_seek(&make_key(key), &mut statistics).unwrap(),
                 escape(key));
         assert_eq!((cursor.key(), cursor.value()),
@@ -595,7 +625,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut iter = snapshot.iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         assert!(!iter.seek(&make_key(b"z\x00"), &mut statistics).unwrap());
         assert!(!iter.reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
         must_delete(engine, b"x");
@@ -614,7 +644,7 @@ mod tests {
         assert_near_reverse_seek(&mut cursor, b"x1", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         assert!(!cursor.near_seek(&make_key(b"z\x00"), &mut statistics).unwrap());
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
@@ -638,7 +668,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         assert!(!cursor.near_reverse_seek(&make_key(b"x"), &mut statistics).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"z"), &mut statistics).unwrap());
         assert!(!cursor.near_reverse_seek(&make_key(b"w"), &mut statistics).unwrap());
@@ -649,7 +679,7 @@ mod tests {
 
     macro_rules! assert_seek {
         ($cursor:ident, $func:ident, $k:expr, $res:ident) => ({
-            let mut statistics = Statistics::default();
+            let mut statistics = CFStatistics::default();
             assert_eq!($cursor.$func(&$k, &mut statistics).unwrap(), $res.is_some(),
                        "assert_seek {} failed exp {:?}", $k, $res);
             if let Some((ref k, ref v)) = $res {
