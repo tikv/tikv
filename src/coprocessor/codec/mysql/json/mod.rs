@@ -42,6 +42,7 @@ pub enum Json {
     Object(BTreeMap<String, Json>),
     Array(Vec<Json>),
     I64(i64),
+    U64(u64),
     Double(f64),
     String(String),
     Boolean(bool),

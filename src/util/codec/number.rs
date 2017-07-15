@@ -126,6 +126,10 @@ pub trait NumberEncoder: Write {
     fn encode_i64_le(&mut self, v: i64) -> Result<()> {
         self.write_i64::<LittleEndian>(v).map_err(From::from)
     }
+
+    fn encode_u64_le(&mut self, v: u64) -> Result<()> {
+        self.write_u64::<LittleEndian>(v).map_err(From::from)
+    }
 }
 
 impl<T: Write> NumberEncoder for T {}
@@ -203,6 +207,10 @@ pub trait NumberDecoder: Read {
 
     fn decode_i64_le(&mut self) -> Result<i64> {
         self.read_i64::<LittleEndian>().map_err(From::from)
+    }
+
+    fn decode_u64_le(&mut self) -> Result<u64> {
+        self.read_u64::<LittleEndian>().map_err(From::from)
     }
 }
 

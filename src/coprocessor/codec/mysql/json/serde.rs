@@ -64,6 +64,7 @@ impl Serialize for Json {
             }
             Json::Double(d) => serializer.serialize_f64(d),
             Json::I64(d) => serializer.serialize_i64(d),
+            Json::U64(d) => serializer.serialize_u64(d),
         }
     }
 }

@@ -25,6 +25,7 @@ const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
 const TYPE_CODE_LITERAL: u8 = 0x04;
 const TYPE_CODE_I64: u8 = 0x09;
+const TYPE_CODE_U64: u8 = 0x0a;
 const TYPE_CODE_DOUBLE: u8 = 0x0b;
 const TYPE_CODE_STRING: u8 = 0x0c;
 
@@ -75,7 +76,7 @@ impl Json {
             Json::Object(ref d) => get_obj_binary_len(d),
             Json::Array(ref d) => get_array_binary_len(d),
             Json::Boolean(_) | Json::None => LITERAL_LEN,
-            Json::I64(_) | Json::Double(_) => NUMBER_LEN,
+            Json::I64(_) | Json::U64(_) | Json::Double(_) => NUMBER_LEN,
             Json::String(ref d) => get_str_binary_len(d),
         }
     }
@@ -86,6 +87,7 @@ impl Json {
             Json::Array(_) => TYPE_CODE_ARRAY,
             Json::Boolean(_) | Json::None => TYPE_CODE_LITERAL,
             Json::I64(_) => TYPE_CODE_I64,
+            Json::U64(_) => TYPE_CODE_U64,
             Json::Double(_) => TYPE_CODE_DOUBLE,
             Json::String(_) => TYPE_CODE_STRING,
         }
@@ -107,6 +109,7 @@ pub trait JsonEncoder: NumberEncoder {
                 self.encode_literal(v)
             }
             Json::I64(d) => self.encode_json_i64(d),
+            Json::U64(d) => self.encode_json_u64(d),
             Json::Double(d) => self.encode_json_f64(d),
             Json::String(ref d) => self.encode_str(d),
         }
@@ -174,6 +177,10 @@ pub trait JsonEncoder: NumberEncoder {
         self.encode_i64_le(data)
     }
 
+    fn encode_json_u64(&mut self, data: u64) -> Result<()> {
+        self.encode_u64_le(data)
+    }
+
     fn encode_json_f64(&mut self, data: f64) -> Result<()> {
         self.encode_f64_le(data)
     }
@@ -229,6 +236,7 @@ pub trait JsonDecoder: NumberDecoder {
             TYPE_CODE_ARRAY => self.decode_json_array(),
             TYPE_CODE_LITERAL => self.decode_json_literal(),
             TYPE_CODE_I64 => self.decode_json_i64(),
+            TYPE_CODE_U64 => self.decode_json_u64(),
             TYPE_CODE_DOUBLE => self.decode_json_double(),
             TYPE_CODE_STRING => self.decode_json_str(),
             _ => Err(invalid_type!("unsupported type {:?}", code_type)),
@@ -311,6 +319,11 @@ pub trait JsonDecoder: NumberDecoder {
     fn decode_json_i64(&mut self) -> Result<Json> {
         let value = try!(self.decode_i64_le());
         Ok(Json::I64(value))
+    }
+
+    fn decode_json_u64(&mut self) -> Result<Json> {
+        let value = try!(self.decode_u64_le());
+        Ok(Json::U64(value))
     }
 
     fn decode_json_item(&mut self, values_data: &[u8], data_start_position: u32) -> Result<Json> {
@@ -408,6 +421,7 @@ mod test {
             (r#"{"key":"value"}"#, TYPE_CODE_OBJECT),
             (r#"["d1","d2"]"#, TYPE_CODE_ARRAY),
             (r#"3"#, TYPE_CODE_I64),
+            (r#"18446744073709551615"#, TYPE_CODE_U64),
             (r#"3.0"#, TYPE_CODE_DOUBLE),
             (r#"null"#, TYPE_CODE_LITERAL),
             (r#"true"#, TYPE_CODE_LITERAL),
