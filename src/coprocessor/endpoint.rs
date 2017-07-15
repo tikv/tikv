@@ -174,10 +174,16 @@ impl RequestTask {
         COPR_REQ_HANDLE_TIME.with_label_values(&[type_str])
             .observe(handle_time - wait_time);
 
-        let scanned_keys = self.statistics.total_op_count() as f64;
-        COPR_SCAN_KEYS.with_label_values(&[type_str]).observe(scanned_keys);
-        let inefficiency = self.statistics.inefficiency();
-        COPR_SCAN_INEFFICIENCY.with_label_values(&[type_str]).observe(inefficiency);
+
+        COPR_SCAN_KEYS.with_label_values(&[type_str])
+            .observe(self.statistics.total_op_count() as f64);
+
+        for (cf, details) in self.statistics.details() {
+            for (tag, count) in details {
+                COPR_SCAN_DETAILS.with_label_values(&[type_str, cf, tag])
+                    .observe(count as f64);
+            }
+        }
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
@@ -187,8 +193,8 @@ impl RequestTask {
                   type_str,
                   handle_time,
                   wait_time,
-                  scanned_keys,
-                  inefficiency,
+                  self.statistics.total_op_count(),
+                  self.statistics.total_processed(),
                   self.req.get_ranges().len(),
                   self.req.get_ranges().get(0));
         }
@@ -221,10 +227,8 @@ impl BatchRunnable<Task> for Host {
                     let key = {
                         let ctx = req.req.get_context();
                         (ctx.get_region_id(),
-                         ctx.get_region_epoch().get_conf_ver(),
                          ctx.get_region_epoch().get_version(),
-                         ctx.get_peer().get_id(),
-                         ctx.get_peer().get_store_id())
+                         ctx.get_peer().get_id())
                     };
                     let mut group = grouped_reqs.entry(key).or_insert_with(Vec::new);
                     group.push(req);
