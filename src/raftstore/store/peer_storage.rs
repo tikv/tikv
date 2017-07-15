@@ -781,40 +781,9 @@ impl PeerStorage {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&mut self, wb: &WriteBatch) -> Result<()> {
-        let t = Instant::now();
-        let mut meta_count = 0;
-        let mut raft_count = 0;
-        let region_id = self.get_region_id();
-        let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
-                                      keys::region_meta_prefix(region_id + 1));
-        try!(self.engine.scan(&meta_start,
-                              &meta_end,
-                              false,
-                              &mut |key, _| {
-                                  try!(wb.delete(key));
-                                  meta_count += 1;
-                                  Ok(true)
-                              }));
-
-        let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
-        let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
-                                      keys::region_raft_prefix(region_id + 1));
-        try!(self.engine.scan_cf(CF_RAFT,
-                                 &raft_start,
-                                 &raft_end,
-                                 false,
-                                 &mut |key, _| {
-                                     try!(wb.delete_cf(handle, key));
-                                     raft_count += 1;
-                                     Ok(true)
-                                 }));
+    pub fn clear_meta(&mut self, wb: &mut WriteBatch) -> Result<()> {
+        try!(clear_meta(&self.engine, wb, self.get_region_id()));
         self.cache = EntryCache::default();
-        info!("{} clear peer {} meta keys and {} raft keys, takes {:?}",
-              self.tag,
-              meta_count,
-              raft_count,
-              t.elapsed());
         Ok(())
     }
 
@@ -1016,6 +985,42 @@ impl PeerStorage {
             region: self.region.clone(),
         })
     }
+}
+
+/// Delete all meta belong to the region. Results are stored in `wb`.
+pub fn clear_meta(engine: &DB, wb: &WriteBatch, region_id: u64) -> Result<()> {
+    let t = Instant::now();
+    let mut meta_count = 0;
+    let mut raft_count = 0;
+    let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
+                                  keys::region_meta_prefix(region_id + 1));
+    try!(engine.scan(&meta_start,
+                     &meta_end,
+                     false,
+                     &mut |key, _| {
+                         try!(wb.delete(key));
+                         meta_count += 1;
+                         Ok(true)
+                     }));
+
+    let handle = try!(rocksdb::get_cf_handle(engine, CF_RAFT));
+    let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
+                                  keys::region_raft_prefix(region_id + 1));
+    try!(engine.scan_cf(CF_RAFT,
+                        &raft_start,
+                        &raft_end,
+                        false,
+                        &mut |key, _| {
+                            try!(wb.delete_cf(handle, key));
+                            raft_count += 1;
+                            Ok(true)
+                        }));
+    info!("[region {}] clear peer {} meta keys and {} raft keys, takes {:?}",
+          region_id,
+          meta_count,
+          raft_count,
+          t.elapsed());
+    Ok(())
 }
 
 pub fn do_snapshot(mgr: SnapManager, snap: &DbSnapshot, region_id: u64) -> raft::Result<Snapshot> {
