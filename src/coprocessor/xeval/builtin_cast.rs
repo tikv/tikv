@@ -13,7 +13,8 @@
 
 use std::i64;
 use tipb::expression::Expr;
-use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp};
+use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp,
+                                produce_str_with_specified_tp};
 use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag};
 use coprocessor::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
@@ -73,6 +74,7 @@ impl Evaluator {
             _ => return invalid_type_error(&d, TYPE_INT),
         }
         let s = try!(d.into_string());
+        let s = try!(produce_str_with_specified_tp(s, expr.get_field_type(), ctx));
         Ok(Datum::Bytes(s.into_bytes()))
     }
 
@@ -263,7 +265,8 @@ mod test {
     use tipb::expression::{FieldType, ExprType, ScalarFuncSig};
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::mysql::{Decimal, Time, Duration};
-    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::mysql::{types, charset};
+    use coprocessor::codec::field_type;
     use super::super::Evaluator;
     use super::super::evaluator::test::build_expr_with_sig;
 
@@ -339,15 +342,35 @@ mod test {
                                          FieldType::new()),
                      Datum::F64(1.0))]);
 
-    // test_eval!(test_cast_int_as_string,
-    //            vec![(build_expr_with_sig(vec![Datum::I64(-1)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsString),
-    //                  Datum::Bytes(b"-1".to_vec())),
-    //                 (build_expr_with_sig(vec![Datum::U64(1)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsString),
-    //                  Datum::Bytes(b"1".to_vec()))]);
+    test_eval!(test_cast_int_as_string,
+               vec![(build_expr_with_sig(vec![Datum::I64(-1)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsString,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(field_type::UNSPECIFIED_LENGTH);
+                                             ft
+                                         }),
+                     Datum::Bytes(b"-1".to_vec())),
+                    (build_expr_with_sig(vec![Datum::U64(1)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsString,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(field_type::UNSPECIFIED_LENGTH);
+                                             ft
+                                         }),
+                     Datum::Bytes(b"1".to_vec())),
+                    (build_expr_with_sig(vec![Datum::I64(10000)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsString,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(5);
+                                             ft.set_charset(charset::CHARSET_UTF8.to_owned());
+                                             ft
+                                         }),
+                     Datum::Bytes(b"10000".to_vec()))]);
 
     // test_eval!(test_cast_int_as_decimal,
     //            vec![(build_expr_with_sig(vec![Datum::I64(-1)],

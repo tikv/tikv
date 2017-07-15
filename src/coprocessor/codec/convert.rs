@@ -16,6 +16,16 @@ use std::borrow::Cow;
 
 use coprocessor::xeval::EvalContext;
 use super::Result;
+use super::field_type::UNSPECIFIED_LENGTH;
+
+pub fn truncate_str(mut s: String, flen: isize) -> String {
+    if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
+        s.truncate(flen as usize);
+        s
+    } else {
+        s
+    }
+}
 
 // `overflow` returns an overflowed error.
 #[macro_export]
