@@ -376,8 +376,8 @@ impl Peer {
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
-        let wb = WriteBatch::new();
-        try!(self.mut_store().clear_meta(&wb));
+        let mut wb = WriteBatch::new();
+        try!(self.mut_store().clear_meta(&mut wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
         try!(self.engine.write(wb));
 
