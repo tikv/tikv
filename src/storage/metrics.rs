@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{Counter, CounterVec, Gauge, HistogramVec, Histogram, exponential_buckets};
+use prometheus::{Counter, CounterVec, Gauge, HistogramVec, exponential_buckets};
 
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: CounterVec =
@@ -79,11 +79,12 @@ lazy_static! {
             exponential_buckets(1.0, 2.0, 21).unwrap()
         ).unwrap();
 
-    pub static ref KV_COMMAND_SCAN_INEFFICIENCY: Histogram =
-        register_histogram!(
-            "tikv_scheudler_kv_scan_inefficiency",
-            "Bucketed histogram of kv keys scan inefficiency",
-            vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    pub static ref KV_COMMAND_SCAN_DETAILS: HistogramVec =
+        register_histogram_vec!(
+            "tikv_scheudler_kv_scan_details",
+            "Bucketed histogram of kv keys scan details for each cf",
+            &["cf","tag"],
+              exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref RAWKV_COMMAND_COUNTER_VEC: CounterVec =
