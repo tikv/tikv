@@ -33,9 +33,10 @@
 
 use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use std::thread;
+use std::hash::{Hash, Hasher};
 
 use threadpool::ThreadPool;
 use prometheus::HistogramTimer;
@@ -226,8 +227,6 @@ fn make_engine_cb(cid: u64, pr: ProcessResult, ch: SyncSendCh<Msg>) -> EngineCal
     })
 }
 
-use std::hash::{Hash, Hasher};
-
 #[derive(Clone)]
 struct HashableContext(Context);
 
@@ -241,7 +240,7 @@ impl Hash for HashableContext {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let key = {
             let ctx = &self.0;
-            (ctx.get_region_id(), ctx.get_region_epoch().get_version())
+            (ctx.get_region_id(), ctx.get_region_epoch().get_version(), ctx.get_peer().get_id())
         };
         Hash::hash(&key, state);
     }
@@ -996,16 +995,10 @@ impl Scheduler {
         loop {
             let msg = box_try!(receiver.recv());
             msgs.push(msg);
-            loop {
-                match receiver.try_recv() {
-                    Ok(msg) => {
-                        msgs.push(msg);
-                        if msgs.len() >= CMD_BATCH_SIZE {
-                            break;
-                        }
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    _ => (),
+            while let Ok(msg) = receiver.try_recv() {
+                msgs.push(msg);
+                if msgs.len() >= CMD_BATCH_SIZE {
+                    break;
                 }
             }
 
@@ -1031,14 +1024,12 @@ impl Scheduler {
             if !self.grouped_cmds.as_ref().unwrap().is_empty() {
                 let m = self.grouped_cmds.take().unwrap();
                 for (ctx, cids) in m {
-                    if !cids.is_empty() {
-                        total += cids.len();
-                        self.get_snapshot(&ctx.0, cids);
-                    }
+                    total += cids.len();
+                    self.get_snapshot(&ctx.0, cids);
                 }
                 self.grouped_cmds = Some(HashMap::with_capacity(CMD_BATCH_SIZE));
             }
-            BATCH_COMMANDS_GAUGE.set(total as f64);
+            BATCH_COMMANDS.observe(total as f64);
         }
     }
 }
