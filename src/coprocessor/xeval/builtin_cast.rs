@@ -259,6 +259,7 @@ impl Evaluator {
 
 #[cfg(test)]
 mod test {
+    use std::{i64, u64};
     use tipb::expression::{FieldType, ExprType, ScalarFuncSig};
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::mysql::{Decimal, Time, Duration};
@@ -310,7 +311,21 @@ mod test {
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CastIntAsInt,
                                          FieldType::new()),
-                     Datum::I64(-1))]);
+                     Datum::I64(-1)),
+                    (build_expr_with_sig(vec![Datum::U64(i64::MAX as u64)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsInt,
+                                         FieldType::new()),
+                     Datum::I64(i64::MAX)),
+                    (build_expr_with_sig(vec![Datum::U64(u64::MAX)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsInt,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flag(types::UNSIGNED_FLAG as u32);
+                                             ft
+                                         }),
+                     Datum::U64(u64::MAX))]);
 
     // test_eval!(test_cast_int_as_real,
     //            vec![(build_expr_with_sig(vec![Datum::I64(-1)],
