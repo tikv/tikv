@@ -256,7 +256,7 @@ impl<T, C> Store<T, C> {
                 debug!("region {:?} is tombstone in store {}",
                        region,
                        self.store_id());
-                self.clean_up_meta(&mut wb, region);
+                self.clear_stale_meta(&mut wb, region);
                 return Ok(true);
             }
             let mut peer = try!(Peer::create(self, region));
@@ -288,12 +288,12 @@ impl<T, C> Store<T, C> {
               applying_count,
               t.elapsed());
 
-        try!(self.clean_up());
+        try!(self.clear_stale_data());
 
         Ok(())
     }
 
-    fn clean_up_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
+    fn clear_stale_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
         let raft_key = keys::raft_state_key(region.get_id());
         let handle = rocksdb::get_cf_handle(&self.engine, CF_RAFT).unwrap();
         if self.engine.get_cf(handle, &raft_key).unwrap().is_none() {
@@ -305,8 +305,8 @@ impl<T, C> Store<T, C> {
         peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
     }
 
-    /// `clean_up` clean up all possible garbage data.
-    fn clean_up(&mut self) -> Result<()> {
+    /// `clear_stale_data` clean up all possible garbage data.
+    fn clear_stale_data(&mut self) -> Result<()> {
         let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
