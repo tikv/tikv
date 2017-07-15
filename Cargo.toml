@@ -76,6 +76,7 @@ git = "https://github.com/pingcap/kvproto.git"
 
 [dependencies.tipb]
 git = "https://github.com/pingcap/tipb.git"
+branch = "hhkbp2/add-expr-field-type-fields"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"

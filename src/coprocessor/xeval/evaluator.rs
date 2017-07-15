@@ -621,7 +621,7 @@ pub mod test {
 
     use std::i32;
 
-    use tipb::expression::{Expr, ExprType};
+    use tipb::expression::{Expr, ExprType, FieldType};
     use tipb::select::SelectRequest;
     use protobuf::RepeatedField;
 
@@ -682,9 +682,14 @@ pub mod test {
         build_expr(vec![left, right], tp)
     }
 
-    pub fn build_expr_with_sig(children: Vec<Datum>, tp: ExprType, sig: ScalarFuncSig) -> Expr {
+    pub fn build_expr_with_sig(children: Vec<Datum>,
+                               tp: ExprType,
+                               sig: ScalarFuncSig,
+                               field_type: FieldType)
+                               -> Expr {
         let mut expr = build_expr(children, tp);
         expr.set_sig(sig);
+        expr.set_field_type(field_type);
         expr
     }
 
