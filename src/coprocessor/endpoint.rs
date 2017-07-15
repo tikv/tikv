@@ -227,10 +227,8 @@ impl BatchRunnable<Task> for Host {
                     let key = {
                         let ctx = req.req.get_context();
                         (ctx.get_region_id(),
-                         ctx.get_region_epoch().get_conf_ver(),
                          ctx.get_region_epoch().get_version(),
-                         ctx.get_peer().get_id(),
-                         ctx.get_peer().get_store_id())
+                         ctx.get_peer().get_id())
                     };
                     let mut group = grouped_reqs.entry(key).or_insert_with(Vec::new);
                     group.push(req);
