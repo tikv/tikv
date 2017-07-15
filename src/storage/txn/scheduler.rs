@@ -241,12 +241,7 @@ impl Hash for HashableContext {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let key = {
             let ctx = &self.0;
-            (ctx.get_region_id(),
-             ctx.get_region_epoch().get_conf_ver(),
-             ctx.get_region_epoch().get_version(),
-             ctx.get_peer().get_id(),
-             ctx.get_peer().get_store_id(),
-             ctx.get_priority())
+            (ctx.get_region_id(), ctx.get_region_epoch().get_version())
         };
         Hash::hash(&key, state);
     }
@@ -841,7 +836,7 @@ impl Scheduler {
         let cids1 = cids.clone();
         let cids2 = cids.clone();
         let ch = self.schedch.clone();
-        let cb = box move |(cb_ctx, snapshot): (CbContext, EngineResult<Box<Snapshot>>)| {
+        let cb = box move |(cb_ctx, snapshot)| {
             match ch.send(Msg::SnapshotFinished {
                 cids: cids1,
                 cb_ctx: cb_ctx,
@@ -997,7 +992,7 @@ impl Scheduler {
     }
 
     pub fn run(&mut self, receiver: Receiver<Msg>) -> Result<()> {
-        let mut msgs = vec![];
+        let mut msgs = Vec::with_capacity(CMD_BATCH_SIZE);
         loop {
             let msg = box_try!(receiver.recv());
             msgs.push(msg);
