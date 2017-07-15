@@ -327,15 +327,18 @@ mod test {
                                          }),
                      Datum::U64(u64::MAX))]);
 
-    // test_eval!(test_cast_int_as_real,
-    //            vec![(build_expr_with_sig(vec![Datum::I64(-1)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsReal),
-    //                  Datum::F64(-1.0)),
-    //                 (build_expr_with_sig(vec![Datum::U64(1)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsReal),
-    //                  Datum::F64(1.0))]);
+    test_eval!(test_cast_int_as_real,
+               vec![(build_expr_with_sig(vec![Datum::I64(-1)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsReal,
+                                         FieldType::new()),
+                     Datum::F64(-1.0)),
+                    (build_expr_with_sig(vec![Datum::U64(1)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsReal,
+                                         FieldType::new()),
+                     Datum::F64(1.0))]);
+
     // test_eval!(test_cast_int_as_string,
     //            vec![(build_expr_with_sig(vec![Datum::I64(-1)],
     //                                      ExprType::ScalarFunc,
