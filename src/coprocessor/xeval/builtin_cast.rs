@@ -12,7 +12,10 @@
 // limitations under the License.
 
 use std::i64;
-use tipb::expression::Expr;
+use protobuf::ProtobufEnum;
+use chrono::naive::time::NaiveTime;
+use chrono::offset::fixed::FixedOffset;
+use tipb::expression::{DataType, Expr};
 use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp,
                                 produce_str_with_specified_tp};
 use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag};
@@ -95,7 +98,17 @@ impl Evaluator {
         let d = try!(self.eval(ctx, child));
         try!(check_datum_int(&d));
         let s = try!(d.into_string());
-        let t = try!(Time::parse_datetime(&s, DEFAULT_FSP, &ctx.tz));
+        let decimal = expr.get_field_type().get_decimal();
+        let offset = match FixedOffset::east_opt(decimal) {
+            None => return Err(Error::Eval(format!("invalid tz offset {}", decimal))),
+            Some(tz) => tz,
+        };
+        let mut t = try!(Time::parse_datetime(&s, DEFAULT_FSP, &offset));
+        let data_type = expr.get_field_type().get_tp();
+        if data_type == DataType::TypeDate {
+            let dt = t.get_time().date().and_time(NaiveTime::from_hms(0, 0, 0)).unwrap();
+            t = try!(Time::new(dt, data_type.value() as u8, decimal as i8));
+        }
         Ok(Datum::Time(t))
     }
 
@@ -263,6 +276,7 @@ impl Evaluator {
 #[cfg(test)]
 mod test {
     use std::{i64, u64};
+    use chrono::offset::fixed::FixedOffset;
     use tipb::expression::{FieldType, ExprType, ScalarFuncSig};
     use coprocessor::codec::datum::Datum;
     use coprocessor::codec::mysql::{Decimal, Time, Duration};
@@ -383,15 +397,24 @@ mod test {
     //                                      ScalarFuncSig::CastIntAsDecimal),
     //                  Datum::Dec(Decimal::from(1)))]);
 
-    // test_eval!(test_cast_int_as_time,
-    //            vec![(build_expr_with_sig(vec![Datum::I64(20121231113045)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsTime),
-    //                  Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap())),
-    //                 (build_expr_with_sig(vec![Datum::U64(121231)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsTime),
-    //                  Datum::Time(Time::parse_utc_datetime("2012-12-31 00:00:00", 0).unwrap()))]);
+    test_eval!(test_cast_int_as_time,
+               vec![(build_expr_with_sig(vec![Datum::I64(20121231113045)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsTime,
+                                         FieldType::new()),
+                     Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap())),
+                    (build_expr_with_sig(vec![Datum::U64(121231)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsTime,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_decimal(1);
+                                             ft
+                                         }),
+                     Datum::Time(Time::parse_datetime("2012-12-31 00:00:00",
+                                                      0,
+                                                      &FixedOffset::east(1))
+                        .unwrap()))]);
 
     test_eval!(test_cast_int_as_duration,
                vec![(build_expr_with_sig(vec![Datum::I64(101112)],
