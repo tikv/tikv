@@ -104,7 +104,8 @@ impl Evaluator {
         let d = try!(self.eval(ctx, child));
         try!(check_datum_int(&d));
         let s = try!(d.into_string());
-        let duration = try!(Duration::parse(s.as_bytes(), DEFAULT_FSP));
+        let duration = try!(Duration::parse(s.as_bytes(),
+                                            expr.get_field_type().get_decimal() as i8));
         Ok(Datum::Dur(duration))
     }
 
@@ -392,9 +393,10 @@ mod test {
     //                                      ScalarFuncSig::CastIntAsTime),
     //                  Datum::Time(Time::parse_utc_datetime("2012-12-31 00:00:00", 0).unwrap()))]);
 
-    // test_eval!(test_cast_int_as_duration,
-    //            vec![(build_expr_with_sig(vec![Datum::I64(101112)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsDuration),
-    //                  Datum::Dur(Duration::parse(b"10:11:12", 0).unwrap()))]);
+    test_eval!(test_cast_int_as_duration,
+               vec![(build_expr_with_sig(vec![Datum::I64(101112)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsDuration,
+                                         FieldType::new()),
+                     Datum::Dur(Duration::parse(b"10:11:12", 0).unwrap()))]);
 }
