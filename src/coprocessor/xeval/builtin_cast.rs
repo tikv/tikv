@@ -387,15 +387,27 @@ mod test {
                                          }),
                      Datum::Bytes(b"10000".to_vec()))]);
 
-    // test_eval!(test_cast_int_as_decimal,
-    //            vec![(build_expr_with_sig(vec![Datum::I64(-1)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsDecimal),
-    //                  Datum::Dec(Decimal::from(-1))),
-    //                 (build_expr_with_sig(vec![Datum::U64(1)],
-    //                                      ExprType::ScalarFunc,
-    //                                      ScalarFuncSig::CastIntAsDecimal),
-    //                  Datum::Dec(Decimal::from(1)))]);
+    test_eval!(test_cast_int_as_decimal,
+               vec![(build_expr_with_sig(vec![Datum::I64(-1)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsDecimal,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(1);
+                                             ft.set_decimal(0);
+                                             ft
+                                         }),
+                     Datum::Dec(Decimal::from(-1))),
+                    (build_expr_with_sig(vec![Datum::U64(1000)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastIntAsDecimal,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(5);
+                                             ft.set_decimal(1);
+                                             ft
+                                         }),
+                     Datum::Dec(Decimal::from(1000)))]);
 
     test_eval!(test_cast_int_as_time,
                vec![(build_expr_with_sig(vec![Datum::I64(20121231113045)],
