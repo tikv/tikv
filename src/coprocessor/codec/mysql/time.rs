@@ -123,7 +123,7 @@ impl Time {
     }
 
     pub fn get_time(&self) -> DateTime<FixedOffset> {
-        self.time.clone()
+        self.time
     }
 
     pub fn get_tp(&self) -> u8 {
