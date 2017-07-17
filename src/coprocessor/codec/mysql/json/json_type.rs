@@ -48,7 +48,8 @@ mod test {
         let test_cases = vec![
             (r#"{"a": "b"}"#, JSON_TYPE_OBJECT),
             (r#"["a", "b"]"#, JSON_TYPE_ARRAY),
-            ("5", JSON_TYPE_INTEGER),
+            ("-5", JSON_TYPE_INTEGER),
+            ("5", JSON_TYPE_UNSIGNED_INTEGER),
             ("18446744073709551615", JSON_TYPE_UNSIGNED_INTEGER),
             ("5.6", JSON_TYPE_DOUBLE),
             (r#""hello, world""#, JSON_TYPE_STRING),
