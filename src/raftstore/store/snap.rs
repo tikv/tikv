@@ -702,21 +702,21 @@ pub fn build_plain_cf_file<E: BytesEncoder>(encoder: &mut E,
                       end_key,
                       false,
                       &mut |key, value| {
-                          cf_key_count += 1;
-                          cf_size += key.len() + value.len();
-                          try!(encoder.encode_compact_bytes(key));
-                          try!(encoder.encode_compact_bytes(value));
-                          Ok(true)
-                      }));
+        cf_key_count += 1;
+        cf_size += key.len() + value.len();
+        try!(encoder.encode_compact_bytes(key));
+        try!(encoder.encode_compact_bytes(value));
+        Ok(true)
+    }));
     // use an empty byte array to indicate that cf reaches an end.
     box_try!(encoder.encode_compact_bytes(b""));
     Ok((cf_key_count, cf_size))
 }
 
 fn apply_plain_cf_file<D: CompactBytesDecoder>(decoder: &mut D,
-                                                   options: &ApplyOptions,
-                                                   handle: &CFHandle)
-                                                   -> Result<()> {
+                                               options: &ApplyOptions,
+                                               handle: &CFHandle)
+                                               -> Result<()> {
     let mut wb = WriteBatch::new();
     let mut batch_size = 0;
     loop {
