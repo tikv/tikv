@@ -388,6 +388,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
                                      Some(false));
     opts.set_use_direct_io_for_flush_and_compaction(direct_io);
 
+    let pipelined_write = get_toml_boolean(config, "rocksdb.enable-pipelined-write", Some(true));
+    opts.enable_pipelined_write(pipelined_write);
+
     opts
 }
 

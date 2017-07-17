@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use super::{Coprocessor, RegionObserver, ObserverContext, Result as CopResult};
-use util::codec::table;
+use coprocessor::codec::table;
 use util::codec::bytes::{encode_bytes, BytesDecoder};
 
 use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
@@ -85,7 +85,7 @@ mod test {
     use raftstore::coprocessor::RegionObserver;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{SplitRequest, AdminRequest, AdminCmdType};
-    use util::codec::{datum, table, Datum};
+    use coprocessor::codec::{datum, table, Datum};
     use util::codec::number::NumberEncoder;
     use util::codec::bytes::encode_bytes;
     use byteorder::{BigEndian, WriteBytesExt};
