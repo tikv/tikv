@@ -1024,7 +1024,7 @@ impl Scheduler {
             if !self.grouped_cmds.as_ref().unwrap().is_empty() {
                 let m = self.grouped_cmds.take().unwrap();
                 for (idx, (ctx, cids)) in m.into_iter().enumerate() {
-                    BATCH_COMMANDS.with_label_values(&[BATCH_GROUPS[idx]])
+                    BATCH_COMMANDS.with_label_values(&BATCH_GROUPS[idx..idx+1])
                         .observe(cids.len() as f64);
                     self.get_snapshot(&ctx.0, cids);
                 }
