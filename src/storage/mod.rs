@@ -719,7 +719,7 @@ impl Storage {
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
         Ok(())
     }
-    
+
     pub fn async_mvcc_by_key(&self,
                              ctx: Context,
                              key: Key,

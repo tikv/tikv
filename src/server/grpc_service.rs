@@ -880,13 +880,13 @@ fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
         lock_info.set_lock_version(lock.ts);
     }
     mvcc_info.set_lock(lock_info);
-    let (vw, vv) = extract_vectors(mvcc);
+    let (vw, vv) = extract_info_vectors(mvcc);
     mvcc_info.set_writes(RepeatedField::from_vec(vw));
     mvcc_info.set_values(RepeatedField::from_vec(vv));
     mvcc_info
 }
 
-fn extract_vectors(res: storage::MvccInfo) -> (Vec<WriteInfo>, Vec<ValueInfo>) {
+fn extract_info_vectors(res: storage::MvccInfo) -> (Vec<WriteInfo>, Vec<ValueInfo>) {
     let vv: Vec<ValueInfo> = res.values
         .into_iter()
         .map(|(start_ts, is_short, value)| {
