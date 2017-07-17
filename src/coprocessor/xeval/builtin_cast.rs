@@ -20,13 +20,8 @@ use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp,
                                 produce_str_with_specified_tp};
 use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag};
 use coprocessor::codec::convert;
-use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
-
-const TYPE_INT: &'static str = "int";
-
-fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
-    Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
-}
+use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED, TYPE_INT,
+            invalid_type_error};
 
 fn check_datum_int(datum: &Datum) -> Result<()> {
     match *datum {

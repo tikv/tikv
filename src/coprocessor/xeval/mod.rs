@@ -42,3 +42,11 @@ pub type Result<T> = result::Result<T, Error>;
 pub use self::evaluator::{Evaluator, EvalContext};
 
 pub const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
+
+pub const TYPE_INT: &'static str = "int";
+
+use coprocessor::codec::datum::Datum;
+
+pub fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
+    Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
+}
