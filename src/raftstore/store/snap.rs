@@ -24,13 +24,14 @@ use std::time;
 use std::thread;
 
 use protobuf::Message;
-use rocksdb::DB;
+use rocksdb::{DB, CFHandle, WriteBatch, Writable};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 
 use raftstore::Result as RaftStoreResult;
 use raftstore::store::Msg;
+use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::transport::SendCh;
 use util::HandyRwLock;
@@ -38,7 +39,7 @@ use util::collections::{HashMap, HashMapEntry as Entry};
 use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 
 use raftstore::store::engine::{Snapshot as DbSnapshot, Iterable};
-use raftstore::store::keys::{enc_start_key, enc_end_key};
+use raftstore::store::keys::{self, enc_start_key, enc_end_key};
 
 
 use raftstore::store::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
@@ -77,6 +78,7 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
+// CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]
 fn plain_file_used(cf: &str) -> bool {
     cf == CF_LOCK
@@ -730,7 +732,7 @@ fn apply_plain_cf_file<D: CompactBytesDecoder>(decoder: &mut D,
             }
             break;
         }
-        box_try!(util::check_key_in_region(keys::origin_key(&key), &options.region));
+        box_try!(check_key_in_region(keys::origin_key(&key), &options.region));
         batch_size += key.len();
         let value = box_try!(decoder.decode_compact_bytes());
         batch_size += value.len();
@@ -867,7 +869,13 @@ impl Snapshot for Snap {
                 let mut file = box_try!(File::open(&cf_file.path));
                 try!(apply_plain_cf_file(&mut file, &options, cf_handle));
             } else {
-                let ingest_opt = IngestExternalFileOptions::new();
+                // we move instead of copy file when ingest_external_file_cf
+                // so method delete will not sub size_track
+                if file_exists(&cf_file.path) {
+                    let mut size_track = self.size_track.wl();
+                    *size_track = size_track.saturating_sub(cf_file.size);
+                }
+                let mut ingest_opt = IngestExternalFileOptions::new();
                 ingest_opt.move_files(true);
                 let path = cf_file.path.as_path().to_str().unwrap();
                 box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
