@@ -15,6 +15,7 @@ mod endpoint;
 mod aggregate;
 mod metrics;
 mod executor;
+mod dag;
 pub mod codec;
 pub mod xeval;
 
@@ -81,4 +82,4 @@ impl From<txn::Error> for Error {
 }
 
 pub use self::endpoint::{Host as EndPointHost, RequestTask, SelectContext, SINGLE_GROUP,
-                         REQ_TYPE_SELECT, REQ_TYPE_INDEX, Task as EndPointTask};
+                         REQ_TYPE_SELECT, REQ_TYPE_INDEX, REQ_TYPE_DAG, Task as EndPointTask};
