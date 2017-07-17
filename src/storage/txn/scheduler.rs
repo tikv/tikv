@@ -873,22 +873,24 @@ impl Scheduler {
                             cids: Vec<u64>,
                             cb_ctx: CbContext,
                             snapshot: EngineResult<Box<Snapshot>>) {
-        for cid in cids {
-            debug!("receive snapshot finish msg for cid={}", cid);
-            match snapshot {
-                Ok(ref snapshot) => {
+        debug!("receive snapshot finish msg for cid={:?}", cids);
+        match snapshot {
+            Ok(ref snapshot) => {
+                for cid in cids {
                     SCHED_STAGE_COUNTER_VEC
                         .with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
                         .inc();
                     let s = Snapshot::clone(snapshot.as_ref());
                     self.process_by_worker(cid, cb_ctx.clone(), s);
                 }
-                Err(ref e) => {
+            }
+            Err(ref e) => {
+                error!("get snapshot failed for cids={:?}, error {:?}", cids, e);
+                for cid in cids {
                     SCHED_STAGE_COUNTER_VEC
                         .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
                         .inc();
                     let e = e.maybe_clone().unwrap_or_else(|| {
-                        error!("get snapshot failed for cid={}, error {:?}", cid, e);
                         EngineError::Other(box_err!("{:?}", e))
                     });
                     self.finish_with_err(cid, Error::from(e));
@@ -1020,21 +1022,23 @@ impl Scheduler {
                 }
             }
 
-            let mut total = 0;
             if !self.grouped_cmds.as_ref().unwrap().is_empty() {
                 let m = self.grouped_cmds.take().unwrap();
-                for (ctx, cids) in m {
-                    total += cids.len();
+                for (idx, (ctx, cids)) in m.into_iter().enumerate() {
+                    BATCH_COMMANDS.with_label_values(&[BATCH_GROUPS[idx]])
+                        .observe(cids.len() as f64);
                     self.get_snapshot(&ctx.0, cids);
                 }
                 self.grouped_cmds = Some(HashMap::with_capacity(CMD_BATCH_SIZE));
             }
-            BATCH_COMMANDS.observe(total as f64);
         }
     }
 }
 
 const CMD_BATCH_SIZE: usize = 32;
+const BATCH_GROUPS: &'static [&'static str] =
+    &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17",
+      "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32"];
 
 /// Generates the lock for a command.
 ///
