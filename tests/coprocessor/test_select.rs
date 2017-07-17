@@ -102,26 +102,6 @@ impl Iterator for ChunkSpliter {
     }
 }
 
-#[allow(dead_code)]
-fn debug_chunk(prefix: &str, chunk: &[Chunk]) {
-    println!("{}: {{", prefix);
-    for c in chunk {
-        let mut start: usize = 0;
-        let mut end: usize = 0;
-        let data = c.get_rows_data();
-        for meta in c.get_rows_meta().iter() {
-            end += meta.get_length() as usize;
-            let mut row = &data[start..end];
-            println!("\thandle={}, len={}, data={:?}",
-                     meta.get_handle(),
-                     meta.get_length(),
-                     row.decode().unwrap());
-            start = end;
-        }
-    }
-    println!("}}");
-}
-
 #[derive(Clone, Copy)]
 struct Column {
     id: i64,
