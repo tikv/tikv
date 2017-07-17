@@ -61,6 +61,7 @@ impl Error {
         match *self {
             Error::KeyLength => Some(Error::KeyLength),
             Error::KeyPadding => Some(Error::KeyPadding),
+            Error::KeyNotFound => Some(Error::KeyNotFound),
             Error::InvalidDataType(ref r) => Some(Error::InvalidDataType(r.clone())),
             Error::Encoding(e) => Some(Error::Encoding(e)),
             Error::Protobuf(_) |
