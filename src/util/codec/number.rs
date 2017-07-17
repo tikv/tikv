@@ -386,6 +386,11 @@ mod test {
                     decode_i64_le,
                     I64_TESTS);
 
+    test_serialize!(var_u64_little_endian_codec,
+                    encode_u64_le,
+                    decode_u64_le,
+                    U64_TESTS);
+
     test_serialize!(var_u16_codec, encode_u16_le, decode_u16_le, U16_TESTS);
     test_serialize!(var_u32_codec, encode_u32_le, decode_u32_le, U32_TESTS);
 

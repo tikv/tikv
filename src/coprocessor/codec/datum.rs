@@ -263,7 +263,7 @@ impl Datum {
         let order = match *self {
             Datum::Json(ref j) => j.cmp(json),
             Datum::I64(d) => Json::I64(d).cmp(json),
-            Datum::U64(d) => Json::I64(d as i64).cmp(json),
+            Datum::U64(d) => Json::U64(d).cmp(json),
             Datum::F64(d) => Json::Double(d).cmp(json),
             Datum::Dec(ref d) => {
                 let ff = try!(d.as_f64());

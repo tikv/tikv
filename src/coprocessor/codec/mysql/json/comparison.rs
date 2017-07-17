@@ -130,6 +130,7 @@ mod test {
     fn test_cmp_json_between_same_type() {
         let test_cases = vec![
             ("false", "true"),
+            ("-3", "3"),
             ("3", "5"),
             ("3.0", "4.9"),
             (r#""hello""#, r#""hello, world""#),

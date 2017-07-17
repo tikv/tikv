@@ -159,6 +159,7 @@ mod test {
         let legal_cases = vec!{
             (r#"{"key":"value"}"#),
             (r#"["d1","d2"]"#),
+            (r#"-3"#),
             (r#"3"#),
             (r#"3.0"#),
             (r#"null"#),
