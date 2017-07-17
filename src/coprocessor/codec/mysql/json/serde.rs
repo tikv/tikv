@@ -97,7 +97,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
     fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
         where E: de::Error
     {
-        self.visit_i64(v as i64)
+        Ok(Json::U64(v))
     }
 
     fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
