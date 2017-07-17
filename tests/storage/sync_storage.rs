@@ -135,6 +135,19 @@ impl SyncStorage {
     pub fn raw_delete(&self, ctx: Context, key: Vec<u8>) -> Result<()> {
         wait_op!(|cb| self.store.async_raw_delete(ctx, key, cb).unwrap()).unwrap()
     }
+
+    pub fn raw_scan(&self,
+                    ctx: Context,
+                    start_key: Vec<u8>,
+                    limit: usize)
+                    -> Result<Vec<Result<KvPair>>> {
+        wait_op!(|cb| {
+                self.store
+                    .async_raw_scan(ctx, start_key, limit, cb)
+                    .unwrap()
+            })
+            .unwrap()
+    }
 }
 
 impl Clone for SyncStorage {

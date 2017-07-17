@@ -21,7 +21,7 @@ use kvproto::coprocessor::KeyRange;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use storage::{Snapshot, Statistics};
-use util::xeval::EvalContext;
+use super::xeval::EvalContext;
 use super::{Result, Error};
 use super::executor::Executor as DAGExecutor;
 use super::executor::table_scan::TableScanExecutor;

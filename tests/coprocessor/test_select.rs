@@ -17,22 +17,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::i64;
 use protobuf::{RepeatedField, Message};
 
-use tikv::coprocessor::*;
-use tikv::coprocessor;
 use kvproto::kvrpcpb::Context;
 use kvproto::coprocessor::{Request, KeyRange};
-use tikv::storage::{Mutation, Key, ALL_CFS};
-use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tipb::select::{SelectRequest, DAGRequest, SelectResponse, Chunk};
 use tipb::executor::{Executor, ExecType, TableScan, IndexScan, Selection, Aggregation, TopN, Limit};
 use tipb::schema::{self, ColumnInfo};
 use tipb::expression::{Expr, ExprType, ByItem};
+
+use tikv::util::codec::number::*;
 use tikv::util::worker::Worker;
 use tikv::util::codec::{table, Datum, datum};
 use tikv::util::codec::datum::DatumDecoder;
 use tikv::util::codec::number::*;
 use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
-
+use tikv::storage::{Mutation, Key, ALL_CFS};
+use tikv::storage::engine::{self, Engine, TEMP_DIR};
+use tikv::coprocessor;
+use tikv::coprocessor::*;
+use tikv::coprocessor::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
+use tikv::coprocessor::codec::{table, Datum, datum};
 use storage::sync_storage::SyncStorage;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
