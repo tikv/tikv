@@ -26,16 +26,13 @@ use tipb::expression::{Expr, ExprType, ByItem};
 
 use tikv::util::codec::number::*;
 use tikv::util::worker::Worker;
-use tikv::util::codec::{table, Datum, datum};
-use tikv::util::codec::datum::DatumDecoder;
-use tikv::util::codec::number::*;
-use tikv::util::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
-use tikv::storage::{Mutation, Key, ALL_CFS};
-use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use tikv::coprocessor;
 use tikv::coprocessor::*;
+use tikv::coprocessor::codec::{table, datum};
+use tikv::coprocessor::codec::datum::Datum;
 use tikv::coprocessor::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
-use tikv::coprocessor::codec::{table, Datum, datum};
+use tikv::storage::{Mutation, Key, ALL_CFS};
+use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use storage::sync_storage::SyncStorage;
 
 static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
@@ -399,6 +396,7 @@ impl<'a> Select<'a> {
         self.build_with(&[0])
     }
 
+    // the first returned value is select_request, second is dag_request
     fn build_with(mut self, flags: &[u64]) -> (Request, Request) {
         let mut req = Request::new();
         // construct sel req
