@@ -135,6 +135,21 @@ impl Tikv for BenchTikvHandler {
                 _: ClientStreamingSink<Done>) {
         unimplemented!()
     }
+
+    fn raw_scan(&self, _: RpcContext, _: RawScanRequest, _: UnarySink<RawScanResponse>) {
+        unimplemented!()
+    }
+
+    fn mvcc_get_by_key(&self, _: RpcContext, _: MvccGetByKeyRequest, _: UnarySink<MvccGetByKeyResponse>) {
+        unimplemented!()
+    }
+
+    fn mvcc_get_by_start_ts(&self,
+                            _: RpcContext,
+                            _: MvccGetByStartTsRequest,
+                            _: UnarySink<MvccGetByStartTsResponse>) {
+        unimplemented!()
+    }
 }
 
 // TODO: Import from TiKV
