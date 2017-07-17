@@ -273,6 +273,47 @@ impl<'a> MvccReader<'a> {
         Ok(())
     }
 
+    pub fn seek_first(&mut self, ts: u64) -> Result<Option<Key>> {
+        assert!(self.scan_mode.is_some());
+        self.create_write_cursor()?;
+        self.create_lock_cursor()?;
+
+        let mut w_cur = self.write_cursor.as_mut().unwrap();
+        let mut l_cur = self.lock_cursor.as_mut().unwrap();
+        let (mut w_ok, mut l_ok) = (w_cur.seek_to_first(&mut self.statistics.write),
+                                    l_cur.seek_to_first(&mut self.statistics.lock));
+
+        loop {
+            let (mut w_key, mut l_key) = (None, None);
+            if w_ok {
+                w_key = Some(w_cur.key().to_vec());
+                if Key::from_encoded(w_key.clone().unwrap()).decode_ts()? < ts {
+                    w_key = None;
+                }
+                w_ok = w_cur.next(&mut self.statistics.write);
+            }
+            if l_ok {
+                l_key = Some(l_cur.key().to_vec());
+                if Key::from_encoded(l_key.clone().unwrap()).decode_ts()? < ts {
+                    l_key = None;
+                }
+                l_ok = l_cur.next(&mut self.statistics.lock);
+            }
+            match (w_key, l_key) {
+                (None, None) => {}
+                (None, Some(k)) => return Ok(Some(Key::from_encoded(k))),
+                (Some(k), None) => return Ok(Some(Key::from_encoded(k).truncate_ts()?)),
+                (Some(wk), Some(lk)) => {
+                    if wk < lk {
+                        return Ok(Some(Key::from_encoded(wk).truncate_ts()?));
+                    } else {
+                        return Ok(Some(Key::from_encoded(lk)));
+                    }
+                }
+            };
+        }
+    }
+
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
         assert!(self.scan_mode.is_some());
         try!(self.create_write_cursor());

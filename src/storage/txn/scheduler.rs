@@ -420,12 +420,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              true,
                                              None,
                                              ctx.get_isolation_level());
-            match reader.seek(Key::from_raw(&[]), start_ts)
+            match reader.seek_first(start_ts)
                 .map_err(StorageError::from) {
                 Err(e) => ProcessResult::Failed { err: e.into() },
                 Ok(opt) => {
                     match opt {
-                        Some((key, _)) => {
+                        Some(key) => {
                             match find_mvcc_infos_by_key(&mut reader, &key, start_ts) {
                                 Ok((lock, writes, values)) => {
                                     ProcessResult::MvccStartTs {
