@@ -14,9 +14,11 @@
 // remove later
 #![allow(dead_code)]
 
+use tipb::executor::Limit;
+
 use super::{Row, Executor};
 use super::super::Result;
-use tipb::executor::Limit;
+use super::super::metrics::*;
 
 struct LimitExecutor<'a> {
     limit: u64,
@@ -26,6 +28,7 @@ struct LimitExecutor<'a> {
 
 impl<'a> LimitExecutor<'a> {
     fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
+        COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
@@ -54,8 +57,8 @@ mod test {
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
     use super::super::topn::test::gen_table_data;
-    use util::codec::mysql::types;
-    use util::codec::datum::Datum;
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::datum::Datum;
     use storage::Statistics;
     use tipb::executor::TableScan;
     use protobuf::RepeatedField;

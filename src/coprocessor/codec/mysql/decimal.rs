@@ -20,8 +20,8 @@ use std::cmp::Ordering;
 
 use byteorder::ReadBytesExt;
 
-use util::codec::{Result, Error, TEN_POW, convert};
 use util::codec::bytes::BytesDecoder;
+use super::super::{Result, Error, TEN_POW, convert};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -2166,7 +2166,7 @@ mod test {
             (WORD_BUF_LEN, "123E5", Res::Ok("12300000")),
             (WORD_BUF_LEN, "123E-2", Res::Ok("1.23")),
             (1, "123450000098765", Res::Overflow("98765")),
-		    (1, "123450.000098765", Res::Truncated("123450")),
+            (1, "123450.000098765", Res::Truncated("123450")),
             (WORD_BUF_LEN, "123.123", Res::Ok("123.123")),
             (WORD_BUF_LEN, "123.1230", Res::Ok("123.1230")),
             (WORD_BUF_LEN, "00123.123", Res::Ok("123.123")),
@@ -2407,7 +2407,7 @@ mod test {
             (0, "234.567", "10.555", Some("22.223306489815253434"), Some("2.357")),
             (0, "-234.567", "10.555", Some("-22.223306489815253434"), Some("-2.357")),
             (0, "234.567", "-10.555", Some("-22.223306489815253434"), Some("2.357")),
-		    (0, "99999999999999999999999999999999999999", "3",
+            (0, "99999999999999999999999999999999999999", "3",
              Some("33333333333333333333333333333333333333"), Some("0")),
             (DEFAULT_DIV_FRAC_INCR, "1", "1", Some("1.000000000"), Some("0")),
             (DEFAULT_DIV_FRAC_INCR, "1.00", "1", Some("1.000000000"), Some("0.00")),

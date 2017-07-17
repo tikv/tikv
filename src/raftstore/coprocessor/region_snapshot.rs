@@ -291,7 +291,7 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::{PeerStorage, CacheQueryStats};
-    use storage::{Cursor, Key, ALL_CFS, ScanMode, Statistics};
+    use storage::{Cursor, Key, ALL_CFS, ScanMode, CFStatistics};
     use util::{worker, rocksdb, escape};
 
     use super::*;
@@ -494,7 +494,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics).unwrap());

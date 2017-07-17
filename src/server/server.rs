@@ -22,6 +22,7 @@ use kvproto::tikvpb_grpc::*;
 use util::worker::Worker;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
+use raftstore::store::config::REGION_SPLIT_SIZE;
 
 use super::{Result, Config};
 use coprocessor::{EndPointHost, EndPointTask};
@@ -33,7 +34,7 @@ use super::raft_client::RaftClient;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: usize = 4 * REGION_SPLIT_SIZE as usize;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
@@ -235,7 +236,7 @@ mod tests {
 
         server.start(&cfg).unwrap();
 
-        let trans = server.transport();
+        let mut trans = server.transport();
         for i in 0..10 {
             if i % 2 == 1 {
                 trans.report_unreachable(RaftMessage::new());
@@ -245,6 +246,7 @@ mod tests {
         let mut msg = RaftMessage::new();
         msg.set_region_id(1);
         trans.send(msg).unwrap();
+        trans.flush();
         assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
         server.stop().unwrap();
     }

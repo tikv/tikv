@@ -16,15 +16,15 @@ use std::ascii::AsciiExt;
 use std::str;
 
 use chrono::FixedOffset;
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
-use util::codec::datum::{Datum, DatumDecoder};
-use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json};
-use util::codec;
 use util::collections::{HashMap, HashMapEntry};
-
+use super::super::codec::datum::{Datum, DatumDecoder};
+use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
+                                 ModifyType};
+use super::super::codec;
 use super::{Result, Error};
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
@@ -137,8 +137,14 @@ impl Evaluator {
             ExprType::IfNull => self.eval_if_null(ctx, expr),
             ExprType::IsNull => self.eval_is_null(ctx, expr),
             ExprType::NullIf => self.eval_null_if(ctx, expr),
+            ExprType::JsonSet => self.eval_json_modify(ctx, expr, ModifyType::Set),
+            ExprType::JsonInsert => self.eval_json_modify(ctx, expr, ModifyType::Insert),
+            ExprType::JsonReplace => self.eval_json_modify(ctx, expr, ModifyType::Replace),
+            ExprType::JsonUnquote => self.eval_json_unquote(ctx, expr),
+            ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
             ExprType::JsonType => self.eval_json_type(ctx, expr),
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
+            ExprType::ScalarFunc => self.eval_scalar_function(ctx, expr),
             _ => Ok(Datum::Null),
         }
     }
@@ -218,6 +224,15 @@ impl Evaluator {
         left.cmp(ctx, &right).map(Some).map_err(From::from)
     }
 
+    pub fn get_one_child<'a>(&mut self, expr: &'a Expr) -> Result<&'a Expr> {
+        let l = expr.get_children().len();
+        if l != 1 {
+            return Err(Error::Expr(format!("{:?} need 1 operand but got {}", expr.get_tp(), l)));
+        }
+        let children = expr.get_children();
+        Ok(&children[0])
+    }
+
     fn get_two_children<'a>(&mut self, expr: &'a Expr) -> Result<(&'a Expr, &'a Expr)> {
         let l = expr.get_children().len();
         if l != 2 {
@@ -228,14 +243,8 @@ impl Evaluator {
     }
 
     fn eval_one_child(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = expr.get_children();
-        if children.len() != 1 {
-            return Err(Error::Expr(format!("{:?} need 1 operands but got {}",
-                                           expr.get_tp(),
-                                           children.len())));
-        }
-        let child = try!(self.eval(ctx, &children[0]));
-        Ok(child)
+        let child_expr = try!(self.get_one_child(expr));
+        self.eval(ctx, child_expr)
     }
 
     fn eval_two_children(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
@@ -415,6 +424,78 @@ impl Evaluator {
         }
     }
 
+    fn eval_json_modify(&mut self,
+                        ctx: &EvalContext,
+                        expr: &Expr,
+                        mt: ModifyType)
+                        -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2));
+        if is_even(children.len() as i64) {
+            return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
+        }
+
+        let mut index = 0 as i64;
+        let should_be_null = children.iter().any(|item| {
+            index += 1;
+            if *item != Datum::Null {
+                false
+            } else {
+                index == 1 || is_even(index)
+            }
+        });
+        if should_be_null {
+            return Ok(Datum::Null);
+        }
+
+        let kv_len = children.len() / 2;
+        let mut children = children.into_iter();
+        let mut json = try!(children.next().unwrap().cast_as_json());
+        let mut keys = Vec::with_capacity(kv_len);
+        let mut values = Vec::with_capacity(kv_len);
+        while let Some(item) = children.next() {
+            let key = try!(item.to_json_path_expr());
+            let value = try!(children.next().unwrap().into_json());
+            keys.push(key);
+            values.push(value);
+        }
+
+        try!(json.modify(&keys, values, mt));
+        Ok(Datum::Json(json))
+    }
+
+    fn eval_json_unquote(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr));
+        if child == Datum::Null {
+            return Ok(Datum::Null);
+        }
+        // here Datum::Byte(bs) should be converted into Json::String(bs)
+        // select JSON_UNQUOTE('{"a":   "b"}');
+        // +------------------------------+
+        // | JSON_UNQUOTE('{"a":   "b"}') |
+        // +------------------------------+
+        // | {"a":   "b"}                 |
+        // +------------------------------+
+        let json = try!(child.into_json());
+        let unquote_data = try!(json.unquote());
+        Ok(Datum::Bytes(unquote_data.into_bytes()))
+    }
+
+    fn eval_json_extract(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2));
+        if children.iter().any(|item| *item == Datum::Null) {
+            return Ok(Datum::Null);
+        }
+        let mut children = children.into_iter();
+        let json = try!(children.next().unwrap().cast_as_json());
+        let path_extrs: Vec<PathExpression> = try!(children.map(|item| item.to_json_path_expr())
+            .collect());
+        if let Some(data) = json.extract(&path_extrs) {
+            Ok(Datum::Json(data))
+        } else {
+            Ok(Datum::Null)
+        }
+    }
+
     fn eval_json_type(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let child = try!(self.eval_one_child(ctx, expr));
         if Datum::Null == child {
@@ -435,6 +516,13 @@ impl Evaluator {
         let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json())
             .collect());
         Ok(Datum::Json(first.merge(suffixes)))
+    }
+
+    fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        match expr.get_sig() {
+            ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
+            _ => Err(Error::Expr(format!("unsupported scalar function: {:?}", expr.get_sig()))),
+        }
     }
 
     fn eval_logic<F>(&mut self,
@@ -511,12 +599,17 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
     Ok(pos.is_ok())
 }
 
+#[inline]
+fn is_even(n: i64) -> bool {
+    n & 1 == 0
+}
+
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
-    use util::codec::{Datum, datum};
-    use util::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
+    use coprocessor::codec::{Datum, datum};
+    use coprocessor::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
 
     use std::i32;
 
@@ -579,6 +672,12 @@ mod test {
 
     fn bin_expr(left: Datum, right: Datum, tp: ExprType) -> Expr {
         build_expr(vec![left, right], tp)
+    }
+
+    pub fn build_expr_with_sig(children: Vec<Datum>, tp: ExprType, sig: ScalarFuncSig) -> Expr {
+        let mut expr = build_expr(children, tp);
+        expr.set_sig(sig);
+        expr
     }
 
     fn build_expr(children: Vec<Datum>, tp: ExprType) -> Expr {
@@ -753,7 +852,7 @@ mod test {
     // TODO: test time
     test_eval!(test_eval_plus,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Plus), Datum::I64(2)),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Plus), Datum::U64(2)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Plus), Datum::F64(2.0)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Plus), Datum::F64(0.0)),
@@ -779,7 +878,7 @@ mod test {
 
     test_eval!(test_eval_div,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div), Datum::Dec(1.into())),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Div), Datum::Dec(1.into())),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Div), Datum::Dec(1.into())),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Div), Datum::F64(1f64)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Div), Datum::F64(-1f64)),
@@ -832,7 +931,7 @@ mod test {
 
     test_eval!(test_eval_mul,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::Mul), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::Mul), Datum::U64(1)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"1".to_vec()), ExprType::Mul), Datum::F64(1f64)),
         (bin_expr(Datum::I64(1), Datum::Bytes(b"-1".to_vec()), ExprType::Mul), Datum::F64(-1f64)),
@@ -856,7 +955,7 @@ mod test {
 
     test_eval!(test_eval_int_div,
                vec![
-		(bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
+        (bin_expr(Datum::I64(1), Datum::I64(1), ExprType::IntDiv), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::IntDiv), Datum::Null),
         (bin_expr(Datum::I64(1), Datum::U64(1), ExprType::IntDiv), Datum::U64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::IntDiv), Datum::Null),
@@ -885,7 +984,7 @@ mod test {
     test_eval!(test_eval_rem,
                vec![
         (bin_expr(Datum::I64(3), Datum::I64(1), ExprType::Mod), Datum::I64(0)),
-		(bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
+        (bin_expr(Datum::I64(3), Datum::I64(2), ExprType::Mod), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::I64(0), ExprType::Mod), Datum::Null),
         (bin_expr(Datum::I64(3), Datum::U64(2), ExprType::Mod), Datum::I64(1)),
         (bin_expr(Datum::I64(1), Datum::U64(0), ExprType::Mod), Datum::Null),
@@ -1073,6 +1172,49 @@ mod test {
         build_expr(datums, tp)
     }
 
+    test_eval!(test_eval_json_modify,
+               vec![
+        (build_expr(vec![Datum::Null, Datum::Null, Datum::Null], ExprType::JsonSet),
+                    Datum::Null),
+        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                         ExprType::JsonSet),
+                    Datum::Json(r#"[9,3]"#.parse().unwrap())),
+        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                         ExprType::JsonInsert),
+                    Datum::Json(r#"[9,3]"#.parse().unwrap())),
+        (build_expr(vec![Datum::I64(9), Datum::Bytes(b"$[1]".to_vec()), Datum::I64(3)],
+                         ExprType::JsonReplace),
+                    Datum::Json(r#"9"#.parse().unwrap())),
+        (build_expr(vec![Datum::Bytes(br#"{"a":"x"}"#.to_vec()),
+                            Datum::Bytes(b"$.a".to_vec()),Datum::Null],
+                        ExprType::JsonSet),
+                    Datum::Json(r#"{"a":null}"#.parse().unwrap())),
+               ]);
+
+    test_eval!(test_eval_json_unquote,
+               vec![
+            (build_expr(vec![Datum::Null], ExprType::JsonUnquote),
+                        Datum::Null),
+            (build_byte_datums_expr(&[b"a"], ExprType::JsonUnquote),
+                        Datum::Bytes(b"a".to_vec())),
+            (build_byte_datums_expr(&[br#"\"3\""#], ExprType::JsonUnquote),
+                        Datum::Bytes(br#""3""#.to_vec())),
+            (build_byte_datums_expr(&[br#"{"a":  "b"}"#], ExprType::JsonUnquote),
+                        Datum::Bytes(br#"{"a":  "b"}"#.to_vec())),
+            (build_byte_datums_expr(&[br#"hello,\"quoted string\",world"#],
+                                    ExprType::JsonUnquote),
+                        Datum::Bytes(br#"hello,"quoted string",world"#.to_vec())),
+               ]);
+
+    test_eval!(test_eval_json_extract,
+               vec![(build_expr(vec![Datum::Null, Datum::Null], ExprType::JsonExtract),
+                     Datum::Null),
+                    (build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#,
+                                              b"$.a[0].aa[0].aaa",
+                                              b"$.aaa"],
+                                            ExprType::JsonExtract),
+                     Datum::Json("[1,2]".parse().unwrap()))]);
+
     test_eval!(test_eval_json_type,
                vec![
             (build_expr(vec![Datum::Null], ExprType::JsonType),
@@ -1103,10 +1245,18 @@ mod test {
 
     test_eval_err!(test_eval_json_err,
                    vec![
+          build_byte_datums_expr(&[b"{}", b"$invalidPath", b"3",], ExprType::JsonReplace),
+          build_byte_datums_expr(&[b"{}", b"$.a", b"3", b"$.c"], ExprType::JsonReplace),
+          build_expr(vec![], ExprType::JsonUnquote),
+          build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonUnquote),
+          build_expr(vec![], ExprType::JsonExtract),
+          build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#],
+                                ExprType::JsonExtract),
+          build_byte_datums_expr(&[br#"{"a": [{"aa": [{"aaa": 1}]}], "aaa": 2}"#, b"aaa"],
+                                ExprType::JsonExtract),
           build_expr(vec![], ExprType::JsonType),
           build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
      ]);
-
 }
