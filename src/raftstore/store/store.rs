@@ -1375,10 +1375,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let mut compact_logs = vec![];
 
         for (&region_id, peer) in &mut self.region_peers {
-            if peer.pending_remove {
-                continue;
-            }
-
             let applied_idx = peer.get_store().applied_index();
             let mut replicated_idx = applied_idx;
             if peer.is_leader() {
