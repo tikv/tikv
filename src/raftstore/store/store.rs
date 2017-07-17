@@ -1379,7 +1379,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 continue;
             }
 
-            let mut replicated_idx = 0;
+            let applied_idx = peer.get_store().applied_index();
+            let mut replicated_idx = applied_idx;
             if peer.is_leader() {
                 replicated_idx = peer.raft_group
                     .status()
@@ -1398,7 +1399,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
                 }
             }
-            let applied_idx = peer.get_store().applied_index();
             let first_idx = peer.get_store().first_index();
             let mut compact_idx;
             if applied_idx > first_idx &&

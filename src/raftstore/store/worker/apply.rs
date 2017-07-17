@@ -832,7 +832,7 @@ impl ApplyDelegate {
         let resp = AdminResponse::new();
         debug!("{} old CompactLog admin command, no need to handle",
                self.tag);
-        return Ok((resp, None));
+        Ok((resp, None))
     }
 
     fn exec_write_cmd(&mut self, ctx: &ExecContext) -> Result<RaftCmdResponse> {
