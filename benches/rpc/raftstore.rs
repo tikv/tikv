@@ -267,7 +267,7 @@ fn new_client_and_server() -> (BenchTikvClient, BenchTikvServer) {
     let mut server = BenchTikvServer::new(env.clone());
     server.start();
 
-    // Sleep awhile for making sure server is raedy.
+    // Sleep awhile for making sure server is ready.
     thread::sleep(Duration::from_secs(1));
 
     let addr = server.local_addr();
@@ -296,7 +296,7 @@ fn bench_raft_rpc(b: &mut Bencher) {
         let _ = bench_raft.wait();
     });
 
-    // Warming up about 5 sec.
+    // Warming up about 5 seconds.
     thread::sleep(Duration::from_secs(5));
 
     let start = Instant::now();
