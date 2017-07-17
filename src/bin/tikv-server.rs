@@ -64,6 +64,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::logger::{self, StderrLogger};
 use tikv::util::file_log::RotatingFileLogger;
 use tikv::util::transport::SendCh;
+use tikv::util::properties::UserPropertiesCollectorFactory;
 use tikv::server::{DEFAULT_LISTENING_ADDR, DEFAULT_CLUSTER_ID, Server, Node, Config,
                    create_raft_storage};
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -180,6 +181,22 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
     })
 }
 
+fn get_toml_float_opt(config: &toml::Value, name: &str) -> Option<f64> {
+    let res = match config.lookup(name) {
+        Some(&toml::Value::Float(f)) => Some(f),
+        Some(&toml::Value::String(ref s)) => {
+            Some(s.parse()
+                .unwrap_or_else(|e| exit_with_err(format!("{} parse failed {:?}", name, e))))
+        }
+        None => None,
+        _ => exit_with_err(format!("{} float is excepted", name)),
+    };
+    if let Some(f) = res {
+        info!("toml value {} : {:?}", name, f);
+    }
+    res
+}
+
 #[allow(absurd_extreme_comparisons)]
 fn cfg_usize(target: &mut usize, config: &toml::Value, name: &str) -> bool {
     match get_toml_int_opt(config, name) {
@@ -203,6 +220,16 @@ fn cfg_u64(target: &mut u64, config: &toml::Value, name: &str) {
         Some(i) => {
             assert!(i >= 0, "{}: {} is invalid", name, i);
             *target = i as u64;
+        }
+        None => info!("{} keep default {}", name, *target),
+    }
+}
+
+fn cfg_f64(target: &mut f64, config: &toml::Value, name: &str) {
+    match get_toml_float_opt(config, name) {
+        Some(f) => {
+            assert!(f >= 0.0, "{}: {} is invalid", name, f);
+            *target = f;
         }
         None => info!("{} keep default {}", name, *target),
     }
@@ -553,6 +580,9 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     // Create prefix bloom filter for memtable.
     opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+    // Collects user defined properties.
+    let f = Box::new(UserPropertiesCollectorFactory::default());
+    opts.add_table_properties_collector_factory("tikv.user-properties-collector", f);
     opts
 }
 
@@ -742,6 +772,9 @@ fn build_cfg(matches: &ArgMatches,
             "raftstore.consistency-check-interval");
     cfg.raft_store.use_sst_file_snapshot =
         get_toml_boolean(config, "raftstore.use-sst-file-snapshot", Some(true));
+    cfg_f64(&mut cfg.storage.gc_ratio_threshold,
+            config,
+            "storage.gc-ratio-threshold");
     cfg_usize(&mut cfg.storage.sched_notify_capacity,
               config,
               "storage.scheduler-notify-capacity");

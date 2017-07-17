@@ -12,6 +12,7 @@
 // limitations under the License.
 
 const DEFAULT_STORE_PATH: &'static str = "";
+const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_MSG_PER_TICK: usize = 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 102400;
@@ -21,6 +22,7 @@ const DEFAULT_SCHED_TOO_BUSY_THRESHOLD: usize = 1000;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub path: String,
+    pub gc_ratio_threshold: f64,
     pub sched_notify_capacity: usize,
     pub sched_msg_per_tick: usize,
     pub sched_concurrency: usize,
@@ -32,6 +34,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             path: DEFAULT_STORE_PATH.to_owned(),
+            gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             sched_notify_capacity: DEFAULT_SCHED_CAPACITY,
             sched_msg_per_tick: DEFAULT_SCHED_MSG_PER_TICK,
             sched_concurrency: DEFAULT_SCHED_CONCURRENCY,
