@@ -581,7 +581,7 @@ impl Storage {
                               -> Result<()> {
         let mut modifies = vec![];
         for cf in DATA_CFS {
-            modifies.push(Modify::DeleteRange(cf, start_key, end_key));
+            modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
         }
 
         try!(self.engine.async_write(&ctx,
@@ -1231,6 +1231,64 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 4);
         assert_eq!(rx.recv().unwrap(), 3);
 
+        storage.stop().unwrap();
+    }
+
+    #[test]
+    fn test_delete_range() {
+        let config = Config::new();
+        let mut storage = Storage::new(&config).unwrap();
+        storage.start(&config).unwrap();
+        let (tx, rx) = channel();
+        // Write x and y.
+        storage.async_prewrite(Context::new(),
+                            vec![Mutation::Put((make_key(b"x"), b"100".to_vec())),
+                                 Mutation::Put((make_key(b"y"), b"100".to_vec()))],
+                            b"x".to_vec(),
+                            100,
+                            Options::default(),
+                            expect_ok(tx.clone(), 0))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_commit(Context::new(),
+                          vec![make_key(b"x"), make_key(b"y")],
+                          100,
+                          101,
+                          expect_ok(tx.clone(), 1))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 2))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"y"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 3))
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Delete range [x, y)
+        storage.async_delete_range(Context::new(),
+                                make_key(b"x"),
+                                make_key(b"y"),
+                                expect_ok(tx.clone(), 4))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"x"),
+                       101,
+                       expect_get_none(tx.clone(), 5))
+            .unwrap();
+        rx.recv().unwrap();
+        storage.async_get(Context::new(),
+                       make_key(b"y"),
+                       101,
+                       expect_get_val(tx.clone(), b"100".to_vec(), 6))
+            .unwrap();
+        rx.recv().unwrap();
         storage.stop().unwrap();
     }
 }
