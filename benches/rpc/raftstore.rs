@@ -13,7 +13,7 @@
 
 use std::thread;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Instant, Duration};
 use std::net::{SocketAddr, IpAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,8 +28,8 @@ use kvproto::kvrpcpb::*;
 use futures::{Future, Stream, Sink, future, stream};
 use futures::sync::mpsc::{channel as future_channel, Sender as FutureSender};
 use futures::sync::oneshot::{self, Sender as OneShotSender};
-use grpc::{WriteFlags, Server as GrpcServer, ServerBuilder, Environment,
-           ChannelBuilder, RpcContext, UnarySink, RequestStream, ClientStreamingSink};
+use grpc::{WriteFlags, Server as GrpcServer, ServerBuilder, Environment, ChannelBuilder,
+           RpcContext, UnarySink, RequestStream, ClientStreamingSink};
 
 // Default settings used in TiKV.
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
@@ -54,6 +54,7 @@ impl Tikv for BenchTikvHandler {
         let benching = self.benching.clone();
         ctx.spawn(stream.for_each(move |_| {
                 if 0 != benching.load(Ordering::SeqCst) {
+                    benching.fetch_add(1, Ordering::Release);
                     raft_tx.send(()).unwrap();
                 };
                 future::ok(())
@@ -203,6 +204,7 @@ impl BenchTikvServer {
 }
 
 // TODO: Import from TiKV
+// Imitate Conn in raft_clinet.rs
 pub struct BenchTikvClient {
     stream: FutureSender<(RaftMessage, WriteFlags)>,
     _client: TikvClient,
@@ -244,7 +246,7 @@ impl BenchTikvClient {
 // Plan:
 //   1. [x] Make it work
 //   2. [ ] RaftClient::new takes a pre-configured TikvClient.
-//   3. [ ] tikv::server::Server::new takes a pre configured GrpcServer.
+//   3. [ ] tikv::server::Server::new takes a pre-configured GrpcServer.
 fn new_client_and_server() -> (BenchTikvClient, BenchTikvServer) {
     let env = Arc::new(Environment::new(DEFAULT_GRPC_CONCURRENCY));
     let mut server = BenchTikvServer::new(env.clone());
@@ -259,9 +261,8 @@ fn new_client_and_server() -> (BenchTikvClient, BenchTikvServer) {
     (client, server)
 }
 
-// TODO: Proper shutdown client and server.
-// TODO: Report QPS.
 // TODO: Embedding perf.
+// TODO: Stabilize result.
 #[bench]
 fn bench_raft_rpc(b: &mut Bencher) {
     let (client, server) = new_client_and_server();
@@ -269,17 +270,32 @@ fn bench_raft_rpc(b: &mut Bencher) {
     let sink = client.raft_sink();
 
     thread::spawn(move || {
-        let msgs = vec![Ok((RaftMessage::new(), WriteFlags::default().buffer_hint(true)))];
+        // // TODO: calc the precise count of msgs for ecah eventloop tick.
+        let count = 1000;
+        let buffered = vec![Ok((RaftMessage::new(), WriteFlags::default().buffer_hint(true)))];
+        let flusher = vec![Ok((RaftMessage::new(), WriteFlags::default()))];
+        let msgs = buffered.into_iter().cycle().take(count).chain(flusher);
+        let source = stream::iter(msgs.cycle());
 
-        let bench_raft = sink.send_all(stream::iter(msgs.into_iter().cycle()));
-
-        bench_raft.wait().unwrap();
+        let bench_raft = sink.send_all(source);
+        let _ = bench_raft.wait();
     });
 
     // Warming up about 5 sec.
     thread::sleep(Duration::from_secs(5));
+
+    let start = Instant::now();
     benching.store(1, Ordering::SeqCst);
     b.iter(|| {
         server.recv().unwrap();
-    })
+    });
+    let duration = start.elapsed();
+    let count = server.handler.benching.load(Ordering::Acquire);
+
+    // FIXME: do not ignore the extra nanoseconds.
+    let qps = count as u64 / duration.as_secs();
+    printf!("QPS: {:?}", qps);
+
+    drop(client);
+    drop(server);
 }
