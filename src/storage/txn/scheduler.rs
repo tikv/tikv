@@ -890,9 +890,8 @@ impl Scheduler {
                     SCHED_STAGE_COUNTER_VEC
                         .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
                         .inc();
-                    let e = e.maybe_clone().unwrap_or_else(|| {
-                        EngineError::Other(box_err!("{:?}", e))
-                    });
+                    let e = e.maybe_clone()
+                        .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
                     self.finish_with_err(cid, Error::from(e));
                 }
             }
