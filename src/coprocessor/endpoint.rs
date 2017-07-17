@@ -422,7 +422,7 @@ impl TiDbEndPoint {
                     sel_resp.set_error(to_pb_error(&e));
                     resp.set_data(box_try!(sel_resp.write_to_bytes()));
                     resp.set_other_error(format!("{}", e));
-                    COPR_REQ_ERROR.with_label_values(&["select", "other"]).inc();
+                    COPR_REQ_ERROR.with_label_values(&["other"]).inc();
                 } else {
                     return Err(e);
                 }
