@@ -278,7 +278,7 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
                           -> Result<MultipleReturnValue> {
     let mut writes = vec![];
     let mut values = vec![];
-    let mut lock: Option<MvccLock> = None;
+    let lock = reader.load_lock(key)?;
     loop {
         let opt = reader.seek_write(key, ts)?;
         match opt {
@@ -292,7 +292,6 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
             }
             None => break,
         };
-        lock = reader.load_lock(key)?;
         let write = writes[writes.len() - 1].1.clone();
         if let Some(v) = write.short_value {
             values.push((write.start_ts, true, v));
