@@ -51,7 +51,7 @@ use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
                     CompactRunner, RaftlogGcTask, RaftlogGcRunner, PdRunner, PdTask,
                     ConsistencyCheckTask, ConsistencyCheckRunner, ApplyTask, ApplyRunner,
-                    ApplyTaskRes};
+                    ApplyTaskRes, LocalCompactLog};
 use super::worker::apply::{ExecResult, ChangePeer};
 use super::{util, Msg, Tick, SnapshotStatusMsg, SnapManager, SnapshotDeleter};
 use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
@@ -568,6 +568,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 Ok(ApplyTaskRes::Destroy(p)) => {
                     let store_id = self.store_id();
                     self.destroy_peer(p.region_id(), util::new_peer(store_id, p.id()));
+                }
+                Ok(ApplyTaskRes::LocalCompactLogs(multi_res)) => {
+                    for res in multi_res {
+                        if let Some(p) = self.region_peers.get_mut(&res.region_id) {
+                            debug!("{} local compact finish: {:?}", p.tag, res);
+                            p.mut_store().apply_state = res.apply_state;
+                        }
+                        self.on_ready_result(res.region_id, res.exec_res);
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(e) => panic!("unexpected error {:?}", e),
@@ -1381,41 +1390,29 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     #[allow(if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
         let mut total_gc_logs = 0;
+        let mut compact_logs = vec![];
 
         for (&region_id, peer) in &mut self.region_peers {
-            if !peer.is_leader() {
-                continue;
-            }
-
-            // Leader will replicate the compact log command to followers,
-            // If we use current replicated_index (like 10) as the compact index,
-            // when we replicate this log, the newest replicated_index will be 11,
-            // but we only compact the log to 10, not 11, at that time,
-            // the first index is 10, and replicated_index is 11, with an extra log,
-            // and we will do compact again with compact index 11, in cycles...
-            // So we introduce a threshold, if replicated index - first index > threshold,
-            // we will try to compact log.
-            // raft log entries[..............................................]
-            //                  ^                                       ^
-            //                  |-----------------threshold------------ |
-            //              first_index                         replicated_index
-            let replicated_idx = peer.raft_group
-                .status()
-                .progress
-                .values()
-                .map(|p| p.matched)
-                .min()
-                .unwrap();
-            // When an election happened or a new peer is added, replicated_idx can be 0.
-            if replicated_idx > 0 {
-                let last_idx = peer.raft_group.raft.raft_log.last_index();
-                assert!(last_idx >= replicated_idx,
-                        "expect last index {} >= replicated index {}",
-                        last_idx,
-                        replicated_idx);
-                REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
-            }
             let applied_idx = peer.get_store().applied_index();
+            let mut replicated_idx = applied_idx;
+            if peer.is_leader() {
+                replicated_idx = peer.raft_group
+                    .status()
+                    .progress
+                    .values()
+                    .map(|p| p.matched)
+                    .min()
+                    .unwrap();
+                // When an election happened or a new peer is added, replicated_idx can be 0.
+                if replicated_idx > 0 {
+                    let last_idx = peer.raft_group.raft.raft_log.last_index();
+                    assert!(last_idx >= replicated_idx,
+                            "expect last index {} >= replicated index {}",
+                            last_idx,
+                            replicated_idx);
+                    REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+                }
+            }
             let first_idx = peer.get_store().first_index();
             let mut compact_idx;
             if applied_idx > first_idx &&
@@ -1423,11 +1420,11 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 compact_idx = applied_idx;
             } else if peer.raft_log_size_hint >= self.cfg.raft_log_gc_size_limit {
                 compact_idx = applied_idx;
-            } else if replicated_idx < first_idx ||
-                      replicated_idx - first_idx <= self.cfg.raft_log_gc_threshold {
-                continue;
-            } else {
+            } else if replicated_idx > first_idx &&
+                      replicated_idx - first_idx > self.cfg.raft_log_gc_threshold {
                 compact_idx = replicated_idx;
+            } else {
+                continue;
             }
 
             // Have no idea why subtract 1 here, but original code did this by magic.
@@ -1441,15 +1438,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             total_gc_logs += compact_idx - first_idx;
 
             let term = peer.raft_group.raft.raft_log.term(compact_idx).unwrap();
-
-            // Create a compact log request and notify directly.
-            let request = new_compact_log_request(region_id, peer.peer.clone(), compact_idx, term);
-
-            if let Err(e) = self.sendch.try_send(Msg::new_raft_cmd(request, Box::new(|_| {}))) {
-                error!("{} send compact log {} err {:?}", peer.tag, compact_idx, e);
-            }
+            let compact = LocalCompactLog::new(region_id, compact_idx, term);
+            compact_logs.push(compact);
         }
 
+        if !compact_logs.is_empty() {
+            self.apply_worker.schedule(ApplyTask::local_compact_logs(compact_logs)).unwrap();
+        }
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as f64).unwrap();
         self.register_raft_gc_log_tick(event_loop);
     }
@@ -2005,21 +2000,6 @@ fn register_timer<T: Transport, C: PdClient>(event_loop: &mut EventLoop<Store<T,
                             e));
     }
     Ok(())
-}
-
-fn new_compact_log_request(region_id: u64,
-                           peer: metapb::Peer,
-                           compact_index: u64,
-                           compact_term: u64)
-                           -> RaftCmdRequest {
-    let mut request = new_admin_request(region_id, peer);
-
-    let mut admin = AdminRequest::new();
-    admin.set_cmd_type(AdminCmdType::CompactLog);
-    admin.mut_compact_log().set_compact_index(compact_index);
-    admin.mut_compact_log().set_compact_term(compact_term);
-    request.set_admin_request(admin);
-    request
 }
 
 impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {

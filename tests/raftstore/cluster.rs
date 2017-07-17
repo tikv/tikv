@@ -72,7 +72,7 @@ pub trait Simulator {
 
 pub struct Cluster<T: Simulator> {
     pub cfg: ServerConfig,
-    leaders: HashMap<u64, metapb::Peer>,
+    pub leaders: HashMap<u64, metapb::Peer>,
     paths: Vec<TempDir>,
     dbs: Vec<Arc<DB>>,
 
