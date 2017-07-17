@@ -15,7 +15,7 @@ use std::u64;
 use std::sync::Arc;
 use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator};
 use kvproto::metapb::Region;
-use util::rocksdb::{UserProperties, GetPropertiesOptions};
+use util::properties::{UserProperties, GetPropertiesOptions};
 
 use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
@@ -129,7 +129,7 @@ impl RegionSnapshot {
 
         // Aggregates properties from multiple tables.
         let mut res = UserProperties::new();
-        for (_, v) in &collection {
+        for (_, v) in &*collection {
             let props = v.user_collected_properties();
             let other = try!(UserProperties::decode(props));
             if other.min_ts > max_ts {

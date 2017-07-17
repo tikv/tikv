@@ -19,7 +19,7 @@ use super::write::{Write, WriteType};
 use raftstore::store::engine::IterOption;
 use std::u64;
 use kvproto::kvrpcpb::IsolationLevel;
-use util::rocksdb::GetPropertiesOptions;
+use util::properties::GetPropertiesOptions;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -469,6 +469,7 @@ impl<'a> MvccReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::u64;
     use kvproto::metapb::{Peer, Region};
     use kvproto::kvrpcpb::IsolationLevel;
     use rocksdb::{self, DB, Writable, WriteBatch};
@@ -479,8 +480,10 @@ mod tests {
     use storage::mvcc::{MvccTxn, MvccReader};
     use tempdir::TempDir;
     use raftstore::coprocessor::RegionSnapshot;
+    use raftstore::errors::Result;
     use raftstore::store::keys;
-    use util::rocksdb::{self as rocksdb_util, CFOptions, UserPropertiesCollectorFactory};
+    use util::rocksdb::{self as rocksdb_util, CFOptions};
+    use util::properties::{UserProperties, UserPropertiesCollectorFactory};
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -600,6 +603,13 @@ mod tests {
         region
     }
 
+    fn get_properties(db: Arc<DB>, region: Region, safe_point: u64) -> Result<UserProperties> {
+        let mut opts = GetPropertiesOptions::default();
+        opts.max_ts = Some(safe_point);
+        let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
+        snap.get_properties_cf(CF_WRITE, &opts)
+    }
+
     fn check_need_gc(db: Arc<DB>, region: Region, safe_point: u64, need_gc: bool) {
         let snap = RegionSnapshot::from_raw(db.clone(), region.clone());
         let mut stat = Statistics::default();
@@ -611,67 +621,105 @@ mod tests {
     fn test_need_gc() {
         let path = TempDir::new("_test_storage_mvcc_reader").expect("");
         let path = path.path().to_str().unwrap();
-
         let region = make_region(1, vec![0], vec![10]);
+        test_without_properties(path, &region);
+        test_with_properties(path, &region);
+    }
 
-        // Open without properties.
-        {
-            let db = open_db(path, false);
-            let mut engine = RegionEngine::new(db.clone(), region.clone());
+    fn test_without_properties(path: &str, region: &Region) {
+        let db = open_db(path, false);
+        let mut engine = RegionEngine::new(db.clone(), region.clone());
 
-            // Put 2 keys.
-            engine.put(&[1], 1, 1);
-            engine.put(&[4], 2, 2);
-            check_need_gc(db.clone(), region.clone(), 10, true);
-            engine.flush();
-            // After this flush, we have a SST file without properties.
-            // Without properties, we always need GC.
-            check_need_gc(db.clone(), region.clone(), 10, true);
-        }
+        // Put 2 keys.
+        engine.put(&[1], 1, 1);
+        engine.put(&[4], 2, 2);
+        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
+        check_need_gc(db.clone(), region.clone(), 10, true);
+        engine.flush();
+        // After this flush, we have a SST file without properties.
+        // Without properties, we always need GC.
+        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
+        check_need_gc(db.clone(), region.clone(), 10, true);
+    }
 
-        // Open with properties.
-        {
-            let db = open_db(path, true);
-            let mut engine = RegionEngine::new(db.clone(), region.clone());
+    #[allow(cyclomatic_complexity)]
+    fn test_with_properties(path: &str, region: &Region) {
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(db.clone(), region.clone());
 
-            // Put 2 keys.
-            engine.put(&[2], 3, 3);
-            engine.put(&[3], 4, 4);
-            engine.flush();
-            // After this flush, we have a SST file w/ properties, plus the SST
-            // file w/o properties from previous flush. We always need GC as
-            // long as we can't get properties from any SST files.
-            check_need_gc(db.clone(), region.clone(), 10, true);
-            engine.compact();
-            // After this compact, the two SST files are compacted into a new
-            // SST file with properties. Now all SST files have properties and
-            // all keys have only one version, so we don't need gc.
-            check_need_gc(db.clone(), region.clone(), 10, false);
+        // Put 2 keys.
+        engine.put(&[2], 3, 3);
+        engine.put(&[3], 4, 4);
+        engine.flush();
+        // After this flush, we have a SST file w/ properties, plus the SST
+        // file w/o properties from previous flush. We always need GC as
+        // long as we can't get properties from any SST files.
+        assert!(get_properties(db.clone(), region.clone(), 10).is_err());
+        check_need_gc(db.clone(), region.clone(), 10, true);
+        engine.compact();
+        // After this compact, the two SST files are compacted into a new
+        // SST file with properties. Now all SST files have properties and
+        // all keys have only one version, so we don't need gc.
+        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        assert_eq!(props.min_ts, 1);
+        assert_eq!(props.max_ts, 4);
+        assert_eq!(props.num_rows, 4);
+        assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_versions, 4);
+        assert_eq!(props.max_row_versions, 1);
+        check_need_gc(db.clone(), region.clone(), 10, false);
 
-            // Put 2 more keys and delete them.
-            engine.put(&[5], 5, 5);
-            engine.put(&[6], 6, 6);
-            engine.delete(&[5], 7, 7);
-            engine.delete(&[6], 8, 8);
-            engine.flush();
-            // After this flush, keys 5,6 in the new SST file have more than one
-            // versions, so we need gc.
-            check_need_gc(db.clone(), region.clone(), 10, true);
-            // But if the `safe_point` is older than all versions, we don't need gc too.
-            check_need_gc(db.clone(), region.clone(), 0, false);
+        // Put 2 more keys and delete them.
+        engine.put(&[5], 5, 5);
+        engine.put(&[6], 6, 6);
+        engine.delete(&[5], 7, 7);
+        engine.delete(&[6], 8, 8);
+        engine.flush();
+        // After this flush, keys 5,6 in the new SST file have more than one
+        // versions, so we need gc.
+        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        assert_eq!(props.min_ts, 1);
+        assert_eq!(props.max_ts, 8);
+        assert_eq!(props.num_rows, 6);
+        assert_eq!(props.num_puts, 6);
+        assert_eq!(props.num_versions, 8);
+        assert_eq!(props.max_row_versions, 2);
+        check_need_gc(db.clone(), region.clone(), 10, true);
+        // But if the `safe_point` is older than all versions, we don't need gc too.
+        let props = get_properties(db.clone(), region.clone(), 0).unwrap();
+        assert_eq!(props.min_ts, u64::MAX);
+        assert_eq!(props.max_ts, 0);
+        assert_eq!(props.num_rows, 0);
+        assert_eq!(props.num_puts, 0);
+        assert_eq!(props.num_versions, 0);
+        assert_eq!(props.max_row_versions, 0);
+        check_need_gc(db.clone(), region.clone(), 0, false);
 
-            // We gc the two deleted keys manually.
-            engine.gc(&[5], 10);
-            engine.gc(&[6], 10);
-            engine.compact();
-            // After this compact, all versions of keys 5,6 are deleted,
-            // no keys have more than one versions, so we don't need gc.
-            check_need_gc(db.clone(), region.clone(), 10, false);
+        // We gc the two deleted keys manually.
+        engine.gc(&[5], 10);
+        engine.gc(&[6], 10);
+        engine.compact();
+        // After this compact, all versions of keys 5,6 are deleted,
+        // no keys have more than one versions, so we don't need gc.
+        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        assert_eq!(props.min_ts, 1);
+        assert_eq!(props.max_ts, 4);
+        assert_eq!(props.num_rows, 4);
+        assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_versions, 4);
+        assert_eq!(props.max_row_versions, 1);
+        check_need_gc(db.clone(), region.clone(), 10, false);
 
-            // A single lock version need gc.
-            engine.lock(&[7], 9, 9);
-            engine.flush();
-            check_need_gc(db.clone(), region.clone(), 10, true);
-        }
+        // A single lock version need gc.
+        engine.lock(&[7], 9, 9);
+        engine.flush();
+        let props = get_properties(db.clone(), region.clone(), 10).unwrap();
+        assert_eq!(props.min_ts, 1);
+        assert_eq!(props.max_ts, 9);
+        assert_eq!(props.num_rows, 5);
+        assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_versions, 5);
+        assert_eq!(props.max_row_versions, 1);
+        check_need_gc(db.clone(), region.clone(), 10, true);
     }
 }

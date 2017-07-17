@@ -21,7 +21,7 @@ use self::rocksdb::EngineRocksdb;
 use storage::{Key, Value, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use kvproto::errorpb::Error as ErrorHeader;
-use util::rocksdb::{UserProperties, GetPropertiesOptions};
+use util::properties::{UserProperties, GetPropertiesOptions};
 
 mod rocksdb;
 pub mod raftkv;

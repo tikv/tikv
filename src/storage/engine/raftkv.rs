@@ -21,7 +21,7 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Re
                           CmdType, DeleteRequest, PutRequest};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
-use util::rocksdb::{UserProperties, GetPropertiesOptions};
+use util::properties::{UserProperties, GetPropertiesOptions};
 
 use std::sync::Arc;
 use std::fmt::{self, Formatter, Debug};
