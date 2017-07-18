@@ -23,6 +23,7 @@ use coprocessor::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
 
 const TYPE_REAL: &'static str = "real";
+const TYPE_DECIMAL: &'static str = "decimal";
 
 fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
     Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
@@ -155,9 +156,14 @@ impl Evaluator {
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 
-    pub fn cast_decimal_as_decimal(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_decimal_as_decimal(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        if let Datum::Dec(d) = datum {
+            let decimal = try!(produce_dec_with_specified_tp(d, expr.get_field_type(), ctx));
+            return Ok(Datum::Dec(decimal));
+        }
+        invalid_type_error(&datum, TYPE_DECIMAL)
     }
 
     pub fn cast_decimal_as_time(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -359,4 +365,16 @@ mod test {
                                          ScalarFuncSig::CastRealAsDuration,
                                          FieldType::new()),
                      Datum::Dur(Duration::parse(b"10:11:12", 0).unwrap()))]);
+
+    test_eval!(test_cast_decimal_as_decimal,
+               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(1000.0).unwrap())],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastDecimalAsDecimal,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(5);
+                                             ft.set_decimal(1);
+                                             ft
+                                         }),
+                     Datum::Dec(Decimal::from_f64(1000.0).unwrap()))]);
 }
