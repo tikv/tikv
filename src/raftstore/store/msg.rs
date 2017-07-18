@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::time::Instant;
-use std::boxed::{Box, FnBox};
+use std::boxed::FnBox;
 use std::fmt;
 
 use kvproto::raft_serverpb::RaftMessage;
