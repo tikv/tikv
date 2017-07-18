@@ -17,7 +17,6 @@ use std::str;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, ScalarFuncSig};
-use tipb::select::SelectRequest;
 
 use util::codec::number::NumberDecoder;
 use util::collections::{HashMap, HashMapEntry};
@@ -60,17 +59,14 @@ impl Default for EvalContext {
 const ONE_DAY: i64 = 3600 * 24;
 
 impl EvalContext {
-    pub fn new(sel: &SelectRequest) -> Result<EvalContext> {
-        let offset = sel.get_time_zone_offset();
-        if offset <= -ONE_DAY || offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", offset)));
+    pub fn new(tz_offset: i64, flags: u64) -> Result<EvalContext> {
+        if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
+            return Err(Error::Eval(format!("invalid tz offset {}", tz_offset)));
         }
-        let tz = match FixedOffset::east_opt(offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", offset))),
+        let tz = match FixedOffset::east_opt(tz_offset as i32) {
+            None => return Err(Error::Eval(format!("invalid tz offset {}", tz_offset))),
             Some(tz) => tz,
         };
-
-        let flags = sel.get_flags();
 
         let e = EvalContext {
             tz: tz,
@@ -82,7 +78,9 @@ impl EvalContext {
     }
 }
 
-/// `Evaluator` evaluates `tipb::Expr`.
+// `Evaluator` evaluates `tipb::Expr`.
+// TODO(performance) Evaluator should not contains any data member
+// since Managing data is not his responsibility but calculation.
 #[derive(Default)]
 pub struct Evaluator {
     // column_id -> column_value
@@ -1131,10 +1129,10 @@ pub mod test {
     fn test_context() {
         let mut req = SelectRequest::new();
         req.set_time_zone_offset(i32::MAX as i64 + 1);
-        let ctx = EvalContext::new(&req);
+        let ctx = EvalContext::new(req.get_time_zone_offset(), req.get_flags());
         assert!(ctx.is_err());
         req.set_time_zone_offset(3600);
-        EvalContext::new(&req).unwrap();
+        EvalContext::new(req.get_time_zone_offset(), req.get_flags()).unwrap();
     }
 
     #[test]

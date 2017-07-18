@@ -99,4 +99,10 @@ lazy_static! {
             "tikv_storage_gc_empty_range_total",
             "Total number of empty range found by gc"
         ).unwrap();
+
+    pub static ref KV_COMMAND_GC_SKIPPED_COUNTER: Counter =
+        register_counter!(
+            "tikv_storage_gc_skipped_counter",
+            "Total number of gc command skipped owing to optimization"
+        ).unwrap();
 }

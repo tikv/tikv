@@ -133,3 +133,31 @@ impl PartialEq for Key {
 pub fn make_key(k: &[u8]) -> Key {
     Key::from_raw(k)
 }
+
+/// Splits encoded key on timestamp.
+/// Returns the split key and timestamp.
+pub fn split_encoded_key_on_ts(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
+    if key.len() < number::U64_SIZE {
+        Err(codec::Error::KeyLength)
+    } else {
+        let pos = key.len() - number::U64_SIZE;
+        let k = &key[..pos];
+        let mut ts = &key[pos..];
+        Ok((k, try!(ts.decode_u64_desc())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_ts() {
+        let k = b"k";
+        let ts = 123;
+        assert!(split_encoded_key_on_ts(k).is_err());
+        let enc = Key::from_encoded(k.to_vec()).append_ts(ts);
+        let res = split_encoded_key_on_ts(enc.encoded()).unwrap();
+        assert_eq!(res, (k.as_ref(), ts));
+    }
+}
