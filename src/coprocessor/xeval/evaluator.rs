@@ -18,12 +18,15 @@ use std::str;
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
+use util::is_even;
 use util::codec::number::NumberDecoder;
 use util::collections::{HashMap, HashMapEntry};
+
+use super::super::codec;
 use super::super::codec::datum::{Datum, DatumDecoder};
 use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
                                  ModifyType};
-use super::super::codec;
+use super::super::codec::mysql::json::{json_object, json_array};
 use super::{Result, Error};
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
@@ -142,6 +145,8 @@ impl Evaluator {
             ExprType::JsonExtract => self.eval_json_extract(ctx, expr),
             ExprType::JsonType => self.eval_json_type(ctx, expr),
             ExprType::JsonMerge => self.eval_json_merge(ctx, expr),
+            ExprType::JsonObject => self.eval_json_object(ctx, expr),
+            ExprType::JsonArray => self.eval_json_array(ctx, expr),
             ExprType::ScalarFunc => self.eval_scalar_function(ctx, expr),
             _ => Ok(Datum::Null),
         }
@@ -428,7 +433,7 @@ impl Evaluator {
                         mt: ModifyType)
                         -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 2));
-        if is_even(children.len() as i64) {
+        if is_even(children.len()) {
             return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
         }
 
@@ -438,7 +443,7 @@ impl Evaluator {
             if *item != Datum::Null {
                 false
             } else {
-                index == 1 || is_even(index)
+                index == 1 || is_even(index as usize)
             }
         });
         if should_be_null {
@@ -514,6 +519,18 @@ impl Evaluator {
         let suffixes: Vec<Json> = try!(children.map(|item| item.cast_as_json())
             .collect());
         Ok(Datum::Json(first.merge(suffixes)))
+    }
+
+    fn eval_json_object(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 0));
+        let obj = try!(json_object(children));
+        Ok(Datum::Json(obj))
+    }
+
+    fn eval_json_array(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 0));
+        let arr = try!(json_array(children));
+        Ok(Datum::Json(arr))
     }
 
     fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -608,11 +625,6 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
         return Err(e.into());
     }
     Ok(pos.is_ok())
-}
-
-#[inline]
-fn is_even(n: i64) -> bool {
-    n & 1 == 0
 }
 
 #[cfg(test)]
@@ -1274,5 +1286,24 @@ pub mod test {
           build_byte_datums_expr(&[br#"true"#, br#"444"#], ExprType::JsonType),
           build_expr(vec![], ExprType::JsonMerge),
           build_expr(vec![Datum::Null], ExprType::JsonMerge),
-     ]);
+    ]);
+
+    test_eval!(test_eval_json_object,
+               vec![
+        (build_expr(vec![], ExprType::JsonObject), Datum::Json("{}".parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null], ExprType::JsonObject),
+            Datum::Json(r#"{"1":null}"#.parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::U64(2), Datum::Bytes(b"sdf".to_vec()),
+                Datum::Bytes(b"k1".to_vec()), Datum::Bytes(b"v1".to_vec())], ExprType::JsonObject),
+            Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap())),
+    ]);
+
+    test_eval!(test_eval_json_array,
+               vec![
+        (build_expr(vec![], ExprType::JsonArray), Datum::Json("[]".parse().unwrap())),
+        (build_expr(vec![Datum::Null], ExprType::JsonArray),
+            Datum::Json("[null]".parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())],
+            ExprType::JsonArray), Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap())),
+    ]);
 }

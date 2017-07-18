@@ -60,7 +60,7 @@ mod duration;
 pub mod decimal;
 pub mod types;
 mod time;
-mod json;
+pub mod json;
 pub mod charset;
 
 pub use self::duration::Duration;
