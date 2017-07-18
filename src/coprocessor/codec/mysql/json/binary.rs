@@ -403,7 +403,7 @@ mod test {
         let json_nil = Json::None;
         let json_bool = Json::Boolean(true);
         let json_int = Json::I64(30);
-        let json_uint = Json::I64(30);
+        let json_uint = Json::U64(30);
         let json_double = Json::Double(3.24);
         let json_str = Json::String(String::from("hello, 世界"));
         let test_cases = vec![json_nil, json_bool, json_int, json_uint, json_double, json_str, j1, j2];
