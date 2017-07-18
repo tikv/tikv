@@ -418,9 +418,6 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let pipelined_write = get_toml_boolean(config, "rocksdb.enable-pipelined-write", Some(true));
     opts.enable_pipelined_write(pipelined_write);
 
-    let max_compaction_bytes = get_toml_int(config, "rocksdb.max-compaction-bytes", Some(0));
-    opt.set_max_compaction_bytes(max_compaction_bytes as u64);
-
     opts
 }
 
@@ -441,6 +438,7 @@ struct CfOptValues {
     pub level_zero_file_num_compaction_trigger: i64,
     pub level_zero_slowdown_writes_trigger: i64,
     pub level_zero_stop_writes_trigger: i64,
+    pub max_compaction_bytes: i64,
 }
 
 impl Default for CfOptValues {
@@ -462,6 +460,7 @@ impl Default for CfOptValues {
             level_zero_file_num_compaction_trigger: 4,
             level_zero_slowdown_writes_trigger: 20,
             level_zero_stop_writes_trigger: 36,
+            max_compaction_bytes: 2 * GB as i64,
         }
     }
 }
@@ -555,6 +554,11 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                      (prefix.clone() + "level0-stop-writes-trigger").as_str(),
                      Some(default_values.level_zero_stop_writes_trigger));
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
+
+    let max_compaction_bytes = get_toml_int(config,
+                                            (prefix.clone() + "max-compaction-bytes").as_str(),
+                                            Some(default_values.max_compaction_bytes));
+    opts.set_max_compaction_bytes(max_compaction_bytes as u64);
 
     opts
 }

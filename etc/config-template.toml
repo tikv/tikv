@@ -273,6 +273,9 @@ stats-dump-period-sec = 600
 # Target file size for compaction.
 # target-file-size-base = "32MB"
 
+# Max bytes for compaction.max_compaction_bytes
+# max-compaction-bytes = "2GB"
+
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read.
 # in normal cases should tune to 30%-50% system's total memory.
 # block-cache-size = "1GB"
