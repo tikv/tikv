@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::Box;
 use std::error;
 
 use kvproto::raft_cmdpb::RaftCmdResponse;
