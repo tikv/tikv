@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
+use std::{i64, u64};
 use protobuf::ProtobufEnum;
 use chrono::naive::time::NaiveTime;
 use chrono::offset::fixed::FixedOffset;
@@ -58,9 +58,19 @@ impl Evaluator {
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 
-    pub fn cast_real_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_real_as_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let d = try!(self.eval(ctx, child));
+        if let Datum::F64(f) = d {
+            if has_unsigned_flag(expr.get_field_type().get_flag() as u64) {
+                let u = try!(convert::convert_float_to_uint(f, u64::MAX));
+                return Ok(Datum::U64(u));
+            } else {
+                let i = try!(convert::convert_float_to_int(f, i64::MIN, i64::MAX));
+                return Ok(Datum::I64(i));
+            }
+        }
+        invalid_type_error(&d, TYPE_REAL)
     }
 
     pub fn cast_real_as_real(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -248,6 +258,22 @@ mod test {
             }
         };
     }
+
+    test_eval!(test_cast_real_as_int,
+               vec![(build_expr_with_sig(vec![Datum::F64(1.5)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastRealAsInt,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flag(types::UNSIGNED_FLAG as u32);
+                                             ft
+                                         }),
+                     Datum::U64(2)),
+                    (build_expr_with_sig(vec![Datum::F64(-1.5)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastRealAsInt,
+                                         FieldType::new()),
+                     Datum::I64(-2))]);
 
     test_eval!(test_cast_real_as_real,
                vec![(build_expr_with_sig(vec![Datum::F64(1.0)],

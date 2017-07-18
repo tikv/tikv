@@ -67,7 +67,7 @@ impl Evaluator {
 
 #[cfg(test)]
 mod test {
-    use tipb::expression::{ExprType, ScalarFuncSig};
+    use tipb::expression::{FieldType, ExprType, ScalarFuncSig};
     use coprocessor::codec::datum::Datum;
     use super::super::Evaluator;
     use super::super::evaluator::test::build_expr_with_sig;
@@ -100,14 +100,17 @@ mod test {
     test_eval!(test_abs_int,
                vec![(build_expr_with_sig(vec![Datum::I64(-1)],
                                          ExprType::ScalarFunc,
-                                         ScalarFuncSig::AbsInt),
+                                         ScalarFuncSig::AbsInt,
+                                         FieldType::new()),
                      Datum::I64(1)),
                     (build_expr_with_sig(vec![Datum::I64(1)],
                                          ExprType::ScalarFunc,
-                                         ScalarFuncSig::AbsInt),
+                                         ScalarFuncSig::AbsInt,
+                                         FieldType::new()),
                      Datum::I64(1)),
                     (build_expr_with_sig(vec![Datum::U64(1)],
                                          ExprType::ScalarFunc,
-                                         ScalarFuncSig::AbsInt),
+                                         ScalarFuncSig::AbsInt,
+                                         FieldType::new()),
                      Datum::U64(1))]);
 }
