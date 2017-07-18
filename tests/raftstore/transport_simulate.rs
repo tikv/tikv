@@ -25,7 +25,6 @@ use std::sync::{Arc, RwLock, Mutex};
 use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
 use std::{time, usize, thread};
-use std::vec::Vec;
 use std::sync::atomic::*;
 
 pub trait Channel<M>: Send + Clone {
