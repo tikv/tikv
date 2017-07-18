@@ -83,6 +83,7 @@ macro_rules! printf {
 
 mod raftstore;
 mod mvcc;
+mod rpc;
 
 fn print_result(smp: BenchSamples) {
     println!("{}", test::fmt_bench_samples(&smp));
@@ -97,4 +98,5 @@ fn main() {
     // TODO allow user to specify flag to just bench some cases.
     raftstore::bench_raftstore();
     mvcc::bench_engine();
+    rpc::bench_raft_rpc();
 }

@@ -43,7 +43,6 @@ macro_rules! printf {
 mod channel;
 mod writebatch;
 mod serialization;
-mod rpc;
 
 #[allow(dead_code)]
 #[path="../tests/util.rs"]

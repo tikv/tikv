@@ -19,22 +19,25 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender as StdSender, Receiver as StdReceiver, channel as std_channel};
 
-use test::Bencher;
 use kvproto::tikvpb_grpc::*;
 use kvproto::coprocessor::{Request, Response};
 use kvproto::raft_serverpb::{RaftMessage, Done, SnapshotChunk};
 use kvproto::kvrpcpb::*;
 
-use futures::{Future, Stream, Sink, future, stream};
-use futures::sync::mpsc::{channel as future_channel, Sender as FutureSender};
-use futures::sync::oneshot::{self, Sender as OneShotSender};
-use grpc::{WriteFlags, Server as GrpcServer, ServerBuilder, Environment, ChannelBuilder,
-           RpcContext, UnarySink, RequestStream, ClientStreamingSink};
+use futures::{Future, Stream, future};
+use grpc::{Server as GrpcServer, ServerBuilder, Environment, ChannelBuilder, RpcContext,
+           UnarySink, RequestStream, ClientStreamingSink};
+
+use tikv::server::{RaftClient, Config};
+
+use super::print_result;
+
+// Copy from std::time;
+const NANOS_PER_SEC: u32 = 1_000_000_000;
 
 // Default settings used in TiKV.
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
-const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 10;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: usize = 2 * 1024 * 1024;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
@@ -97,10 +100,10 @@ impl Tikv for BenchTikvHandler {
             ctx: RpcContext,
             stream: RequestStream<RaftMessage>,
             _: ClientStreamingSink<Done>) {
-        let mut running = self.running.lock().unwrap();
-        let mut inner = running.as_mut().unwrap();
+        let running = self.running.lock().unwrap();
+        let inner = running.as_ref().unwrap();
         let counter = inner.counter.clone();
-        let forwarder = inner.forwarder.take().unwrap();
+        let forwarder = inner.forwarder.as_ref().unwrap().clone();
 
         ctx.spawn(stream.for_each(move |_| {
                 if 0 != counter.load(Ordering::Acquire) {
@@ -205,7 +208,7 @@ impl Tikv for BenchTikvHandler {
     }
 }
 
-/// A mock TiKV server for benching purpose, all `GrpcServer`
+/// A mock `TiKV` server for benching purpose, all `GrpcServer`
 /// configuration MUST be consist with the real server in
 /// `src/server/server.rs`.
 // TODO: a better way for handling the cfgs.
@@ -220,9 +223,7 @@ pub struct BenchTikvServer {
 
 impl BenchTikvServer {
     pub fn new(env: Arc<Environment>) -> BenchTikvServer {
-        let h = BenchTikvHandler {
-            running: Arc::new(Mutex::new(None)),
-        };
+        let h = BenchTikvHandler { running: Arc::new(Mutex::new(None)) };
 
         let channel_args = ChannelBuilder::new(env.clone())
             .stream_initial_window_size(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE)
@@ -257,7 +258,7 @@ impl BenchTikvServer {
 
     // TODO: addrs.
     pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr.clone()
+        self.local_addr
     }
 
     pub fn init_recording(&mut self, name: String) -> Result<(), String> {
@@ -286,45 +287,7 @@ impl BenchTikvServer {
     }
 }
 
-// Imitate Conn in raft_clinet.rs
-pub struct BenchTikvClient {
-    stream: FutureSender<(RaftMessage, WriteFlags)>,
-    _client: TikvClient,
-    _close: OneShotSender<()>,
-}
-
-impl BenchTikvClient {
-    pub fn new(env: Arc<Environment>, addr: SocketAddr) -> BenchTikvClient {
-        let channel = ChannelBuilder::new(env)
-            .stream_initial_window_size(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE)
-            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(MAX_GRPC_SEND_MSG_LEN)
-            .connect(&format!("{}", addr));
-        let client = TikvClient::new(channel);
-        let (tx, rx) = future_channel(DEFAULT_GRPC_CONCURRENT_STREAM);
-        let (tx_close, rx_close) = oneshot::channel();
-        let (sink, _) = client.raft();
-        client.spawn(rx_close.map_err(|_| ())
-            .select(sink.sink_map_err(|_| ())
-                .send_all(rx.map_err(|_| ()))
-                .map(|_| ())
-                .map_err(|_| ()))
-            .map(|_| ())
-            .map_err(|_| ()));
-
-        BenchTikvClient {
-            stream: tx,
-            _client: client,
-            _close: tx_close,
-        }
-    }
-
-    pub fn raft_sink(&self) -> FutureSender<(RaftMessage, WriteFlags)> {
-        self.stream.clone()
-    }
-}
-
-pub fn new_bench_server() -> (Arc<Environment>, BenchTikvServer) {
+fn new_bench_server() -> (Arc<Environment>, BenchTikvServer) {
     let env = Arc::new(Environment::new(DEFAULT_GRPC_CONCURRENCY));
     let mut server = BenchTikvServer::new(env.clone());
     server.start();
@@ -335,27 +298,39 @@ pub fn new_bench_server() -> (Arc<Environment>, BenchTikvServer) {
     (env, server)
 }
 
-// TODO: Embedding perf.
 // TODO: Stabilize result.
-#[bench]
-fn bench_raft_rpc(b: &mut Bencher) {
+pub fn bench_raft_rpc() {
+    let name = "raft_client_streaming";
+    printf!("benching RPC on {}\t...", name);
+
     let (env, mut server) = new_bench_server();
     let addr = server.local_addr();
-    let client = BenchTikvClient::new(env, addr);
+    let mut client = RaftClient::new(env, Config::default());
 
-    server.init_recording("raft_client_streaming".to_owned()).unwrap();
+    let quit = Arc::new(AtomicUsize::new(0));
+    let quit1 = quit.clone();
+    server.init_recording(name.to_owned()).unwrap();
 
-    let sink = client.raft_sink();
     thread::spawn(move || {
-        // // TODO: calc the precise count of msgs for ecah eventloop tick.
-        let count = 1000;
-        let buffered = vec![Ok((RaftMessage::new(), WriteFlags::default().buffer_hint(true)))];
-        let flusher = vec![Ok((RaftMessage::new(), WriteFlags::default()))];
-        let msgs = buffered.into_iter().cycle().take(count).chain(flusher);
-        let source = stream::iter(msgs.cycle());
+        // TODO: calc the precise duration for every eventloop tick.
+        let batch_size = 1024;
+        let flush_duration = 10;
 
-        let bench_raft = sink.send_all(source);
-        let _ = bench_raft.wait();
+        let mut region_id = 0;
+        let sample = RaftMessage::new();
+        loop {
+            if 0 != quit.load(Ordering::Acquire) {
+                return;
+            }
+            region_id += 1;
+            let mut msg = sample.clone();
+            msg.set_region_id(region_id);
+            let _ = client.send(1, addr, msg);
+            if region_id % batch_size == 0 {
+                client.flush();
+                thread::sleep(Duration::from_millis(flush_duration));
+            }
+        }
     });
 
     // Warming up about 5 seconds.
@@ -363,16 +338,17 @@ fn bench_raft_rpc(b: &mut Bencher) {
 
     let start = Instant::now();
     server.start_recording().unwrap();
-    b.iter(|| {
-        server.recv().unwrap();
-    });
+    let result = bench!{
+        server.recv().unwrap()
+    };
     let duration = start.elapsed();
     let count = server.stop_recording().unwrap();
 
-    // FIXME: do not ignore the extra nanoseconds.
-    let qps = count as u64 / duration.as_secs();
-    printf!("QPS: {:?}", qps);
+    let qps = count as f64 /
+              (duration.as_secs() as f64 + duration.subsec_nanos() as f64 / NANOS_PER_SEC as f64);
+    printf!("\tQPS: {:?}", qps);
+    print_result(result);
 
-    drop(client);
+    quit1.store(1, Ordering::Release);
     drop(server);
 }
