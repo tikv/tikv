@@ -30,6 +30,7 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 
 use raftstore::Result as RaftStoreResult;
+use raftstore::errors::Error as RaftStoreError;
 use raftstore::store::Msg;
 use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -1146,11 +1147,14 @@ impl SnapManager {
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
-        let s = try!(Snap::new_for_applying(&core.base,
-                                            key,
-                                            core.snap_size.clone(),
-                                            Box::new(self.clone())));
-        assert!(s.exists());
+        let s = Snap::new_for_applying(&core.base,
+                                       key,
+                                       core.snap_size.clone(),
+                                       Box::new(self.clone()))?;
+        if !s.exists() {
+            return Err(RaftStoreError::Other(From::from("snapshot of {:?} not exists."
+                .to_string())));
+        }
         Ok(Box::new(s))
     }
 
