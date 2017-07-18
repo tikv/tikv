@@ -134,6 +134,7 @@ pub enum Command {
     Gc {
         ctx: Context,
         safe_point: u64,
+        ratio_threshold: f64,
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
@@ -341,7 +342,7 @@ impl Command {
 
 use util::transport::SyncSendCh;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Options {
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
@@ -367,6 +368,9 @@ pub struct Storage {
     engine: Box<Engine>,
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
+
+    // Storage configurations.
+    gc_ratio_threshold: f64,
 }
 
 impl Storage {
@@ -382,6 +386,7 @@ impl Storage {
                 handle: None,
                 receiver: Some(rx),
             })),
+            gc_ratio_threshold: config.gc_ratio_threshold,
         })
     }
 
@@ -624,6 +629,7 @@ impl Storage {
         let cmd = Command::Gc {
             ctx: ctx,
             safe_point: safe_point,
+            ratio_threshold: self.gc_ratio_threshold,
             scan_key: None,
             keys: vec![],
         };
@@ -701,6 +707,7 @@ impl Clone for Storage {
             engine: self.engine.clone(),
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
+            gc_ratio_threshold: self.gc_ratio_threshold,
         }
     }
 }
