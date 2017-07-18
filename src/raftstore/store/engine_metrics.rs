@@ -15,7 +15,7 @@ use std::sync::Arc;
 use prometheus::{Gauge, GaugeVec};
 use rocksdb::{DB, DBStatisticsTickerType as TickerType, DBStatisticsHistogramType as HistType,
               HistogramData};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::rocksdb;
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &'static str = "rocksdb.total-sst-files-size";
@@ -45,7 +45,7 @@ pub const ENGINE_TICKER_TYPES: &'static [TickerType] = &[TickerType::BlockCacheM
 pub const ENGINE_HIST_TYPES: &'static [HistType] =
     &[HistType::DbGetMicros, HistType::DbWriteMicros, HistType::DbSeekMicros];
 
-pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
+pub fn flush_kv_engine_ticker_metrics(t: TickerType, value: u64) {
     match t {
         TickerType::BlockCacheMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY_VEC.with_label_values(&["block_cache_miss"])
@@ -114,7 +114,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64) {
     }
 }
 
-pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData) {
+pub fn flush_kv_engine_histogram_metrics(t: HistType, value: HistogramData) {
     match t {
         HistType::DbGetMicros => {
             STORE_ENGINE_GET_MICROS_VEC.with_label_values(&["get_median"]).set(value.median);
@@ -150,7 +150,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData) {
 }
 
 fn get_cf_size(engine: &Arc<DB>, cf: &str, used_size: &mut u64) {
-    let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+    let handle = rocksdb::get_cf_handle(engine, cf).unwrap();
     let cf_used_size = engine.get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
         .expect("rocksdb is too old, missing total-sst-files-size property");
 
@@ -195,13 +195,11 @@ fn get_cf_size(engine: &Arc<DB>, cf: &str, used_size: &mut u64) {
     }
 }
 
-pub fn flush_engine_properties_and_get_used_size(engine: Arc<DB>, default_engine: Arc<DB>) -> u64 {
+pub fn flush_kv_engine_properties_and_get_used_size(kv_engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
-    for cf in [CF_DEFAULT, CF_LOCK, CF_WRITE].iter() {
-        get_cf_size(&default_engine, cf, &mut used_size);
+    for cf in &[CF_DEFAULT, CF_LOCK, CF_WRITE] {
+        get_cf_size(&kv_engine, cf, &mut used_size);
     }
-    get_cf_size(&engine, CF_RAFT, &mut used_size);
-
     used_size
 }
 

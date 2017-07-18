@@ -64,6 +64,7 @@ use super::cmd_resp::{bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
 use super::engine_metrics::*;
+use super::raft_engine_metrics::*;
 use super::local_metrics::RaftMetrics;
 use prometheus::local::LocalHistogram;
 
@@ -1632,8 +1633,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         stats.set_capacity(capacity);
 
-        let mut used_size = flush_engine_properties_and_get_used_size(self.raft_engine.clone(),
-                                                                      self.kv_engine.clone());
+        let mut used_size = flush_kv_engine_properties_and_get_used_size(self.kv_engine.clone());
+        used_size += flush_raft_engine_properties_and_get_used_size(self.raft_engine.clone());
         used_size += self.snap_mgr.get_total_snap_size();
 
         stats.set_used_size(used_size);
@@ -1681,13 +1682,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         stats.set_start_time(self.start_time.sec as u32);
 
         // report store write flow to pd
-        let engine_total_bytes_written = self.raft_engine
+        let engine_total_bytes_written = self.kv_engine
             .get_statistics_ticker_count(TickerType::BytesWritten);
         let delta = engine_total_bytes_written - self.store_stat.engine_total_bytes_written;
         self.store_stat.engine_total_bytes_written = engine_total_bytes_written;
         stats.set_bytes_written(delta);
 
-        let engine_total_keys_written = self.raft_engine
+        let engine_total_keys_written = self.kv_engine
             .get_statistics_ticker_count(TickerType::NumberKeysWritten);
         let delta = engine_total_keys_written - self.store_stat.engine_total_keys_written;
         self.store_stat.engine_total_keys_written = engine_total_keys_written;
@@ -1709,13 +1710,19 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     fn flush_engine_statistics(&mut self) {
         for t in ENGINE_TICKER_TYPES {
+            let v = self.kv_engine.get_statistics_ticker_count(*t);
+            flush_kv_engine_ticker_metrics(*t, v);
+
             let v = self.raft_engine.get_statistics_ticker_count(*t);
-            flush_engine_ticker_metrics(*t, v);
+            flush_raft_engine_ticker_metrics(*t, v);
         }
 
         for t in ENGINE_HIST_TYPES {
+            if let Some(v) = self.kv_engine.get_statistics_histogram(*t) {
+                flush_kv_engine_histogram_metrics(*t, v);
+            }
             if let Some(v) = self.raft_engine.get_statistics_histogram(*t) {
-                flush_engine_histogram_metrics(*t, v);
+                flush_raft_engine_histogram_metrics(*t, v);
             }
         }
     }

@@ -480,7 +480,7 @@ impl ApplyDelegate {
                                                                  index,
                                                                  term,
                                                                  &cmd);
-        if is_ok == false {
+        if !is_ok {
             apply_ctx.wb_mut().rollback_to_save_point().unwrap();
         }
 

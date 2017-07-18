@@ -846,13 +846,13 @@ fn get_data_and_backup_dirs(matches: &ArgMatches, config: &toml::Value) -> (Stri
     }
 }
 
-fn get_raft_rocksdb_data_dir(store_dir: &String, config: &toml::Value) -> String {
+fn get_raft_rocksdb_data_dir(store_dir: &str, config: &toml::Value) -> String {
     // raft rocksdb data path
     let abs_data_dir = get_toml_string_opt(config, "server.raft-data-dir")
         .map(|s| canonicalize_path(&s))
         .unwrap_or_else(|| {
             warn!("raft rocksdb dir not set, use default dir {}", store_dir);
-            store_dir.clone()
+            store_dir.to_string()
         });
     info!("server.raft-data-dir uses {:?}", abs_data_dir);
 
