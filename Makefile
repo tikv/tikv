@@ -40,10 +40,10 @@ release:
 	cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 
 static_release:
-	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 ROCKSDB_SYS_SSE=1  make release
+	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_PORTABLE=1 ROCKSDB_SYS_SSE=1 make release
 
 static_unportable_release:
-	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_SSE=1  make release
+	ROCKSDB_SYS_STATIC=1 ROCKSDB_SYS_SSE=1 make release
 
 static_prof_release:
 	ENABLE_FEATURES=mem-profiling make static_release
@@ -69,12 +69,17 @@ test:
 	# TODO: remove above target once https://github.com/rust-lang/cargo/issues/2984 is resolved.
 
 bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features "${ENABLE_FEATURES}" -- --nocapture && \
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --features "${ENABLE_FEATURES}" -- --nocapture
 	RUST_BACKTRACE=1 cargo run --release --bin bench-tikv --features "${ENABLE_FEATURES}"
 
 format:
-	@cargo fmt -- --write-mode diff | grep -E "Diff .*at line" > /dev/null && cargo fmt -- --write-mode overwrite || exit 0
-	@rustfmt --write-mode diff tests/tests.rs benches/benches.rs | grep -E "Diff .*at line" > /dev/null && rustfmt --write-mode overwrite tests/tests.rs benches/benches.rs || exit 0
+	find . -iname '*.rs' | xargs cargo fmt -- --write-mode overwrite || true
+
+check-format:
+	find . -iname '*.rs' | xargs cargo fmt -- --write-mode diff
+
+format-check: check-format
 
 clean:
 	cargo clean
+	rm -f ${BIN_PATH}/tikv-server ${BIN_PATH}/tikv-ctl
