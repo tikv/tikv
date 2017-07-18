@@ -792,6 +792,21 @@ impl Decimal {
         }
     }
 
+    /// returns whether a decimal is negative.
+    pub fn is_negative(&self) -> bool {
+        self.negative
+    }
+
+    /// checks whether it's a zero decimal.
+    pub fn is_zero(&self) -> bool {
+        for x in self.word_buf.iter() {
+            if *x != 0 {
+                return false;
+            }
+        }
+        true
+    }
+
     /// reset the decimal to zero.
     fn reset_to_zero(&mut self) {
         self.int_cnt = 1;

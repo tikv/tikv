@@ -19,6 +19,7 @@ use std::str::FromStr;
 use std::mem;
 use std::fmt::{self, Display, Formatter, Debug};
 use byteorder::{ReadBytesExt, WriteBytesExt};
+use tipb::expression::{DataType, FieldType};
 
 use util::escape;
 use util::codec::{number, bytes};
@@ -27,7 +28,8 @@ use util::codec::bytes::BytesEncoder;
 use super::super::xeval::EvalContext;
 use super::{Result, convert};
 use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
-                   Time, Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr};
+                   Res, Time, Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr};
+use super::field_type::UNSPECIFIED_LENGTH;
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -972,6 +974,43 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         return Err(box_err!("{} is too short", escape(buf)));
     }
     Ok(buf.split_at(1 + pos))
+}
+
+pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
+    !ctx.ignore_truncate && !ctx.truncate_as_warning
+}
+
+// Produces a new decimal accroding to `flen` and `decimal`.
+pub fn produce_dec_with_specified_tp(dec: Decimal,
+                                     tp: &FieldType,
+                                     ctx: &EvalContext)
+                                     -> Result<Decimal> {
+    let (flen, decimal) = (tp.get_flen(), tp.get_decimal());
+    if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
+        let (prec, frac) = dec.prec_and_frac();
+        let (prec, frac) = (prec as i32, frac as i32);
+        if !dec.is_zero() && prec - frac > flen - decimal {
+            // This following line of code is from TiDB `ProduceDecWithSpecifiedTp`.
+            // let d = new_max_or_min_dec(dec.is_negative(), flen, decimal);
+            // TODO: we may need a OverlowAsWarning.
+            // `select (cast 111 as decimal(1))` causes a warning in MySQL.
+            return Err(box_err!("{} value is out of range in DECIMAL({}, {})",
+                                dec,
+                                flen,
+                                decimal));
+        } else if frac != decimal {
+            let d = match dec.round(decimal as i8) {
+                Res::Ok(d) => d,
+                Res::Overflow(_) => return Err(box_err!("round overflow")),
+                Res::Truncated(_) => return Err(box_err!("round truncated")),
+            };
+            if !d.is_zero() && frac > decimal && handle_truncate_as_error(ctx) {
+                return Err(box_err!("data truncated"));
+            }
+            return Ok(d);
+        }
+    }
+    Ok(dec)
 }
 
 #[cfg(test)]

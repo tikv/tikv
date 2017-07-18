@@ -16,7 +16,7 @@ use protobuf::ProtobufEnum;
 use chrono::naive::time::NaiveTime;
 use chrono::offset::fixed::FixedOffset;
 use tipb::expression::Expr;
-use coprocessor::codec::datum::Datum;
+use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp};
 use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag};
 use coprocessor::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
@@ -87,9 +87,15 @@ impl Evaluator {
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 
-    pub fn cast_real_as_decimal(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_real_as_decimal(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        if let Datum::F64(f) = datum {
+            let decimal = try!(Decimal::from_f64(f));
+            let decimal = try!(produce_dec_with_specified_tp(decimal, expr.get_field_type(), ctx));
+            return Ok(Datum::Dec(decimal));
+        }
+        invalid_type_error(&datum, TYPE_REAL)
     }
 
     pub fn cast_real_as_time(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -281,4 +287,16 @@ mod test {
                                          ScalarFuncSig::CastRealAsReal,
                                          FieldType::new()),
                      Datum::F64(1.0))]);
+
+    test_eval!(test_cast_real_as_decimal,
+               vec![(build_expr_with_sig(vec![Datum::F64(1000.0)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastRealAsDecimal,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(5);
+                                             ft.set_decimal(1);
+                                             ft
+                                         }),
+                     Datum::Dec(Decimal::from_f64(1000.0).unwrap()))]);
 }
