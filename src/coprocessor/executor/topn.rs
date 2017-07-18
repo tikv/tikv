@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME: remove later
-#![allow(dead_code)]
-
 use std::usize;
 use std::rc::Rc;
 use std::vec::IntoIter;
@@ -33,9 +30,8 @@ pub struct TopNExecutor<'a> {
     columns: Vec<ColumnInfo>,
     heap: Option<TopNHeap>,
     iter: Option<IntoIter<SortRow>>,
-
-    src: Box<Executor + 'a>,
     ctx: Rc<EvalContext>,
+    src: Box<Executor + 'a>,
 }
 
 impl<'a> TopNExecutor<'a> {

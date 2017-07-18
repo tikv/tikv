@@ -32,7 +32,6 @@ pub struct TableScanExecutor<'a> {
 }
 
 impl<'a> TableScanExecutor<'a> {
-    #[allow(dead_code)] //TODO:remove it
     pub fn new(meta: TableScan,
                key_ranges: Vec<KeyRange>,
                snapshot: &'a Snapshot,
