@@ -16,7 +16,8 @@ use protobuf::ProtobufEnum;
 use chrono::naive::time::NaiveTime;
 use chrono::offset::fixed::FixedOffset;
 use tipb::expression::Expr;
-use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp};
+use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp,
+                                produce_str_with_specified_tp};
 use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag};
 use coprocessor::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
@@ -82,9 +83,15 @@ impl Evaluator {
         }
     }
 
-    pub fn cast_real_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_real_as_string(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let d = try!(self.eval(ctx, child));
+        if let Datum::F64(f) = d {
+            let s = format!("{}", f);
+            let s = try!(produce_str_with_specified_tp(s, expr.get_field_type(), ctx));
+            return Ok(Datum::Bytes(s.into_bytes()));
+        }
+        invalid_type_error(&d, TYPE_REAL)
     }
 
     pub fn cast_real_as_decimal(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -287,6 +294,17 @@ mod test {
                                          ScalarFuncSig::CastRealAsReal,
                                          FieldType::new()),
                      Datum::F64(1.0))]);
+
+    test_eval!(test_cast_real_as_string,
+               vec![(build_expr_with_sig(vec![Datum::F64(3.1415926535)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastRealAsString,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(12);
+                                             ft
+                                         }),
+                     Datum::Bytes(b"3.1415926535".to_vec()))]);
 
     test_eval!(test_cast_real_as_decimal,
                vec![(build_expr_with_sig(vec![Datum::F64(1000.0)],
