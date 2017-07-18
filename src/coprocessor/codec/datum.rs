@@ -426,7 +426,7 @@ impl Datum {
                 Ok(json)
             }
             Datum::I64(d) => Ok(Json::I64(d)),
-            Datum::U64(d) => Ok(Json::I64(d as i64)),
+            Datum::U64(d) => Ok(Json::U64(d)),
             Datum::F64(d) => Ok(Json::Double(d)),
             Datum::Dec(d) => {
                 let ff = try!(d.as_f64());
