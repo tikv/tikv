@@ -62,4 +62,28 @@ quick_error! {
     }
 }
 
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+        match *self {
+            Error::Engine(ref e) => e.maybe_clone().map(Error::Engine),
+            Error::Codec(ref e) => e.maybe_clone().map(Error::Codec),
+            Error::KeyIsLocked { ref key, ref primary, ts, ttl } => {
+                Some(Error::KeyIsLocked {
+                    key: key.clone(),
+                    primary: primary.clone(),
+                    ts: ts,
+                    ttl: ttl,
+                })
+            }
+            Error::BadFormatLock => Some(Error::BadFormatLock),
+            Error::BadFormatWrite => Some(Error::BadFormatWrite),
+            Error::TxnLockNotFound => Some(Error::TxnLockNotFound),
+            Error::WriteConflict => Some(Error::WriteConflict),
+            Error::KeyVersion => Some(Error::KeyVersion),
+            Error::Committed { commit_ts } => Some(Error::Committed { commit_ts: commit_ts }),
+            Error::Io(_) => None,
+        }
+    }
+}
+
 pub type Result<T> = ::std::result::Result<T, Error>;

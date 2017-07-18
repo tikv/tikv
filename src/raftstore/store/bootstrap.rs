@@ -56,7 +56,8 @@ pub fn bootstrap_store(raft_engine: &DB, cluster_id: u64, store_id: u64) -> Resu
 // Write first region meta and prepare state.
 pub fn write_prepare_bootstrap(raft_engine: &DB,
                                kv_engine: &DB,
-                               region: &metapb::Region) -> Result<()> {
+                               region: &metapb::Region)
+                               -> Result<()> {
     let mut state = RegionLocalState::new();
     state.set_region(region.clone());
 

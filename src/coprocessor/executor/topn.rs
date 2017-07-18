@@ -11,30 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME: remove later
-#![allow(dead_code)]
-
 use std::usize;
 use std::rc::Rc;
 use std::vec::IntoIter;
 
-use super::{Executor, Row, ExprColumnRefVisitor};
-use super::super::Result;
-use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
-use util::xeval::{Evaluator, EvalContext};
-
 use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
+
+use super::{Executor, Row, ExprColumnRefVisitor};
+use super::super::Result;
+use super::super::xeval::{Evaluator, EvalContext};
+use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
+use super::super::metrics::*;
 
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
     columns: Vec<ColumnInfo>,
     heap: Option<TopNHeap>,
     iter: Option<IntoIter<SortRow>>,
-
-    src: Box<Executor + 'a>,
     ctx: Rc<EvalContext>,
+    src: Box<Executor + 'a>,
 }
 
 impl<'a> TopNExecutor<'a> {
@@ -53,7 +50,7 @@ impl<'a> TopNExecutor<'a> {
             .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect();
-
+        COPR_EXECUTOR_COUNT.with_label_values(&["topn"]).inc();
         Ok(TopNExecutor {
             order_by: Rc::new(order_by),
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
@@ -108,11 +105,11 @@ pub mod test {
     use super::*;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
-    use util::codec::Datum;
     use util::collections::HashMap;
-    use util::codec::table::{self, RowColsDict};
     use util::codec::number::NumberEncoder;
-    use util::codec::mysql::types;
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::table::{self, RowColsDict};
+    use coprocessor::codec::mysql::types;
     use storage::Statistics;
 
     use tipb::executor::TableScan;

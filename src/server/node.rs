@@ -200,7 +200,10 @@ impl<C> Node<C>
         Ok(store_id)
     }
 
-    pub fn prepare_bootstrap_cluster(&self, raft_engine: &DB, kv_engine: &DB, store_id: u64)
+    pub fn prepare_bootstrap_cluster(&self,
+                                     raft_engine: &DB,
+                                     kv_engine: &DB,
+                                     store_id: u64)
                                      -> Result<metapb::Region> {
         let region_id = try!(self.alloc_id());
         info!("alloc first region id {} for cluster {}, store {}",
@@ -212,7 +215,8 @@ impl<C> Node<C>
               peer_id,
               region_id);
 
-        let region = try!(store::prepare_bootstrap(raft_engine, kv_engine, store_id, region_id, peer_id));
+        let region =
+            try!(store::prepare_bootstrap(raft_engine, kv_engine, store_id, region_id, peer_id));
         Ok(region)
     }
 
@@ -246,7 +250,11 @@ impl<C> Node<C>
         Err(box_err!("check cluster prepare bootstrapped failed"))
     }
 
-    fn bootstrap_cluster(&mut self, raft_engine: &DB, kv_engine: &DB, region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(&mut self,
+                         raft_engine: &DB,
+                         kv_engine: &DB,
+                         region: metapb::Region)
+                         -> Result<()> {
         let region_id = region.get_id();
         match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
@@ -306,10 +314,11 @@ impl<C> Node<C>
                 sender: sender,
                 snapshot_status_receiver: snapshot_status_receiver,
             };
-            let mut store = match Store::new(ch, store, cfg, raft_db, kv_db, trans, pd_client, snap_mgr) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
-            };
+            let mut store =
+                match Store::new(ch, store, cfg, raft_db, kv_db, trans, pd_client, snap_mgr) {
+                    Err(e) => panic!("construct store {} err {:?}", store_id, e),
+                    Ok(s) => s,
+                };
             tx.send(0).unwrap();
             if let Err(e) = store.run(&mut event_loop) {
                 error!("store {} run err {:?}", store_id, e);

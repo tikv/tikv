@@ -345,7 +345,8 @@ impl ApplyDelegate {
     }
 
     fn write_apply_state(&self, wb: &WriteBatch) {
-        wb.put_msg(&keys::apply_state_key(self.region.get_id()), &self.apply_state)
+        wb.put_msg(&keys::apply_state_key(self.region.get_id()),
+                     &self.apply_state)
             .unwrap_or_else(|e| {
                 panic!("{} failed to save apply state to write batch, error: {:?}",
                        self.tag,
@@ -474,8 +475,11 @@ impl ApplyDelegate {
         apply_ctx.host.pre_apply(&self.region, &mut cmd);
 
         apply_ctx.wb_mut().set_save_point();
-        let (mut resp, exec_result, is_ok) =
-            self.apply_raft_cmd(apply_ctx.wb_ref(), apply_ctx.raft_wb_ref(), index, term, &cmd);
+        let (mut resp, exec_result, is_ok) = self.apply_raft_cmd(apply_ctx.wb_ref(),
+                                                                 apply_ctx.raft_wb_ref(),
+                                                                 index,
+                                                                 term,
+                                                                 &cmd);
         if is_ok == false {
             apply_ctx.wb_mut().rollback_to_save_point().unwrap();
         }
@@ -812,10 +816,12 @@ impl ApplyDelegate {
         new_region.mut_region_epoch().set_version(region_ver);
         write_peer_state(raft_wb, &region, PeerState::Normal)
             .and_then(|_| write_peer_state(raft_wb, &new_region, PeerState::Normal))
-            .and_then(|_| write_initial_state(self.raft_engine.as_ref(),
-                                              raft_wb,
-                                              ctx.wb,
-                                              new_region.get_id()))
+            .and_then(|_| {
+                write_initial_state(self.raft_engine.as_ref(),
+                                    raft_wb,
+                                    ctx.wb,
+                                    new_region.get_id())
+            })
             .unwrap_or_else(|e| {
                 panic!("{} failed to save split region {:?}: {:?}",
                        self.tag,
@@ -1540,8 +1546,7 @@ mod tests {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
-            let apply_state: RaftApplyState =
-                db.get_msg(&apply_state_key).unwrap().unwrap();
+            let apply_state: RaftApplyState = db.get_msg(&apply_state_key).unwrap().unwrap();
             assert_eq!(apply_state, delegate.apply_state);
         }
 

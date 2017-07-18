@@ -373,7 +373,8 @@ impl<T: Simulator> Cluster<T> {
 
         let node_id = 1;
         // TODO(lishuai):
-        let region = prepare_bootstrap(&self.engines[&node_id], &self.engines[&node_id], 1, 1, 1).unwrap();
+        let region = prepare_bootstrap(&self.engines[&node_id], &self.engines[&node_id], 1, 1, 1)
+            .unwrap();
         let rid = region.get_id();
         self.bootstrap_cluster(region);
         rid

@@ -31,7 +31,7 @@ mod metrics;
 
 pub use self::config::Config;
 pub use self::engine::{Engine, Snapshot, TEMP_DIR, new_local_engine, Modify, Cursor,
-                       Error as EngineError, ScanMode, Statistics};
+                       Error as EngineError, ScanMode, Statistics, CFStatistics};
 pub use self::engine::raftkv::RaftKv;
 pub use self::txn::{SnapshotStore, Scheduler, Msg};
 pub use self::types::{Key, Value, KvPair, make_key};
@@ -134,10 +134,16 @@ pub enum Command {
     Gc {
         ctx: Context,
         safe_point: u64,
+        ratio_threshold: f64,
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
     RawGet { ctx: Context, key: Key },
+    RawScan {
+        ctx: Context,
+        start_key: Key,
+        limit: usize,
+    },
     Pause { ctx: Context, duration: u64 },
 }
 
@@ -207,6 +213,13 @@ impl Display for Command {
             Command::RawGet { ref ctx, ref key } => {
                 write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
             }
+            Command::RawScan { ref ctx, ref start_key, limit } => {
+                write!(f,
+                       "kv::command::rawscan {:?} {} | {:?}",
+                       start_key,
+                       limit,
+                       ctx)
+            }
             Command::Pause { ref ctx, duration } => {
                 write!(f, "kv::command::pause {} ms | {:?}", duration, ctx)
             }
@@ -230,6 +243,7 @@ impl Command {
             Command::Scan { .. } |
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
+            Command::RawScan { .. } |
             Command::Pause { .. } => true,
             Command::ResolveLock { ref keys, .. } |
             Command::Gc { ref keys, .. } => keys.is_empty(),
@@ -266,6 +280,7 @@ impl Command {
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
+            Command::RawScan { .. } => "raw_scan",
             Command::Pause { .. } => "pause",
         }
     }
@@ -283,6 +298,7 @@ impl Command {
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
             Command::RawGet { .. } |
+            Command::RawScan { .. } |
             Command::Pause { .. } => 0,
         }
     }
@@ -300,6 +316,7 @@ impl Command {
             Command::ResolveLock { ref ctx, .. } |
             Command::Gc { ref ctx, .. } |
             Command::RawGet { ref ctx, .. } |
+            Command::RawScan { ref ctx, .. } |
             Command::Pause { ref ctx, .. } => ctx,
         }
     }
@@ -317,6 +334,7 @@ impl Command {
             Command::ResolveLock { ref mut ctx, .. } |
             Command::Gc { ref mut ctx, .. } |
             Command::RawGet { ref mut ctx, .. } |
+            Command::RawScan { ref mut ctx, .. } |
             Command::Pause { ref mut ctx, .. } => ctx,
         }
     }
@@ -324,7 +342,7 @@ impl Command {
 
 use util::transport::SyncSendCh;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Options {
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
@@ -350,6 +368,9 @@ pub struct Storage {
     kv_engine: Box<Engine>,
     sendch: SyncSendCh<Msg>,
     handle: Arc<Mutex<StorageHandle>>,
+
+    // Storage configurations.
+    gc_ratio_threshold: f64,
 }
 
 impl Storage {
@@ -365,6 +386,7 @@ impl Storage {
                 handle: None,
                 receiver: Some(rx),
             })),
+            gc_ratio_threshold: config.gc_ratio_threshold,
         })
     }
 
@@ -607,6 +629,7 @@ impl Storage {
         let cmd = Command::Gc {
             ctx: ctx,
             safe_point: safe_point,
+            ratio_threshold: self.gc_ratio_threshold,
             scan_key: None,
             keys: vec![],
         };
@@ -660,6 +683,22 @@ impl Storage {
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["delete"]).inc();
         Ok(())
     }
+
+    pub fn async_raw_scan(&self,
+                          ctx: Context,
+                          key: Vec<u8>,
+                          limit: usize,
+                          callback: Callback<Vec<Result<KvPair>>>)
+                          -> Result<()> {
+        let cmd = Command::RawScan {
+            ctx: ctx,
+            start_key: Key::from_encoded(key),
+            limit: limit,
+        };
+        try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
+        Ok(())
+    }
 }
 
 impl Clone for Storage {
@@ -668,6 +707,7 @@ impl Clone for Storage {
             kv_engine: self.kv_engine.clone(),
             sendch: self.sendch.clone(),
             handle: self.handle.clone(),
+            gc_ratio_threshold: self.gc_ratio_threshold,
         }
     }
 }

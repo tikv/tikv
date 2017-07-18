@@ -11,19 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME(andelf): remove following later
-#![allow(dead_code)]
-
 use std::rc::Rc;
 
 use tipb::executor::Selection;
 use tipb::schema::ColumnInfo;
 use tipb::expression::Expr;
-use util::xeval::{Evaluator, EvalContext};
-
+use super::super::xeval::{Evaluator, EvalContext};
 use super::super::Result;
 use super::{Row, Executor, ExprColumnRefVisitor};
 use super::super::endpoint::inflate_with_col;
+use super::super::metrics::*;
 
 pub struct SelectionExecutor<'a> {
     conditions: Vec<Expr>,
@@ -48,6 +45,7 @@ impl<'a> SelectionExecutor<'a> {
             .filter(|col| visitor.col_ids.get(&col.get_column_id()).is_some())
             .cloned()
             .collect::<Vec<ColumnInfo>>();
+        COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
         Ok(SelectionExecutor {
             conditions: conditions,
             columns: columns,
@@ -87,8 +85,8 @@ mod tests {
     use protobuf::RepeatedField;
     use util::codec::number::NumberEncoder;
     use tipb::expression::{Expr, ExprType};
-    use util::codec::mysql::types;
-    use util::codec::datum::Datum;
+    use coprocessor::codec::mysql::types;
+    use coprocessor::codec::datum::Datum;
     use tipb::executor::TableScan;
     use kvproto::kvrpcpb::IsolationLevel;
 

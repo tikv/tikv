@@ -11,14 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: remove it
-#![allow(dead_code)]
-
 use std::collections::HashSet;
-use util::codec::table::RowColsDict;
 use util::codec::number::NumberDecoder;
 use tipb::expression::{Expr, ExprType};
-use coprocessor::Result;
+use super::codec::table::RowColsDict;
+use super::Result;
 
 mod scanner;
 pub mod table_scan;

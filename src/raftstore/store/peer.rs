@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::{mem, slice};
+use std::{cmp, mem, slice};
 use std::time::{Instant, Duration};
 
 use time::Timespec;
@@ -381,8 +381,8 @@ impl Peer {
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
-        let wb = WriteBatch::new();
-        try!(self.mut_store().clear_meta(&wb));
+        let mut wb = WriteBatch::new();
+        try!(self.mut_store().clear_meta(&mut wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
         try!(self.raft_engine.write(wb));
 
@@ -848,13 +848,14 @@ impl Peer {
         self.peer_stat.written_keys += res.metrics.written_keys;
         self.peer_stat.written_bytes += res.metrics.written_bytes;
 
-        if has_split {
+        let diff = if has_split {
             self.delete_keys_hint = res.metrics.delete_keys_hint;
-            self.size_diff_hint = res.metrics.size_diff_hint as u64;
+            res.metrics.size_diff_hint
         } else {
             self.delete_keys_hint += res.metrics.delete_keys_hint;
-            self.size_diff_hint = (self.size_diff_hint as i64 + res.metrics.size_diff_hint) as u64;
-        }
+            self.size_diff_hint as i64 + res.metrics.size_diff_hint
+        };
+        self.size_diff_hint = cmp::max(diff, 0) as u64;
 
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
             self.mark_to_be_checked(groups);
@@ -1100,12 +1101,21 @@ impl Peer {
     ///    Then at least '(total + 1)/2 + 1' nodes need to be up to date for now.
     /// 2. A `RemoveNode` request
     ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
-    ///    need to be up to date for now.
+    ///    need to be up to date for now. If 'allow_remove_leader' is false then
+    ///    the peer to be removed should not be the leader.
     fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
         let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
 
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
+
+        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader &&
+           peer.get_id() == self.peer_id() {
+            warn!("{} rejects remove leader request {:?}",
+                  self.tag,
+                  change_peer);
+            return Err(box_err!("ignore remove leader"));
+        }
 
         let mut status = self.raft_group.status();
         let total = status.progress.len();

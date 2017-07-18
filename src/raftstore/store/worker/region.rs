@@ -94,10 +94,10 @@ struct SnapContext {
 impl SnapContext {
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
-        let raft_snap = Snapshot::new(self.raft_db.clone());
+        let raft_db = self.raft_db.clone();
         let kv_snap = Snapshot::new(self.kv_db.clone());
 
-        let snap = box_try!(store::do_snapshot(self.mgr.clone(), &raft_snap, &kv_snap, region_id));
+        let snap = box_try!(store::do_snapshot(self.mgr.clone(), &raft_db, &kv_snap, region_id));
         if let Err(e) = notifier.try_send(snap) {
             info!("[region {}] failed to notify snap result, maybe leadership has changed, \
                    ignore: {:?}",
@@ -212,7 +212,8 @@ impl SnapContext {
         info!("[region {}] begin apply snap data", region_id);
         try!(check_abort(&abort));
         let region_key = keys::region_state_key(region_id);
-        let mut region_state: RegionLocalState = match box_try!(self.raft_db.get_msg(&region_key)) {
+        let mut region_state: RegionLocalState = match box_try!(self.raft_db
+            .get_msg(&region_key)) {
             Some(state) => state,
             None => return Err(box_err!("failed to get region_state from {}", escape(&region_key))),
         };

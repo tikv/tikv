@@ -314,8 +314,7 @@ impl InvokeContext {
 
     #[inline]
     pub fn save_apply_to(&self, kv_wb: &mut WriteBatch) -> Result<()> {
-        try!(kv_wb.put_msg(&keys::apply_state_key(self.region_id),
-                           &self.apply_state));
+        try!(kv_wb.put_msg(&keys::apply_state_key(self.region_id), &self.apply_state));
         Ok(())
     }
 }
@@ -383,7 +382,9 @@ impl PeerStorage {
                tag: String,
                stats: Rc<RefCell<CacheQueryStats>>)
                -> Result<PeerStorage> {
-        debug!("creating storage on {} for {:?}", raft_engine.path(), region);
+        debug!("creating storage on {} for {:?}",
+               raft_engine.path(),
+               region);
         let raft_state = try!(init_raft_state(&raft_engine, region));
         let apply_state = try!(init_apply_state(&kv_engine, region));
         let last_term = try!(init_last_term(&raft_engine, region, &raft_state, &apply_state));
@@ -516,10 +517,10 @@ impl PeerStorage {
         let start_key = keys::raft_log_key(self.get_region_id(), low);
         let end_key = keys::raft_log_key(self.get_region_id(), high);
         try!(self.raft_engine.scan_cf(CF_RAFT,
-                                 &start_key,
-                                 &end_key,
-                                 true, // fill_cache
-                                 &mut |_, value| {
+                                      &start_key,
+                                      &end_key,
+                                      true, // fill_cache
+                                      &mut |_, value| {
             let mut entry = Entry::new();
             try!(entry.merge_from_bytes(value));
 
@@ -782,40 +783,9 @@ impl PeerStorage {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&mut self, wb: &WriteBatch) -> Result<()> {
-        let t = Instant::now();
-        let mut meta_count = 0;
-        let mut raft_count = 0;
-        let region_id = self.get_region_id();
-        let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
-                                      keys::region_meta_prefix(region_id + 1));
-        try!(self.raft_engine.scan(&meta_start,
-                                   &meta_end,
-                                   false,
-                                   &mut |key, _| {
-                                       try!(wb.delete(key));
-                                       meta_count += 1;
-                                       Ok(true)
-                                   }));
-
-        let handle = try!(rocksdb::get_cf_handle(&self.raft_engine, CF_RAFT));
-        let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
-                                      keys::region_raft_prefix(region_id + 1));
-        try!(self.raft_engine.scan_cf(CF_RAFT,
-                                      &raft_start,
-                                      &raft_end,
-                                      false,
-                                      &mut |key, _| {
-                                          try!(wb.delete_cf(handle, key));
-                                          raft_count += 1;
-                                          Ok(true)
-                                      }));
+    pub fn clear_meta(&mut self, wb: &mut WriteBatch) -> Result<()> {
+        try!(clear_meta(&self.raft_engine, wb, self.get_region_id()));
         self.cache = EntryCache::default();
-        info!("{} clear peer {} meta keys and {} raft keys, takes {:?}",
-              self.tag,
-              meta_count,
-              raft_count,
-              t.elapsed());
         Ok(())
     }
 
@@ -1020,7 +990,46 @@ impl PeerStorage {
     }
 }
 
-pub fn do_snapshot(mgr: SnapManager, raft_snap: &DbSnapshot, kv_snap: &DbSnapshot, region_id: u64)
+/// Delete all meta belong to the region. Results are stored in `wb`.
+pub fn clear_meta(raft_engine: &DB, wb: &WriteBatch, region_id: u64) -> Result<()> {
+    let t = Instant::now();
+    let mut meta_count = 0;
+    let mut raft_count = 0;
+    let (meta_start, meta_end) = (keys::region_meta_prefix(region_id),
+                                  keys::region_meta_prefix(region_id + 1));
+    try!(raft_engine.scan(&meta_start,
+                          &meta_end,
+                          false,
+                          &mut |key, _| {
+                              try!(wb.delete(key));
+                              meta_count += 1;
+                              Ok(true)
+                          }));
+
+    let handle = try!(rocksdb::get_cf_handle(raft_engine, CF_RAFT));
+    let (raft_start, raft_end) = (keys::region_raft_prefix(region_id),
+                                  keys::region_raft_prefix(region_id + 1));
+    try!(raft_engine.scan_cf(CF_RAFT,
+                             &raft_start,
+                             &raft_end,
+                             false,
+                             &mut |key, _| {
+                                 try!(wb.delete_cf(handle, key));
+                                 raft_count += 1;
+                                 Ok(true)
+                             }));
+    info!("[region {}] clear peer {} meta keys and {} raft keys, takes {:?}",
+          region_id,
+          meta_count,
+          raft_count,
+          t.elapsed());
+    Ok(())
+}
+
+pub fn do_snapshot(mgr: SnapManager,
+                   raft_db: &DB,
+                   kv_snap: &DbSnapshot,
+                   region_id: u64)
                    -> raft::Result<Snapshot> {
     debug!("[region {}] begin to generate a snapshot", region_id);
 
@@ -1034,7 +1043,7 @@ pub fn do_snapshot(mgr: SnapManager, raft_snap: &DbSnapshot, kv_snap: &DbSnapsho
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        match try!(raft_snap.get_msg_cf::<Entry>(CF_RAFT, &keys::raft_log_key(region_id, idx))) {
+        match try!(raft_db.get_msg_cf::<Entry>(CF_RAFT, &keys::raft_log_key(region_id, idx))) {
             None => return Err(box_err!("entry {} of {} not found.", idx, region_id)),
             Some(entry) => entry.get_term(),
         }
@@ -1045,7 +1054,7 @@ pub fn do_snapshot(mgr: SnapManager, raft_snap: &DbSnapshot, kv_snap: &DbSnapsho
     mgr.register(key.clone(), SnapEntry::Generating);
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
-    let state: RegionLocalState = try!(raft_snap.get_msg(&keys::region_state_key(key.region_id))
+    let state: RegionLocalState = try!(raft_db.get_msg(&keys::region_state_key(key.region_id))
         .and_then(|res| {
             match res {
                 None => Err(box_err!("could not find region info")),
@@ -1095,7 +1104,8 @@ pub fn do_snapshot(mgr: SnapManager, raft_snap: &DbSnapshot, kv_snap: &DbSnapsho
 pub fn write_initial_state<T: Mutable>(raft_engine: &DB,
                                        w: &T,
                                        kv_w: &T,
-                                       region_id: u64) -> Result<()> {
+                                       region_id: u64)
+                                       -> Result<()> {
     let mut raft_state = RaftLocalState::new();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);

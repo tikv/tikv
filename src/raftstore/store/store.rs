@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{DB, DBStatisticsTickerType as TickerType};
+use rocksdb::{DB, DBStatisticsTickerType as TickerType, WriteBatch};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -45,7 +45,7 @@ use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
 use util::{rocksdb, RingQueue};
 use util::collections::{HashMap, HashSet};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -58,7 +58,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, StaleState, ConsistencyState, ReadyContext};
-use super::peer_storage::{ApplySnapResult, CacheQueryStats};
+use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::msg::Callback;
 use super::cmd_resp::{bind_term, bind_error};
 use super::transport::Transport;
@@ -240,6 +240,7 @@ impl<T, C> Store<T, C> {
         let mut applying_count = 0;
 
         let t = Instant::now();
+        let mut wb = WriteBatch::new();
         try!(raft_engine.scan(start_key,
                               end_key,
                               false,
@@ -258,6 +259,7 @@ impl<T, C> Store<T, C> {
                 debug!("region {:?} is tombstone in store {}",
                        region,
                        self.store_id());
+                self.clear_stale_meta(&mut wb, region);
                 return Ok(true);
             }
             let mut peer = try!(Peer::create(self, region));
@@ -277,6 +279,10 @@ impl<T, C> Store<T, C> {
             Ok(true)
         }));
 
+        if !wb.is_empty() {
+            self.raft_engine.write(wb).unwrap();
+        }
+
         info!("{} starts with {} regions, including {} tombstones and {} applying \
                regions, takes {:?}",
               self.tag,
@@ -285,13 +291,25 @@ impl<T, C> Store<T, C> {
               applying_count,
               t.elapsed());
 
-        try!(self.clean_up());
+        try!(self.clear_stale_data());
 
         Ok(())
     }
 
-    /// `clean_up` clean up all possible garbage data.
-    fn clean_up(&mut self) -> Result<()> {
+    fn clear_stale_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
+        let raft_key = keys::raft_state_key(region.get_id());
+        let handle = rocksdb::get_cf_handle(&self.raft_engine, CF_RAFT).unwrap();
+        if self.raft_engine.get_cf(handle, &raft_key).unwrap().is_none() {
+            // it has been cleaned up.
+            return;
+        }
+
+        peer_storage::clear_meta(&self.raft_engine, wb, region.get_id()).unwrap();
+        peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
+    }
+
+    /// `clear_stale_data` clean up all possible garbage data.
+    fn clear_stale_data(&mut self) -> Result<()> {
         let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {

@@ -31,7 +31,7 @@ const RAFT_LOG_GC_COUNT_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4 / 1024;
 const RAFT_LOG_GC_SIZE_LIMIT: u64 = REGION_SPLIT_SIZE * 3 / 4;
 const SPLIT_REGION_CHECK_TICK_INTERVAL: u64 = 10000;
 
-pub const REGION_SPLIT_SIZE: u64 = 96 * 1024 * 1024;
+pub const REGION_SPLIT_SIZE: u64 = 256 * 1024 * 1024;
 pub const REGION_MAX_SIZE: u64 = REGION_SPLIT_SIZE / 2 * 3;
 pub const REGION_CHECK_DIFF: u64 = REGION_SPLIT_SIZE / 8;
 
@@ -138,6 +138,8 @@ pub struct Config {
 
     // Right region derive origin region id when split.
     pub right_derive_when_split: bool,
+
+    pub allow_remove_leader: bool,
 }
 
 impl Default for Config {
@@ -177,6 +179,7 @@ impl Default for Config {
             raft_store_max_leader_lease: TimeDuration::seconds(DEFAULT_RAFT_STORE_LEASE_SEC),
             use_sst_file_snapshot: DEFAULT_USE_SST_FILE_SNAPSHOT,
             right_derive_when_split: true,
+            allow_remove_leader: false,
         }
     }
 }

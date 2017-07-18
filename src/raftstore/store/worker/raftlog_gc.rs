@@ -108,7 +108,10 @@ impl Runnable<Task> for Runner {
         debug!("[region {}] execute gc log to {}",
                task.region_id,
                task.end_idx);
-        match self.gc_raft_log(task.raft_engine, task.region_id, task.start_idx, task.end_idx) {
+        match self.gc_raft_log(task.raft_engine,
+                               task.region_id,
+                               task.start_idx,
+                               task.end_idx) {
             Err(e) => {
                 error!("[region {}] failed to gc: {:?}", task.region_id, e);
                 self.report_collected(0);
