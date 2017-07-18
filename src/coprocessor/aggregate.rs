@@ -14,9 +14,8 @@
 use std::cmp::Ordering;
 use tipb::expression::{Expr, ExprType};
 
-use util::codec::Datum;
-use util::xeval::{evaluator, EvalContext};
-
+use super::codec::Datum;
+use super::xeval::{evaluator, EvalContext};
 use super::Result;
 
 

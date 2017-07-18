@@ -32,7 +32,6 @@ pub mod logger;
 pub mod panic_hook;
 pub mod worker;
 pub mod codec;
-pub mod xeval;
 pub mod rocksdb;
 pub mod config;
 pub mod buf;
@@ -45,6 +44,7 @@ pub mod clocktime;
 pub mod metrics;
 pub mod threadpool;
 pub mod collections;
+pub mod properties;
 
 #[cfg(target_os="linux")]
 mod thread_metrics;

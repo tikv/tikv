@@ -17,16 +17,15 @@ use std::str;
 
 use chrono::FixedOffset;
 use tipb::expression::{Expr, ExprType, ScalarFuncSig};
-use tipb::select::SelectRequest;
 
 use util::is_even;
 use util::codec::number::NumberDecoder;
-use util::codec::datum::{Datum, DatumDecoder};
-use util::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression, ModifyType};
-use util::codec::mysql::json::{json_object, json_array};
-use util::codec;
 use util::collections::{HashMap, HashMapEntry};
 
+use super::super::codec;
+use super::super::codec::datum::{Datum, DatumDecoder};
+use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression, ModifyType};
+use super::super::codec::mysql::json::{json_object, json_array};
 use super::{Result, Error};
 
 /// Flags are used by `SelectRequest.flags` to handle execution mode, like how to handle
@@ -62,17 +61,14 @@ impl Default for EvalContext {
 const ONE_DAY: i64 = 3600 * 24;
 
 impl EvalContext {
-    pub fn new(sel: &SelectRequest) -> Result<EvalContext> {
-        let offset = sel.get_time_zone_offset();
-        if offset <= -ONE_DAY || offset >= ONE_DAY {
-            return Err(Error::Eval(format!("invalid tz offset {}", offset)));
+    pub fn new(tz_offset: i64, flags: u64) -> Result<EvalContext> {
+        if tz_offset <= -ONE_DAY || tz_offset >= ONE_DAY {
+            return Err(Error::Eval(format!("invalid tz offset {}", tz_offset)));
         }
-        let tz = match FixedOffset::east_opt(offset as i32) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", offset))),
+        let tz = match FixedOffset::east_opt(tz_offset as i32) {
+            None => return Err(Error::Eval(format!("invalid tz offset {}", tz_offset))),
             Some(tz) => tz,
         };
-
-        let flags = sel.get_flags();
 
         let e = EvalContext {
             tz: tz,
@@ -84,7 +80,9 @@ impl EvalContext {
     }
 }
 
-/// `Evaluator` evaluates `tipb::Expr`.
+// `Evaluator` evaluates `tipb::Expr`.
+// TODO(performance) Evaluator should not contains any data member
+// since Managing data is not his responsibility but calculation.
 #[derive(Default)]
 pub struct Evaluator {
     // column_id -> column_value
@@ -533,7 +531,7 @@ impl Evaluator {
         let arr = try!(json_array(children));
         Ok(Datum::Json(arr))
     }
-    
+
     fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         match expr.get_sig() {
             ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
@@ -619,8 +617,8 @@ fn check_in(ctx: &EvalContext, target: Datum, value_list: &[Datum]) -> Result<bo
 pub mod test {
     use super::*;
     use util::codec::number::{self, NumberEncoder};
-    use util::codec::{Datum, datum};
-    use util::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
+    use coprocessor::codec::{Datum, datum};
+    use coprocessor::codec::mysql::{self, MAX_FSP, Decimal, Duration, DecimalEncoder};
 
     use std::i32;
 
@@ -1142,10 +1140,10 @@ pub mod test {
     fn test_context() {
         let mut req = SelectRequest::new();
         req.set_time_zone_offset(i32::MAX as i64 + 1);
-        let ctx = EvalContext::new(&req);
+        let ctx = EvalContext::new(req.get_time_zone_offset(), req.get_flags());
         assert!(ctx.is_err());
         req.set_time_zone_offset(3600);
-        EvalContext::new(&req).unwrap();
+        EvalContext::new(req.get_time_zone_offset(), req.get_flags()).unwrap();
     }
 
     #[test]

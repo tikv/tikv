@@ -72,7 +72,7 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     }
     let mut map = BTreeMap::new();
     let mut key = None;
-    for elem in kvs.into_iter() {
+    for elem in kvs {
         if key.is_none() {
             // take elem as key
             if elem == Datum::Null {

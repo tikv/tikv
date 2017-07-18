@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME: remove later
-#![allow(dead_code)]
-
 use std::usize;
 use std::rc::Rc;
 use std::vec::IntoIter;
@@ -22,9 +19,9 @@ use tipb::executor::TopN;
 use tipb::schema::ColumnInfo;
 use tipb::expression::ByItem;
 
-use util::xeval::{Evaluator, EvalContext};
 use super::{Executor, Row, ExprColumnRefVisitor};
 use super::super::Result;
+use super::super::xeval::{Evaluator, EvalContext};
 use super::super::endpoint::{inflate_with_col, SortRow, TopNHeap};
 use super::super::metrics::*;
 
@@ -33,9 +30,8 @@ pub struct TopNExecutor<'a> {
     columns: Vec<ColumnInfo>,
     heap: Option<TopNHeap>,
     iter: Option<IntoIter<SortRow>>,
-
-    src: Box<Executor + 'a>,
     ctx: Rc<EvalContext>,
+    src: Box<Executor + 'a>,
 }
 
 impl<'a> TopNExecutor<'a> {
@@ -109,11 +105,11 @@ pub mod test {
     use super::*;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
-    use util::codec::Datum;
     use util::collections::HashMap;
-    use util::codec::table::{self, RowColsDict};
     use util::codec::number::NumberEncoder;
-    use util::codec::mysql::types;
+    use coprocessor::codec::Datum;
+    use coprocessor::codec::table::{self, RowColsDict};
+    use coprocessor::codec::mysql::types;
     use storage::Statistics;
 
     use tipb::executor::TableScan;
