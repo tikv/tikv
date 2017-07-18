@@ -501,6 +501,7 @@ pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
 }
 
+#[inline]
 pub fn is_even(n: usize) -> bool {
     n & 1 == 0
 }

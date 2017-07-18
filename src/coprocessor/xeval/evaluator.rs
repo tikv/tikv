@@ -24,7 +24,8 @@ use util::collections::{HashMap, HashMapEntry};
 
 use super::super::codec;
 use super::super::codec::datum::{Datum, DatumDecoder};
-use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression, ModifyType};
+use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
+                                 ModifyType};
 use super::super::codec::mysql::json::{json_object, json_array};
 use super::{Result, Error};
 
@@ -1282,8 +1283,9 @@ pub mod test {
     test_eval!(test_eval_json_array,
                vec![
         (build_expr(vec![], ExprType::JsonArray), Datum::Json("[]".parse().unwrap())),
-        (build_expr(vec![Datum::Null],ExprType::JsonArray), Datum::Json("[null]".parse().unwrap())),
-        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())], ExprType::JsonArray),
-            Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap())),
+        (build_expr(vec![Datum::Null], ExprType::JsonArray),
+            Datum::Json("[null]".parse().unwrap())),
+        (build_expr(vec![Datum::U64(1), Datum::Null, Datum::Bytes(b"sdf".to_vec())],
+            ExprType::JsonArray), Datum::Json(r#"[1,null,"sdf"]"#.parse().unwrap())),
     ]);
 }
