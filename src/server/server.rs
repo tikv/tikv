@@ -13,7 +13,6 @@
 
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
-use std::boxed::Box;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 
@@ -22,6 +21,7 @@ use kvproto::tikvpb_grpc::*;
 use util::worker::Worker;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
+use raftstore::store::config::REGION_SPLIT_SIZE;
 
 use super::{Result, Config};
 use coprocessor::{EndPointHost, EndPointTask};
@@ -33,7 +33,7 @@ use super::raft_client::RaftClient;
 
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: usize = 4 * REGION_SPLIT_SIZE as usize;
 
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
