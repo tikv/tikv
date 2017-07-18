@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::boxed::{Box, FnBox};
+use std::boxed::FnBox;
 use std::net::SocketAddr;
 use std::fmt::{self, Formatter, Display};
 use std::time::Instant;
