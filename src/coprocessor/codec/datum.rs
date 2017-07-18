@@ -993,7 +993,7 @@ pub fn produce_dec_with_specified_tp(dec: Decimal,
         if !dec.is_zero() && prec - frac > flen - decimal {
             // This following line of code is from TiDB `ProduceDecWithSpecifiedTp`.
             // let d = new_max_or_min_dec(dec.is_negative(), flen, decimal);
-            // TODO: we may need a OverlowAsWarning.
+            // TODO: we may need a OverflowAsWarning.
             // `select (cast 111 as decimal(1))` causes a warning in MySQL.
             return Err(box_err!("{} value is out of range in DECIMAL({}, {})",
                                 dec,
