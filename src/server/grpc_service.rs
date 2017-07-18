@@ -872,14 +872,14 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
 
 fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
     let mut mvcc_info = MvccInfo::new();
-    let mut lock_info = LockInfo::new();
     if let Some(ref lock) = mvcc.lock {
+        let mut lock_info = LockInfo::new();
         lock_info.set_primary_lock(lock.primary.clone());
         lock_info.set_key(key.raw().unwrap());
         lock_info.set_lock_ttl(lock.ttl);
         lock_info.set_lock_version(lock.ts);
+        mvcc_info.set_lock(lock_info);
     }
-    mvcc_info.set_lock(lock_info);
     let (vw, vv) = extract_info_vectors(mvcc);
     mvcc_info.set_writes(RepeatedField::from_vec(vw));
     mvcc_info.set_values(RepeatedField::from_vec(vv));
