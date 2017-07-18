@@ -418,6 +418,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let pipelined_write = get_toml_boolean(config, "rocksdb.enable-pipelined-write", Some(true));
     opts.enable_pipelined_write(pipelined_write);
 
+    let max_compaction_bytes = get_toml_int(config, "rocksdb.max-compaction-bytes", Some(0));
+    opt.set_max_compaction_bytes(max_compaction_bytes as u64);
+
     opts
 }
 
