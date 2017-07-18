@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::boxed::{Box, FnBox};
+use std::boxed::FnBox;
 use kvproto::coprocessor::Response;
 mod metrics;
 mod grpc_service;

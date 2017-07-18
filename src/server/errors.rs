@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::error;
-use std::boxed::Box;
 use std::result;
 use std::io::Error as IoError;
 use std::net::AddrParseError;
