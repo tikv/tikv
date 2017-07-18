@@ -15,7 +15,7 @@ use std::thread;
 use std::str::FromStr;
 use std::time::{Instant, Duration};
 use std::net::{SocketAddr, IpAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender as StdSender, Receiver as StdReceiver, channel as std_channel};
 
@@ -39,10 +39,57 @@ const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: usize = 2 * 1024 * 1024;
 const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
 
+// TODO: it's only suitable for streaming benchmarks.
+struct Inner {
+    name: String,
+    counter: Arc<AtomicUsize>,
+    // useful in bench.iter()
+    forwarder: Option<StdSender<()>>,
+}
+
 #[derive(Clone)]
 struct BenchTikvHandler {
-    benching: Arc<AtomicUsize>,
-    raft_tx: StdSender<()>,
+    running: Arc<Mutex<Option<Inner>>>,
+}
+
+impl BenchTikvHandler {
+    fn init_recording(&self,
+                      name: String,
+                      counter: Arc<AtomicUsize>,
+                      forwarder: StdSender<()>)
+                      -> Result<(), String> {
+        let mut running = self.running.lock().unwrap();
+        if running.is_some() {
+            return Err(running.as_ref().unwrap().name.clone());
+        }
+
+        *running = Some(Inner {
+            name: name,
+            counter: counter,
+            forwarder: Some(forwarder),
+        });
+        Ok(())
+    }
+
+    fn start_recording(&self) -> Result<(), String> {
+        let running = self.running.lock().unwrap();
+        if running.is_none() {
+            return Err("not initialize".to_owned());
+        }
+
+        running.as_ref().unwrap().counter.store(1, Ordering::Release);
+        Ok(())
+    }
+
+    fn stop_recording(&self) -> Result<usize, String> {
+        let mut running = self.running.lock().unwrap();
+        if running.is_none() {
+            return Err("not initialize".to_owned());
+        }
+        let case = running.take().unwrap();
+        let count = case.counter.swap(0, Ordering::Acquire);
+        Ok(count)
+    }
 }
 
 impl Tikv for BenchTikvHandler {
@@ -50,12 +97,15 @@ impl Tikv for BenchTikvHandler {
             ctx: RpcContext,
             stream: RequestStream<RaftMessage>,
             _: ClientStreamingSink<Done>) {
-        let raft_tx = self.raft_tx.clone();
-        let benching = self.benching.clone();
+        let mut running = self.running.lock().unwrap();
+        let mut inner = running.as_mut().unwrap();
+        let counter = inner.counter.clone();
+        let forwarder = inner.forwarder.take().unwrap();
+
         ctx.spawn(stream.for_each(move |_| {
-                if 0 != benching.load(Ordering::SeqCst) {
-                    benching.fetch_add(1, Ordering::Release);
-                    raft_tx.send(()).unwrap();
+                if 0 != counter.load(Ordering::Acquire) {
+                    counter.fetch_add(1, Ordering::Release);
+                    let _ = forwarder.send(());
                 };
                 future::ok(())
             })
@@ -140,7 +190,10 @@ impl Tikv for BenchTikvHandler {
         unimplemented!()
     }
 
-    fn mvcc_get_by_key(&self, _: RpcContext, _: MvccGetByKeyRequest, _: UnarySink<MvccGetByKeyResponse>) {
+    fn mvcc_get_by_key(&self,
+                       _: RpcContext,
+                       _: MvccGetByKeyRequest,
+                       _: UnarySink<MvccGetByKeyResponse>) {
         unimplemented!()
     }
 
@@ -152,20 +205,23 @@ impl Tikv for BenchTikvHandler {
     }
 }
 
-// TODO: Import from TiKV
+/// A mock TiKV server for benching purpose, all `GrpcServer`
+/// configuration MUST be consist with the real server in
+/// `src/server/server.rs`.
+// TODO: a better way for handling the cfgs.
 pub struct BenchTikvServer {
     server: GrpcServer,
     local_addr: SocketAddr,
     handler: BenchTikvHandler,
-    raft_rx: StdReceiver<()>,
+
+    // Coupled with forwarder in `BenchTikvHandler`.
+    rx: Option<StdReceiver<()>>,
 }
 
 impl BenchTikvServer {
     pub fn new(env: Arc<Environment>) -> BenchTikvServer {
-        let (tx, rx) = std_channel();
         let h = BenchTikvHandler {
-            benching: Arc::new(AtomicUsize::new(0)),
-            raft_tx: tx,
+            running: Arc::new(Mutex::new(None)),
         };
 
         let channel_args = ChannelBuilder::new(env.clone())
@@ -187,38 +243,49 @@ impl BenchTikvServer {
             SocketAddr::new(IpAddr::from_str(host).unwrap(), port as u16)
         };
 
-        let svr = BenchTikvServer {
+        BenchTikvServer {
             server: grpc_server,
             local_addr: addr,
             handler: h,
-            raft_rx: rx,
-        };
-
-        svr
+            rx: None,
+        }
     }
 
     pub fn start(&mut self) {
         self.server.start();
     }
 
+    // TODO: addrs.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr.clone()
     }
 
-    pub fn start_benching(&self) -> Arc<AtomicUsize> {
-        self.handler.benching.clone()
+    pub fn init_recording(&mut self, name: String) -> Result<(), String> {
+        let (tx, rx) = std_channel();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        self.rx = Some(rx);
+        self.handler.init_recording(name, counter, tx)
     }
 
-    pub fn recv(&self) -> Result<(), &'static str> {
-        if 0 != self.handler.benching.load(Ordering::SeqCst) {
-            self.raft_rx.recv().map_err(|_| "channel has hung up")
+    pub fn start_recording(&self) -> Result<(), String> {
+        self.handler.start_recording()
+    }
+
+    pub fn stop_recording(&mut self) -> Result<usize, String> {
+        self.rx.take();
+        self.handler.stop_recording()
+    }
+
+    pub fn recv(&self) -> Result<(), String> {
+        if self.rx.is_some() {
+            self.rx.as_ref().unwrap().recv().map_err(|_| "channel has hung up".to_owned())
         } else {
-            Err("Benchmark is not ready")
+            Err("Benchmark is not ready".to_owned())
         }
     }
 }
 
-// TODO: Import from TiKV
 // Imitate Conn in raft_clinet.rs
 pub struct BenchTikvClient {
     stream: FutureSender<(RaftMessage, WriteFlags)>,
@@ -257,12 +324,7 @@ impl BenchTikvClient {
     }
 }
 
-// TODO: make it configurable.
-// Plan:
-//   1. [x] Make it work
-//   2. [ ] RaftClient::new takes a pre-configured TikvClient.
-//   3. [ ] tikv::server::Server::new takes a pre-configured GrpcServer.
-fn new_client_and_server() -> (BenchTikvClient, BenchTikvServer) {
+pub fn new_bench_server() -> (Arc<Environment>, BenchTikvServer) {
     let env = Arc::new(Environment::new(DEFAULT_GRPC_CONCURRENCY));
     let mut server = BenchTikvServer::new(env.clone());
     server.start();
@@ -270,20 +332,20 @@ fn new_client_and_server() -> (BenchTikvClient, BenchTikvServer) {
     // Sleep awhile for making sure server is ready.
     thread::sleep(Duration::from_secs(1));
 
-    let addr = server.local_addr();
-    let client = BenchTikvClient::new(env, addr);
-
-    (client, server)
+    (env, server)
 }
 
 // TODO: Embedding perf.
 // TODO: Stabilize result.
 #[bench]
 fn bench_raft_rpc(b: &mut Bencher) {
-    let (client, server) = new_client_and_server();
-    let benching = server.start_benching();
-    let sink = client.raft_sink();
+    let (env, mut server) = new_bench_server();
+    let addr = server.local_addr();
+    let client = BenchTikvClient::new(env, addr);
 
+    server.init_recording("raft_client_streaming".to_owned()).unwrap();
+
+    let sink = client.raft_sink();
     thread::spawn(move || {
         // // TODO: calc the precise count of msgs for ecah eventloop tick.
         let count = 1000;
@@ -300,12 +362,12 @@ fn bench_raft_rpc(b: &mut Bencher) {
     thread::sleep(Duration::from_secs(5));
 
     let start = Instant::now();
-    benching.store(1, Ordering::SeqCst);
+    server.start_recording().unwrap();
     b.iter(|| {
         server.recv().unwrap();
     });
     let duration = start.elapsed();
-    let count = server.handler.benching.load(Ordering::Acquire);
+    let count = server.stop_recording().unwrap();
 
     // FIXME: do not ignore the extra nanoseconds.
     let qps = count as u64 / duration.as_secs();
