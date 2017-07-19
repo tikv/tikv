@@ -1329,10 +1329,6 @@ mod test {
     }
 
     #[test]
-    fn test_storage_create_snapshot_with_sst_format() {
-        test_storage_create_snapshot();
-    }
-
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut cs = ConfState::new();
@@ -1601,10 +1597,6 @@ mod test {
     }
 
     #[test]
-    fn test_storage_apply_snapshot_with_sst_file_format() {
-        test_storage_apply_snapshot();
-    }
-
     fn test_storage_apply_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
         let mut cs = ConfState::new();
