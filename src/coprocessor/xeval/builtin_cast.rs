@@ -214,9 +214,17 @@ impl Evaluator {
         Ok(Datum::Time(t))
     }
 
-    pub fn cast_decimal_as_duration(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_decimal_as_duration(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let d = try!(self.eval(ctx, child));
+        match d {
+            Datum::Dec(_) => {}
+            _ => return invalid_type_error(&d, TYPE_DECIMAL),
+        }
+        let s = try!(d.into_string());
+        let duration = try!(Duration::parse(s.as_bytes(),
+                                            expr.get_field_type().get_decimal() as i8));
+        Ok(Datum::Dur(duration))
     }
 
     pub fn cast_string_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -466,4 +474,11 @@ mod test {
                                          }),
                      Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45.123345", 0)
                                  .unwrap()))]);
+
+    test_eval!(test_cast_decimal_as_duration,
+               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(101112.123456).unwrap())],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastDecimalAsDuration,
+                                         FieldType::new()),
+                     Datum::Dur(Duration::parse(b"10:11:12", 0).unwrap()))]);
 }
