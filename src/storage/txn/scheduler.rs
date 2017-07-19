@@ -31,7 +31,6 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -405,7 +404,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Collects garbage.
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
+        Command::Gc { ref ctx, safe_point, ratio_threshold, ref mut scan_key, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
                                              &mut statistics,
                                              Some(ScanMode::Forward),
@@ -413,27 +412,39 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              None,
                                              ctx.get_isolation_level());
             // scan_key is used as start_key here,and Range start gc with scan_key=none.
-            let is_range_start_key = scan_key.is_none();
-            let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
-                .map_err(Error::from)
-                .and_then(|(keys, next_start)| {
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
-                        .observe(keys.len() as f64);
-                    if keys.is_empty() {
-                        // empty range
-                        if is_range_start_key {
-                            KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+            let is_range_start_gc = scan_key.is_none();
+            // This is an optimization to skip gc before scanning all data.
+            let need_gc = if is_range_start_gc {
+                reader.need_gc(safe_point, ratio_threshold)
+            } else {
+                true
+            };
+            let res = if !need_gc {
+                KV_COMMAND_GC_SKIPPED_COUNTER.inc();
+                Ok(None)
+            } else {
+                reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
+                    .map_err(Error::from)
+                    .and_then(|(keys, next_start)| {
+                        KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                            .observe(keys.len() as f64);
+                        if keys.is_empty() {
+                            // empty range
+                            if is_range_start_gc {
+                                KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+                            }
+                            Ok(None)
+                        } else {
+                            Ok(Some(Command::Gc {
+                                ctx: ctx.clone(),
+                                safe_point: safe_point,
+                                ratio_threshold: ratio_threshold,
+                                scan_key: next_start,
+                                keys: keys,
+                            }))
                         }
-                        Ok(None)
-                    } else {
-                        Ok(Some(Command::Gc {
-                            ctx: ctx.clone(),
-                            safe_point: safe_point,
-                            scan_key: next_start,
-                            keys: keys,
-                        }))
-                    }
-                });
+                    })
+            };
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -612,7 +623,7 @@ fn process_write_impl(cid: u64,
                 (pr, txn.modifies())
             }
         }
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
+        Command::Gc { ref ctx, safe_point, ratio_threshold, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(snapshot,
                                        &mut statistics,
@@ -633,6 +644,7 @@ fn process_write_impl(cid: u64,
                     cmd: Command::Gc {
                         ctx: ctx.clone(),
                         safe_point: safe_point,
+                        ratio_threshold: ratio_threshold,
                         scan_key: scan_key.take(),
                         keys: vec![],
                     },
@@ -1011,6 +1023,7 @@ mod tests {
                                  Command::Gc {
                                      ctx: Context::new(),
                                      safe_point: 5,
+                                     ratio_threshold: 0.0,
                                      scan_key: None,
                                      keys: vec![make_key(b"k")],
                                  }];
