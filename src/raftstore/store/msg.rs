@@ -56,6 +56,11 @@ pub enum Msg {
         callback: Callback,
     },
 
+    RaftCmdsBatch {
+        send_time: Instant,
+        batch: Vec<(RaftCmdRequest, Callback)>,
+    },
+
     // For split check
     SplitCheckResult {
         region_id: u64,
@@ -82,6 +87,7 @@ impl fmt::Debug for Msg {
             Msg::Quit => write!(fmt, "Quit"),
             Msg::RaftMessage(_) => write!(fmt, "Raft Message"),
             Msg::RaftCmd { .. } => write!(fmt, "Raft Command"),
+            Msg::RaftCmdsBatch { .. } => write!(fmt, "Raft Command Batch"),
             Msg::SplitCheckResult { .. } => write!(fmt, "Split Check Result"),
             Msg::ReportUnreachable { ref region_id, ref to_peer_id } => {
                 write!(fmt,
@@ -107,6 +113,13 @@ impl Msg {
             send_time: Instant::now(),
             request: request,
             callback: callback,
+        }
+    }
+
+    pub fn new_raft_cmds_batch(batch: Vec<(RaftCmdRequest, Callback)>) -> Msg {
+        Msg::RaftCmdsBatch {
+            send_time: Instant::now(),
+            batch: batch,
         }
     }
 }

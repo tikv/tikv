@@ -65,6 +65,10 @@ pub trait Engine: Send + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
 
+    fn async_snapshots_batch(&self, _: Vec<(&Context, Callback<Box<Snapshot>>)>) -> Result<()> {
+        unimplemented!()
+    }
+
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb).unwrap(), timeout) {
