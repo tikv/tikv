@@ -170,9 +170,14 @@ impl Evaluator {
         invalid_type_error(&datum, TYPE_DECIMAL)
     }
 
-    pub fn cast_decimal_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_decimal_as_real(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        if let Datum::Dec(d) = datum {
+            let f = try!(d.as_f64());
+            return Ok(Datum::F64(f));
+        }
+        invalid_type_error(&datum, TYPE_DECIMAL)
     }
 
     pub fn cast_decimal_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -399,7 +404,19 @@ mod test {
                                              ft.set_flag(types::UNSIGNED_FLAG as u32);
                                              ft
                                          }),
-                     Datum::U64(1))]);
+                     Datum::U64(1)),
+                    (build_expr_with_sig(vec![Datum::Dec(Decimal::from(-1))],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastDecimalAsInt,
+                                         FieldType::new()),
+                     Datum::I64(-1))]);
+
+    test_eval!(test_cast_decimal_as_real,
+               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(5.14159).unwrap())],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastDecimalAsReal,
+                                         FieldType::new()),
+                     Datum::F64(5.14159))]);
 
     test_eval!(test_cast_decimal_as_decimal,
                vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(1000.0).unwrap())],
