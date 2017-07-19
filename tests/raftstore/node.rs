@@ -169,9 +169,7 @@ impl Simulator for NodeCluster {
         let (snap_mgr, tmp) = if node_id == 0 ||
                                  !self.trans.rl().snap_paths.contains_key(&node_id) {
             let tmp = TempDir::new("test_cluster").unwrap();
-            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(),
-                                            Some(node.get_sendch()),
-                                            cfg.raft_store.use_sst_file_snapshot);
+            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()));
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.rl();

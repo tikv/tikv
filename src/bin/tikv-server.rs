@@ -896,8 +896,7 @@ fn run_raft_server(pd_client: RpcClient,
     let resolver = PdStoreAddrResolver::new(pd_client.clone())
         .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
     let snap_mgr = SnapManager::new(snap_path.as_path().to_str().unwrap().to_owned(),
-                                    Some(store_sendch),
-                                    cfg.raft_store.use_sst_file_snapshot);
+                                    Some(store_sendch));
     let mut server = Server::new(&cfg,
                                  storage.clone(),
                                  raft_router,
