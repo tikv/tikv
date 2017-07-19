@@ -294,8 +294,7 @@ impl<'a> MvccReader<'a> {
             }
             if l_ok {
                 l_key = Some(l_cur.key().to_vec());
-                let k = Key::from_encoded(l_key.clone().unwrap());
-                let lock = Lock::parse(l_cur.get(&k, &mut self.statistics.lock)?.unwrap())?;
+                let lock = Lock::parse(l_cur.value())?;
                 if lock.ts < ts {
                     l_key = None;
                 }

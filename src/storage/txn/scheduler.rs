@@ -399,8 +399,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              true,
                                              None,
                                              ctx.get_isolation_level());
-            let ts: u64 = u64::MAX;
-            match find_mvcc_infos_by_key(&mut reader, key, ts) {
+            match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
                 Ok((lock, writes, values)) => {
                     ProcessResult::MvccKey {
                         mvcc: MvccInfo {
@@ -426,7 +425,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                 Ok(opt) => {
                     match opt {
                         Some(key) => {
-                            match find_mvcc_infos_by_key(&mut reader, &key, start_ts) {
+                            match find_mvcc_infos_by_key(&mut reader, &key, u64::MAX) {
                                 Ok((lock, writes, values)) => {
                                     ProcessResult::MvccStartTs {
                                         mvcc: Some((key,
