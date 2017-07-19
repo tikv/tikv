@@ -1273,8 +1273,9 @@ impl Runner {
     }
 
     fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
+        let mut propose_num = 0;
         for region_proposal in proposals {
-            APPLY_PROPOSAL.observe(region_proposal.props.len() as f64);
+            propose_num += region_proposal.props.len();
             let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
                 Some(d) => d,
                 None => {
@@ -1302,6 +1303,7 @@ impl Runner {
                 }
             }
         }
+        APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
     fn handle_registration(&mut self, s: Registration) {
