@@ -65,7 +65,7 @@ pub trait Engine: Send + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
 
-    fn async_snapshots_batch(&self, _: Vec<(&Context, Callback<Box<Snapshot>>)>) -> Result<()> {
+    fn async_snapshots_batch(&self, _: Vec<(Context, Callback<Box<Snapshot>>)>) -> Result<()> {
         unimplemented!()
     }
 

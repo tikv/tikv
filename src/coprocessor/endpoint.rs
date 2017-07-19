@@ -278,20 +278,25 @@ impl BatchRunnable<Task> for Host {
                 }
             }
         }
+
+        let mut batch = Vec::with_capacity(grouped_reqs.len());
         for (_, reqs) in grouped_reqs {
+            use storage::engine::Callback;
+
             self.last_req_id += 1;
             let id = self.last_req_id;
             let sched = self.sched.clone();
-            if let Err(e) = self.engine.async_snapshot(reqs[0].req.get_context(),
-                                                       box move |(_, res)| {
-                                                           sched.schedule(Task::SnapRes(id, res))
-                                                               .unwrap()
-                                                       }) {
-                notify_batch_failed(e, reqs);
-                continue;
-            }
+            let ctx = reqs[0].req.get_context().clone();
+            let cb: Callback<Box<Snapshot>> = box move |(_, res)| {
+                sched.schedule(Task::SnapRes(id, res))
+                    .unwrap()
+            };
             self.reqs.insert(id, reqs);
+            batch.push((ctx, cb));
         }
+
+        // FIXME: `notify_batch_failed(e, reqs);`
+        let _ = self.engine.async_snapshots_batch(batch);
     }
 
     fn shutdown(&mut self) {
