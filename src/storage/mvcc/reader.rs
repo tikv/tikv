@@ -279,42 +279,15 @@ impl<'a> MvccReader<'a> {
         self.create_lock_cursor()?;
 
         let mut w_cur = self.write_cursor.as_mut().unwrap();
-        let mut l_cur = self.lock_cursor.as_mut().unwrap();
-        let (mut w_ok, mut l_ok) = (w_cur.seek_to_first(&mut self.statistics.write),
-                                    l_cur.seek_to_first(&mut self.statistics.lock));
+        let mut w_ok = w_cur.seek_to_first(&mut self.statistics.write);
 
-        loop {
-            let (mut w_key, mut l_key) = (None, None);
-            if w_ok {
-                w_key = Some(w_cur.key().to_vec());
-                if Write::parse(w_cur.value())?.start_ts != ts {
-                    w_key = None;
-                }
-                w_ok = w_cur.next(&mut self.statistics.write);
+        while w_ok {
+            if Write::parse(w_cur.value())?.start_ts == ts {
+                return Ok(Some(Key::from_encoded(w_cur.key().to_vec()).truncate_ts()?));
             }
-            if l_ok {
-                l_key = Some(l_cur.key().to_vec());
-                if Lock::parse(l_cur.value())?.ts != ts {
-                    l_key = None;
-                }
-                l_ok = l_cur.next(&mut self.statistics.lock);
-            }
-            if !l_ok && !w_ok {
-                return Ok(None);
-            }
-            match (w_key, l_key) {
-                (None, None) => {}
-                (None, Some(k)) => return Ok(Some(Key::from_encoded(k))),
-                (Some(k), None) => return Ok(Some(Key::from_encoded(k).truncate_ts()?)),
-                (Some(wk), Some(lk)) => {
-                    if wk < lk {
-                        return Ok(Some(Key::from_encoded(wk).truncate_ts()?));
-                    } else {
-                        return Ok(Some(Key::from_encoded(lk)));
-                    }
-                }
-            };
+            w_ok = w_cur.next(&mut self.statistics.write);
         }
+        Ok(None)
     }
 
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
