@@ -37,7 +37,7 @@ impl Json {
             Json::Array(_) => PRECEDENCE_ARRAY,
             Json::Boolean(_) => PRECEDENCE_BOOLEAN,
             Json::None => PRECEDENCE_NULL,
-            Json::I64(_) | Json::Double(_) => PRECEDENCE_NUMBER,
+            Json::I64(_) | Json::U64(_) | Json::Double(_) => PRECEDENCE_NUMBER,
             Json::String(_) => PRECEDENCE_STRING,
         }
     }
@@ -46,6 +46,7 @@ impl Json {
         match *self {
             Json::Double(d) => Ok(d),
             Json::I64(d) => Ok(d as f64),
+            Json::U64(d) => Ok(d as f64),
             Json::Boolean(_) => {
                 let v = try!(self.as_literal());
                 Ok(v as f64)
@@ -129,6 +130,7 @@ mod test {
     fn test_cmp_json_between_same_type() {
         let test_cases = vec![
             ("false", "true"),
+            ("-3", "3"),
             ("3", "5"),
             ("3.0", "4.9"),
             (r#""hello""#, r#""hello, world""#),
