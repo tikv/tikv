@@ -61,6 +61,22 @@ pub fn convert_float_to_uint(val: f64, upper_bound: u64) -> Result<u64> {
     Ok(v as u64)
 }
 
+pub fn str_to_int(ctx: &EvalContext, s: &str) -> Result<i64> {
+    let s = s.trim();
+    let vs = try!(get_valid_int_prefix(ctx, s));
+
+    let r = box_try!(vs.as_ref().parse::<i64>());
+    Ok(r)
+}
+
+pub fn str_to_uint(ctx: &EvalContext, s: &str) -> Result<u64> {
+    let s = s.trim();
+    let vs = try!(get_valid_int_prefix(ctx, s));
+
+    let r = box_try!(vs.as_ref().parse::<u64>());
+    Ok(r)
+}
+
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
 /// Note that it does NOT handle overflow.

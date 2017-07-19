@@ -228,9 +228,20 @@ impl Evaluator {
         Ok(Datum::Dur(duration))
     }
 
-    pub fn cast_string_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_string_as_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        if let Datum::Bytes(_) = datum {
+            let s = try!(datum.into_string());
+            if has_unsigned_flag(expr.get_field_type().get_flag() as u64) {
+                let u = try!(convert::str_to_uint(ctx, &s));
+                return Ok(Datum::U64(u));
+            } else {
+                let i = try!(convert::str_to_int(ctx, &s));
+                return Ok(Datum::I64(i));
+            }
+        }
+        invalid_type_error(&datum, TYPE_STRING)
     }
 
     pub fn cast_string_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -471,7 +482,8 @@ mod test {
                      Datum::Dec(Decimal::from_f64(1000.0).unwrap()))]);
 
     test_eval!(test_cast_decimal_as_time,
-               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(20121231113045.123345).unwrap())],
+               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(20121231113045.123345)
+                                                         .unwrap())],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CastDecimalAsTime,
                                          {
@@ -480,14 +492,32 @@ mod test {
                                              ft
                                          }),
                      Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45.123345", 0)
-                                 .unwrap()))]);
+                        .unwrap()))]);
 
     test_eval!(test_cast_decimal_as_duration,
-               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(101112.123456).unwrap())],
+               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(101112.123456)
+                                                  .unwrap())],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::CastDecimalAsDuration,
                                          FieldType::new()),
                      Datum::Dur(Duration::parse(b"10:11:12", 0).unwrap()))]);
+
+    test_eval!(test_cast_string_as_int,
+               vec![(build_expr_with_sig(vec![Datum::Bytes(b"-1".to_vec())],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastStringAsInt,
+                                         FieldType::new()),
+                     Datum::I64(-1)),
+                    (build_expr_with_sig(vec![Datum::Bytes(b"1".to_vec())],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastStringAsInt,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flag(types::UNSIGNED_FLAG as u32);
+                                             ft
+                                         }),
+                     Datum::U64(1))]);
+
 
     test_eval!(test_cast_string_as_string,
                vec![(build_expr_with_sig(vec![Datum::Bytes(b"pingcap".to_vec())],
