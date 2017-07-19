@@ -287,18 +287,20 @@ impl<'a> MvccReader<'a> {
             let (mut w_key, mut l_key) = (None, None);
             if w_ok {
                 w_key = Some(w_cur.key().to_vec());
-                if Key::from_encoded(w_key.clone().unwrap()).decode_ts()? < ts {
+                if Write::parse(w_cur.value())?.start_ts != ts {
                     w_key = None;
                 }
                 w_ok = w_cur.next(&mut self.statistics.write);
             }
             if l_ok {
                 l_key = Some(l_cur.key().to_vec());
-                let lock = Lock::parse(l_cur.value())?;
-                if lock.ts < ts {
+                if Lock::parse(l_cur.value())?.ts != ts {
                     l_key = None;
                 }
                 l_ok = l_cur.next(&mut self.statistics.lock);
+            }
+            if !l_ok && !w_ok {
+                return Ok(None);
             }
             match (w_key, l_key) {
                 (None, None) => {}
