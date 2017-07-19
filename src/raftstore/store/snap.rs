@@ -1782,14 +1782,14 @@ mod test {
         assert_eq!(mgr.get_total_snap_size(), 0);
 
         let db_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2-db").unwrap();
-        let snapshot = DbSnapshot::new(super::test::get_test_db(&db_dir).unwrap());
+        let snapshot = DbSnapshot::new(get_test_db(&db_dir).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(RwLock::new(0));
         let deleter = Box::new(mgr.clone());
         let mut s1 =
             Snap::new_for_building(&path, &key1, &snapshot, size_track.clone(), deleter.clone())
                 .unwrap();
-        let mut region = super::test::get_test_region(1, 1, 1);
+        let mut region = get_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::new();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
@@ -1865,11 +1865,11 @@ mod test {
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
-        let db = super::test::get_test_db(&src_db_dir).unwrap();
+        let db = get_test_db(&src_db_dir).unwrap();
         let snapshot = DbSnapshot::new(db);
 
         let key = SnapKey::new(1, 1, 1);
-        let region = super::test::get_test_region(1, 1, 1);
+        let region = get_test_region(1, 1, 1);
 
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
