@@ -276,7 +276,6 @@ impl<'a> MvccReader<'a> {
     pub fn seek_first(&mut self, ts: u64) -> Result<Option<Key>> {
         assert!(self.scan_mode.is_some());
         self.create_write_cursor()?;
-        self.create_lock_cursor()?;
 
         let mut w_cur = self.write_cursor.as_mut().unwrap();
         let mut w_ok = w_cur.seek_to_first(&mut self.statistics.write);
