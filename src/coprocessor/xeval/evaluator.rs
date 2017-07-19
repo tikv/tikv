@@ -82,8 +82,8 @@ impl EvalContext {
 }
 
 // `Evaluator` evaluates `tipb::Expr`.
-// TODO(performance) Evaluator should not contains any data member
-// since Managing data is not his responsibility but calculation.
+// TODO(performance) Evaluator should not contains any data member,
+// since managing data is not its responsibility but doing calculation.
 #[derive(Default)]
 pub struct Evaluator {
     // column_id -> column_value
@@ -314,7 +314,7 @@ impl Evaluator {
 
     fn eval_in(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         if expr.get_children().len() != 2 {
-            return Err(Error::Expr(format!("IN need 2 operand, got {}",
+            return Err(Error::Expr(format!("IN need 2 operands, got {}",
                                            expr.get_children().len())));
         }
         let children = expr.get_children();
@@ -324,7 +324,7 @@ impl Evaluator {
         }
         let value_list_expr = &children[1];
         if value_list_expr.get_tp() != ExprType::ValueList {
-            return Err(Error::Expr("the second children should be value list type".to_owned()));
+            return Err(Error::Expr("the second child should be of value list type".to_owned()));
         }
         let decoded = try!(self.decode_value_list(value_list_expr));
         if try!(check_in(ctx, target, decoded)) {
@@ -434,7 +434,7 @@ impl Evaluator {
                         -> Result<Datum> {
         let children = try!(self.eval_more_children(ctx, expr, 2));
         if is_even(children.len()) {
-            return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
+            return Err(Error::Expr(format!("expect odd number of operands, got {}", children.len())));
         }
 
         let mut index = 0 as i64;
@@ -472,7 +472,7 @@ impl Evaluator {
             return Ok(Datum::Null);
         }
         // here Datum::Byte(bs) should be converted into Json::String(bs)
-        // select JSON_UNQUOTE('{"a":   "b"}');
+        // > select JSON_UNQUOTE('{"a":   "b"}');
         // +------------------------------+
         // | JSON_UNQUOTE('{"a":   "b"}') |
         // +------------------------------+
