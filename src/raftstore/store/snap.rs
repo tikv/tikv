@@ -1937,11 +1937,6 @@ mod test {
         assert_eq!(mgr.get_total_snap_size(), 0);
     }
 
-    #[test]
-    fn test_snap_deletion_on_registry() {
-        test_snap_deletion_on_registry_impl();
-    }
-
     fn check_registry_around_deregister(mgr: SnapManager, key: &SnapKey, entry: &SnapEntry) {
         let snap_keys = mgr.list_idle_snap().unwrap();
         assert!(snap_keys.is_empty());
@@ -1954,7 +1949,8 @@ mod test {
         assert!(!mgr.has_registered(&snap_key));
     }
 
-    fn test_snap_deletion_on_registry_impl() {
+    #[test]
+    fn test_snap_deletion_on_registry() {
         let src_temp_dir = TempDir::new("test-snap-deletion-on-registry-src").unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
         let src_mgr = SnapManager::new(src_path.clone(), None);
