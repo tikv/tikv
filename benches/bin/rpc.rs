@@ -17,7 +17,7 @@ use std::time::{Instant, Duration};
 use std::net::{SocketAddr, IpAddr};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Sender as StdSender, Receiver as StdReceiver, channel as std_channel};
+use std::sync::mpsc::{Sender, Receiver, channel};
 
 use kvproto::tikvpb_grpc::*;
 use kvproto::coprocessor::{Request, Response};
@@ -35,23 +35,17 @@ use super::print_result;
 // Copy from std::time;
 const NANOS_PER_SEC: u32 = 1_000_000_000;
 
-// Default settings used in TiKV.
-const DEFAULT_GRPC_CONCURRENCY: usize = 4;
-const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
-const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: usize = 2 * 1024 * 1024;
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
-const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
-
-// TODO: it's only suitable for streaming benchmarks.
 struct Inner {
     name: String,
     counter: Arc<AtomicUsize>,
     // useful in bench.iter()
-    forwarder: Option<StdSender<()>>,
+    forwarder: Option<Sender<()>>,
 }
 
 #[derive(Clone)]
 struct BenchTikvHandler {
+    // TODO: It's only suitable for streaming benchmarks.
+    //      Maybe using Either later.
     running: Arc<Mutex<Option<Inner>>>,
 }
 
@@ -59,7 +53,7 @@ impl BenchTikvHandler {
     fn init_recording(&self,
                       name: String,
                       counter: Arc<AtomicUsize>,
-                      forwarder: StdSender<()>)
+                      forwarder: Sender<()>)
                       -> Result<(), String> {
         let mut running = self.running.lock().unwrap();
         if running.is_some() {
@@ -208,6 +202,13 @@ impl Tikv for BenchTikvHandler {
     }
 }
 
+// Default settings used in TiKV.
+const DEFAULT_GRPC_CONCURRENCY: usize = 4;
+const DEFAULT_GRPC_CONCURRENT_STREAM: usize = 1024;
+const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: usize = 2 * 1024 * 1024;
+const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const MAX_GRPC_SEND_MSG_LEN: usize = 128 * 1024 * 1024;
+
 /// A mock `TiKV` server for benching purpose, all `GrpcServer`
 /// configuration MUST be consist with the real server in
 /// `src/server/server.rs`.
@@ -218,7 +219,7 @@ pub struct BenchTikvServer {
     handler: BenchTikvHandler,
 
     // Coupled with forwarder in `BenchTikvHandler`.
-    rx: Option<StdReceiver<()>>,
+    rx: Option<Receiver<()>>,
 }
 
 impl BenchTikvServer {
@@ -262,7 +263,7 @@ impl BenchTikvServer {
     }
 
     pub fn init_recording(&mut self, name: String) -> Result<(), String> {
-        let (tx, rx) = std_channel();
+        let (tx, rx) = channel();
         let counter = Arc::new(AtomicUsize::new(0));
 
         self.rx = Some(rx);
@@ -346,7 +347,7 @@ pub fn bench_raft_rpc() {
 
     let qps = count as f64 /
               (duration.as_secs() as f64 + duration.subsec_nanos() as f64 / NANOS_PER_SEC as f64);
-    printf!("\tQPS: {:?}", qps);
+    printf!("\tQPS: {:.1}", qps);
     print_result(result);
 
     quit1.store(1, Ordering::Release);

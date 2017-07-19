@@ -28,17 +28,6 @@ extern crate tempdir;
 extern crate rocksdb;
 extern crate protobuf;
 extern crate kvproto;
-extern crate grpc;
-extern crate futures;
-
-/// Same as print, but will flush automatically.
-macro_rules! printf {
-    ($($arg:tt)*) => ({
-        use std::io::{self, Write};
-        print!($($arg)*);
-        io::stdout().flush().unwrap();
-    });
-}
 
 mod channel;
 mod writebatch;
