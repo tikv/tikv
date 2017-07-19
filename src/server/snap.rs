@@ -13,7 +13,7 @@
 
 use std::fmt::{self, Formatter, Display};
 use std::io;
-use std::iter::{self, Iterator, Once};
+use std::iter::{self, Once};
 use std::net::SocketAddr;
 use std::boxed::FnBox;
 use std::time::Instant;

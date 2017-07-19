@@ -13,7 +13,6 @@
 
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
-use std::boxed::Box;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 

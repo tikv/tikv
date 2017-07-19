@@ -215,7 +215,10 @@ stats-dump-period-sec = 600
 # Use O_DIRECT for both reads and writes in background flush and compactions
 # use-direct-io-for-flush-and-compaction = false
 
-# Limit the disk IO of compaction and flush.
+# Limit the disk IO of compaction and flush. Compaction and flush can cause
+# terrible spikes if they exceed a certain threshold. Consider setting this to
+# 50% ~ 80% of the disk throughput for a more stable result. However, in heavy
+# write workload, limiting compaction and flush speed can cause write stalls too.
 # rate-bytes-per-sec = 0
 
 # Enable or disable the pipelined write
@@ -272,6 +275,9 @@ stats-dump-period-sec = 600
 
 # Target file size for compaction.
 # target-file-size-base = "32MB"
+
+# Max bytes for compaction.max_compaction_bytes
+# max-compaction-bytes = "2GB"
 
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read.
 # in normal cases should tune to 30%-50% system's total memory.

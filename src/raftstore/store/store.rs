@@ -16,7 +16,6 @@ use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::boxed::Box;
 use std::collections::Bound::{Included, Excluded, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;

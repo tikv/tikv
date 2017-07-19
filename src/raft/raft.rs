@@ -27,7 +27,6 @@
 
 
 use std::cmp;
-use std::boxed::Box;
 
 use rand::{self, Rng};
 use kvproto::eraftpb::{HardState, Entry, EntryType, Message, Snapshot, MessageType};
