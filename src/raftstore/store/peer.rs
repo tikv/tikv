@@ -642,7 +642,7 @@ impl Peer {
         self.get_store().applied_index_term == self.term()
     }
 
-    pub fn schedule_apply_proposals(&mut self) -> Option<RegionProposal> {
+    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
         if self.apply_proposals.is_empty() {
             return None;
         }

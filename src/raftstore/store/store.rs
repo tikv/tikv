@@ -913,7 +913,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                    if let Some(region_proposal) = peer.schedule_apply_proposals() {
+                    if let Some(region_proposal) = peer.take_apply_proposals() {
                         region_proposals.push(region_proposal);
                     }
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
@@ -923,7 +923,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
 
         if !region_proposals.is_empty() {
-            self.apply_worker.schedule(ApplyTask::proposals(region_proposals)).unwrap();
+            self.apply_worker.schedule(ApplyTask::Proposals(region_proposals)).unwrap();
         }
 
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;

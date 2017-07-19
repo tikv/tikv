@@ -1151,10 +1151,6 @@ impl Task {
         Task::Registration(Registration::new(peer))
     }
 
-    pub fn proposals(proposals: Vec<RegionProposal>) -> Task {
-        Task::Proposals(proposals)
-    }
-
     pub fn destroy(region_id: u64) -> Task {
         Task::Destroy(Destroy { region_id: region_id })
     }
@@ -1453,7 +1449,7 @@ mod tests {
                                   resp_tx.send(resp).unwrap();
                               });
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
-        runner.run(Task::proposals(vec![region_proposal]));
+        runner.run(Task::Proposals(vec![region_proposal]));
         // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
@@ -1465,7 +1461,7 @@ mod tests {
             Proposal::new(true, 3, 0, box move |resp| { cc_tx.send(resp).unwrap(); }),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
-        runner.run(Task::proposals(vec![region_proposal]));
+        runner.run(Task::Proposals(vec![region_proposal]));
         assert!(rx.try_recv().is_err());
         {
             let normals = &runner.delegates[&2].pending_cmds.normals;
@@ -1479,7 +1475,7 @@ mod tests {
 
         let p = Proposal::new(true, 4, 0, box move |_| {});
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
-        runner.run(Task::proposals(vec![region_proposal]));
+        runner.run(Task::Proposals(vec![region_proposal]));
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2].pending_cmds.conf_change;
