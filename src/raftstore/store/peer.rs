@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::{mem, slice};
+use std::{cmp, mem, slice};
 use std::time::{Instant, Duration};
 
 use time::Timespec;
@@ -32,10 +32,10 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progr
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::Config;
-use raftstore::store::worker::{apply, PdTask};
+use raftstore::store::worker::{apply, PdTask, Proposal};
 use raftstore::store::worker::apply::ExecResult;
 
-use util::worker::{FutureWorker as Worker, Scheduler};
+use util::worker::{FutureWorker, Scheduler, Worker};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either};
 use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
@@ -199,6 +199,7 @@ pub struct Peer {
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
     proposals: ProposalQueue,
+    apply_proposals: Vec<Proposal>,
     pending_reads: ReadIndexQueue,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: FlatMap<u64, Instant>,
@@ -292,7 +293,11 @@ impl Peer {
         let peer_cache = FlatMap::default();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
 
-        let ps = try!(PeerStorage::new(store.engine(), region, sched, tag.clone()));
+        let ps = try!(PeerStorage::new(store.engine(),
+                                       region,
+                                       sched,
+                                       tag.clone(),
+                                       store.entry_cache_metries.clone()));
 
         let applied_index = ps.applied_index();
 
@@ -306,6 +311,7 @@ impl Peer {
             applied: applied_index,
             check_quorum: true,
             tag: tag.clone(),
+            skip_bcast_commit: true,
             ..Default::default()
         };
 
@@ -317,6 +323,7 @@ impl Peer {
             region_id: region.get_id(),
             raft_group: raft_group,
             proposals: Default::default(),
+            apply_proposals: vec![],
             pending_reads: Default::default(),
             peer_cache: RefCell::new(peer_cache),
             peer_heartbeats: FlatMap::default(),
@@ -369,8 +376,8 @@ impl Peer {
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
-        let wb = WriteBatch::new();
-        try!(self.get_store().clear_meta(&wb));
+        let mut wb = WriteBatch::new();
+        try!(self.mut_store().clear_meta(&mut wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
         try!(self.engine.write(wb));
 
@@ -386,6 +393,10 @@ impl Peer {
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_req_region_removed(region.get_id(), cb);
             }
+        }
+
+        for proposal in self.apply_proposals.drain(..) {
+            apply::notify_req_region_removed(region.get_id(), proposal.cb);
         }
 
         info!("{} destroy itself, takes {:?}", self.tag, t.elapsed());
@@ -585,7 +596,7 @@ impl Peer {
         send_to_quorum_ts + self.cfg.raft_store_max_leader_lease
     }
 
-    fn on_role_changed(&mut self, ready: &Ready, worker: &Worker<PdTask>) {
+    fn on_role_changed(&mut self, ready: &Ready, worker: &FutureWorker<PdTask>) {
         // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
             match ss.raft_state {
@@ -631,9 +642,19 @@ impl Peer {
         self.get_store().applied_index_term == self.term()
     }
 
+    pub fn schedule_apply_proposals(&mut self, worker: &Worker<ApplyTask>) {
+        if self.apply_proposals.is_empty() {
+            return;
+        }
+
+        let proposals = mem::replace(&mut self.apply_proposals, vec![]);
+        let t = ApplyTask::proposals(self.peer_id(), self.region_id, proposals);
+        worker.schedule(t).unwrap();
+    }
+
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   ctx: &mut ReadyContext<T>,
-                                                  worker: &Worker<PdTask>) {
+                                                  worker: &FutureWorker<PdTask>) {
         self.marked_to_be_checked = false;
         if self.pending_remove {
             return;
@@ -818,13 +839,14 @@ impl Peer {
         self.peer_stat.written_keys += res.metrics.written_keys;
         self.peer_stat.written_bytes += res.metrics.written_bytes;
 
-        if has_split {
+        let diff = if has_split {
             self.delete_keys_hint = res.metrics.delete_keys_hint;
-            self.size_diff_hint = res.metrics.size_diff_hint as u64;
+            res.metrics.size_diff_hint
         } else {
             self.delete_keys_hint += res.metrics.delete_keys_hint;
-            self.size_diff_hint = (self.size_diff_hint as i64 + res.metrics.size_diff_hint) as u64;
-        }
+            self.size_diff_hint as i64 + res.metrics.size_diff_hint
+        };
+        self.size_diff_hint = cmp::max(diff, 0) as u64;
 
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
             self.mark_to_be_checked(groups);
@@ -974,13 +996,8 @@ impl Peer {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(clocktime::raw_now());
 
-        let t = ApplyTask::propose(self.peer_id(),
-                                   self.region_id,
-                                   is_conf_change,
-                                   meta.index,
-                                   meta.term,
-                                   cb);
-        self.apply_scheduler.schedule(t).unwrap();
+        let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
+        self.apply_proposals.push(p);
 
         self.proposals.push(meta);
     }
@@ -1075,12 +1092,21 @@ impl Peer {
     ///    Then at least '(total + 1)/2 + 1' nodes need to be up to date for now.
     /// 2. A `RemoveNode` request
     ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
-    ///    need to be up to date for now.
+    ///    need to be up to date for now. If 'allow_remove_leader' is false then
+    ///    the peer to be removed should not be the leader.
     fn check_conf_change(&self, cmd: &RaftCmdRequest) -> Result<()> {
         let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
 
         let change_type = change_peer.get_change_type();
         let peer = change_peer.get_peer();
+
+        if change_type == ConfChangeType::RemoveNode && !self.cfg.allow_remove_leader &&
+           peer.get_id() == self.peer_id() {
+            warn!("{} rejects remove leader request {:?}",
+                  self.tag,
+                  change_peer);
+            return Err(box_err!("ignore remove leader"));
+        }
 
         let mut status = self.raft_group.status();
         let total = status.progress.len();
@@ -1409,7 +1435,7 @@ impl Peer {
         None
     }
 
-    pub fn heartbeat_pd(&self, worker: &Worker<PdTask>) {
+    pub fn heartbeat_pd(&self, worker: &FutureWorker<PdTask>) {
         let task = PdTask::Heartbeat {
             region: self.region().clone(),
             peer: self.peer.clone(),
@@ -1491,14 +1517,19 @@ impl Peer {
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
         try!(check_epoch(self.region(), req));
-        let snap = Snapshot::new(self.engine.clone());
+        let mut snap = None;
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => try!(apply::do_get(&self.tag, self.region(), &snap, req)),
+                CmdType::Get => {
+                    if snap.is_none() {
+                        snap = Some(Snapshot::new(self.engine.clone()));
+                    }
+                    try!(apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req))
+                }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
                 CmdType::Prewrite => unreachable!(),
                 CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),

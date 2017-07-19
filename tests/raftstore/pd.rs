@@ -13,7 +13,6 @@
 
 
 use std::collections::{HashMap, BTreeMap, HashSet};
-use std::vec::Vec;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -483,6 +482,10 @@ impl TestPdClient {
 
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.set_rule(box move |region: &metapb::Region, _: &metapb::Peer| {
+            debug!("[region {}] trying add {:?} to {:?}",
+                   region_id,
+                   peer,
+                   region);
             if region.get_id() != region_id {
                 return None;
             }

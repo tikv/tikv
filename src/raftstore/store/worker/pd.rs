@@ -245,6 +245,7 @@ impl<T: PdClient> Runner<T> {
 
     fn schedule_heartbeat_receiver(&mut self, handle: &Handle) {
         let ch = self.ch.clone();
+        let store_id = self.store_id;
         let f = self.pd_client
             .handle_region_heartbeat_response(self.store_id, move |mut resp| {
                 PD_REQ_COUNTER_VEC.with_label_values(&["heartbeat", "success"]).inc();
@@ -275,7 +276,11 @@ impl<T: PdClient> Runner<T> {
                     send_admin_request_raw(&ch, region_id, epoch, peer, req)
                 }
             })
-            .map_err(|e| panic!("unexpected error: {:?}", e));
+            .map_err(|e| panic!("unexpected error: {:?}", e))
+            .map(move |_| {
+                info!("[store {}] region heartbeat response handler exit.",
+                      store_id)
+            });
         handle.spawn(f);
         self.is_hb_receiver_scheduled = true;
     }

@@ -428,7 +428,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#62741f9e6e5a8bef365245847b09e600eb848ee6"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4d686bf9b4d083e464cfb935300830bc282f4923"
 dependencies = [
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -725,7 +725,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#62741f9e6e5a8bef365245847b09e600eb848ee6"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4d686bf9b4d083e464cfb935300830bc282f4923"
 dependencies = [
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/pingcap/rust-rocksdb.git)",
@@ -920,7 +920,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#11c2044a6a91f947faaa5e4f1a06c9026f333f69"
+source = "git+https://github.com/pingcap/tipb.git#24e2e8538b2a46968b58ce0394453828d49779dc"
 dependencies = [
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

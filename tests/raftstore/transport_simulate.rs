@@ -25,11 +25,11 @@ use std::sync::{Arc, RwLock, Mutex};
 use std::sync::mpsc::Sender;
 use std::marker::PhantomData;
 use std::{time, usize, thread};
-use std::vec::Vec;
 use std::sync::atomic::*;
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;
+    fn flush(&mut self) {}
 }
 
 impl<T, S> Channel<RaftMessage> for ServerTransport<T, S>
@@ -38,6 +38,10 @@ impl<T, S> Channel<RaftMessage> for ServerTransport<T, S>
 {
     fn send(&self, m: RaftMessage) -> Result<()> {
         Transport::send(self, m)
+    }
+
+    fn flush(&mut self) {
+        self.flush_raft_client();
     }
 }
 
@@ -167,6 +171,10 @@ impl<M, C: Channel<M>> Clone for SimulateTransport<M, C> {
 impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
     fn send(&self, m: RaftMessage) -> Result<()> {
         Channel::send(self, m)
+    }
+
+    fn flush(&mut self) {
+        self.ch.flush();
     }
 }
 

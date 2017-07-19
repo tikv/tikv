@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::vec::Vec;
-
 use byteorder::{ByteOrder, BigEndian, WriteBytesExt};
 
 use raftstore::Result;

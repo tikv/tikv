@@ -14,14 +14,14 @@
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver as StdReceiver, TryRecvError};
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::boxed::Box;
 use std::collections::Bound::{Included, Excluded, Unbounded};
 use std::time::{Duration, Instant};
 use std::thread;
 use std::u64;
 
-use rocksdb::{DB, DBStatisticsTickerType as TickerType};
+use rocksdb::{DB, DBStatisticsTickerType as TickerType, WriteBatch};
 use rocksdb::rocksdb_options::WriteOptions;
 use mio::{self, EventLoop, EventLoopConfig, Sender};
 use protobuf;
@@ -44,7 +44,7 @@ use util::worker::{Worker, Scheduler, FutureWorker};
 use util::transport::SendCh;
 use util::{rocksdb, RingQueue};
 use util::collections::{HashMap, HashSet};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use super::worker::{SplitCheckRunner, SplitCheckTask, RegionTask, RegionRunner, CompactTask,
@@ -57,7 +57,7 @@ use super::keys::{self, enc_start_key, enc_end_key, data_end_key, data_key};
 use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, StaleState, ConsistencyState, ReadyContext};
-use super::peer_storage::ApplySnapResult;
+use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
 use super::msg::Callback;
 use super::cmd_resp::{bind_term, bind_error};
 use super::transport::Transport;
@@ -131,6 +131,7 @@ pub struct Store<T, C: 'static> {
     snap_mgr: SnapManager,
 
     raft_metrics: RaftMetrics,
+    pub entry_cache_metries: Rc<RefCell<CacheQueryStats>>,
 
     tag: String,
 
@@ -211,6 +212,7 @@ impl<T, C> Store<T, C> {
             coprocessor_host: Arc::new(coprocessor_host),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
+            entry_cache_metries: Rc::new(RefCell::new(CacheQueryStats::default())),
             pending_votes: RingQueue::with_capacity(PENDING_VOTES_CAP),
             tag: tag,
             start_time: time::get_time(),
@@ -234,6 +236,7 @@ impl<T, C> Store<T, C> {
         let mut applying_count = 0;
 
         let t = Instant::now();
+        let mut wb = WriteBatch::new();
         try!(engine.scan(start_key,
                          end_key,
                          false,
@@ -252,6 +255,7 @@ impl<T, C> Store<T, C> {
                 debug!("region {:?} is tombstone in store {}",
                        region,
                        self.store_id());
+                self.clear_stale_meta(&mut wb, region);
                 return Ok(true);
             }
             let mut peer = try!(Peer::create(self, region));
@@ -271,6 +275,10 @@ impl<T, C> Store<T, C> {
             Ok(true)
         }));
 
+        if !wb.is_empty() {
+            self.engine.write(wb).unwrap();
+        }
+
         info!("{} starts with {} regions, including {} tombstones and {} applying \
                regions, takes {:?}",
               self.tag,
@@ -279,13 +287,25 @@ impl<T, C> Store<T, C> {
               applying_count,
               t.elapsed());
 
-        try!(self.clean_up());
+        try!(self.clear_stale_data());
 
         Ok(())
     }
 
-    /// `clean_up` clean up all possible garbage data.
-    fn clean_up(&mut self) -> Result<()> {
+    fn clear_stale_meta(&mut self, wb: &mut WriteBatch, region: &metapb::Region) {
+        let raft_key = keys::raft_state_key(region.get_id());
+        let handle = rocksdb::get_cf_handle(&self.engine, CF_RAFT).unwrap();
+        if self.engine.get_cf(handle, &raft_key).unwrap().is_none() {
+            // it has been cleaned up.
+            return;
+        }
+
+        peer_storage::clear_meta(&self.engine, wb, region.get_id()).unwrap();
+        peer_storage::write_peer_state(wb, region, PeerState::Tombstone).unwrap();
+    }
+
+    /// `clear_stale_data` clean up all possible garbage data.
+    fn clear_stale_data(&mut self) -> Result<()> {
         let t = Instant::now();
         let mut last_start_key = keys::data_key(b"");
         for region_id in self.region_ranges.values() {
@@ -526,6 +546,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         timer.observe_duration();
 
         self.raft_metrics.flush();
+        self.entry_cache_metries.borrow_mut().flush();
 
         self.register_raft_base_tick(event_loop);
     }
@@ -890,6 +911,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                    peer.schedule_apply_proposals(&self.apply_worker);
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
@@ -1058,6 +1080,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             end_idx: state.get_index() + 1,
         };
         peer.last_compacted_idx = task.end_idx;
+        peer.mut_store().compact_to(task.end_idx);
         if let Err(e) = self.raftlog_gc_worker.schedule(task) {
             error!("[region {}] failed to schedule compact task: {}",
                    region_id,

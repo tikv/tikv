@@ -32,7 +32,6 @@ pub mod logger;
 pub mod panic_hook;
 pub mod worker;
 pub mod codec;
-pub mod xeval;
 pub mod rocksdb;
 pub mod config;
 pub mod buf;
@@ -45,6 +44,7 @@ pub mod clocktime;
 pub mod metrics;
 pub mod threadpool;
 pub mod collections;
+pub mod properties;
 
 #[cfg(target_os="linux")]
 mod thread_metrics;
@@ -79,6 +79,22 @@ pub fn get_limit_at_size<'a, T, I>(entries: I, max: u64) -> usize
 pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     let limit = get_limit_at_size(entries.as_slice(), max);
     entries.truncate(limit);
+}
+
+/// Take slices in the range.
+///
+/// ### Panic
+///
+/// if [low, high) is out of bound.
+pub fn slices_in_range<T>(entry: &VecDeque<T>, low: usize, high: usize) -> (&[T], &[T]) {
+    let (first, second) = entry.as_slices();
+    if low >= first.len() {
+        (&second[low - first.len()..high - first.len()], &[])
+    } else if high <= first.len() {
+        (&first[low..high], &[])
+    } else {
+        (&first[low..], &second[..high - first.len()])
+    }
 }
 
 pub struct DefaultRng {
@@ -485,8 +501,14 @@ pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter().filter(|x| b.iter().find(|y| y == x).is_none()).map(|x| *x).collect()
 }
 
+#[inline]
+pub fn is_even(n: usize) -> bool {
+    n & 1 == 0
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::*;
     use std::net::{SocketAddr, AddrParseError};
     use std::time::Duration;
     use std::rc::Rc;
@@ -611,6 +633,41 @@ mod tests {
         for (mut entries, max, len) in tbls {
             limit_size(&mut entries, max);
             assert_eq!(entries.len(), len);
+        }
+    }
+
+    #[test]
+    fn test_slices_vec_deque() {
+        for first in 0..10 {
+            let mut v = VecDeque::with_capacity(10);
+            for i in 0..first {
+                v.push_back(i);
+            }
+            for i in first..10 {
+                v.push_back(i - first);
+            }
+            v.drain(..first);
+            for i in 0..first {
+                v.push_back(10 + i - first);
+            }
+            for len in 0..10 {
+                for low in 0..len + 1 {
+                    for high in low..len + 1 {
+                        let (p1, p2) = super::slices_in_range(&v, low, high);
+                        let mut res = vec![];
+                        res.extend_from_slice(p1);
+                        res.extend_from_slice(p2);
+                        let exp: Vec<_> = (low..high).collect();
+                        assert_eq!(res,
+                                   exp,
+                                   "[{}, {}) in {:?} with first: {}",
+                                   low,
+                                   high,
+                                   v,
+                                   first);
+                    }
+                }
+            }
         }
     }
 

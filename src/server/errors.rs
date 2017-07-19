@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::error;
-use std::boxed::Box;
 use std::result;
 use std::io::Error as IoError;
 use std::net::AddrParseError;
@@ -28,7 +27,7 @@ use storage::engine::Error as EngineError;
 use storage::Error as StorageError;
 use pd::Error as PdError;
 use super::snap::Task as SnapTask;
-use super::coprocessor::EndPointTask;
+use coprocessor::EndPointTask;
 
 quick_error!{
     #[derive(Debug)]
