@@ -180,9 +180,15 @@ impl Evaluator {
         invalid_type_error(&datum, TYPE_DECIMAL)
     }
 
-    pub fn cast_decimal_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_decimal_as_string(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        if let Datum::Dec(_) = datum {
+            let s = try!(datum.into_string());
+            let s = try!(produce_str_with_specified_tp(s, expr.get_field_type(), ctx));
+            return Ok(Datum::Bytes(s.into_bytes()));
+        }
+        invalid_type_error(&datum, TYPE_REAL)
     }
 
     pub fn cast_decimal_as_decimal(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -417,6 +423,17 @@ mod test {
                                          ScalarFuncSig::CastDecimalAsReal,
                                          FieldType::new()),
                      Datum::F64(5.14159))]);
+
+    test_eval!(test_cast_decimal_as_string,
+               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from(12345))],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastDecimalAsString,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(5);
+                                             ft
+                                         }),
+                     Datum::Bytes(b"12345".to_vec()))]);
 
     test_eval!(test_cast_decimal_as_decimal,
                vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(1000.0).unwrap())],
