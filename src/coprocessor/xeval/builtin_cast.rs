@@ -14,11 +14,10 @@
 use std::{i64, u64};
 use protobuf::ProtobufEnum;
 use chrono::naive::time::NaiveTime;
-use chrono::offset::fixed::FixedOffset;
 use tipb::expression::{DataType, Expr};
 use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp,
                                 produce_str_with_specified_tp};
-use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag, Res};
+use coprocessor::codec::mysql::{Decimal, Time, Duration, has_unsigned_flag, Res};
 use coprocessor::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
 
@@ -126,16 +125,12 @@ impl Evaluator {
             _ => return invalid_type_error(&d, TYPE_REAL),
         }
         let s = try!(d.into_string());
-        let decimal = expr.get_field_type().get_decimal();
-        let offset = match FixedOffset::east_opt(decimal) {
-            None => return Err(Error::Eval(format!("invalid tz offset {}", decimal))),
-            Some(tz) => tz,
-        };
-        let mut t = try!(Time::parse_datetime(&s, DEFAULT_FSP, &offset));
+        let fsp = expr.get_field_type().get_decimal() as i8;
+        let mut t = try!(Time::parse_datetime(&s, fsp, &ctx.tz));
         let data_type = expr.get_field_type().get_tp();
         if data_type == DataType::TypeDate {
             let dt = t.get_time().date().and_time(NaiveTime::from_hms(0, 0, 0)).unwrap();
-            t = try!(Time::new(dt, data_type.value() as u8, decimal as i8));
+            t = try!(Time::new(dt, data_type.value() as u8, fsp));
         }
         Ok(Datum::Time(t))
     }
@@ -201,9 +196,22 @@ impl Evaluator {
         invalid_type_error(&datum, TYPE_DECIMAL)
     }
 
-    pub fn cast_decimal_as_time(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_decimal_as_time(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        match datum {
+            Datum::Dec(_) => {}
+            _ => return invalid_type_error(&datum, TYPE_DECIMAL),
+        }
+        let s = try!(datum.into_string());
+        let fsp = expr.get_field_type().get_decimal() as i8;
+        let mut t = try!(Time::parse_datetime(&s, fsp, &ctx.tz));
+        let data_type = expr.get_field_type().get_tp();
+        if data_type == DataType::TypeDate {
+            let dt = t.get_time().date().and_time(NaiveTime::from_hms(0, 0, 0)).unwrap();
+            t = try!(Time::new(dt, data_type.value() as u8, fsp));
+        }
+        Ok(Datum::Time(t))
     }
 
     pub fn cast_decimal_as_duration(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -446,4 +454,16 @@ mod test {
                                              ft
                                          }),
                      Datum::Dec(Decimal::from_f64(1000.0).unwrap()))]);
+
+    test_eval!(test_cast_decimal_as_time,
+               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(20121231113045.123345).unwrap())],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastDecimalAsTime,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(18);
+                                             ft
+                                         }),
+                     Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45.123345", 0)
+                                 .unwrap()))]);
 }
