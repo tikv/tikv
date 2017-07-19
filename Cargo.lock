@@ -214,11 +214,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam"
-version = "0.2.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
 name = "dbghelp-sys"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -274,19 +269,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "grpc"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue#402fbd237d3576d380d55a6d9ad81525c3910332"
+source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue#4b5c1a42471fc4001d2cf006e4ddc2128b0172c1"
 dependencies = [
- "crossbeam 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpc-sys 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue)",
  "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mio 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 1.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "grpc-sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue#402fbd237d3576d380d55a6d9ad81525c3910332"
+source = "git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue#4b5c1a42471fc4001d2cf006e4ddc2128b0172c1"
 dependencies = [
  "cmake 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "gcc 0.3.35 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -388,7 +383,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=ov/grpc/alarm-queue#6e3c631df809acdbf9c2d3f6304931fd3efbfe17"
+source = "git+https://github.com/pingcap/kvproto.git?branch=ov/grpc/alarm-queue#2000cdfbe1cba4c72f2d376f2f17b28c1f062356"
 dependencies = [
  "futures 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpc 0.1.0 (git+https://github.com/pingcap/grpc-rs.git?branch=ov/alarm-queue)",
@@ -1095,7 +1090,6 @@ dependencies = [
 "checksum cmake 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)" = "d18d68987ed4c516dcc3e7913659bfa4076f5182eea4a7e0038bb060953e76ac"
 "checksum cookie 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)" = "0e3d6405328b6edb412158b3b7710e2634e23f3614b9bb1c412df7952489a626"
 "checksum crc 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "541a7a4936092a4dac8b3a1dc1abc264372e0ce1e7ab712dfe0484374f5a2b7b"
-"checksum crossbeam 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)" = "0c5ea215664ca264da8a9d9c3be80d2eaf30923c259d03e870388eb927508f97"
 "checksum dbghelp-sys 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "97590ba53bcb8ac28279161ca943a924d1fd4a8fb3fa63302591647c4fc5b850"
 "checksum dtoa 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "80c8b71fd71146990a9742fc06dcbbde19161a267e0ad4e572c35162f4578c90"
 "checksum flat_map 0.0.4 (registry+https://github.com/rust-lang/crates.io-index)" = "fc16c081affe2ded9d62cd239a9ef1b4801fa98037b59523014f661c7bee182c"
