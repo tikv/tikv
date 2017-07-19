@@ -18,7 +18,7 @@ use chrono::offset::fixed::FixedOffset;
 use tipb::expression::{DataType, Expr};
 use coprocessor::codec::datum::{Datum, produce_dec_with_specified_tp,
                                 produce_str_with_specified_tp};
-use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag};
+use coprocessor::codec::mysql::{Decimal, Time, Duration, DEFAULT_FSP, has_unsigned_flag, Res};
 use coprocessor::codec::convert;
 use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
 
@@ -27,6 +27,18 @@ const TYPE_DECIMAL: &'static str = "decimal";
 
 fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
     Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
+}
+
+
+// `decimal_try` wraps calls to decimal functions.
+#[macro_export]
+macro_rules! decimal_try {
+    ($e:expr) => (
+        match $e {
+            Res::Ok(v) => v,
+            Res::Overflow(_) => return Err(Error::Eval("round overflow".to_owned())),
+            Res::Truncated(_) => return Err(Error::Eval("round truncated".to_owned())),
+        });
 }
 
 impl Evaluator {
@@ -141,9 +153,21 @@ impl Evaluator {
         Ok(Datum::Dur(duration))
     }
 
-    pub fn cast_decimal_as_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_decimal_as_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        if let Datum::Dec(d) = datum {
+            if has_unsigned_flag(expr.get_field_type().get_flag() as u64) {
+                let f = try!(d.as_f64());
+                let u = try!(convert::convert_float_to_uint(f, u64::MAX));
+                return Ok(Datum::U64(u));
+            } else {
+                let d = decimal_try!(d.round(0));
+                let i = decimal_try!(d.as_i64());
+                return Ok(Datum::I64(i));
+            }
+        }
+        invalid_type_error(&datum, TYPE_DECIMAL)
     }
 
     pub fn cast_decimal_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -365,6 +389,17 @@ mod test {
                                          ScalarFuncSig::CastRealAsDuration,
                                          FieldType::new()),
                      Datum::Dur(Duration::parse(b"10:11:12", 0).unwrap()))]);
+
+    test_eval!(test_cast_decimal_as_int,
+               vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from(1))],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastDecimalAsInt,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flag(types::UNSIGNED_FLAG as u32);
+                                             ft
+                                         }),
+                     Datum::U64(1))]);
 
     test_eval!(test_cast_decimal_as_decimal,
                vec![(build_expr_with_sig(vec![Datum::Dec(Decimal::from_f64(1000.0).unwrap())],
