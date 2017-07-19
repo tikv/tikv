@@ -23,6 +23,7 @@ use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
 
 const TYPE_REAL: &'static str = "real";
 const TYPE_DECIMAL: &'static str = "decimal";
+const TYPE_STRING: &'static str = "string";
 
 fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
     Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
@@ -237,9 +238,15 @@ impl Evaluator {
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 
-    pub fn cast_string_as_string(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO: add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn cast_string_as_string(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        if let Datum::Bytes(_) = datum {
+            let s = try!(datum.into_string());
+            let s = try!(produce_str_with_specified_tp(s, expr.get_field_type(), ctx));
+            return Ok(Datum::Bytes(s.into_bytes()));
+        }
+        invalid_type_error(&datum, TYPE_STRING)
     }
 
     pub fn cast_string_as_decimal(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -481,4 +488,15 @@ mod test {
                                          ScalarFuncSig::CastDecimalAsDuration,
                                          FieldType::new()),
                      Datum::Dur(Duration::parse(b"10:11:12", 0).unwrap()))]);
+
+    test_eval!(test_cast_string_as_string,
+               vec![(build_expr_with_sig(vec![Datum::Bytes(b"pingcap".to_vec())],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::CastStringAsString,
+                                         {
+                                             let mut ft = FieldType::new();
+                                             ft.set_flen(7);
+                                             ft
+                                         }),
+                     Datum::Bytes(b"pingcap".to_vec()))]);
 }
