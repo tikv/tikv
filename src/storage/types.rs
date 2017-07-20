@@ -32,25 +32,15 @@ pub type Value = Vec<u8>;
 /// encoded bytes.
 pub type KvPair = (Vec<u8>, Value);
 
-/// `MvccInfo` store all mvcc information of given key.
+/// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MvccInfo {
     pub lock: Option<Lock>,
     /// commit_ts and write
     pub writes: Vec<(u64, Write)>,
     /// start_ts and value
     pub values: Vec<(u64, bool, Value)>,
-}
-
-impl Default for MvccInfo {
-    fn default() -> MvccInfo {
-        MvccInfo {
-            lock: None,
-            writes: vec![],
-            values: vec![],
-        }
-    }
 }
 
 /// Key type.
