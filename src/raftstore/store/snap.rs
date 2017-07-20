@@ -1152,7 +1152,8 @@ impl SnapManager {
                                             core.snap_size.clone(),
                                             Box::new(self.clone())));
         if !s.exists() {
-            return Err(RaftStoreError::Other(From::from("snapshot of {:?} not exists."
+            return Err(RaftStoreError::Other(From::from(format!("snapshot of {:?} not exists.",
+                                                                key)
                 .to_string())));
         }
         Ok(Box::new(s))
