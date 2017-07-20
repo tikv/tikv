@@ -41,15 +41,15 @@ fn zero_datetime(tz: &FixedOffset) -> Time {
 
 #[allow(too_many_arguments)]
 #[inline]
-fn ymd_hms_nanos<T: TimeZone>(tz: &T,
-                              year: i32,
-                              month: u32,
-                              day: u32,
-                              hour: u32,
-                              min: u32,
-                              secs: u32,
-                              nanos: u32)
-                              -> Result<DateTime<T>> {
+pub fn ymd_hms_nanos<T: TimeZone>(tz: &T,
+                                  year: i32,
+                                  month: u32,
+                                  day: u32,
+                                  hour: u32,
+                                  min: u32,
+                                  secs: u32,
+                                  nanos: i64)
+                                  -> Result<DateTime<T>> {
     tz.ymd_opt(year, month, day)
         .and_hms_opt(hour, min, secs)
         .single()
@@ -255,7 +255,7 @@ impl Time {
                                    h,
                                    minute,
                                    sec,
-                                   frac * TEN_POW[9 - fsp as usize]));
+                                   (frac * TEN_POW[9 - fsp as usize]) as i64));
         Time::new(t, types::DATETIME as u8, fsp as i8)
     }
 
@@ -277,7 +277,7 @@ impl Time {
         let second = (hms & ((1 << 6) - 1)) as u32;
         let minute = ((hms >> 6) & ((1 << 6) - 1)) as u32;
         let hour = (hms >> 12) as u32;
-        let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
+        let nanosec = ((u & ((1 << 24) - 1)) * 1000) as i64;
         let t = if tp == types::TIMESTAMP {
             let t = try!(ymd_hms_nanos(&UTC, year, month, day, hour, minute, second, nanosec));
             tz.from_utc_datetime(&t.naive_utc())

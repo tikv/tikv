@@ -18,10 +18,13 @@ use std::fmt::{self, Display, Formatter};
 use std::{str, i64, u64};
 use std::io::Write;
 
-use super::super::Result;
-use super::{Decimal, parse_frac, check_fsp};
+use chrono::{Datelike, Local, FixedOffset};
 
-const NANOS_PER_SEC: i64 = 1_000_000_000;
+use super::super::Result;
+use super::time::{ymd_hms_nanos, Time};
+use super::{Decimal, parse_frac, check_fsp, round_frac};
+
+pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 const NANO_WIDTH: u32 = 9;
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
@@ -95,12 +98,13 @@ impl Duration {
     }
 
     pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
+        let fsp = try!(check_fsp(fsp));
         let neg = nanos < 0;
         let nanos = nanos.abs();
-
-        let dur = StdDuration::new((nanos / NANOS_PER_SEC) as u64,
-                                   (nanos % NANOS_PER_SEC) as u32);
-        Duration::new(dur, neg, fsp)
+        let sec = (nanos / NANOS_PER_SEC) as u64;
+        let nano_sec = round_frac((nanos % NANOS_PER_SEC) as u32, fsp as i8);
+        let dur = StdDuration::new(sec, nano_sec);
+        Duration::new(dur, neg, fsp as i8)
     }
 
     pub fn new(dur: StdDuration, neg: bool, fsp: i8) -> Result<Duration> {
@@ -110,6 +114,35 @@ impl Duration {
             neg: neg,
             fsp: try!(check_fsp(fsp)),
         })
+    }
+
+    pub fn round_frac(&self, fsp: i8) -> Result<Duration> {
+        let fsp = try!(check_fsp(fsp));
+        if self.fsp == fsp {
+            return Ok(self.clone());
+        }
+        let mut sec = self.dur.as_secs();
+        let mut nanos = round_frac(self.dur.subsec_nanos(), fsp as i8);
+        if nanos >= 1_000_000_000 {
+            sec += 1;
+            nanos -= 1_000_000_000;
+        }
+        let d = StdDuration::new(sec, nanos);
+        Duration::new(d, self.neg, fsp as i8)
+    }
+
+    pub fn to_time(&self, tz: FixedOffset, tp: u8, fsp: i8) -> Result<Time> {
+        let date = Local::today();
+        let dur = try!(self.round_frac(fsp));
+        let time = try!(ymd_hms_nanos(&tz,
+                                      date.year(),
+                                      date.month(),
+                                      date.day(),
+                                      0,
+                                      0,
+                                      0,
+                                      dur.to_nanos()));
+        Time::new(time, tp, fsp)
     }
 
     // `parse` parses the time form a formatted string with a fractional seconds part,

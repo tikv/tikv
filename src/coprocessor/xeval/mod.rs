@@ -39,3 +39,5 @@ use std::result;
 pub type Result<T> = result::Result<T, Error>;
 
 pub use self::evaluator::{Evaluator, EvalContext};
+
+pub const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";

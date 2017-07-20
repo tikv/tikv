@@ -13,7 +13,7 @@
 
 pub use util::codec::{Result, Error};
 
-const TEN_POW: &'static [u32] =
+pub const TEN_POW: &'static [u32] =
     &[1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000];
 
 /// A shortcut to box an error.
@@ -32,5 +32,6 @@ pub mod datum;
 pub mod table;
 pub mod convert;
 pub mod mysql;
+pub mod field_type;
 
 pub use self::datum::Datum;

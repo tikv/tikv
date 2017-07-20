@@ -18,6 +18,7 @@ use std::str::FromStr;
 use std::mem;
 use std::fmt::{self, Display, Formatter, Debug};
 use byteorder::{ReadBytesExt, WriteBytesExt};
+use tipb::expression::{DataType, FieldType};
 
 use util::escape;
 use util::codec::{number, bytes};
@@ -25,8 +26,10 @@ use util::codec::number::NumberDecoder;
 use util::codec::bytes::BytesEncoder;
 use super::super::xeval::EvalContext;
 use super::{Result, convert};
-use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, DecimalEncoder, DecimalDecoder,
-                   Time, Json, JsonEncoder, JsonDecoder, PathExpression, parse_json_path_expr};
+use super::mysql::{self, Duration, DEFAULT_FSP, MAX_FSP, Decimal, Res, DecimalEncoder,
+                   DecimalDecoder, Time, Json, JsonEncoder, JsonDecoder, PathExpression,
+                   parse_json_path_expr, charset};
+use super::field_type::UNSPECIFIED_LENGTH;
 
 pub const NIL_FLAG: u8 = 0;
 const BYTES_FLAG: u8 = 1;
@@ -972,6 +975,86 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     }
     Ok(buf.split_at(1 + pos))
 }
+
+pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
+    !ctx.ignore_truncate && !ctx.truncate_as_warning
+}
+
+// Produces a new decimal accroding to `flen` and `decimal`.
+pub fn produce_dec_with_specified_tp(dec: Decimal,
+                                     tp: &FieldType,
+                                     ctx: &EvalContext)
+                                     -> Result<Decimal> {
+    let (flen, decimal) = (tp.get_flen(), tp.get_decimal());
+    if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
+        let (prec, frac) = dec.prec_and_frac();
+        let (prec, frac) = (prec as i32, frac as i32);
+        if !dec.is_zero() && prec - frac > flen - decimal {
+            // TODO: we may need a OverflowAsWarning.
+            // `select (cast 111 as decimal(1))` causes a warning in MySQL.
+            return Err(box_err!("{} value is out of range in DECIMAL({}, {})",
+                                dec,
+                                flen,
+                                decimal));
+        } else if frac != decimal {
+            let d = match dec.round(decimal as i8) {
+                Res::Ok(d) => d,
+                Res::Overflow(_) => return Err(box_err!("round overflow")),
+                Res::Truncated(_) => return Err(box_err!("round truncated")),
+            };
+            if !d.is_zero() && frac > decimal && handle_truncate_as_error(ctx) {
+                return Err(box_err!("data truncated"));
+            }
+            return Ok(d);
+        }
+    }
+    Ok(dec)
+}
+
+// Produces a new string according to `flen` and `charset`.
+pub fn produce_str_with_specified_tp(mut s: String,
+                                     tp: &FieldType,
+                                     ctx: &EvalContext)
+                                     -> Result<String> {
+    let (flen, charset) = (tp.get_flen(), tp.get_charset());
+    if flen >= 0 {
+        let flen = flen as usize;
+        // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
+        // char count and truncate to flen chars if it is too long.
+        if charset == charset::CHARSET_UTF8 || charset == charset::CHARSET_UTF8MB4 {
+            let mut char_count = 0;
+            let mut truncate_pos = 0;
+            for (i, (pos, _)) in s.char_indices().enumerate() {
+                char_count += 1;
+                if i == flen {
+                    truncate_pos = pos;
+                }
+            }
+            if truncate_pos > 0 || flen == 0 {
+                if handle_truncate_as_error(ctx) {
+                    return Err(box_err!("Data Too Long, field len {}, data len {}",
+                                        flen,
+                                        char_count));
+                }
+                return Ok(convert::truncate_str(s, truncate_pos as isize));
+            }
+        } else if s.len() > flen {
+            if handle_truncate_as_error(ctx) {
+                return Err(box_err!("Data Too Long, field len {}, data len {}", flen, s.len()));
+            }
+            return Ok(convert::truncate_str(s, flen as isize));
+        } else if tp.get_tp() == DataType::TypeString && s.len() < flen {
+            let to_pad = flen - s.len();
+            s.reserve(to_pad);
+            for _ in 0..to_pad {
+                s.push('\u{0}');
+            }
+            return Ok(s);
+        }
+    }
+    Ok(s)
+}
+
 
 #[cfg(test)]
 mod test {
