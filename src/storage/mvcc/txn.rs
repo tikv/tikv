@@ -1109,16 +1109,32 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
 
-        must_prewrite_put(engine.as_ref(), &[2], &gen_value(b'v', SHORT_VALUE_MAX_LEN + 1), &[2], 3);
+        must_prewrite_put(engine.as_ref(),
+                          &[2],
+                          &gen_value(b'v', SHORT_VALUE_MAX_LEN + 1),
+                          &[2],
+                          3);
         must_commit(engine.as_ref(), &[2], 3, 3);
 
-        must_prewrite_put(engine.as_ref(), &[3], &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1), &[3], 3);
+        must_prewrite_put(engine.as_ref(),
+                          &[3],
+                          &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1),
+                          &[3],
+                          3);
         must_commit(engine.as_ref(), &[3], 3, 4);
 
-        must_prewrite_put(engine.as_ref(), &[3], &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1), &[3], 5);
+        must_prewrite_put(engine.as_ref(),
+                          &[3],
+                          &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1),
+                          &[3],
+                          5);
         must_commit(engine.as_ref(), &[3], 5, 5);
 
-        must_prewrite_put(engine.as_ref(), &[6], &gen_value(b'x', SHORT_VALUE_MAX_LEN + 1), &[6], 3);
+        must_prewrite_put(engine.as_ref(),
+                          &[6],
+                          &gen_value(b'x', SHORT_VALUE_MAX_LEN + 1),
+                          &[6],
+                          3);
         must_commit(engine.as_ref(), &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
@@ -1145,10 +1161,18 @@ mod tests {
         must_prewrite_put(engine.as_ref(), &[2], &gen_value(b'v', 2), &[2], 3);
         must_commit(engine.as_ref(), &[2], 3, 3);
 
-        must_prewrite_put(engine.as_ref(), &[3], &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1), &[3], 4);
+        must_prewrite_put(engine.as_ref(),
+                          &[3],
+                          &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1),
+                          &[3],
+                          4);
         must_commit(engine.as_ref(), &[3], 4, 4);
 
-        must_prewrite_put(engine.as_ref(), &[5], &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1), &[5], 2);
+        must_prewrite_put(engine.as_ref(),
+                          &[5],
+                          &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1),
+                          &[5],
+                          2);
         must_commit(engine.as_ref(), &[5], 2, 5);
 
         must_prewrite_put(engine.as_ref(), &[6], &gen_value(b'x', 3), &[6], 3);
