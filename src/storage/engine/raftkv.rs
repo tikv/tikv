@@ -166,7 +166,10 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         Ok(())
     }
 
-    fn call_commands_batch(&self, batch: Vec<(RaftCmdRequest, Callback<CmdRes>)>) -> Result<()> {
+    fn call_commands_batch(&self,
+                           batch: Vec<(RaftCmdRequest, Callback<CmdRes>)>,
+                           on_finish: Callback<()>)
+                           -> Result<()> {
         use raftstore::store;
         let batch = batch.into_iter().map(|(req, cb)| {
             let l = req.get_requests().len();
@@ -178,7 +181,11 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             (req, callback)
         });
 
-        try!(self.router.send_commands_batch(batch.collect()));
+        let on_finish: store::Callback = box move |_| {
+            // on_finish should ignore all params.
+            on_finish((CbContext::new(), Ok(())));
+        };
+        try!(self.router.send_commands_batch(batch.collect(), on_finish));
         Ok(())
     }
 
@@ -206,7 +213,8 @@ impl<S: RaftStoreRouter> RaftKv<S> {
     }
 
     fn exec_requests_batch(&self,
-                           batch: Vec<(Context, Vec<Request>, Callback<CmdRes>)>)
+                           batch: Vec<(Context, Vec<Request>, Callback<CmdRes>)>,
+                           on_finish: Callback<()>)
                            -> Result<()> {
         let batch = batch.into_iter().map(|(ctx, reqs, cb)| {
             let header = self.new_request_header1(ctx);
@@ -217,7 +225,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             (cmd, cb)
         });
 
-        self.call_commands_batch(batch.collect())
+        self.call_commands_batch(batch.collect(), on_finish)
     }
 }
 
@@ -331,7 +339,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 
     fn async_snapshots_batch(&self,
-                             batch: Vec<(Context, Callback<Box<Snapshot>>)>)
+                             batch: Vec<(Context, Callback<Box<Snapshot>>)>,
+                             on_finish: Callback<()>)
                              -> engine::Result<()> {
         let batch = batch.into_iter().map(|(ctx, cb)| {
             let mut req = Request::new();
@@ -364,7 +373,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             (ctx, vec![req], callback)
         });
 
-        self.exec_requests_batch(batch.collect()).map_err(|e| {
+        self.exec_requests_batch(batch.collect(), on_finish).map_err(|e| {
             let tag = get_tag_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
             e.into()

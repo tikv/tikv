@@ -2039,7 +2039,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
                 self.propose_raft_command(request, callback)
             }
-            Msg::RaftCmdsBatch { send_time, batch } => {
+            Msg::RaftCmdsBatch { send_time, batch, on_finish } => {
                 self.raft_metrics
                     .propose
                     .request_wait_time
@@ -2047,6 +2047,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                 for (request, callback) in batch {
                     self.propose_raft_command(request, callback)
                 }
+                on_finish.call_box((RaftCmdResponse::new(),));
             }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);
