@@ -273,18 +273,19 @@ impl<'a> MvccReader<'a> {
         Ok(())
     }
 
-    pub fn seek_first(&mut self, ts: u64) -> Result<Option<Key>> {
+    // Return the first committed key which start_ts equals to ts
+    pub fn seek_ts(&mut self, ts: u64) -> Result<Option<Key>> {
         assert!(self.scan_mode.is_some());
-        self.create_write_cursor()?;
+        try!(self.create_write_cursor());
 
-        let mut w_cur = self.write_cursor.as_mut().unwrap();
-        let mut w_ok = w_cur.seek_to_first(&mut self.statistics.write);
+        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let mut ok = cursor.seek_to_first(&mut self.statistics.write);
 
-        while w_ok {
-            if Write::parse(w_cur.value())?.start_ts == ts {
-                return Ok(Some(Key::from_encoded(w_cur.key().to_vec()).truncate_ts()?));
+        while ok {
+            if try!(Write::parse(cursor.value())).start_ts == ts {
+                return Ok(Some(try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts())));
             }
-            w_ok = w_cur.next(&mut self.statistics.write);
+            ok = cursor.next(&mut self.statistics.write);
         }
         Ok(None)
     }

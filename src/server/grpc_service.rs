@@ -29,9 +29,9 @@ use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
 use util::worker::Scheduler;
 use util::buf::PipeBuffer;
-use storage::{self, Storage, Key, Options, Mutation};
+use storage::{self, Storage, Key, Options, Mutation, Value};
 use storage::txn::Error as TxnError;
-use storage::mvcc::{Error as MvccError, WriteType};
+use storage::mvcc::{Error as MvccError, WriteType, Write as MvccWrite};
 use storage::engine::Error as EngineError;
 use super::transport::RaftStoreRouter;
 use coprocessor::{RequestTask, EndPointTask};
@@ -771,7 +771,6 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::Tikv for Service<T> {
                             resp.set_info(extract_mvcc_info(k, vv));
                         }
                         Ok(None) => {
-                            resp.set_key(vec![]);
                             resp.set_info(Default::default());
                         }
                         Err(e) => resp.set_error(format!("{}", e)),
@@ -872,33 +871,35 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
 
 fn extract_mvcc_info(key: Key, mvcc: storage::MvccInfo) -> MvccInfo {
     let mut mvcc_info = MvccInfo::new();
-    if let Some(ref lock) = mvcc.lock {
+    if let Some(lock) = mvcc.lock {
         let mut lock_info = LockInfo::new();
-        lock_info.set_primary_lock(lock.primary.clone());
+        lock_info.set_primary_lock(lock.primary);
         lock_info.set_key(key.raw().unwrap());
         lock_info.set_lock_ttl(lock.ttl);
         lock_info.set_lock_version(lock.ts);
         mvcc_info.set_lock(lock_info);
     }
-    let (vw, vv) = extract_info_vectors(mvcc);
+    let vv = extract_2pc_values(mvcc.values);
+    let vw = extract_2pc_writes(mvcc.writes);
     mvcc_info.set_writes(RepeatedField::from_vec(vw));
     mvcc_info.set_values(RepeatedField::from_vec(vv));
     mvcc_info
 }
 
-fn extract_info_vectors(res: storage::MvccInfo) -> (Vec<WriteInfo>, Vec<ValueInfo>) {
-    let vv: Vec<ValueInfo> = res.values
-        .into_iter()
+fn extract_2pc_values(res: Vec<(u64, bool, Value)>) -> Vec<ValueInfo> {
+    res.into_iter()
         .map(|(start_ts, is_short, value)| {
             let mut value_info = ValueInfo::new();
             value_info.set_ts(start_ts);
-            value_info.set_value(value.clone());
+            value_info.set_value(value);
             value_info.set_is_short_value(is_short);
             value_info
         })
-        .collect();
-    let vw: Vec<WriteInfo> = res.writes
-        .into_iter()
+        .collect()
+}
+
+fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<WriteInfo> {
+    res.into_iter()
         .map(|(commit_ts, write)| {
             let mut write_info = WriteInfo::new();
             write_info.set_start_ts(write.start_ts);
@@ -912,8 +913,7 @@ fn extract_info_vectors(res: storage::MvccInfo) -> (Vec<WriteInfo>, Vec<ValueInf
             write_info.set_commit_ts(commit_ts);
             write_info
         })
-        .collect();
-    (vw, vv)
+        .collect()
 }
 
 fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {

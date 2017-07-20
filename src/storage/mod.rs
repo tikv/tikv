@@ -730,7 +730,7 @@ impl Storage {
             key: key,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::MvccInfoByKey(callback))?;
+        try!(self.send(cmd, StorageCb::MvccInfoByKey(callback)));
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }
@@ -745,7 +745,7 @@ impl Storage {
             start_ts: start_ts,
         };
         let tag = cmd.tag();
-        self.send(cmd, StorageCb::MvccInfoByStartTs(callback))?;
+        try!(self.send(cmd, StorageCb::MvccInfoByStartTs(callback)));
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }

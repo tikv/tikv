@@ -278,9 +278,9 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
                           -> Result<MultipleReturnValue> {
     let mut writes = vec![];
     let mut values = vec![];
-    let lock = reader.load_lock(key)?;
+    let lock = try!(reader.load_lock(key));
     loop {
-        let opt = reader.seek_write(key, ts)?;
+        let opt = try!(reader.seek_write(key, ts));
         match opt {
             Some((commit_ts, write)) => {
                 ts = commit_ts - 1;
@@ -292,12 +292,12 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
             }
             None => break,
         };
-        let write = writes[writes.len() - 1].1.clone();
-        if let Some(v) = write.short_value {
+        let write = &writes[writes.len() - 1].1;
+        if let Some(v) = write.short_value.clone() {
             values.push((write.start_ts, true, v));
             continue;
         }
-        let v = reader.load_data(key, write.start_ts)?;
+        let v = try!(reader.load_data(key, write.start_ts));
         values.push((write.start_ts, false, v))
     }
     Ok((lock, writes, values))
@@ -419,7 +419,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              true,
                                              None,
                                              ctx.get_isolation_level());
-            match reader.seek_first(start_ts)
+            match reader.seek_ts(start_ts)
                 .map_err(StorageError::from) {
                 Err(e) => ProcessResult::Failed { err: e.into() },
                 Ok(opt) => {
