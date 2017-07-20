@@ -31,7 +31,6 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -46,6 +45,7 @@ use storage::{Engine, Command, Snapshot, StorageCb, Result as StorageResult,
 use storage::mvcc::{MvccTxn, MvccReader, Error as MvccError, MAX_TXN_WRITE_SIZE};
 use storage::{Key, Value, KvPair, CMD_TAG_GC};
 use storage::engine::{CbContext, Result as EngineResult, Callback as EngineCallback, Modify};
+use raftstore::store::engine::IterOption;
 use util::transport::{SyncSendCh, Error as TransportError};
 use util::SlowTimer;
 use util::collections::HashMap;
@@ -328,7 +328,13 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                         .observe(results.len() as f64);
                     Ok(results.drain(..).map(|x| x.map_err(StorageError::from)).collect())
                 });
-            KV_COMMAND_SCAN_INEFFICIENCY.observe(statistics.inefficiency());
+
+            for (cf, details) in statistics.details() {
+                for (tag, count) in details {
+                    KV_COMMAND_SCAN_DETAILS.with_label_values(&[cf, tag]).observe(count as f64);
+                }
+            }
+
             match res {
                 Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
                 Err(e) => ProcessResult::Failed { err: e.into() },
@@ -398,7 +404,7 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             }
         }
         // Collects garbage.
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, .. } => {
+        Command::Gc { ref ctx, safe_point, ratio_threshold, ref mut scan_key, .. } => {
             let mut reader = MvccReader::new(snapshot.as_ref(),
                                              &mut statistics,
                                              Some(ScanMode::Forward),
@@ -406,27 +412,39 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
                                              None,
                                              ctx.get_isolation_level());
             // scan_key is used as start_key here,and Range start gc with scan_key=none.
-            let is_range_start_key = scan_key.is_none();
-            let res = reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
-                .map_err(Error::from)
-                .and_then(|(keys, next_start)| {
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
-                        .observe(keys.len() as f64);
-                    if keys.is_empty() {
-                        // empty range
-                        if is_range_start_key {
-                            KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+            let is_range_start_gc = scan_key.is_none();
+            // This is an optimization to skip gc before scanning all data.
+            let need_gc = if is_range_start_gc {
+                reader.need_gc(safe_point, ratio_threshold)
+            } else {
+                true
+            };
+            let res = if !need_gc {
+                KV_COMMAND_GC_SKIPPED_COUNTER.inc();
+                Ok(None)
+            } else {
+                reader.scan_keys(scan_key.take(), GC_BATCH_SIZE)
+                    .map_err(Error::from)
+                    .and_then(|(keys, next_start)| {
+                        KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag])
+                            .observe(keys.len() as f64);
+                        if keys.is_empty() {
+                            // empty range
+                            if is_range_start_gc {
+                                KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
+                            }
+                            Ok(None)
+                        } else {
+                            Ok(Some(Command::Gc {
+                                ctx: ctx.clone(),
+                                safe_point: safe_point,
+                                ratio_threshold: ratio_threshold,
+                                scan_key: next_start,
+                                keys: keys,
+                            }))
                         }
-                        Ok(None)
-                    } else {
-                        Ok(Some(Command::Gc {
-                            ctx: ctx.clone(),
-                            safe_point: safe_point,
-                            scan_key: next_start,
-                            keys: keys,
-                        }))
-                    }
-                });
+                    })
+            };
             match res {
                 Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
                 Ok(None) => ProcessResult::Res,
@@ -437,6 +455,12 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
             KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with_label_values(&[tag]).observe(1f64);
             match snapshot.get(key) {
                 Ok(val) => ProcessResult::Value { value: val },
+                Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
+            }
+        }
+        Command::RawScan { ref start_key, limit, .. } => {
+            match process_rawscan(snapshot, start_key, limit, &mut statistics) {
+                Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
                 Err(e) => ProcessResult::Failed { err: StorageError::from(e) },
             }
         }
@@ -451,6 +475,23 @@ fn process_read(cid: u64, mut cmd: Command, ch: SyncSendCh<Msg>, snapshot: Box<S
         // Todo: if this happens we need to clean up command's context
         panic!("send read finished failed, cid={}, err={:?}", cid, e);
     }
+}
+
+fn process_rawscan(snapshot: Box<Snapshot>,
+                   start_key: &Key,
+                   limit: usize,
+                   stats: &mut Statistics)
+                   -> Result<Vec<StorageResult<KvPair>>> {
+    let mut cursor = try!(snapshot.iter(IterOption::default(), ScanMode::Forward));
+    if !try!(cursor.seek(start_key, &mut stats.data)) {
+        return Ok(vec![]);
+    }
+    let mut pairs = vec![];
+    while cursor.valid() && pairs.len() < limit {
+        pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
+        cursor.next(&mut stats.data);
+    }
+    Ok(pairs)
 }
 
 /// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
@@ -582,7 +623,7 @@ fn process_write_impl(cid: u64,
                 (pr, txn.modifies())
             }
         }
-        Command::Gc { ref ctx, safe_point, ref mut scan_key, ref keys } => {
+        Command::Gc { ref ctx, safe_point, ratio_threshold, ref mut scan_key, ref keys } => {
             let mut scan_key = scan_key.take();
             let mut txn = MvccTxn::new(snapshot,
                                        &mut statistics,
@@ -603,6 +644,7 @@ fn process_write_impl(cid: u64,
                     cmd: Command::Gc {
                         ctx: ctx.clone(),
                         safe_point: safe_point,
+                        ratio_threshold: ratio_threshold,
                         scan_key: scan_key.take(),
                         keys: vec![],
                     },
@@ -981,6 +1023,7 @@ mod tests {
                                  Command::Gc {
                                      ctx: Context::new(),
                                      safe_point: 5,
+                                     ratio_threshold: 0.0,
                                      scan_key: None,
                                      keys: vec![make_key(b"k")],
                                  }];

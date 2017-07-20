@@ -376,8 +376,8 @@ impl Peer {
         info!("{} begin to destroy", self.tag);
 
         // Set Tombstone state explicitly
-        let wb = WriteBatch::new();
-        try!(self.mut_store().clear_meta(&wb));
+        let mut wb = WriteBatch::new();
+        try!(self.mut_store().clear_meta(&mut wb));
         try!(write_peer_state(&wb, &region, PeerState::Tombstone));
         try!(self.engine.write(wb));
 
@@ -1517,14 +1517,19 @@ impl Peer {
 
     fn exec_read(&mut self, req: &RaftCmdRequest) -> Result<RaftCmdResponse> {
         try!(check_epoch(self.region(), req));
-        let snap = Snapshot::new(self.engine.clone());
+        let mut snap = None;
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
 
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => try!(apply::do_get(&self.tag, self.region(), &snap, req)),
+                CmdType::Get => {
+                    if snap.is_none() {
+                        snap = Some(Snapshot::new(self.engine.clone()));
+                    }
+                    try!(apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req))
+                }
                 CmdType::Snap => try!(apply::do_snap(self.region().to_owned())),
                 CmdType::Prewrite => unreachable!(),
                 CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),

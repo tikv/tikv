@@ -22,7 +22,7 @@ use super::node::new_node_cluster;
 use super::transport_simulate::*;
 use super::server::new_server_cluster;
 use super::util::*;
-use tikv::raftstore::store::{keys, Peekable, Iterable};
+use tikv::raftstore::store::{keys, Peekable, Iterable, Mutable};
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = cluster.pd_client.clone();
@@ -231,4 +231,34 @@ fn test_server_readd_peer() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_readd_peer(&mut cluster);
+}
+
+// Simulate a case that tikv exit before a removed peer clean up its stale meta.
+#[test]
+fn test_server_stale_meta() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.disable_default_rule();
+
+    cluster.run();
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    pd_client.must_remove_peer(1, new_peer(3, 3));
+    pd_client.must_add_peer(1, new_peer(3, 4));
+    cluster.shutdown();
+
+    let engine_3 = cluster.get_engine(3);
+    let mut state: RegionLocalState =
+        engine_3.get_msg(&keys::region_state_key(1)).unwrap().unwrap();
+    state.set_state(PeerState::Tombstone);
+    engine_3.put_msg(&keys::region_state_key(1), &state).unwrap();
+    cluster.clear_send_filters();
+
+    // avoid TIMEWAIT
+    sleep_ms(500);
+    cluster.start();
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&engine_3, b"k1", b"v1");
 }

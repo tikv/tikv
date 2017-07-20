@@ -18,10 +18,10 @@ use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration as ChronoDuration, TimeZone};
 
-use util::codec::mysql::{self, types, parse_frac, check_fsp};
-use util::codec::mysql::Decimal;
-use util::codec::{Result, TEN_POW};
+use coprocessor::codec::mysql::{self, types, parse_frac, check_fsp};
+use coprocessor::codec::mysql::Decimal;
 use super::duration::Duration;
+use super::super::{Result, TEN_POW};
 
 const ZERO_DATETIME_STR: &'static str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &'static str = "0000-00-00";
@@ -366,7 +366,7 @@ mod test {
 
     use chrono::{FixedOffset, Duration};
 
-    use util::codec::mysql::{MAX_FSP, UN_SPECIFIED_FSP, types};
+    use coprocessor::codec::mysql::{MAX_FSP, UN_SPECIFIED_FSP, types};
 
     const MIN_OFFSET: i32 = -60 * 24 + 1;
     const MAX_OFFSET: i32 = 60 * 24;

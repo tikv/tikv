@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use util::codec::Error;
 use serde::ser::{Serialize, Serializer, SerializeTuple, SerializeMap};
 use serde::de::{self, Deserialize, Deserializer, Visitor, SeqAccess, MapAccess};
 use serde_json;
@@ -20,9 +19,8 @@ use std::fmt;
 use std::{str, f64};
 use std::str::FromStr;
 
+use coprocessor::codec::Error;
 use super::Json;
-
-const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
 impl Json {
     pub fn to_string(&self) -> String {
@@ -64,6 +62,7 @@ impl Serialize for Json {
             }
             Json::Double(d) => serializer.serialize_f64(d),
             Json::I64(d) => serializer.serialize_i64(d),
+            Json::U64(d) => serializer.serialize_u64(d),
         }
     }
 }
@@ -96,7 +95,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
     fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
         where E: de::Error
     {
-        self.visit_i64(v as i64)
+        Ok(Json::U64(v))
     }
 
     fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
@@ -158,6 +157,7 @@ mod test {
         let legal_cases = vec!{
             (r#"{"key":"value"}"#),
             (r#"["d1","d2"]"#),
+            (r#"-3"#),
             (r#"3"#),
             (r#"3.0"#),
             (r#"null"#),

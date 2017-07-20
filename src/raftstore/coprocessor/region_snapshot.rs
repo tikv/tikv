@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::u64;
 use std::sync::Arc;
-use rocksdb::{DB, SeekKey, DBVector, DBIterator};
+use rocksdb::{DB, Range, SeekKey, DBVector, DBIterator};
 use kvproto::metapb::Region;
+use util::properties::{UserProperties, GetPropertiesOptions};
 
 use raftstore::store::engine::{SyncSnapshot, Snapshot, Peekable, Iterable, IterOption};
 use raftstore::store::{keys, util, PeerStorage};
-use raftstore::Result;
+use raftstore::{Error, Result};
 
 
 /// Snapshot of a region.
@@ -105,6 +107,37 @@ impl RegionSnapshot {
         }
 
         Ok(())
+    }
+
+    pub fn get_properties_cf(&self,
+                             cf: &str,
+                             opts: &GetPropertiesOptions)
+                             -> Result<UserProperties> {
+        let db = self.snap.get_db();
+        let cf = try!(db.cf_handle(cf)
+            .ok_or_else(|| Error::RocksDb(format!("cf {} not found.", cf))));
+
+        let start = keys::enc_start_key(self.get_region());
+        let end = keys::enc_end_key(self.get_region());
+        let range = Range::new(&start, &end);
+        let collection = try!(db.get_properties_of_tables_in_range(cf, &[range]));
+        if collection.is_empty() {
+            return Err(Error::RocksDb("no user properties".to_owned()));
+        }
+
+        let max_ts = opts.max_ts.unwrap_or(u64::MAX);
+
+        // Aggregates properties from multiple tables.
+        let mut res = UserProperties::new();
+        for (_, v) in &*collection {
+            let props = v.user_collected_properties();
+            let other = try!(UserProperties::decode(props));
+            if other.min_ts > max_ts {
+                continue;
+            }
+            res.add(&other);
+        }
+        Ok(res)
     }
 
     pub fn get_start_key(&self) -> &[u8] {
@@ -291,7 +324,7 @@ mod tests {
     use raftstore::store::engine::*;
     use raftstore::store::keys::*;
     use raftstore::store::{PeerStorage, CacheQueryStats};
-    use storage::{Cursor, Key, ALL_CFS, ScanMode, Statistics};
+    use storage::{Cursor, Key, ALL_CFS, ScanMode, CFStatistics};
     use util::{worker, rocksdb, escape};
 
     use super::*;
@@ -494,7 +527,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engine.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut statistics = Statistics::default();
+        let mut statistics = CFStatistics::default();
         let mut iter = Cursor::new(snap.iter(IterOption::default()), ScanMode::Mixed);
         assert!(!iter.reverse_seek(&Key::from_encoded(b"a2".to_vec()), &mut statistics).unwrap());
         assert!(iter.reverse_seek(&Key::from_encoded(b"a7".to_vec()), &mut statistics).unwrap());
