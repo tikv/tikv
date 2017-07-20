@@ -301,6 +301,7 @@ impl<'a> MvccTxn<'a> {
 
 #[cfg(test)]
 mod tests {
+    use tempdir::TempDir;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use super::MvccTxn;
     use super::super::MvccReader;
@@ -1100,5 +1101,68 @@ mod tests {
                                          IsolationLevel::SI);
         assert_eq!(reader.scan_keys(start.map(make_key), limit).unwrap(),
                    expect);
+    }
+
+    #[test]
+    fn test_scan_values_in_default() {
+        let path = TempDir::new("_test_scan_values_in_default").expect("");
+        let path = path.path().to_str().unwrap();
+        let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
+
+        must_prewrite_put(engine.as_ref(), &[2], &gen_value(b'v', SHORT_VALUE_MAX_LEN + 1), &[2], 3);
+        must_commit(engine.as_ref(), &[2], 3, 3);
+
+        must_prewrite_put(engine.as_ref(), &[3], &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1), &[3], 3);
+        must_commit(engine.as_ref(), &[3], 3, 4);
+
+        must_prewrite_put(engine.as_ref(), &[3], &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1), &[3], 5);
+        must_commit(engine.as_ref(), &[3], 5, 5);
+
+        must_prewrite_put(engine.as_ref(), &[6], &gen_value(b'x', SHORT_VALUE_MAX_LEN + 1), &[6], 3);
+        must_commit(engine.as_ref(), &[6], 3, 6);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut statistics = Statistics::default();
+        let mut reader = MvccReader::new(snapshot.as_ref(),
+                                         &mut statistics,
+                                         Some(ScanMode::Forward),
+                                         true,
+                                         None,
+                                         IsolationLevel::SI);
+
+        let v = reader.scan_values_in_default(&make_key(&[3])).unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[1], (3, gen_value(b'a', SHORT_VALUE_MAX_LEN + 1)));
+        assert_eq!(v[0], (5, gen_value(b'b', SHORT_VALUE_MAX_LEN + 1)));
+    }
+
+    #[test]
+    fn test_seek_ts() {
+        let path = TempDir::new("_test_seek_ts").expect("");
+        let path = path.path().to_str().unwrap();
+        let engine = engine::new_local_engine(path, ALL_CFS).unwrap();
+
+        must_prewrite_put(engine.as_ref(), &[2], &gen_value(b'v', 2), &[2], 3);
+        must_commit(engine.as_ref(), &[2], 3, 3);
+
+        must_prewrite_put(engine.as_ref(), &[3], &gen_value(b'a', SHORT_VALUE_MAX_LEN + 1), &[3], 4);
+        must_commit(engine.as_ref(), &[3], 4, 4);
+
+        must_prewrite_put(engine.as_ref(), &[5], &gen_value(b'b', SHORT_VALUE_MAX_LEN + 1), &[5], 2);
+        must_commit(engine.as_ref(), &[5], 2, 5);
+
+        must_prewrite_put(engine.as_ref(), &[6], &gen_value(b'x', 3), &[6], 3);
+        must_commit(engine.as_ref(), &[6], 3, 6);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut statistics = Statistics::default();
+        let mut reader = MvccReader::new(snapshot.as_ref(),
+                                         &mut statistics,
+                                         Some(ScanMode::Forward),
+                                         true,
+                                         None,
+                                         IsolationLevel::SI);
+
+        assert_eq!(reader.seek_ts(3).unwrap().unwrap(), make_key(&[2]));
     }
 }

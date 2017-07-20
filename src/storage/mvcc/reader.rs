@@ -475,7 +475,7 @@ impl<'a> MvccReader<'a> {
             if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {
                 v.push((try!(cur_key.decode_ts()), cursor.value().to_vec()));
             }
-            if cur_key_without_ts.encoded().as_slice() > key.encoded().as_slice() {
+            if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
                 break;
             }
             ok = cursor.next(&mut self.statistics.data);
