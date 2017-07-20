@@ -707,21 +707,21 @@ pub fn build_plain_cf_file<E: BytesEncoder>(encoder: &mut E,
                       end_key,
                       false,
                       &mut |key, value| {
-                          cf_key_count += 1;
-                          cf_size += key.len() + value.len();
-                          try!(encoder.encode_compact_bytes(key));
-                          try!(encoder.encode_compact_bytes(value));
-                          Ok(true)
-                      }));
+        cf_key_count += 1;
+        cf_size += key.len() + value.len();
+        try!(encoder.encode_compact_bytes(key));
+        try!(encoder.encode_compact_bytes(value));
+        Ok(true)
+    }));
     // use an empty byte array to indicate that cf reaches an end.
     box_try!(encoder.encode_compact_bytes(b""));
     Ok((cf_key_count, cf_size))
 }
 
 fn apply_plain_cf_file<D: CompactBytesDecoder>(decoder: &mut D,
-                                                   options: &ApplyOptions,
-                                                   handle: &CFHandle)
-                                                   -> Result<()> {
+                                               options: &ApplyOptions,
+                                               handle: &CFHandle)
+                                               -> Result<()> {
     let mut wb = WriteBatch::new();
     let mut batch_size = 0;
     loop {
@@ -1147,10 +1147,10 @@ impl SnapManager {
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let core = self.core.rl();
-        let s = Snap::new_for_applying(&core.base,
-                                       key,
-                                       core.snap_size.clone(),
-                                       Box::new(self.clone()))?;
+        let s = try!(Snap::new_for_applying(&core.base,
+                                            key,
+                                            core.snap_size.clone(),
+                                            Box::new(self.clone())));
         if !s.exists() {
             return Err(RaftStoreError::Other(From::from("snapshot of {:?} not exists."
                 .to_string())));
