@@ -981,6 +981,16 @@ pub fn handle_truncate_as_error(ctx: &EvalContext) -> bool {
     !ctx.ignore_truncate && !ctx.truncate_as_warning
 }
 
+// Produces a new f64 according to `flen` and `decimal`.
+pub fn produce_float_with_specified_tp(f: f64, tp: &FieldType, ctx: &EvalContext) -> Result<f64> {
+    // For float and following double type, we will only truncate it for float(M, D) format.
+    // If no D is set, we will handle it like origin float whether M is set or not.
+    let (flen, decimal) = (tp.get_flen(), tp.get_decimal());
+    if flen != UNSPECIFIED_LENGTH && decimal != UNSPECIFIED_LENGTH {
+
+    }
+}
+
 // Produces a new decimal accroding to `flen` and `decimal`.
 pub fn produce_dec_with_specified_tp(dec: Decimal,
                                      tp: &FieldType,

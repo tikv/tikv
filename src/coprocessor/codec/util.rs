@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::Result;
 
 // `round_float` rounds float value to the nearest integer value with float64 format,
 // like MySQL Round function.
@@ -20,4 +21,28 @@
 // e.g, 1.5 -> 2, -1.5 -> -2.
 pub fn round_float(f: f64) -> f64 {
     f.round()
+}
+
+fn get_max_float(flen: i32, decimal: i32) -> f64 {
+    let int_part_len = flen - decimal;
+    let mut f = 10.pow(int_part_len);
+    f -= 10.pow(-decimal);
+    f
+}
+
+// Tries to truncate f.
+// If the result exceeds the max/min float that flen/decimal allowed, returns the
+// max/min float allowed.
+pub fn truncate_float(f: f64, flen: i32, decimal: i32) -> Result<f64> {
+    if f.is_nan() {
+        // nan returns 0
+        return Err(box_err!("{} value is out of range in FLOAT", f));
+    }
+
+    let max_float = get_max_float(flen, decimal);
+    // TODO add impl
+
+    if !f.is_infinite() {
+        f =
+    }
 }

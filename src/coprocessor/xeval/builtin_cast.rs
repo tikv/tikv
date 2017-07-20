@@ -245,6 +245,13 @@ impl Evaluator {
     }
 
     pub fn cast_string_as_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let datum = try!(self.eval(ctx, child));
+        if let Datum::Bytes(_) = datum {
+            let s = try!(datum.into_string());
+            let f = try!(convert::bytes_to_f64(ctx, s.as_bytes()));
+            convert::produce_float_with_specified_tp()
+        }
         // TODO: add impl
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
