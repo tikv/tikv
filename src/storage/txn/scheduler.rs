@@ -295,10 +295,10 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
         let write = &writes[writes.len() - 1].1;
         if let Some(v) = write.short_value.clone() {
             values.push((write.start_ts, true, v));
-            continue;
         }
-        let v = try!(reader.load_data(key, write.start_ts));
-        values.push((write.start_ts, false, v))
+    }
+    for (ts, v) in try!(reader.scan_values_in_default(key)) {
+        values.push((ts, false, v));
     }
     Ok((lock, writes, values))
 }
