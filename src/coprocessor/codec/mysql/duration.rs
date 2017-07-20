@@ -116,10 +116,10 @@ impl Duration {
         })
     }
 
-    pub fn round_frac(&self, fsp: i8) -> Result<Duration> {
+    pub fn round_frac(self, fsp: i8) -> Result<Duration> {
         let fsp = try!(check_fsp(fsp));
         if self.fsp == fsp {
-            return Ok(self.clone());
+            return Ok(self);
         }
         let mut sec = self.dur.as_secs();
         let mut nanos = round_frac(self.dur.subsec_nanos(), fsp as i8);
@@ -131,9 +131,8 @@ impl Duration {
         Duration::new(d, self.neg, fsp as i8)
     }
 
-    pub fn to_time(&self, tz: FixedOffset, tp: u8, fsp: i8) -> Result<Time> {
+    pub fn into_time(self, tz: FixedOffset, tp: u8) -> Result<Time> {
         let date = Local::today();
-        let dur = try!(self.round_frac(fsp));
         let time = try!(ymd_hms_nanos(&tz,
                                       date.year(),
                                       date.month(),
@@ -141,8 +140,10 @@ impl Duration {
                                       0,
                                       0,
                                       0,
-                                      dur.to_nanos()));
-        Time::new(time, tp, fsp)
+                                      self.to_nanos()));
+        let t = try!(Time::new(time, tp, self.fsp as i8));
+        try!(t.check());
+        Ok(t)
     }
 
     // `parse` parses the time form a formatted string with a fractional seconds part,

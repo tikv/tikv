@@ -18,7 +18,6 @@ use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED};
 
 pub const TYPE_DURATION: &'static str = "duration";
 pub const TYPE_TIME: &'static str = "time";
-const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
 
 fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
     Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
@@ -188,7 +187,7 @@ impl Evaluator {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
         if let Datum::Time(_) = d {
-            return Ok(d)
+            return Ok(d);
         }
         invalid_type_error(&d, TYPE_TIME)
     }
@@ -250,9 +249,8 @@ impl Evaluator {
         let d = try!(self.eval(ctx, child));
         if let Datum::Dur(d) = d {
             let tp = expr.get_field_type();
-            return Ok(Datum::Time(
-                try!(d.to_time(ctx.tz, tp.get_tp() as u8, tp.get_decimal() as i8))
-            ));
+            let t = try!(d.into_time(ctx.tz, tp.get_tp() as u8));
+            return Ok(Datum::Time(try!(t.round_frac(tp.get_decimal() as i8))));
         }
         invalid_type_error(&d, TYPE_DURATION)
     }
@@ -273,7 +271,7 @@ mod test {
     use chrono::{Datelike, Local, FixedOffset};
     use tipb::expression::{ExprType, ScalarFuncSig, FieldType, DataType};
     use coprocessor::codec::datum::Datum;
-    use coprocessor::codec::mysql::{Time, Duration, Decimal};
+    use coprocessor::codec::mysql::{Time, Duration};
     use coprocessor::codec::mysql::time::ymd_hms_nanos;
     use coprocessor::codec::mysql::types;
     use super::super::Evaluator;
@@ -304,7 +302,7 @@ mod test {
             }
         };
     }
-    
+
     // first, 31d, 11h, 30m, 45s
     // second, 1d, 10h, 7m, 17s
     test_eval!(test_cast_duration_as_int,

@@ -16,11 +16,13 @@ use std::str;
 use std::fmt::{self, Formatter, Display};
 use std::time::Duration as StdDuration;
 
-use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration as ChronoDuration, TimeZone};
+use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration as ChronoDuration, TimeZone,
+             NaiveDateTime};
 
 use coprocessor::codec::mysql::{self, types, parse_frac, check_fsp};
 use coprocessor::codec::mysql::Decimal;
 use super::duration::Duration;
+use super::round_frac;
 use super::super::{Result, TEN_POW};
 
 const ZERO_DATETIME_STR: &'static str = "0000-00-00 00:00:00";
@@ -28,6 +30,13 @@ const ZERO_DATE_STR: &'static str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
 /// `-0001-11-30 00:00:00 +0000 UTC`, whose timestamp is -62169984000.
 const ZERO_TIMESTAMP: i64 = -62169984000;
+
+// maxDatetime is the maximum for mysql datetime type. 9999/12/31 23:59:59
+const MAX_DATETIME: i64 = 253402300799;
+// maxTimestamp is the maximum for mysql timestamp type. 2038/1/19 03:14:07
+const MAX_TIMESTAMP: i64 = 2147483647;
+// minTimestamp is the minimum for mysql timestamp type. 1970/1/1 00:00:01
+const MIN_TIMESTAMP: i64 = 1;
 
 #[inline]
 fn zero_time(tz: &FixedOffset) -> DateTime<FixedOffset> {
@@ -142,11 +151,38 @@ impl Time {
         }
     }
 
+    pub fn round_frac(self, fsp: i8) -> Result<Time> {
+        if self.tp == types::DATE {
+            return Ok(self);
+        }
+        let fsp = try!(check_fsp(fsp));
+        let sec = self.time.timestamp();
+        let nanos = round_frac(self.time.timestamp_subsec_nanos(), fsp as i8);
+        let t = DateTime::from_utc(NaiveDateTime::from_timestamp(sec, nanos),
+                                   self.time.timezone());
+        Time::new(t, self.tp, fsp as i8)
+    }
+
+    pub fn check(&self) -> Result<()> {
+        if self.tp == types::TIMESTAMP {
+            if !self.is_zero() &&
+               (self.time.timestamp() > MAX_TIMESTAMP || self.time.timestamp() < MIN_TIMESTAMP) {
+                return Err(box_err!("invalid timestamp type"));
+            }
+        } else if self.tp == types::DATETIME {
+            if self.time.timestamp() > MAX_DATETIME {
+                return Err(box_err!("invalid datetime type"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn to_dur(&self) -> Result<Duration> {
         if self.is_zero() {
             return Ok(Duration::zero());
         }
-        let d = StdDuration::new(self.time.timestamp() as u64, self.time.timestamp_subsec_nanos());
+        let d = StdDuration::new(self.time.timestamp() as u64,
+                                 self.time.timestamp_subsec_nanos());
         Duration::new(d, false, self.get_fsp() as i8)
     }
 
