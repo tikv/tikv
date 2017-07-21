@@ -1114,21 +1114,31 @@ impl Proposal {
     }
 }
 
-pub struct Destroy {
-    region_id: u64,
-}
-
-pub struct Proposals {
+pub struct RegionProposal {
     id: u64,
     region_id: u64,
     props: Vec<Proposal>,
+}
+
+impl RegionProposal {
+    pub fn new(id: u64, region_id: u64, props: Vec<Proposal>) -> RegionProposal {
+        RegionProposal {
+            id: id,
+            region_id: region_id,
+            props: props,
+        }
+    }
+}
+
+pub struct Destroy {
+    region_id: u64,
 }
 
 /// region related task.
 pub enum Task {
     Applies(Vec<Apply>),
     Registration(Registration),
-    Proposals(Proposals),
+    Proposals(Vec<RegionProposal>),
     Destroy(Destroy),
 }
 
@@ -1141,14 +1151,6 @@ impl Task {
         Task::Registration(Registration::new(peer))
     }
 
-    pub fn proposals(id: u64, region_id: u64, props: Vec<Proposal>) -> Task {
-        Task::Proposals(Proposals {
-            id: id,
-            region_id: region_id,
-            props: props,
-        })
-    }
-
     pub fn destroy(region_id: u64) -> Task {
         Task::Destroy(Destroy { region_id: region_id })
     }
@@ -1158,7 +1160,7 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Task::Applies(ref a) => write!(f, "async applys count {}", a.len()),
-            Task::Proposals(ref p) => write!(f, "[region {}] proposals", p.region_id),
+            Task::Proposals(ref p) => write!(f, "region proposal count {}", p.len()),
             Task::Registration(ref r) => {
                 write!(f, "[region {}] Reg {:?}", r.region.get_id(), r.apply_state)
             }
@@ -1270,34 +1272,38 @@ impl Runner {
         }
     }
 
-    fn handle_proposals(&mut self, proposals: Proposals) {
-        APPLY_PROPOSAL.observe(proposals.props.len() as f64);
-        let delegate = match self.delegates.get_mut(&proposals.region_id) {
-            Some(d) => d,
-            None => {
-                for p in proposals.props {
-                    let cmd = PendingCmd::new(p.index, p.term, p.cb);
-                    notify_region_removed(proposals.region_id, proposals.id, cmd);
+    fn handle_proposals(&mut self, proposals: Vec<RegionProposal>) {
+        let mut propose_num = 0;
+        for region_proposal in proposals {
+            propose_num += region_proposal.props.len();
+            let delegate = match self.delegates.get_mut(&region_proposal.region_id) {
+                Some(d) => d,
+                None => {
+                    for p in region_proposal.props {
+                        let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                        notify_region_removed(region_proposal.region_id, region_proposal.id, cmd);
+                    }
+                    continue;
                 }
-                return;
-            }
-        };
-        assert_eq!(delegate.id, proposals.id);
-        for p in proposals.props {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
-            if p.is_conf_change {
-                if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
-                    // if it loses leadership before conf change is replicated, there may be
-                    // a stale pending conf change before next conf change is applied. If it
-                    // becomes leader again with the stale pending conf change, will enter
-                    // this block, so we notify leadership may have been changed.
-                    notify_stale_command(&delegate.tag, delegate.term, cmd);
+            };
+            assert_eq!(delegate.id, region_proposal.id);
+            for p in region_proposal.props {
+                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                if p.is_conf_change {
+                    if let Some(cmd) = delegate.pending_cmds.take_conf_change() {
+                        // if it loses leadership before conf change is replicated, there may be
+                        // a stale pending conf change before next conf change is applied. If it
+                        // becomes leader again with the stale pending conf change, will enter
+                        // this block, so we notify leadership may have been changed.
+                        notify_stale_command(&delegate.tag, delegate.term, cmd);
+                    }
+                    delegate.pending_cmds.set_conf_change(cmd);
+                } else {
+                    delegate.pending_cmds.append_normal(cmd);
                 }
-                delegate.pending_cmds.set_conf_change(cmd);
-            } else {
-                delegate.pending_cmds.append_normal(cmd);
             }
         }
+        APPLY_PROPOSAL.observe(propose_num as f64);
     }
 
     fn handle_registration(&mut self, s: Registration) {
@@ -1444,20 +1450,20 @@ mod tests {
                               box move |resp| {
                                   resp_tx.send(resp).unwrap();
                               });
-        runner.run(Task::proposals(1, 1, vec![p]));
+        let region_proposal = RegionProposal::new(1, 1, vec![p]);
+        runner.run(Task::Proposals(vec![region_proposal]));
         // unregistered region should be ignored and notify failed.
         assert!(rx.try_recv().is_err());
         let resp = resp_rx.try_recv().unwrap();
         assert!(resp.get_header().get_error().has_region_not_found());
 
         let (cc_tx, cc_rx) = mpsc::channel();
-        let t = Task::proposals(1,
-                                2,
-                                vec![
+        let pops = vec![
             Proposal::new(false, 2, 0, box |_| {}),
             Proposal::new(true, 3, 0, box move |resp| { cc_tx.send(resp).unwrap(); }),
-        ]);
-        runner.run(t);
+        ];
+        let region_proposal = RegionProposal::new(1, 2, pops);
+        runner.run(Task::Proposals(vec![region_proposal]));
         assert!(rx.try_recv().is_err());
         {
             let normals = &runner.delegates[&2].pending_cmds.normals;
@@ -1470,7 +1476,8 @@ mod tests {
         }
 
         let p = Proposal::new(true, 4, 0, box move |_| {});
-        runner.run(Task::proposals(1, 2, vec![p]));
+        let region_proposal = RegionProposal::new(1, 2, vec![p]);
+        runner.run(Task::Proposals(vec![region_proposal]));
         assert!(rx.try_recv().is_err());
         {
             let cc = &runner.delegates[&2].pending_cmds.conf_change;
