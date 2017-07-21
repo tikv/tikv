@@ -44,13 +44,13 @@ quick_error! {
 
 pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ConfigError> {
     match &*tp.trim().to_lowercase() {
-        "no" => Ok(DBCompressionType::DBNo),
-        "snappy" => Ok(DBCompressionType::DBSnappy),
-        "zlib" => Ok(DBCompressionType::DBZlib),
-        "bzip2" => Ok(DBCompressionType::DBBz2),
-        "lz4" => Ok(DBCompressionType::DBLz4),
-        "lz4hc" => Ok(DBCompressionType::DBLz4hc),
-        "zstd" => Ok(DBCompressionType::DBZstd),
+        "no" => Ok(DBCompressionType::No),
+        "snappy" => Ok(DBCompressionType::Snappy),
+        "zlib" => Ok(DBCompressionType::Zlib),
+        "bzip2" => Ok(DBCompressionType::Bz2),
+        "lz4" => Ok(DBCompressionType::Lz4),
+        "lz4hc" => Ok(DBCompressionType::Lz4hc),
+        "zstd" => Ok(DBCompressionType::Zstd),
         _ => Err(ConfigError::Value(format!("invalid compression type {:?}", tp))),
     }
 }
