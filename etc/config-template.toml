@@ -324,6 +324,7 @@ stats-dump-period-sec = 600
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "32MB"
+# compaction-pri = 0
 
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"
@@ -331,6 +332,7 @@ stats-dump-period-sec = 600
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# compaction-pri = 0
 
 [rocksdb.lockcf]
 # compression-per-level = "no:no:no:no:no:no:no"
@@ -345,6 +347,7 @@ stats-dump-period-sec = 600
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# compaction-pri = 0
 
 [storage]
 # notify capacity of scheduler's channel
