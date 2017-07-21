@@ -747,8 +747,6 @@ fn apply_plain_cf_file<D: CompactBytesDecoder>(decoder: &mut D,
     Ok(())
 }
 
-
-
 impl Snapshot for Snap {
     fn build(&mut self,
              snap: &DbSnapshot,
@@ -870,8 +868,9 @@ impl Snapshot for Snap {
                 let mut file = box_try!(File::open(&cf_file.path));
                 try!(apply_plain_cf_file(&mut file, &options, cf_handle));
             } else {
-                // we move instead of copy file when ingest_external_file_cf
-                // so method delete will not sub size_track
+                // We move instead of copy file when ingest_external_file_cf
+                // so method delete will not sub size_track.
+                // So we check and sub size_track here, before it's moved.
                 if file_exists(&cf_file.path) {
                     let mut size_track = self.size_track.wl();
                     *size_track = size_track.saturating_sub(cf_file.size);
