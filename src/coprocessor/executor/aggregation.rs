@@ -21,11 +21,11 @@ use util::collections::{HashMap, HashMapEntry as Entry};
 use super::super::codec::table::RowColsDict;
 use super::super::codec::datum::{self, Datum, DatumEncoder, approximate_size};
 use super::super::xeval::{Evaluator, EvalContext};
-use super::super::endpoint::{inflate_with_col, SINGLE_GROUP};
+use super::super::endpoint::SINGLE_GROUP;
 use super::super::aggregate::{self, AggrFunc};
 use super::super::metrics::*;
 use super::super::Result;
-use super::{Executor, Row, ExprColumnRefVisitor};
+use super::{Executor, Row, ExprColumnRefVisitor, inflate_with_col_for_dag};
 
 pub struct AggregationExecutor<'a> {
     group_by: Vec<Expr>,
@@ -35,27 +35,23 @@ pub struct AggregationExecutor<'a> {
     cursor: usize,
     executed: bool,
     ctx: Rc<EvalContext>,
-    cols: Vec<ColumnInfo>,
+    cols: Rc<Vec<ColumnInfo>>,
+    related_cols: Vec<usize>, // offset of related columns
     src: Box<Executor + 'a>,
 }
 
 impl<'a> AggregationExecutor<'a> {
     pub fn new(mut meta: Aggregation,
                ctx: Rc<EvalContext>,
-               columns: &[ColumnInfo],
+               columns: Rc<Vec<ColumnInfo>>,
                src: Box<Executor + 'a>)
                -> Result<AggregationExecutor<'a>> {
         // collect all cols used in aggregation
-        let mut visitor = ExprColumnRefVisitor::new();
+        let mut visitor = ExprColumnRefVisitor::new(columns.len());
         let group_by = meta.take_group_by().into_vec();
         try!(visitor.batch_visit(&group_by));
         let aggr_func = meta.take_agg_func().into_vec();
         try!(visitor.batch_visit(&aggr_func));
-        // filter from all cols
-        let cols = columns.iter()
-            .filter(|col| visitor.col_ids.contains(&col.get_column_id()))
-            .cloned()
-            .collect();
         COPR_EXECUTOR_COUNT.with_label_values(&["aggregation"]).inc();
         Ok(AggregationExecutor {
             group_by: group_by,
@@ -65,7 +61,8 @@ impl<'a> AggregationExecutor<'a> {
             cursor: 0,
             executed: false,
             ctx: ctx,
-            cols: cols,
+            cols: columns,
+            related_cols: visitor.cols(),
             src: src,
         })
     }
@@ -87,7 +84,13 @@ impl<'a> AggregationExecutor<'a> {
     fn aggregate(&mut self) -> Result<()> {
         while let Some(row) = try!(self.src.next()) {
             let mut eval = Evaluator::default();
-            try!(inflate_with_col(&mut eval, &self.ctx, &row.data, &self.cols, row.handle));
+            error!("col_len:{}", self.cols.len());
+            try!(inflate_with_col_for_dag(&mut eval,
+                                          &self.ctx,
+                                          &row.data,
+                                          self.cols.clone(),
+                                          &self.related_cols,
+                                          row.handle));
             let group_key = Rc::new(try!(self.get_group_key(&mut eval)));
             match self.group_key_aggrs.entry(group_key.clone()) {
                 Entry::Vacant(e) => {
@@ -226,16 +229,16 @@ mod test {
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
-        let group_by_cols = vec![2, 3];
+        let group_by_cols = vec![1, 2];
         let group_by = build_group_by(&group_by_cols);
         aggregation.set_group_by(RepeatedField::from_vec(group_by));
-        let aggr_funcs = vec![(ExprType::Avg, 1), (ExprType::Count, 3)];
+        let aggr_funcs = vec![(ExprType::Avg, 0), (ExprType::Count, 2)];
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init Aggregation Executor
         let mut aggr_ect = AggregationExecutor::new(aggregation,
                                                     Rc::new(EvalContext::default()),
-                                                    &cis,
+                                                    Rc::new(cis),
                                                     Box::new(ts_ect))
             .unwrap();
         let expect_row_cnt = 4;
