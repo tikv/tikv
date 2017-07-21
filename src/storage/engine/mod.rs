@@ -64,13 +64,11 @@ pub enum Modify {
 pub trait Engine: Send + Debug {
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Box<Snapshot>>) -> Result<()>;
-
+    // batch and on_finish should be called in the same thread and in order.
     fn async_snapshots_batch(&self,
-                             _: Vec<(Context, Callback<Box<Snapshot>>)>,
-                             _: Callback<()>)
-                             -> Result<()> {
-        unimplemented!()
-    }
+                             batch: Vec<(Context, Callback<Box<Snapshot>>)>,
+                             on_finish: Callback<()>)
+                             -> Result<()>;
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);

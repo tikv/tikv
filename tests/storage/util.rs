@@ -116,6 +116,24 @@ impl Engine for BlockEngine {
         })
     }
 
+    fn async_snapshots_batch(&self,
+                             batch: Vec<(Context, Callback<Box<Snapshot>>)>,
+                             on_finish: Callback<()>)
+                             -> Result<()> {
+        let block_snapshot = self.block_snapshot.clone();
+        let sender = self.sender.clone();
+        self.engine.async_snapshots_batch(batch,
+                                          box move |(ctx, res)| {
+            thread::spawn(move || {
+                try_notify(block_snapshot.clone(), sender);
+                while block_snapshot.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                on_finish((ctx, res));
+            });
+        })
+    }
+
     fn clone(&self) -> Box<Engine + 'static> {
         box BlockEngine {
             engine: self.engine.clone(),
