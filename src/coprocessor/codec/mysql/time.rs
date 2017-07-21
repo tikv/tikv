@@ -164,25 +164,56 @@ impl Time {
     }
 
     pub fn check(&self) -> Result<()> {
-        if self.tp == types::TIMESTAMP {
-            if !self.is_zero() &&
-               (self.time.timestamp() > MAX_TIMESTAMP || self.time.timestamp() < MIN_TIMESTAMP) {
-                return Err(box_err!("invalid timestamp type"));
+        if self.is_zero() {
+            return Ok(());
+        }
+
+        match self.tp {
+            types::TIMESTAMP => {
+                if self.time.timestamp() > MAX_TIMESTAMP || self.time.timestamp() < MIN_TIMESTAMP {
+                    return Err(box_err!("invalid time format"));
+                }
             }
-        } else if self.tp == types::DATETIME {
-            if self.time.timestamp() > MAX_DATETIME {
-                return Err(box_err!("invalid datetime type"));
+            types::DATETIME | types::DATE => {
+                if self.time.timestamp() > MAX_DATETIME {
+                    return Err(box_err!("invalid time format"));
+                }
             }
+            _ => return Err(box_err!("invalid datetype for time type")),
         }
         Ok(())
     }
 
+    // converts time with type tp.
+    pub fn convert(self, tp: u8) -> Result<Time> {
+        if self.tp == tp {
+            return Ok(self);
+        }
+        if self.is_zero() {
+            return Time::new(self.time, tp, self.fsp as i8);
+        }
+
+        let t = try!(Time::new(self.time, tp, self.fsp as i8));
+        try!(t.check());
+
+        if tp == types::DATE {
+            let t = try!(ymd_hms_nanos(&t.time.timezone(), t.time.year(), t.time.month(), t.time.day(), 0, 0, 0, 0));
+            return Time::new(t, tp, self.fsp as i8);
+        }
+        Ok(t)
+    }
+
+    // ConvertToDuration converts mysql datetime, timestamp and date to mysql time type.
+    // e.g,
+    // 2012-12-12T10:10:10 -> 10:10:10
+    // 2012-12-12 -> 0
     pub fn to_dur(&self) -> Result<Duration> {
         if self.is_zero() {
             return Ok(Duration::zero());
         }
-        let d = StdDuration::new(self.time.timestamp() as u64,
-                                 self.time.timestamp_subsec_nanos());
+        let time = self.time.time();
+        let d = StdDuration::new((time.hour() * 3600 + time.minute() * 60 + time.second()) as u64,
+                                 time.nanosecond());
         Duration::new(d, false, self.get_fsp() as i8)
     }
 

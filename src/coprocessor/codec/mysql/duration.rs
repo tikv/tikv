@@ -22,7 +22,7 @@ use chrono::{Datelike, Local, FixedOffset};
 
 use super::super::Result;
 use super::time::{ymd_hms_nanos, Time};
-use super::{Decimal, parse_frac, check_fsp, round_frac};
+use super::{Decimal, parse_frac, check_fsp, round_frac, types};
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 const NANO_WIDTH: u32 = 9;
@@ -141,9 +141,8 @@ impl Duration {
                                       0,
                                       0,
                                       self.to_nanos()));
-        let t = try!(Time::new(time, tp, self.fsp as i8));
-        try!(t.check());
-        Ok(t)
+        let t = try!(Time::new(time, types::DATETIME, self.fsp as i8));
+        t.convert(tp)
     }
 
     // `parse` parses the time form a formatted string with a fractional seconds part,

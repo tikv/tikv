@@ -147,9 +147,9 @@ impl Evaluator {
     pub fn cast_time_as_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
-        if let Datum::Time(_) = d {
-            let i = try!(try!(d.into_dec()).as_i64().into_result());
-            return Ok(Datum::I64(i));
+        if let Datum::Time(t) = d {
+            let d = Datum::Time(try!(t.round_frac(expr.get_field_type().get_decimal() as i8)));
+            return Ok(Datum::I64(try!(try!(d.into_dec()).as_i64().into_result())));
         }
         invalid_type_error(&d, TYPE_TIME)
     }
@@ -167,7 +167,9 @@ impl Evaluator {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
         if let Datum::Time(_) = d {
-            let s = try!(d.into_string());
+            let s = try!(produce_str_with_specified_tp(try!(d.into_string()),
+                                                       expr.get_field_type(),
+                                                       ctx));
             return Ok(Datum::Bytes(s.into_bytes()));
         }
         invalid_type_error(&d, TYPE_TIME)
@@ -177,7 +179,8 @@ impl Evaluator {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
         if let Datum::Time(_) = d {
-            let dec = try!(d.into_dec());
+            let dec =
+                try!(produce_dec_with_specified_tp(try!(d.into_dec()), expr.get_field_type(), ctx));
             return Ok(Datum::Dec(dec));
         }
         invalid_type_error(&d, TYPE_TIME)
@@ -186,8 +189,10 @@ impl Evaluator {
     pub fn cast_time_as_time(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
-        if let Datum::Time(_) = d {
-            return Ok(d);
+        if let Datum::Time(t) = d {
+            let tp = expr.get_field_type();
+            let t = try!(t.round_frac(tp.get_decimal() as i8));
+            return Ok(Datum::Time(try!(t.convert(tp.get_tp() as u8))));
         }
         invalid_type_error(&d, TYPE_TIME)
     }
@@ -196,7 +201,9 @@ impl Evaluator {
         let child = try!(self.get_one_child(expr));
         let d = try!(self.eval(ctx, child));
         if let Datum::Time(t) = d {
-            return Ok(Datum::Dur(try!(t.to_dur())));
+            let d = try!(t.to_dur());
+            let d = try!(d.round_frac(expr.get_field_type().get_decimal() as i8));
+            return Ok(Datum::Dur(d));
         }
         invalid_type_error(&d, TYPE_TIME)
     }
@@ -302,6 +309,18 @@ mod test {
             }
         };
     }
+
+    test_eval!(test_cast_time_as_int,
+               vec![(build_expr_with_sig(
+                    vec![Datum::Time(Duration::from_nanos(-2719845 * NANOS_PER_SEC, 6).unwrap())],
+                    ExprType::ScalarFunc,
+                    ScalarFuncSig::CastTimeAsInt, {
+                        let mut tp = FieldType::new();
+                        tp.set_decimal(5);
+                        tp
+                    }),
+                    Datum::I64(-7553045)),
+        ]);
 
     // first, 31d, 11h, 30m, 45s
     // second, 1d, 10h, 7m, 17s
