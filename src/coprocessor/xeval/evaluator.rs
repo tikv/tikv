@@ -25,7 +25,7 @@ use util::collections::{HashMap, HashMapEntry};
 use super::super::codec;
 use super::super::codec::datum::{Datum, DatumDecoder};
 use super::super::codec::mysql::{DecimalDecoder, MAX_FSP, Duration, Json, PathExpression,
-                                 ModifyType};
+                                 ModifyType, Time, types};
 use super::super::codec::mysql::json::{json_object, json_array};
 use super::{Result, Error};
 
@@ -125,6 +125,7 @@ impl Evaluator {
             ExprType::Float64 => self.eval_float(expr),
             ExprType::MysqlDuration => self.eval_duration(expr),
             ExprType::MysqlDecimal => self.eval_decimal(expr),
+            ExprType::MysqlTime => self.eval_time(ctx, expr),
             ExprType::In => self.eval_in(ctx, expr),
             ExprType::Plus => self.eval_arith(ctx, expr, Datum::checked_add),
             ExprType::Div => self.eval_arith(ctx, expr, Datum::checked_div),
@@ -165,6 +166,12 @@ impl Evaluator {
     fn eval_float(&self, expr: &Expr) -> Result<Datum> {
         let f = try!(expr.get_val().decode_f64());
         Ok(Datum::F64(f))
+    }
+
+    fn eval_time(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let n = try!(expr.get_val().decode_u64());
+        let t = try!(Time::from_packed_u64(n, types::DATETIME, MAX_FSP, &ctx.tz));
+        Ok(Datum::Time(t))
     }
 
     fn eval_duration(&self, expr: &Expr) -> Result<Datum> {
@@ -535,6 +542,12 @@ impl Evaluator {
 
     fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         match expr.get_sig() {
+            ScalarFuncSig::CastTimeAsInt => self.cast_time_as_int(ctx, expr),
+            ScalarFuncSig::CastTimeAsReal => self.cast_time_as_real(ctx, expr),
+            ScalarFuncSig::CastTimeAsString => self.cast_time_as_string(ctx, expr),
+            ScalarFuncSig::CastTimeAsDecimal => self.cast_time_as_decimal(ctx, expr),
+            ScalarFuncSig::CastTimeAsTime => self.cast_time_as_time(ctx, expr),
+            ScalarFuncSig::CastTimeAsDuration => self.cast_time_as_duration(ctx, expr),
             ScalarFuncSig::CastDurationAsInt => self.cast_duration_as_int(ctx, expr),
             ScalarFuncSig::CastDurationAsReal => self.cast_duration_as_real(ctx, expr),
             ScalarFuncSig::CastDurationAsString => self.cast_duration_as_string(ctx, expr),
@@ -667,6 +680,12 @@ pub mod test {
                 expr.set_tp(ExprType::MysqlDuration);
                 let mut buf = Vec::with_capacity(number::I64_SIZE);
                 buf.encode_i64(d.to_nanos()).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Time(t) => {
+                expr.set_tp(ExprType::MysqlTime);
+                let mut buf = Vec::with_capacity(number::U64_SIZE);
+                buf.encode_u64(t.to_packed_u64()).unwrap();
                 expr.set_val(buf);
             }
             Datum::Dec(d) => {

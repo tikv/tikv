@@ -310,17 +310,111 @@ mod test {
         };
     }
 
+    // 2017-07-20 10:37:01.999999 => 1500633421.999999
     test_eval!(test_cast_time_as_int,
                vec![(build_expr_with_sig(
-                    vec![Datum::Time(Duration::from_nanos(-2719845 * NANOS_PER_SEC, 6).unwrap())],
+                    vec![Datum::Time(
+                        Time::parse_utc_datetime("2017-07-20 10:37:01.955555", 6).unwrap()
+                    )],
                     ExprType::ScalarFunc,
                     ScalarFuncSig::CastTimeAsInt, {
+                        let mut tp = FieldType::new();
+                        tp.set_decimal(0);
+                        tp
+                    }),
+                    Datum::I64(20170720103702)),
+            ]);
+
+    test_eval!(test_cast_time_as_real,
+               vec![(build_expr_with_sig(
+                    vec![Datum::Time(
+                        Time::parse_utc_datetime("2017-07-20 10:37:01.555555", 6).unwrap()
+                    )], // 20170720103701.555
+                    ExprType::ScalarFunc,
+                    ScalarFuncSig::CastTimeAsReal, {
                         let mut tp = FieldType::new();
                         tp.set_decimal(5);
                         tp
                     }),
-                    Datum::I64(-7553045)),
-        ]);
+                    Datum::F64(20170720103701.55556)),
+            ]);
+
+    test_eval!(test_cast_time_as_string,
+               vec![(build_expr_with_sig(
+                    vec![Datum::Time(
+                        Time::parse_utc_datetime("2017-07-20 10:37:01.555555", 6).unwrap()
+                    )],
+                    ExprType::ScalarFunc,
+                    ScalarFuncSig::CastTimeAsString, {
+                        let mut tp = FieldType::new();
+                        tp.set_flen(30);
+                        tp
+                    }),
+                    Datum::Bytes(b"2017-07-20 10:37:01.555555".to_vec())),
+            ]);
+
+    test_eval!(test_cast_time_as_decimal,
+               vec![(build_expr_with_sig(
+                    vec![Datum::Time(
+                        Time::parse_utc_datetime("2017-07-20 10:37:01.555555", 6).unwrap()
+                    )],
+                    ExprType::ScalarFunc,
+                    ScalarFuncSig::CastTimeAsDecimal, {
+                        let mut tp = FieldType::new();
+                        tp.set_decimal(6);
+                        tp.set_flen(30);
+                        tp
+                    }),
+                    Datum::Dec("20170720103701.555555".parse().unwrap())),
+            ]);
+
+    test_eval!(test_cast_time_as_time,
+               vec![(build_expr_with_sig(
+                    vec![Datum::Time(
+                        Time::parse_utc_datetime("2017-07-20 10:37:01.555555", 6).unwrap()
+                    )],
+                    ExprType::ScalarFunc,
+                    ScalarFuncSig::CastTimeAsTime, {
+                        let mut tp = FieldType::new();
+                        tp.set_decimal(5);
+                        tp.set_tp(DataType::from_i32(types::DATE as i32).unwrap());
+                        tp
+                    }),
+                    Datum::Time({
+                        let t = Time::parse_utc_datetime("2017-07-20", 6).unwrap();
+                        t.convert(types::DATE).unwrap()
+                    })),
+                (build_expr_with_sig(
+                    vec![Datum::Time(
+                        Time::parse_utc_datetime("2017-07-20 10:37:01.555555", 6).unwrap()
+                    )],
+                    ExprType::ScalarFunc,
+                    ScalarFuncSig::CastTimeAsTime, {
+                        let mut tp = FieldType::new();
+                        tp.set_decimal(5);
+                        tp.set_tp(DataType::from_i32(types::DATETIME as i32).unwrap());
+                        tp
+                    }),
+                    Datum::Time(
+                        Time::parse_utc_datetime("2017-07-20 10:37:01.55556", 5).unwrap()
+                    )),
+            ]);
+
+    test_eval!(test_cast_time_as_duration,
+               vec![(build_expr_with_sig(
+                    vec![Datum::Time(
+                        Time::parse_utc_datetime("2017-07-20 10:37:01.555555", 6).unwrap()
+                    )],
+                    ExprType::ScalarFunc,
+                    ScalarFuncSig::CastTimeAsDuration, {
+                        let mut tp = FieldType::new();
+                        tp.set_decimal(5);
+                        tp
+                    }),
+                    Datum::Dur(
+                        Duration::from_nanos(38221 * NANOS_PER_SEC + 555_555_000, 5).unwrap()
+                    )),
+            ]);
 
     // first, 31d, 11h, 30m, 45s
     // second, 1d, 10h, 7m, 17s

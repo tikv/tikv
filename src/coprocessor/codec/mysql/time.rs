@@ -143,7 +143,7 @@ impl Time {
             let s = self.time.format("%Y%m%d%H%M%S");
             if self.fsp > 0 {
                 // Do we need to round the result?
-                let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
+                let nanos = self.time.nanosecond() as f64 / TEN_POW[9 - self.fsp as usize] as f64;
                 format!("{}.{1:02$}", s, nanos, self.fsp as usize)
             } else {
                 format!("{}", s)
@@ -197,7 +197,14 @@ impl Time {
         try!(t.check());
 
         if tp == types::DATE {
-            let t = try!(ymd_hms_nanos(&t.time.timezone(), t.time.year(), t.time.month(), t.time.day(), 0, 0, 0, 0));
+            let t = try!(ymd_hms_nanos(&t.time.timezone(),
+                                       t.time.year(),
+                                       t.time.month(),
+                                       t.time.day(),
+                                       0,
+                                       0,
+                                       0,
+                                       0));
             return Time::new(t, tp, self.fsp as i8);
         }
         Ok(t)
