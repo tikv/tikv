@@ -32,10 +32,10 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progr
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::Config;
-use raftstore::store::worker::{apply, PdTask, Proposal};
+use raftstore::store::worker::{apply, PdTask, Proposal, RegionProposal};
 use raftstore::store::worker::apply::ExecResult;
 
-use util::worker::{FutureWorker, Scheduler, Worker};
+use util::worker::{FutureWorker, Scheduler};
 use raftstore::store::worker::{ApplyTask, ApplyRes, Apply};
 use util::{clocktime, Either};
 use util::collections::{HashSet, FlatMap, FlatMapValues as Values};
@@ -642,14 +642,14 @@ impl Peer {
         self.get_store().applied_index_term == self.term()
     }
 
-    pub fn schedule_apply_proposals(&mut self, worker: &Worker<ApplyTask>) {
+    pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
         if self.apply_proposals.is_empty() {
-            return;
+            return None;
         }
 
         let proposals = mem::replace(&mut self.apply_proposals, vec![]);
-        let t = ApplyTask::proposals(self.peer_id(), self.region_id, proposals);
-        worker.schedule(t).unwrap();
+        let region_proposal = RegionProposal::new(self.peer_id(), self.region_id, proposals);
+        Some(region_proposal)
     }
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
