@@ -605,7 +605,7 @@ mod tests {
         let mut db_opt = Options::new();
         db_opt.set_target_file_size_base(1024 * 1024);
         db_opt.set_write_buffer_size(1024);
-        db_opt.compression(DBCompressionType::DBNo);
+        db_opt.compression(DBCompressionType::No);
 
         let engine =
             Arc::new(rocksdb::new_engine_opt(path.path().to_str().unwrap(), db_opt, vec![])
