@@ -578,15 +578,15 @@ mod tests {
     }
 
     fn open_db(path: &str, with_properties: bool) -> Arc<DB> {
-        let db_opts = rocksdb::Options::new();
-        let mut cf_opts = rocksdb::Options::new();
+        let db_opts = rocksdb::DBOptions::new();
+        let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
         if with_properties {
             let f = Box::new(UserPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::Options::new()),
-                            CFOptions::new(CF_RAFT, rocksdb::Options::new()),
-                            CFOptions::new(CF_LOCK, rocksdb::Options::new()),
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
+                            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
+                            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
                             CFOptions::new(CF_WRITE, cf_opts)];
         Arc::new(rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }

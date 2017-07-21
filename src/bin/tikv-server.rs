@@ -55,7 +55,7 @@ use std::time::Duration;
 use std::env;
 
 use clap::{Arg, App, ArgMatches};
-use rocksdb::{Options as RocksdbOptions, BlockBasedOptions};
+use rocksdb::{DBOptions as RocksdbOptions, ColumnFamilyOptions, BlockBasedOptions};
 use fs2::FileExt;
 use sys_info::{cpu_num, mem_info};
 
@@ -483,7 +483,7 @@ impl Default for CfOptValues {
 fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
                          default_values: CfOptValues)
-                         -> RocksdbOptions {
+                         -> ColumnFamilyOptions {
     let prefix = String::from("rocksdb.") + cf + ".";
     let mut block_base_opts = BlockBasedOptions::new();
     let block_size = get_toml_int(config,
@@ -514,7 +514,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
 
         block_base_opts.set_whole_key_filtering(default_values.whole_key_filtering);
     }
-    let mut opts = RocksdbOptions::new();
+    let mut opts = ColumnFamilyOptions::new();
     opts.set_block_based_table_factory(&block_base_opts);
 
     let cpl = get_toml_string(config,
@@ -585,7 +585,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     opts
 }
 
-fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size =
         align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[0]) as u64) as i64;
@@ -595,7 +595,7 @@ fn get_rocksdb_default_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     get_rocksdb_cf_option(config, "defaultcf", default_values)
 }
 
-fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let mut default_values = CfOptValues::default();
     default_values.block_cache_size =
         align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[1]) as u64) as i64;
@@ -615,7 +615,7 @@ fn get_rocksdb_write_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbO
     opts
 }
 
-fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[2]) as u64);
     let block_cache_size = adjust_block_cache_size(cache_size, RAFTCF_MIN_MEM, RAFTCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
@@ -628,7 +628,7 @@ fn get_rocksdb_raftlog_cf_option(config: &toml::Value, total_mem: u64) -> Rocksd
     opts
 }
 
-fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> RocksdbOptions {
+fn get_rocksdb_lock_cf_option(config: &toml::Value, total_mem: u64) -> ColumnFamilyOptions {
     let cache_size = align_to_mb((total_mem as f64 * DEFAULT_BLOCK_CACHE_RATIO[3]) as u64);
     let block_cache_size = adjust_block_cache_size(cache_size, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM);
     let mut default_values = CfOptValues::default();
