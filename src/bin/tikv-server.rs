@@ -439,6 +439,7 @@ struct CfOptValues {
     pub level_zero_slowdown_writes_trigger: i64,
     pub level_zero_stop_writes_trigger: i64,
     pub max_compaction_bytes: i64,
+    pub compaction_pri: i64,
 }
 
 impl Default for CfOptValues {
@@ -461,6 +462,7 @@ impl Default for CfOptValues {
             level_zero_slowdown_writes_trigger: 20,
             level_zero_stop_writes_trigger: 36,
             max_compaction_bytes: 2 * GB as i64,
+            compaction_pri: 0,
         }
     }
 }
@@ -559,6 +561,13 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                                             (prefix.clone() + "max-compaction-bytes").as_str(),
                                             Some(default_values.max_compaction_bytes));
     opts.set_max_compaction_bytes(max_compaction_bytes as u64);
+
+    let priority = get_toml_int(config,
+                                (prefix.clone() + "compaction-pri").as_str(),
+                                Some(0));
+    let compaction_priority = util::config::parse_rocksdb_compaction_pri(priority)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    opts.compaction_priority(compaction_priority);
 
     opts
 }

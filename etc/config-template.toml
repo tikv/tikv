@@ -279,6 +279,13 @@ stats-dump-period-sec = 600
 # Max bytes for compaction.max_compaction_bytes
 # max-compaction-bytes = "2GB"
 
+# There are four different algorithms to pick files to compact.
+# 0 : ByCompensatedSize
+# 1 : OldestLargestSeqFirst
+# 2 : OldestSmallestSeqFirst
+# 3 : MinOverlappingRatio
+# compaction-pri = 0
+
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read.
 # in normal cases should tune to 30%-50% system's total memory.
 # block-cache-size = "1GB"
