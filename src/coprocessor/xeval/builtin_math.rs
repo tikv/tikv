@@ -17,6 +17,7 @@ use super::{Evaluator, EvalContext, Result, Error};
 
 const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
 pub const TYPE_INT: &'static str = "int";
+pub const TYPE_FLOAT: &'static str = "float";
 
 pub fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
     Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
@@ -39,9 +40,13 @@ impl Evaluator {
         }
     }
 
-    pub fn abs_real(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
-        // TODO add impl
-        Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
+    pub fn abs_real(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+        let child = try!(self.get_one_child(expr));
+        let d = try!(self.eval(ctx, child));
+        match d {
+            Datum::F64(f) => Ok(Datum::F64(f.abs())),
+            _ => invalid_type_error(&d, TYPE_FLOAT),
+        }
     }
 
     pub fn ceil_int(&mut self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
@@ -110,4 +115,18 @@ mod test {
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::AbsInt),
                      Datum::U64(1))]);
+
+    test_eval!(test_abs_real,
+               vec![(build_expr_with_sig(vec![Datum::F64(-1.0_f64)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsReal),
+                     Datum::F64(1.0_f64)),
+                    (build_expr_with_sig(vec![Datum::F64(1.0_f64)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsReal),
+                     Datum::F64(1.0_f64)),
+                    (build_expr_with_sig(vec![Datum::F64(0.0_f64)],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsReal),
+                     Datum::F64(0.0_f64))]);
 }
