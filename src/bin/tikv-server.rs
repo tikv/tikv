@@ -124,7 +124,7 @@ fn get_flag_int(matches: &ArgMatches, name: &str) -> Option<i64> {
 }
 
 fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> bool {
-    let b = match config.lookup(name) {
+    let b = match config.get(name) {
         Some(&toml::Value::Boolean(b)) => b,
         None => {
             info!("{} use default {:?}", name, default);
@@ -138,7 +138,7 @@ fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> 
 }
 
 fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) -> String {
-    let s = match config.lookup(name) {
+    let s = match config.get(name) {
         Some(&toml::Value::String(ref s)) => s.clone(),
         None => {
             info!("{} use default {:?}", name, default);
@@ -152,13 +152,13 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
 }
 
 fn get_toml_string_opt(config: &toml::Value, name: &str) -> Option<String> {
-    config.lookup(name)
+    config.get(name)
         .and_then(|val| val.as_str())
         .map(|s| s.to_owned())
 }
 
 fn get_toml_int_opt(config: &toml::Value, name: &str) -> Option<i64> {
-    let res = match config.lookup(name) {
+    let res = match config.get(name) {
         Some(&toml::Value::Integer(i)) => Some(i),
         Some(&toml::Value::String(ref s)) => {
             Some(util::config::parse_readable_int(s)
@@ -182,7 +182,7 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
 }
 
 fn get_toml_float_opt(config: &toml::Value, name: &str) -> Option<f64> {
-    let res = match config.lookup(name) {
+    let res = match config.get(name) {
         Some(&toml::Value::Float(f)) => Some(f),
         Some(&toml::Value::String(ref s)) => {
             Some(s.parse()
@@ -1027,7 +1027,7 @@ fn main() {
             let mut config_file = File::open(&path).expect("config open failed");
             let mut s = String::new();
             config_file.read_to_string(&mut s).expect("config read failed");
-            toml::Value::Table(toml::Parser::new(&s).parse().expect("malformed config file"))
+            s.parse::<toml::Value>().expect("malformed config file")
         }
         // Default empty value, lookup() always returns `None`.
         None => toml::Value::Integer(0),

@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ascii::AsciiExt;
+
 use util::collections::HashMap;
 
 use super::Result;
@@ -107,6 +109,11 @@ impl Config {
                                     shouldn't be 0"));
         }
 
+        for (k, v) in &self.labels {
+            try!(validate_label(k, "key"));
+            try!(validate_label(v, "value"));
+        }
+
         Ok(())
     }
 
@@ -118,6 +125,33 @@ impl Config {
             self.end_point_txn_concurrency_on_busy = 1;
         }
     }
+}
+
+fn validate_label(s: &str, tp: &str) -> Result<()> {
+    let report_err = || {
+        box_err!("store label {}: {:?} not match ^[a-z0-9]([a-z0-9-._]*[a-z0-9])?", tp, s)
+    };
+    if s.is_empty() {
+        return Err(report_err());
+    }
+    let mut chrs = s.chars();
+    let first_char = chrs.next().unwrap();
+    if !first_char.is_ascii_lowercase() && !first_char.is_ascii_digit() {
+        return Err(report_err());
+    }
+    let last_char = match chrs.next_back() {
+        None => return Ok(()),
+        Some(c) => c,
+    };
+    if !last_char.is_ascii_lowercase() && !last_char.is_ascii_digit() {
+        return Err(report_err());
+    }
+    while let Some(c) = chrs.next() {
+        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && !"-._".contains(c) {
+            return Err(report_err());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
