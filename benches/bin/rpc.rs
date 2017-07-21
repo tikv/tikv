@@ -315,7 +315,7 @@ pub fn bench_raft_rpc() {
     thread::spawn(move || {
         // TODO: calc the precise duration for every eventloop tick.
         let batch_size = 1024;
-        let flush_duration = 10;
+        let flush_duration = 1;
 
         let mut region_id = 0;
         let sample = RaftMessage::new();
