@@ -875,8 +875,10 @@ impl Snapshot for Snap {
                     let mut size_track = self.size_track.wl();
                     *size_track = size_track.saturating_sub(cf_file.size);
                 }
-                let mut ingest_opt = IngestExternalFileOptions::new();
-                ingest_opt.move_files(true);
+                let ingest_opt = IngestExternalFileOptions::new();
+                // TODO: move SST file instead of copy
+                // after changing logic in raft, ask for resending snapshot if applying fail.
+                // ingest_opt.move_files(true);
                 let path = cf_file.path.as_path().to_str().unwrap();
                 box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
             }
