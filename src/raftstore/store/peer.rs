@@ -1405,7 +1405,13 @@ impl Peer {
     }
 
     fn handle_batch_read(&mut self, batch: Vec<(RaftCmdRequest, Callback)>) {
-        for (resp, cb) in self.batch_exec_read(batch) {
+        let mut reqs = Vec::with_capacity(batch.len());
+        let mut cbs = Vec::with_capacity(batch.len());
+        for (req, cb) in batch {
+            reqs.push(req);
+            cbs.push(cb);
+        }
+        for (resp, cb) in self.batch_exec_read(reqs).into_iter().zip(cbs) {
             let mut resp = resp.unwrap_or_else(|e| {
                 match e {
                     Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
@@ -1629,15 +1635,13 @@ impl Peer {
         Ok(resp)
     }
 
-    fn batch_exec_read(&mut self,
-                       batch: Vec<(RaftCmdRequest, Callback)>)
-                       -> Vec<(Result<RaftCmdResponse>, Callback)> {
+    fn batch_exec_read(&mut self, batch: Vec<RaftCmdRequest>) -> Vec<Result<RaftCmdResponse>> {
         let mut snap = None;
-        let mut resps = Vec::with_capacity(batch.len());
+        let mut ret = Vec::with_capacity(batch.len());
 
-        'bat: for (cmd, cb) in batch {
+        'bat: for cmd in batch {
             if let Err(e) = check_epoch(self.region(), &cmd) {
-                resps.push((Err(e), cb));
+                ret.push(Err(e));
                 continue;
             }
 
@@ -1653,7 +1657,7 @@ impl Peer {
                         match apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req) {
                             Ok(resp) => resp,
                             Err(e) => {
-                                resps.push((Err(e), cb));
+                                ret.push(Err(e));
                                 continue 'bat;
                             }
                         }
@@ -1662,11 +1666,11 @@ impl Peer {
                         match apply::do_snap(self.region().to_owned()) {
                             Ok(resp) => resp,
                             Err(e) => {
-                                resps.push((Err(e), cb));
+                                ret.push(Err(e));
                                 continue 'bat;
                             }
                         }
-                    },
+                    }
                     CmdType::Prewrite => unreachable!(),
                     CmdType::Put | CmdType::Delete | CmdType::Invalid => unreachable!(),
                 };
@@ -1677,10 +1681,10 @@ impl Peer {
             }
             let mut resp = RaftCmdResponse::new();
             resp.set_responses(protobuf::RepeatedField::from_vec(responses));
-            resps.push((Ok(resp), cb));
+            ret.push(Ok(resp));
         }
 
-        resps
+        ret
     }
 }
 

@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::{self, Ordering as CmpOrdering};
 use std::cell::RefCell;
+use std::sync::mpsc::sync_channel;
 use tipb::select::{self, SelectRequest, SelectResponse, DAGRequest, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType, ByItem};
@@ -92,6 +93,33 @@ impl Host {
             last_req_id: 0,
             max_running_task_count: DEFAULT_MAX_RUNNING_TASK_COUNT,
             pool: ThreadPool::new(thd_name!("endpoint-pool"), concurrency, queue),
+        }
+    }
+
+    fn handle_snapshot_result(&mut self, id: u64, snapshot: engine::Result<Box<Snapshot>>) {
+        let reqs = self.reqs.remove(&id).unwrap();
+        let snap = match snapshot {
+            Ok(s) => s,
+            Err(e) => {
+                notify_batch_failed(e, reqs);
+                return;
+            }
+        };
+
+        if self.pool.get_task_count() >= self.max_running_task_count {
+            notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
+            return;
+        }
+
+        for req in reqs {
+            let type_str = get_req_type_str(req.req.get_tp());
+            COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
+            let end_point = TiDbEndPoint::new(snap.clone());
+            let txn_id = req.start_ts.unwrap_or_default();
+            self.pool.execute(txn_id, move || {
+                end_point.handle_request(req);
+                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
+            });
         }
     }
 }
@@ -257,85 +285,35 @@ impl BatchRunnable<Task> for Host {
                     group.push(req);
                 }
                 Task::SnapRes(q_id, snap_res) => {
-                    let reqs = self.reqs.remove(&q_id).unwrap();
-                    let snap = match snap_res {
-                        Ok(s) => s,
-                        Err(e) => {
-                            notify_batch_failed(e, reqs);
-                            continue;
-                        }
-                    };
-
-                    if self.pool.get_task_count() >= self.max_running_task_count {
-                        notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
-                        continue;
-                    }
-
-                    for req in reqs {
-                        let type_str = get_req_type_str(req.req.get_tp());
-                        COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
-                        let end_point = TiDbEndPoint::new(snap.clone());
-                        let txn_id = req.start_ts.unwrap_or_default();
-                        self.pool.execute(txn_id, move || {
-                            end_point.handle_request(req);
-                            COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
-                        });
-                    }
+                    self.handle_snapshot_result(q_id, snap_res);
                 }
                 Task::SnapResBatch(batch) => {
                     for (q_id, snap_res) in batch {
-                        let reqs = self.reqs.remove(&q_id).unwrap();
-                        let snap = match snap_res {
-                            Ok(s) => s,
-                            Err(e) => {
-                                notify_batch_failed(e, reqs);
-                                continue;
-                            }
-                        };
-
-                        if self.pool.get_task_count() >= self.max_running_task_count {
-                            notify_batch_failed(Error::Full(self.max_running_task_count), reqs);
-                            continue;
-                        }
-
-                        for req in reqs {
-                            let type_str = get_req_type_str(req.req.get_tp());
-                            COPR_PENDING_REQS.with_label_values(&[type_str]).add(1.0);
-                            let end_point = TiDbEndPoint::new(snap.clone());
-                            let txn_id = req.start_ts.unwrap_or_default();
-                            self.pool.execute(txn_id, move || {
-                                end_point.handle_request(req);
-                                COPR_PENDING_REQS.with_label_values(&[type_str]).sub(1.0);
-                            });
-                        }
+                        self.handle_snapshot_result(q_id, snap_res);
                     }
                 }
             }
         }
 
-        use storage::engine::Callback;
-        use std::sync::mpsc::sync_channel;
-
-        // `send` and `recv` should be called in the same thread and in order.,
-        // should not cause any `pthread_cond_wait`.
+        // `send` and `try_recv` should be called in the same thread and in order.
+        // It should not cause any `pthread_cond_wait`.
         let (tx, rx) = sync_channel(total);
         let mut batch = Vec::with_capacity(grouped_reqs.len());
         for (_, reqs) in grouped_reqs {
             self.last_req_id += 1;
             let id = self.last_req_id;
             let tx = tx.clone();
-            let ctx = reqs[0].req.get_context().clone();
-            // TODO: Callback takes a &mut Vec.
-            let cb: Callback<Box<Snapshot>> = box move |(_, res)| {
+            let cb: engine::Callback<Box<Snapshot>> = box move |(_, res)| {
                 tx.send((id, res))
                     .unwrap()
             };
+            let ctx = reqs[0].req.get_context().clone();
             self.reqs.insert(id, reqs);
             batch.push((ctx, cb));
         }
 
         let sched = self.sched.clone();
-        let on_finish: Callback<()> = box move |_| {
+        let on_finish: engine::Callback<()> = box move |_| {
             let mut batch = Vec::with_capacity(total);
             while let Ok(task) = rx.try_recv() {
                 batch.push(task);

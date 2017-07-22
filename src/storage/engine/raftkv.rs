@@ -13,6 +13,7 @@
 
 
 use server::transport::RaftStoreRouter;
+use raftstore::store;
 use raftstore::errors::Error as RaftServerError;
 use raftstore::coprocessor::{RegionSnapshot, RegionIterator};
 use raftstore::store::engine::Peekable;
@@ -166,11 +167,10 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         Ok(())
     }
 
-    fn call_commands_batch(&self,
+    fn batch_call_commands(&self,
                            batch: Vec<(RaftCmdRequest, Callback<CmdRes>)>,
                            on_finish: Callback<()>)
                            -> Result<()> {
-        use raftstore::store;
         let batch = batch.into_iter().map(|(req, cb)| {
             let l = req.get_requests().len();
             let db = self.db.clone();
@@ -182,7 +182,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         });
 
         let on_finish: store::Callback = box move |_| {
-            // on_finish should ignore all params.
+            // on_finish ignores all params.
             on_finish((CbContext::new(), Ok(())));
         };
         try!(self.router.send_commands_batch(batch.collect(), on_finish));
@@ -200,10 +200,6 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         header
     }
 
-    fn new_request_header1(&self, ctx: Context) -> RaftRequestHeader {
-        self.new_request_header(&ctx)
-    }
-
     fn exec_requests(&self, ctx: &Context, reqs: Vec<Request>, cb: Callback<CmdRes>) -> Result<()> {
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::new();
@@ -212,12 +208,12 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         self.call_command(cmd, cb)
     }
 
-    fn exec_requests_batch(&self,
+    fn batch_exec_requests(&self,
                            batch: Vec<(Context, Vec<Request>, Callback<CmdRes>)>,
                            on_finish: Callback<()>)
                            -> Result<()> {
         let batch = batch.into_iter().map(|(ctx, reqs, cb)| {
-            let header = self.new_request_header1(ctx);
+            let header = self.new_request_header(&ctx);
             let mut cmd = RaftCmdRequest::new();
             cmd.set_header(header);
             cmd.set_requests(RepeatedField::from_vec(reqs));
@@ -225,7 +221,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             (cmd, cb)
         });
 
-        self.call_commands_batch(batch.collect(), on_finish)
+        self.batch_call_commands(batch.collect(), on_finish)
     }
 }
 
@@ -373,7 +369,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             (ctx, vec![req], callback)
         });
 
-        self.exec_requests_batch(batch.collect(), on_finish).map_err(|e| {
+        self.batch_exec_requests(batch.collect(), on_finish).map_err(|e| {
             let tag = get_tag_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.with_label_values(&["snapshot", tag]).inc();
             e.into()

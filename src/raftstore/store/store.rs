@@ -1284,7 +1284,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn batch_propose_raft_commands(&mut self, batch: Vec<(RaftCmdRequest, Callback)>) {
-        let mut batches: HashMap<u64, Vec<(Callback,RaftCmdRequest, RaftCmdResponse)>> = HashMap::default();
+        let mut batches: HashMap<u64, Vec<(Callback, RaftCmdRequest, RaftCmdResponse)>> =
+            HashMap::default();
         for (msg, cb) in batch {
             let mut resp = RaftCmdResponse::new();
 
