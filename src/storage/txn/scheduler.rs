@@ -231,7 +231,10 @@ struct HashableContext(Context);
 
 impl PartialEq for HashableContext {
     fn eq(&self, other: &HashableContext) -> bool {
-        self.0 == other.0
+        // k1 == k2 ⇒ hash(k1) == hash(k2)
+        self.0.get_region_id() == other.0.get_region_id() &&
+        self.0.get_region_epoch().get_version() == other.0.get_region_epoch().get_version() &&
+        self.0.get_peer().get_id() == other.0.get_peer().get_id()
     }
 }
 
@@ -1033,11 +1036,9 @@ impl Scheduler {
                 }
             }
 
-            if !self.grouped_cmds.as_ref().unwrap().is_empty() {
-                let m = self.grouped_cmds.take().unwrap();
-                for (idx, (ctx, cids)) in m.into_iter().enumerate() {
-                    BATCH_COMMANDS.with_label_values(&BATCH_GROUPS[idx..idx + 1])
-                        .observe(cids.len() as f64);
+            if let Some(cmds) = self.grouped_cmds.take() {
+                for (ctx, cids) in cmds {
+                    BATCH_COMMANDS.observe(cids.len() as f64);
                     self.get_snapshot(&ctx.0, cids);
                 }
                 self.grouped_cmds = Some(HashMap::with_capacity(CMD_BATCH_SIZE));
@@ -1047,9 +1048,6 @@ impl Scheduler {
 }
 
 const CMD_BATCH_SIZE: usize = 32;
-const BATCH_GROUPS: &'static [&'static str] =
-    &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17",
-      "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32"];
 
 /// Generates the lock for a command.
 ///

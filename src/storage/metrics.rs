@@ -106,11 +106,10 @@ lazy_static! {
             "Total number of gc command skipped owing to optimization"
         ).unwrap();
 
-    pub static ref BATCH_COMMANDS: HistogramVec =
-        register_histogram_vec!(
+    pub static ref BATCH_COMMANDS: Histogram =
+        register_histogram!(
             "tikv_storage_batch_commands_total",
-            "Bucketed histogram of total number of commands for each group batch",
-            &["group"],
+            "Bucketed histogram of total number of a batch of commands",
             linear_buckets(0.0, 5.0, 8).unwrap()
         ).unwrap();
 }
