@@ -159,9 +159,9 @@ impl PipeBuffer {
                 let dest = self.buf.ptr();
                 if self.start >= len {
                     // [...|.ll.] -> [ll.]
+                    let source = self.buf.ptr().offset(self.start as isize);
                     self.start = 0;
                     self.end = to_keep;
-                    let source = self.buf.ptr().offset(self.start as isize);
                     ptr::copy_nonoverlapping(source, dest, to_keep);
                 } else {
                     // if we just move `self.end`, we can still use `copy_nonoverlapping`.
@@ -362,7 +362,7 @@ impl Debug for PipeBuffer {
 #[cfg(test)]
 mod tests {
     use std::io::*;
-    
+
     use rand::{self, Rng};
 
     use super::*;
@@ -509,7 +509,12 @@ mod tests {
                     if shrink > l {
                         assert_eq!(s, expect.as_slice());
                     } else {
-                        assert_eq!(s, &expect[..shrink], "l: {} pos: {} shrink: {}", l, pos, shrink);
+                        assert_eq!(s,
+                                   &expect[..shrink],
+                                   "l: {} pos: {} shrink: {}",
+                                   l,
+                                   pos,
+                                   shrink);
                     }
                 }
             }
