@@ -264,7 +264,7 @@ mod test {
     #[test]
     fn test_reverse_scan() {
         let mut statistics = Statistics::default();
-        let mut wrapper = IndexTestWrapper::default();;
+        let mut wrapper = IndexTestWrapper::default();
         wrapper.scan.set_desc(true);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let mut scanner = IndexScanExecutor::new(wrapper.scan,

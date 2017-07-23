@@ -907,16 +907,23 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         self.raft_metrics.ready.pending_region += pending_count as u64;
 
+        let mut region_proposals = Vec::with_capacity(pending_count);
         let (wb, append_res) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                    peer.schedule_apply_proposals(&self.apply_worker);
+                    if let Some(region_proposal) = peer.take_apply_proposals() {
+                        region_proposals.push(region_proposal);
+                    }
                     peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
                 }
             }
             (ctx.wb, ctx.ready_res)
         };
+
+        if !region_proposals.is_empty() {
+            self.apply_worker.schedule(ApplyTask::Proposals(region_proposals)).unwrap();
+        }
 
         self.raft_metrics.ready.has_ready_region += append_res.len() as u64;
 
