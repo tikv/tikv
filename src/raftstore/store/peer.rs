@@ -1049,7 +1049,6 @@ impl Peer {
             }
         }
 
-        // TODO: add metrics for collecting batch size.
         self.batch_read_local(batch_read, metrics);
     }
 
@@ -1243,6 +1242,7 @@ impl Peer {
                         batch: Vec<(RaftCmdRequest, Callback)>,
                         metrics: &mut RaftProposeMetrics) {
         metrics.local_read += batch.len() as u64;
+        metrics.batch_local_read.observe(batch.len() as f64);
         self.handle_batch_read(batch);
     }
 

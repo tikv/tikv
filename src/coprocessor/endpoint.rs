@@ -34,6 +34,7 @@ use util::threadpool::{ThreadPool, SmallGroupFirstQueue};
 use util::codec::number::NumberDecoder;
 use server::OnResponse;
 use storage::{self, Engine, SnapshotStore, engine, Snapshot, Key, ScanMode, Statistics};
+use storage::engine::Error as EngineError;
 
 use super::codec::{table, datum, mysql};
 use super::codec::table::{RowColsDict, TableDecoder};
@@ -298,6 +299,7 @@ impl BatchRunnable<Task> for Host {
         // `send` and `try_recv` should be called in the same thread and in order.
         // It should not cause any `pthread_cond_wait`.
         let (tx, rx) = sync_channel(total);
+        let mut req_ids = Vec::new();
         let mut batch = Vec::with_capacity(grouped_reqs.len());
         for (_, reqs) in grouped_reqs {
             self.last_req_id += 1;
@@ -309,6 +311,7 @@ impl BatchRunnable<Task> for Host {
             };
             let ctx = reqs[0].req.get_context().clone();
             self.reqs.insert(id, reqs);
+            req_ids.push(id);
             batch.push((ctx, cb));
         }
 
@@ -322,8 +325,16 @@ impl BatchRunnable<Task> for Host {
                 .unwrap()
         };
 
-        // TODO: `notify_batch_failed(e, reqs);`
-        let _ = self.engine.async_snapshots_batch(batch, on_finish);
+        if let Err(e) = self.engine.async_snapshots_batch(batch, on_finish) {
+            for id in req_ids {
+                let reqs = self.reqs.remove(&id).unwrap();
+                let err = e.maybe_clone().unwrap_or_else(|| {
+                    error!("async snapshot batch failed error {:?}", e);
+                    EngineError::Other(box_err!("{:?}", e))
+                });
+                notify_batch_failed(err, reqs);
+            }
+        }
     }
 
     fn shutdown(&mut self) {
