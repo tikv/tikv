@@ -24,20 +24,23 @@ use std::time;
 use std::thread;
 
 use protobuf::Message;
-use rocksdb::DB;
+use rocksdb::{DB, CFHandle, WriteBatch, Writable};
 use kvproto::eraftpb::Snapshot as RaftSnapshot;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 
 use raftstore::Result as RaftStoreResult;
+use raftstore::errors::Error as RaftStoreError;
 use raftstore::store::Msg;
+use raftstore::store::util::check_key_in_region;
 use storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use util::transport::SendCh;
 use util::HandyRwLock;
 use util::collections::{HashMap, HashMapEntry as Entry};
+use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
 
 use raftstore::store::engine::{Snapshot as DbSnapshot, Iterable};
-use raftstore::store::keys::{enc_start_key, enc_end_key};
+use raftstore::store::keys::{self, enc_start_key, enc_end_key};
 
 
 use raftstore::store::metrics::{SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
@@ -75,6 +78,12 @@ quick_error! {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+// CF_LOCK is relatively small, so we use plain file for performance issue.
+#[inline]
+fn plain_file_used(cf: &str) -> bool {
+    cf == CF_LOCK
+}
 
 #[inline]
 pub fn check_abort(status: &AtomicUsize) -> Result<()> {
@@ -458,18 +467,26 @@ impl Snap {
             return Ok(());
         }
         for cf_file in &mut self.cf_files {
-            // use sst for CF_LOCK to keep clean. Will Return to use plain file.
-            let handle = try!(snap.cf_handle(cf_file.cf));
-            let mut io_options = snap.get_db().get_options_cf(handle).clone();
-            io_options.compression(get_fastest_supported_compression_type());
-            // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
-            // compression_per_level first, so to make sure our specified compression type
-            // being used, we must set them empty or disabled.
-            io_options.compression_per_level(&[]);
-            io_options.bottommost_compression(DBCompressionType::Disable);
-            let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
-            box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
-            cf_file.sst_writer = Some(writer);
+            if plain_file_used(cf_file.cf) {
+                let f = try!(OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(&cf_file.tmp_path));
+                cf_file.file = Some(f);
+            } else {
+                let handle = try!(snap.cf_handle(cf_file.cf));
+                let mut io_options = snap.get_db().get_options_cf(handle).clone();
+                io_options.compression(get_fastest_supported_compression_type());
+                // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
+                // compression_per_level first, so to make sure our specified compression type
+                // being used, we must set them empty or disabled.
+                io_options.compression_per_level(&[]);
+                io_options.bottommost_compression(DBCompressionType::Disable);
+                let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+                box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
+                cf_file.sst_writer = Some(writer);
+            }
         }
         let file = try!(OpenOptions::new()
             .write(true)
@@ -569,7 +586,9 @@ impl Snap {
 
     fn save_cf_files(&mut self) -> io::Result<()> {
         for cf_file in &mut self.cf_files {
-            if cf_file.kv_count == 0 {
+            if plain_file_used(cf_file.cf) {
+                let _ = cf_file.file.take();
+            } else if cf_file.kv_count == 0 {
                 let _ = cf_file.sst_writer.take().unwrap();
             } else {
                 let mut writer = cf_file.sst_writer.take().unwrap();
@@ -635,7 +654,10 @@ impl Snap {
         let (begin_key, end_key) = (enc_start_key(region), enc_end_key(region));
         for cf in SNAPSHOT_CFS {
             try!(self.switch_to_cf_file(cf));
-            let (cf_key_count, cf_size) = {
+            let (cf_key_count, cf_size) = if plain_file_used(cf) {
+                let file = self.cf_files[self.cf_index].file.as_mut().unwrap();
+                try!(build_plain_cf_file(file, snap, cf, &begin_key, &end_key))
+            } else {
                 let mut key_count = 0;
                 let mut size = 0;
                 try!(snap.scan_cf(cf,
@@ -670,6 +692,59 @@ impl Snap {
 
         Ok(())
     }
+}
+
+pub fn build_plain_cf_file<E: BytesEncoder>(encoder: &mut E,
+                                            snap: &DbSnapshot,
+                                            cf: &str,
+                                            start_key: &[u8],
+                                            end_key: &[u8])
+                                            -> RaftStoreResult<(usize, usize)> {
+    let mut cf_key_count = 0;
+    let mut cf_size = 0;
+    try!(snap.scan_cf(cf,
+                      start_key,
+                      end_key,
+                      false,
+                      &mut |key, value| {
+        cf_key_count += 1;
+        cf_size += key.len() + value.len();
+        try!(encoder.encode_compact_bytes(key));
+        try!(encoder.encode_compact_bytes(value));
+        Ok(true)
+    }));
+    // use an empty byte array to indicate that cf reaches an end.
+    box_try!(encoder.encode_compact_bytes(b""));
+    Ok((cf_key_count, cf_size))
+}
+
+fn apply_plain_cf_file<D: CompactBytesDecoder>(decoder: &mut D,
+                                               options: &ApplyOptions,
+                                               handle: &CFHandle)
+                                               -> Result<()> {
+    let mut wb = WriteBatch::new();
+    let mut batch_size = 0;
+    loop {
+        try!(check_abort(&options.abort));
+        let key = box_try!(decoder.decode_compact_bytes());
+        if key.is_empty() {
+            if batch_size > 0 {
+                box_try!(options.db.write(wb));
+            }
+            break;
+        }
+        box_try!(check_key_in_region(keys::origin_key(&key), &options.region));
+        batch_size += key.len();
+        let value = box_try!(decoder.decode_compact_bytes());
+        batch_size += value.len();
+        box_try!(wb.put_cf(handle, &key, &value));
+        if batch_size >= options.write_batch_size {
+            box_try!(options.db.write(wb));
+            wb = WriteBatch::new();
+            batch_size = 0;
+        }
+    }
+    Ok(())
 }
 
 impl Snapshot for Snap {
@@ -789,10 +864,24 @@ impl Snapshot for Snap {
 
             try!(check_abort(&options.abort));
             let cf_handle = box_try!(rocksdb::get_cf_handle(&options.db, cf_file.cf));
-
-            let ingest_opt = IngestExternalFileOptions::new();
-            let path = cf_file.path.as_path().to_str().unwrap();
-            box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
+            if plain_file_used(cf_file.cf) {
+                let mut file = box_try!(File::open(&cf_file.path));
+                try!(apply_plain_cf_file(&mut file, &options, cf_handle));
+            } else {
+                // We move instead of copy file when ingest_external_file_cf
+                // so method delete will not sub size_track.
+                // So we check and sub size_track here, before it's moved.
+                if file_exists(&cf_file.path) {
+                    let mut size_track = self.size_track.wl();
+                    *size_track = size_track.saturating_sub(cf_file.size);
+                }
+                let ingest_opt = IngestExternalFileOptions::new();
+                // TODO: move SST file instead of copy
+                // after changing logic in raft, ask for resending snapshot if applying fail.
+                // ingest_opt.move_files(true);
+                let path = cf_file.path.as_path().to_str().unwrap();
+                box_try!(options.db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
+            }
         }
         Ok(())
     }
@@ -1063,7 +1152,11 @@ impl SnapManager {
                                             key,
                                             core.snap_size.clone(),
                                             Box::new(self.clone())));
-        assert!(s.exists());
+        if !s.exists() {
+            return Err(RaftStoreError::Other(From::from(format!("snapshot of {:?} not exists.",
+                                                                key)
+                .to_string())));
+        }
         Ok(Box::new(s))
     }
 
