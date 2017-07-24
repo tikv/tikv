@@ -281,7 +281,7 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
     let lock = try!(reader.load_lock(key));
     loop {
         let opt = try!(reader.seek_write(key, ts));
-        let mut short_value: Option<Value> = None;
+        let short_value: Option<Value>;
         match opt {
             Some((commit_ts, mut write)) => {
                 ts = commit_ts - 1;
