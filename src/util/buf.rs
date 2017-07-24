@@ -159,11 +159,12 @@ impl PipeBuffer {
                 let dest = self.buf.ptr();
                 if self.start >= len {
                     // [...|.ll.] -> [ll.]
+                    let source = self.buf.ptr().offset(self.start as isize);
                     self.start = 0;
                     self.end = to_keep;
-                    let source = self.buf.ptr().offset(self.start as isize);
                     ptr::copy_nonoverlapping(source, dest, to_keep);
                 } else {
+                    // if we just move `self.end`, we can still use `copy_nonoverlapping`.
                     let right_len = new_cap - self.start;
                     if right_len >= to_keep {
                         // [.rr|...] -> [.rr] or [rrr|r] -> [rr.]
@@ -361,16 +362,34 @@ impl Debug for PipeBuffer {
 #[cfg(test)]
 mod tests {
     use std::io::*;
+
+    use rand::{self, Rng};
+
     use super::*;
+
+    fn new_sample(count: usize) -> Vec<u8> {
+        let mut rng = rand::thread_rng();
+        assert!(count <= 256);
+        let mut samples = rand::sample(&mut rng, 0..255, count);
+        rng.shuffle(&mut samples);
+        samples
+    }
+
+    fn new_pipe_buffer(cap: usize) -> PipeBuffer {
+        let s = PipeBuffer::new(cap);
+        let samples = new_sample(cap);
+        unsafe { ptr::copy_nonoverlapping(samples.as_ptr(), s.buf.ptr(), cap) };
+        s
+    }
 
     #[test]
     fn test_read_from() {
-        let mut s = PipeBuffer::new(25);
+        let mut s = new_pipe_buffer(25);
 
         let cap = s.capacity();
-        let padding = vec![0; cap];
+        let padding = new_sample(cap);
         for len in 0..cap + 1 {
-            let expected = vec![len as u8; len];
+            let expected = new_sample(len);
 
             for pos in 0..cap + 1 {
                 for l in 0..len + 1 {
@@ -400,11 +419,11 @@ mod tests {
 
     #[test]
     fn test_write_to() {
-        let mut s = PipeBuffer::new(25);
+        let mut s = new_pipe_buffer(25);
 
         let cap = s.capacity();
         for len in 0..cap + 1 {
-            let expected = vec![len as u8; len];
+            let expected = new_sample(len);
 
             for pos in 0..cap + 1 {
                 for l in 0..len + 1 {
@@ -424,7 +443,7 @@ mod tests {
                     assert_eq!(w, &expected[..l]);
                     assert_eq!(s, &expected[l..]);
 
-                    let mut w = vec![0; cap];
+                    let mut w = new_sample(cap);
                     assert_eq!(len - l, s.read(&mut w).unwrap());
                     assert_ne!(s.start, s.buf.cap());
                     assert_ne!(s.end, s.buf.cap());
@@ -436,11 +455,11 @@ mod tests {
 
     #[test]
     fn test_buf_read() {
-        let mut s = PipeBuffer::new(25);
+        let mut s = new_pipe_buffer(25);
 
         let cap = s.capacity();
         for len in 0..cap + 1 {
-            let expected = vec![len as u8; len];
+            let expected = new_sample(len);
 
             for pos in 0..cap + 1 {
                 for l in 0..len + 1 {
@@ -472,11 +491,11 @@ mod tests {
     fn test_shrink_to() {
         let cap = 25;
         for l in 0..cap + 1 {
-            let expect = vec![l as u8; l];
+            let expect = new_sample(l);
 
             for pos in 0..cap + 1 {
                 for shrink in 0..cap {
-                    let mut s = PipeBuffer::new(cap);
+                    let mut s = new_pipe_buffer(cap);
                     s.start = pos;
                     s.end = pos;
 
@@ -490,7 +509,12 @@ mod tests {
                     if shrink > l {
                         assert_eq!(s, expect.as_slice());
                     } else {
-                        assert_eq!(s, &expect[..shrink]);
+                        assert_eq!(s,
+                                   &expect[..shrink],
+                                   "l: {} pos: {} shrink: {}",
+                                   l,
+                                   pos,
+                                   shrink);
                     }
                 }
             }
@@ -501,15 +525,15 @@ mod tests {
     fn test_ensure() {
         let cap = 25;
         for l in 0..cap + 1 {
-            let expect = vec![l as u8; l];
+            let expect = new_sample(l);
 
             for pos in 0..cap + 1 {
                 for init in 0..cap + 1 {
-                    let mut s = PipeBuffer::new(cap);
+                    let mut s = new_pipe_buffer(cap);
                     s.start = pos;
                     s.end = pos;
 
-                    let example = vec![init as u8; init];
+                    let example = new_sample(init);
                     let mut input = example.as_slice();
                     assert_eq!(init, s.read_from(&mut input).unwrap());
                     assert_eq!(s, example.as_slice());
@@ -530,10 +554,10 @@ mod tests {
 
     #[test]
     fn test_write_all() {
-        let mut s = PipeBuffer::new(25);
-        let example = vec![1; 25];
+        let mut s = new_pipe_buffer(25);
+        let example = new_sample(25);
         s.write_all(&example).unwrap();
-        let mut buf: Vec<u8> = vec![0; 20];
+        let mut buf: Vec<u8> = new_sample(20);
         {
             let mut buf_w = buf.as_mut_slice();
             assert!(s.write_all_to(&mut buf_w).is_err());
@@ -543,7 +567,7 @@ mod tests {
             let mut buf_w = buf.as_mut_slice();
             assert!(s.write_all_to(&mut buf_w).is_err());
         }
-        buf = vec![0; 25];
+        buf = new_sample(25);
         let mut buf_w = buf.as_mut_slice();
         assert!(s.write_all_to(&mut buf_w).is_ok());
         assert!(s.is_empty());

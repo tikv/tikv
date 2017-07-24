@@ -18,7 +18,7 @@ use url;
 use regex::Regex;
 
 use util::collections::HashMap;
-use rocksdb::{DBCompressionType, DBRecoveryMode};
+use rocksdb::{DBCompressionType, DBRecoveryMode, CompactionPriority};
 
 quick_error! {
     #[derive(Debug)]
@@ -44,13 +44,13 @@ quick_error! {
 
 pub fn parse_rocksdb_compression(tp: &str) -> Result<DBCompressionType, ConfigError> {
     match &*tp.trim().to_lowercase() {
-        "no" => Ok(DBCompressionType::DBNo),
-        "snappy" => Ok(DBCompressionType::DBSnappy),
-        "zlib" => Ok(DBCompressionType::DBZlib),
-        "bzip2" => Ok(DBCompressionType::DBBz2),
-        "lz4" => Ok(DBCompressionType::DBLz4),
-        "lz4hc" => Ok(DBCompressionType::DBLz4hc),
-        "zstd" => Ok(DBCompressionType::DBZstd),
+        "no" => Ok(DBCompressionType::No),
+        "snappy" => Ok(DBCompressionType::Snappy),
+        "zlib" => Ok(DBCompressionType::Zlib),
+        "bzip2" => Ok(DBCompressionType::Bz2),
+        "lz4" => Ok(DBCompressionType::Lz4),
+        "lz4hc" => Ok(DBCompressionType::Lz4hc),
+        "zstd" => Ok(DBCompressionType::Zstd),
         _ => Err(ConfigError::Value(format!("invalid compression type {:?}", tp))),
     }
 }
@@ -69,6 +69,16 @@ pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, Conf
         2 => Ok(DBRecoveryMode::PointInTime),
         3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
         _ => Err(ConfigError::Value(format!("invalid recovery mode: {:?}", mode))),
+    }
+}
+
+pub fn parse_rocksdb_compaction_pri(priority: i64) -> Result<CompactionPriority, ConfigError> {
+    match priority {
+        0 => Ok(CompactionPriority::ByCompensatedSize),
+        1 => Ok(CompactionPriority::OldestLargestSeqFirst),
+        2 => Ok(CompactionPriority::OldestSmallestSeqFirst),
+        3 => Ok(CompactionPriority::MinOverlappingRatio),
+        _ => Err(ConfigError::Value(format!("invalid Compaction priority: {:?}", priority))),
     }
 }
 
@@ -381,6 +391,19 @@ mod test {
                 parse_rocksdb_wal_recovery_mode(3).unwrap());
 
         assert!(parse_rocksdb_wal_recovery_mode(4).is_err());
+    }
+
+    #[test]
+    fn test_parse_rocksdb_compaction_pri() {
+        assert!(CompactionPriority::ByCompensatedSize == parse_rocksdb_compaction_pri(0).unwrap());
+        assert!(CompactionPriority::OldestLargestSeqFirst ==
+                parse_rocksdb_compaction_pri(1).unwrap());
+        assert!(CompactionPriority::OldestSmallestSeqFirst ==
+                parse_rocksdb_compaction_pri(2).unwrap());
+        assert!(CompactionPriority::MinOverlappingRatio ==
+                parse_rocksdb_compaction_pri(3).unwrap());
+
+        assert!(parse_rocksdb_compaction_pri(4).is_err());
     }
 
     #[cfg(target_os = "linux")]
