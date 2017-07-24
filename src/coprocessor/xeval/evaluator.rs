@@ -535,6 +535,14 @@ impl Evaluator {
 
     fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         match expr.get_sig() {
+            // Casting
+            ScalarFuncSig::CastIntAsInt => self.cast_int_as_int(ctx, expr),
+            ScalarFuncSig::CastIntAsReal => self.cast_int_as_real(ctx, expr),
+            ScalarFuncSig::CastIntAsString => self.cast_int_as_string(ctx, expr),
+            ScalarFuncSig::CastIntAsDecimal => self.cast_int_as_decimal(ctx, expr),
+            ScalarFuncSig::CastIntAsTime => self.cast_int_as_time(ctx, expr),
+            ScalarFuncSig::CastIntAsDuration => self.cast_int_as_duration(ctx, expr),
+            // Math
             ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
             ScalarFuncSig::AbsReal => self.abs_real(ctx, expr),
             ScalarFuncSig::CeilInt => self.ceil_int(ctx, expr),
@@ -628,7 +636,7 @@ pub mod test {
 
     use std::i32;
 
-    use tipb::expression::{Expr, ExprType};
+    use tipb::expression::{Expr, ExprType, FieldType};
     use tipb::select::SelectRequest;
     use protobuf::RepeatedField;
 
@@ -689,9 +697,14 @@ pub mod test {
         build_expr(vec![left, right], tp)
     }
 
-    pub fn build_expr_with_sig(children: Vec<Datum>, tp: ExprType, sig: ScalarFuncSig) -> Expr {
+    pub fn build_expr_with_sig(children: Vec<Datum>,
+                               tp: ExprType,
+                               sig: ScalarFuncSig,
+                               field_type: FieldType)
+                               -> Expr {
         let mut expr = build_expr(children, tp);
         expr.set_sig(sig);
+        expr.set_field_type(field_type);
         expr
     }
 

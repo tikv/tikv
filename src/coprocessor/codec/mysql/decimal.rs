@@ -792,6 +792,21 @@ impl Decimal {
         }
     }
 
+    /// returns whether a decimal is negative.
+    pub fn is_negative(&self) -> bool {
+        self.negative
+    }
+
+    /// checks whether it's a zero decimal.
+    pub fn is_zero(&self) -> bool {
+        for x in self.word_buf.iter() {
+            if *x != 0 {
+                return false;
+            }
+        }
+        true
+    }
+
     /// reset the decimal to zero.
     fn reset_to_zero(&mut self) {
         self.int_cnt = 1;
@@ -1891,6 +1906,17 @@ impl Rem for Decimal {
         }
         res
     }
+}
+
+// `new_max_or_min_dec` returns the max or min value decimal for given precision and fraction.
+pub fn new_max_or_min_dec(negative: bool, prec: i32, frac: i32) -> Result<Decimal> {
+    let mut s = String::with_capacity((prec + 2) as usize);
+    s.push(if negative { '-' } else { '+' });
+    let dot_index = (1 + prec - frac) as usize;
+    for i in 1..s.capacity() {
+        s.push(if i == dot_index { '.' } else { '9' });
+    }
+    s.parse()
 }
 
 #[cfg(test)]

@@ -13,14 +13,8 @@
 
 use tipb::expression::Expr;
 use super::super::codec::datum::Datum;
-use super::{Evaluator, EvalContext, Result, Error};
-
-const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
-pub const TYPE_INT: &'static str = "int";
-
-pub fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
-    Err(Error::Eval(format!("invalid expr type: {:?}, expect: {}", datum, expected_type)))
-}
+use super::{Evaluator, EvalContext, Result, Error, ERROR_UNIMPLEMENTED, TYPE_INT,
+            invalid_type_error};
 
 impl Evaluator {
     pub fn abs_int(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
@@ -67,47 +61,25 @@ impl Evaluator {
 
 #[cfg(test)]
 mod test {
-    use tipb::expression::{ExprType, ScalarFuncSig};
+    use tipb::expression::{FieldType, ExprType, ScalarFuncSig};
     use coprocessor::codec::datum::Datum;
     use super::super::Evaluator;
     use super::super::evaluator::test::build_expr_with_sig;
 
-    macro_rules! test_eval {
-        ($tag:ident, $cases:expr) => {
-            #[test]
-            fn $tag() {
-                let mut test_cases = $cases;
-                let mut evaluator = Evaluator::default();
-                for (i, (expr, expected)) in test_cases.drain(..).enumerate() {
-                    let res = evaluator.eval(&Default::default(), &expr);
-                    assert!(res.is_ok(),
-                            "#{} expect eval expr {:?} ok but got {:?}",
-                            i,
-                            expr,
-                            res);
-                    let res = res.unwrap();
-                    assert_eq!(res,
-                               expected,
-                               "#{} expect {:?} but got {:?}",
-                               i,
-                               expected,
-                               res);
-                }
-            }
-        };
-    }
-
     test_eval!(test_abs_int,
                vec![(build_expr_with_sig(vec![Datum::I64(-1)],
                                          ExprType::ScalarFunc,
-                                         ScalarFuncSig::AbsInt),
+                                         ScalarFuncSig::AbsInt,
+                                         FieldType::new()),
                      Datum::I64(1)),
                     (build_expr_with_sig(vec![Datum::I64(1)],
                                          ExprType::ScalarFunc,
-                                         ScalarFuncSig::AbsInt),
+                                         ScalarFuncSig::AbsInt,
+                                         FieldType::new()),
                      Datum::I64(1)),
                     (build_expr_with_sig(vec![Datum::U64(1)],
                                          ExprType::ScalarFunc,
-                                         ScalarFuncSig::AbsInt),
+                                         ScalarFuncSig::AbsInt,
+                                         FieldType::new()),
                      Datum::U64(1))]);
 }

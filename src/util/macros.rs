@@ -201,3 +201,31 @@ macro_rules! wait_op {
         }
     }
 }
+
+/// `test_eval` generates test cases for coprocessor evaluator.
+#[cfg(test)]
+#[macro_export]
+macro_rules! test_eval {
+    ($tag:ident, $cases:expr) => {
+        #[test]
+        fn $tag() {
+            let mut test_cases = $cases;
+            let mut evaluator = Evaluator::default();
+            for (i, (expr, expected)) in test_cases.drain(..).enumerate() {
+                let res = evaluator.eval(&Default::default(), &expr);
+                assert!(res.is_ok(),
+                        "#{} expect eval expr {:?} ok but got {:?}",
+                        i,
+                        expr,
+                        res);
+                let res = res.unwrap();
+                assert_eq!(res,
+                           expected,
+                           "#{} expect {:?} but got {:?}",
+                           i,
+                           expected,
+                           res);
+            }
+        }
+    };
+}
