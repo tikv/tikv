@@ -524,7 +524,7 @@ mod tests {
     use tikv::util::codec::bytes::encode_bytes;
     use tikv::util::codec::number::NumberEncoder;
     use tikv::raftstore::store::keys;
-    use tikv::storage::{ALL_CFS, CF_LOCK, CF_WRITE, CF_DEFAULT};
+    use tikv::storage::{KV_CFS, CF_LOCK, CF_WRITE, CF_DEFAULT};
     use tikv::storage::mvcc::{Lock, Write, LockType, WriteType};
     use tempdir::TempDir;
     use tikv::util::rocksdb::new_engine;
@@ -537,7 +537,7 @@ mod tests {
     fn test_ctl_mvcc() {
         let tmp_dir = TempDir::new("mvcc_tmp").expect("create mvcc_tmp dir");
         //        let file_path = tmp_dir.path().join("tmp_db");
-        let db = new_engine(tmp_dir.path().to_str().unwrap(), ALL_CFS).unwrap();
+        let db = new_engine(tmp_dir.path().to_str().unwrap(), KV_CFS).unwrap();
         let test_data = vec![(PREFIX, b"v", 5), (PREFIX, b"x", 10), (PREFIX, b"y", 15)];
         for &(k, v, ts) in &test_data {
             let key = keys::data_key(Key::from_raw(k).append_ts(ts).encoded().as_slice());

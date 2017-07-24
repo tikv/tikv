@@ -14,7 +14,7 @@
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use tikv::util::HandyRwLock;
-use tikv::storage::{self, Storage, Mutation, make_key, ALL_CFS, Options, Engine};
+use tikv::storage::{self, Storage, Mutation, make_key, Options, Engine};
 use tikv::storage::{txn, engine, mvcc};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
@@ -109,7 +109,7 @@ fn test_raft_storage_store_not_match() {
 
 #[test]
 fn test_engine_leader_change_twice() {
-    let mut cluster = new_server_cluster_with_cfs(0, 3, ALL_CFS);
+    let mut cluster = new_server_cluster_with_cfs(0, 3);
     cluster.run();
 
     let region = cluster.get_region(b"");
@@ -143,7 +143,7 @@ fn test_engine_leader_change_twice() {
 
 #[test]
 fn test_scheduler_leader_change_twice() {
-    let mut cluster = new_server_cluster_with_cfs(0, 2, ALL_CFS);
+    let mut cluster = new_server_cluster_with_cfs(0, 2);
     cluster.run();
     let region = cluster.get_region(b"");
     let peers = region.get_peers();

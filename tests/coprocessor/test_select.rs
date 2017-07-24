@@ -31,7 +31,7 @@ use tikv::coprocessor::*;
 use tikv::coprocessor::codec::{table, datum};
 use tikv::coprocessor::codec::datum::Datum;
 use tikv::coprocessor::xeval::evaluator::FLAG_IGNORE_TRUNCATE;
-use tikv::storage::{Mutation, Key, ALL_CFS};
+use tikv::storage::{Mutation, Key, KV_CFS};
 use tikv::storage::engine::{self, Engine, TEMP_DIR};
 use storage::sync_storage::SyncStorage;
 
@@ -639,7 +639,7 @@ impl ProductTable {
 fn init_with_data(tbl: &ProductTable,
                   vals: &[(i64, Option<&str>, i64)])
                   -> (Store, Worker<EndPointTask>) {
-    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+    let engine = engine::new_local_engine(TEMP_DIR, KV_CFS).unwrap();
     let mut store = Store::new(engine);
 
     store.begin();

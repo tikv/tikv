@@ -1,6 +1,6 @@
 use tikv::util::HandyRwLock;
 use tikv::storage::engine::*;
-use tikv::storage::{Key, CfName, CF_DEFAULT, CF_RAFT, CFStatistics};
+use tikv::storage::{Key, CfName, CF_DEFAULT, CFStatistics};
 use tikv::util::codec::bytes;
 use tikv::util::escape;
 use kvproto::kvrpcpb::Context;
@@ -11,7 +11,7 @@ use tikv::raftstore::store::engine::IterOption;
 #[test]
 fn test_raftkv() {
     let count = 1;
-    let mut cluster = new_server_cluster_with_cfs(0, count, &["cf", CF_RAFT]);
+    let mut cluster = new_server_cluster_with_cfs(0, count);
     cluster.run();
 
     // make sure leader has been elected.
@@ -39,7 +39,7 @@ fn test_raftkv() {
 #[test]
 fn test_read_leader_in_lease() {
     let count = 3;
-    let mut cluster = new_server_cluster_with_cfs(0, count, &["cf", CF_RAFT]);
+    let mut cluster = new_server_cluster_with_cfs(0, count);
     cluster.run();
 
     let k1 = b"k1";

@@ -122,6 +122,7 @@ pub fn prepare_bootstrap(raft_engine: &DB,
 #[cfg(test)]
 mod tests {
     use tempdir::TempDir;
+    use std::path::Path;
 
     use super::*;
     use util::rocksdb;
@@ -132,13 +133,14 @@ mod tests {
     #[test]
     fn test_bootstrap() {
         let path = TempDir::new("var").unwrap();
-        let raft_engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_RAFT]).unwrap();
+        let raft_path = path.path().join(Path::new("raft_db"));
         let kv_engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+        let raft_engine = rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_RAFT]).unwrap();
 
         assert!(bootstrap_store(&raft_engine, 1, 1).is_ok());
         assert!(bootstrap_store(&raft_engine, 1, 1).is_err());
 
-        assert!(prepare_bootstrap(&raft_engine, 1, 1, 1).is_ok());
+        assert!(prepare_bootstrap(&raft_engine, &kv_engine, 1, 1, 1).is_ok());
         assert!(raft_engine.get_value(&keys::region_state_key(1)).unwrap().is_some());
         assert!(raft_engine.get_value(&keys::prepare_bootstrap_key()).unwrap().is_some());
         assert!(raft_engine.get_value_cf(CF_RAFT, &keys::raft_state_key(1)).unwrap().is_some());
@@ -152,7 +154,7 @@ mod tests {
                                &keys::region_meta_prefix(1),
                                &keys::region_meta_prefix(2))
             .unwrap());
-        assert!(is_range_empty(&engine,
+        assert!(is_range_empty(&raft_engine,
                                CF_RAFT,
                                &keys::region_raft_prefix(1),
                                &keys::region_raft_prefix(2))

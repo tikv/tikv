@@ -44,7 +44,8 @@ pub const CF_WRITE: CfName = "write";
 pub const CF_RAFT: CfName = "raft";
 // Cfs that should be very large generally.
 pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
+pub const KV_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const RAFT_CFS: &'static [CfName] = &[CF_DEFAULT, CF_RAFT];
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -391,7 +392,7 @@ impl Storage {
     }
 
     pub fn new(config: &Config) -> Result<Storage> {
-        let kv_engine = try!(engine::new_local_engine(&config.path, ALL_CFS));
+        let kv_engine = try!(engine::new_local_engine(&config.path, KV_CFS));
         Storage::from_engine(kv_engine, config)
     }
 

@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
-use tikv::storage::{Engine, Snapshot, Modify, ALL_CFS};
+use tikv::storage::{Engine, Snapshot, Modify};
 use tikv::storage::engine::{Callback, Result};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
@@ -127,7 +127,7 @@ impl Engine for BlockEngine {
 }
 
 pub fn new_raft_engine(count: usize, key: &str) -> (Cluster<ServerCluster>, Box<Engine>, Context) {
-    let mut cluster = new_server_cluster_with_cfs(0, count, ALL_CFS);
+    let mut cluster = new_server_cluster_with_cfs(0, count);
     cluster.run();
     // make sure leader has been elected.
     assert_eq!(cluster.must_get(b""), None);

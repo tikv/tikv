@@ -29,7 +29,7 @@ use tikv::server::transport::RaftStoreRouter;
 use tikv::raftstore::{Error, Result, store};
 use tikv::raftstore::store::{Msg as StoreMsg, SnapManager};
 use tikv::util::transport::SendCh;
-use tikv::storage::{Engine, CfName, ALL_CFS};
+use tikv::storage::Engine;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
@@ -73,7 +73,12 @@ impl ServerCluster {
 
 impl Simulator for ServerCluster {
     #[allow(useless_format)]
-    fn run_node(&mut self, node_id: u64, mut cfg: Config, engine: Arc<DB>) -> u64 {
+    fn run_node(&mut self,
+                node_id: u64,
+                mut cfg: Config,
+                kv_engine: Arc<DB>,
+                raft_engine: Arc<DB>)
+                -> u64 {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         assert!(node_id == 0 || !self.servers.contains_key(&node_id));
 
@@ -99,7 +104,7 @@ impl Simulator for ServerCluster {
         let (snap_status_sender, snap_status_receiver) = mpsc::channel();
 
         // Create storage.
-        let mut store = create_raft_storage(sim_router.clone(), engine.clone(), &cfg).unwrap();
+        let mut store = create_raft_storage(sim_router.clone(), kv_engine.clone(), &cfg).unwrap();
         store.start(&cfg.storage).unwrap();
         // TODO(lishuai): split raft and kv engine
         self.storages.insert(node_id, store.get_kv_engine());
@@ -124,9 +129,8 @@ impl Simulator for ServerCluster {
         // Create node.
         let mut node = Node::new(&mut event_loop, &cfg, self.pd_client.clone());
         node.start(event_loop,
-                   // TODO(lishuai): split raft and kv engine
-                   engine.clone(),
-                   engine,
+                   raft_engine.clone(),
+                   kv_engine.clone(),
                    simulate_trans.clone(),
                    snap_mgr.clone(),
                    snap_status_receiver)
@@ -212,14 +216,11 @@ impl Simulator for ServerCluster {
 }
 
 pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
-    new_server_cluster_with_cfs(id, count, ALL_CFS)
+    new_server_cluster_with_cfs(id, count)
 }
 
-pub fn new_server_cluster_with_cfs(id: u64,
-                                   count: usize,
-                                   cfs: &[CfName])
-                                   -> Cluster<ServerCluster> {
+pub fn new_server_cluster_with_cfs(id: u64, count: usize) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id));
     let sim = Arc::new(RwLock::new(ServerCluster::new(pd_client.clone())));
-    Cluster::new(id, count, cfs, sim, pd_client)
+    Cluster::new(id, count, sim, pd_client)
 }

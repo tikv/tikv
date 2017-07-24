@@ -1395,24 +1395,32 @@ mod tests {
     use std::sync::*;
 
     use tempdir::TempDir;
+    use std::path::Path;
     use rocksdb::{DB, WriteBatch, Writable};
     use protobuf::Message;
     use kvproto::metapb::RegionEpoch;
     use kvproto::raft_cmdpb::CmdType;
 
     use super::*;
-    use storage::{CF_WRITE, ALL_CFS};
+    use storage::{CF_WRITE, KV_CFS, RAFT_CFS};
     use util::collections::HashMap;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, Arc<DB>) {
+    pub fn create_tmp_engine(path: &str) -> (Arc<DB>, Arc<DB>) {
         let path = TempDir::new(path).unwrap();
-        let db = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
-        (path, db)
+        let kv_db = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), KV_CFS).unwrap());
+        let raft_path = path.path().join(Path::new("raft_db"));
+        let raft_db = Arc::new(rocksdb::new_engine(raft_path.to_str().unwrap(), RAFT_CFS).unwrap());
+        (kv_db, raft_db)
     }
 
-    fn new_runner(db: Arc<DB>, host: Arc<CoprocessorHost>, tx: Sender<TaskRes>) -> Runner {
+    fn new_runner(db: Arc<DB>,
+                  raft_db: Arc<DB>,
+                  host: Arc<CoprocessorHost>,
+                  tx: Sender<TaskRes>)
+                  -> Runner {
         Runner {
             db: db,
+            raft_db: raft_db,
             host: host,
             delegates: HashMap::new(),
             notifier: tx,
@@ -1457,9 +1465,9 @@ mod tests {
     #[test]
     fn test_basic_flow() {
         let (tx, rx) = mpsc::channel();
-        let (_tmp, db) = create_tmp_engine("apply-basic");
+        let (db, raft_db) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::new());
-        let mut runner = new_runner(db.clone(), host, tx);
+        let mut runner = new_runner(db.clone(), raft_db.clone(), host, tx);
 
         let mut reg = Registration::default();
         reg.id = 1;
@@ -1651,11 +1659,11 @@ mod tests {
 
     #[test]
     fn test_handle_raft_committed_entries() {
-        let (_path, db) = create_tmp_engine("test-delegate");
+        let (db, raft_db) = create_tmp_engine("test-delegate");
         let mut reg = Registration::default();
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
-        let mut delegate = ApplyDelegate::from_registration(db.clone(), reg);
+        let mut delegate = ApplyDelegate::from_registration(db.clone(), raft_db.clone(), reg);
         let (tx, rx) = mpsc::channel();
 
         let put_entry = EntryBuilder::new(1, 1)

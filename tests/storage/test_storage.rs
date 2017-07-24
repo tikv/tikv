@@ -19,7 +19,7 @@ use std::thread;
 use rand::random;
 use super::sync_storage::SyncStorage;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::storage::{self, Mutation, Key, make_key, ALL_CFS, Storage};
+use tikv::storage::{self, Mutation, Key, make_key, KV_CFS, Storage};
 use tikv::storage::engine::{self, TEMP_DIR, Engine};
 use tikv::storage::txn::{GC_BATCH_SIZE, RESOLVE_LOCK_BATCH_SIZE};
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
@@ -690,7 +690,7 @@ fn test_storage_1gc_with_engine(engine: Box<Engine>, ctx: Context) {
 }
 #[test]
 fn test_storage_1gc() {
-    let engine = engine::new_local_engine(TEMP_DIR, ALL_CFS).unwrap();
+    let engine = engine::new_local_engine(TEMP_DIR, KV_CFS).unwrap();
     test_storage_1gc_with_engine(engine, Context::new());
     let (_cluster, raft_engine, ctx) = new_raft_engine(3, "");
     test_storage_1gc_with_engine(raft_engine, ctx);

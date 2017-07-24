@@ -1451,7 +1451,7 @@ mod v2 {
         use kvproto::raft_serverpb::{SnapshotMeta, RaftSnapshotData};
         use rocksdb::DB;
 
-        use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT};
+        use storage::{KV_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
         use util::{rocksdb, HandyRwLock};
         use raftstore::Result;
         use raftstore::store::keys;
@@ -1478,16 +1478,16 @@ mod v2 {
 
         pub fn get_test_empty_db(path: &TempDir) -> Result<Arc<DB>> {
             let p = path.path().to_str().unwrap();
-            let db = try!(rocksdb::new_engine(p, ALL_CFS));
+            let db = try!(rocksdb::new_engine(p, KV_CFS));
             Ok(Arc::new(db))
         }
 
         pub fn get_test_db(path: &TempDir) -> Result<Arc<DB>> {
             let p = path.path().to_str().unwrap();
-            let db = try!(rocksdb::new_engine(p, ALL_CFS));
+            let db = try!(rocksdb::new_engine(p, KV_CFS));
             let key = keys::data_key(TEST_KEY);
             // write some data into each cf
-            for (i, cf) in ALL_CFS.iter().enumerate() {
+            for (i, cf) in KV_CFS.iter().enumerate() {
                 let handle = try!(rocksdb::get_cf_handle(&db, cf));
                 let mut p = Peer::new();
                 p.set_store_id(TEST_STORE_ID);
@@ -1686,7 +1686,7 @@ mod v2 {
             let dst_db_dir = TempDir::new("test-snap-file-db-dst").unwrap();
             let dst_db_path = dst_db_dir.path().to_str().unwrap();
             // Change arbitrarily the cf order of ALL_CFS at destination db.
-            let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
+            let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK];
             let dst_db = Arc::new(rocksdb::new_engine(dst_db_path, &dst_cfs).unwrap());
             let options = ApplyOptions {
                 kv_db: dst_db.clone(),
@@ -2350,7 +2350,7 @@ mod test {
     use protobuf::Message;
     use kvproto::raft_serverpb::RaftSnapshotData;
 
-    use storage::ALL_CFS;
+    use storage::KV_CFS;
     use util::rocksdb;
     use super::super::peer_storage::JOB_STATUS_RUNNING;
     use super::super::engine::Snapshot as DbSnapshot;
@@ -2537,7 +2537,7 @@ mod test {
         s3.save().unwrap();
 
         let dst_db_dir = TempDir::new("test-snap-v1-v2-compatible-dst-db").unwrap();
-        let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), ALL_CFS)
+        let dst_db = Arc::new(rocksdb::new_engine(dst_db_dir.path().to_str().unwrap(), KV_CFS)
             .unwrap());
         let options = ApplyOptions {
             kv_db: dst_db.clone(),

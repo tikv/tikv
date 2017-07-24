@@ -14,7 +14,7 @@
 use std::sync::{Arc, mpsc};
 use tikv::raftstore::store::{keys, Peekable, SnapManager, create_event_loop, bootstrap_store};
 use tikv::server::Node;
-use tikv::storage::ALL_CFS;
+use tikv::storage::{KV_CFS, RAFT_CFS};
 use tikv::util::rocksdb;
 use tempdir::TempDir;
 use kvproto::metapb;
@@ -48,8 +48,12 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
-    let tmp_engine = TempDir::new("test_cluster").unwrap();
-    let engine = Arc::new(rocksdb::new_engine(tmp_engine.path().to_str().unwrap(), ALL_CFS)
+    let tmp_engine_kv = TempDir::new("test_cluster_kv").unwrap();
+    let tmp_engine_raft = TempDir::new("test_cluster_raft").unwrap();
+
+    let kv_engine = Arc::new(rocksdb::new_engine(tmp_engine_kv.path().to_str().unwrap(), KV_CFS)
+                          .unwrap());
+    let raft_engine = Arc::new(rocksdb::new_engine(tmp_engine_raft.path().to_str().unwrap(), RAFT_CFS)
         .unwrap());
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
@@ -65,26 +69,27 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // now anthoer node at same time begin bootstrap node, but panic after prepared bootstrap
     // now rocksDB must have some prepare data
-    bootstrap_store(&engine, 0, 1).unwrap();
-    let region = node.prepare_bootstrap_cluster(&engine, 1).unwrap();
-    assert!(engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
+    bootstrap_store(&raft_engine, 0, 1).unwrap();
+    let region = node.prepare_bootstrap_cluster(&raft_engine, &kv_engine, 1).unwrap();
+    assert!(raft_engine.get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         .unwrap()
         .is_some());
     let region_state_key = keys::region_state_key(region.get_id());
-    assert!(engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_some());
+    assert!(raft_engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_some());
 
     // try to restart this node, will clear the prepare data
     node.start(event_loop,
-               engine.clone(),
+               raft_engine.clone(),
+               kv_engine.clone(),
                simulate_trans,
                snap_mgr,
                snapshot_status_receiver)
         .unwrap();
-    assert!(engine.clone()
+    assert!(raft_engine.clone()
         .get_msg::<metapb::Region>(&keys::prepare_bootstrap_key())
         .unwrap()
         .is_none());
-    assert!(engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_none());
+    assert!(raft_engine.get_msg::<RegionLocalState>(&region_state_key).unwrap().is_none());
     assert_eq!(pd_client.get_regions_number() as u32, 1);
 }
 

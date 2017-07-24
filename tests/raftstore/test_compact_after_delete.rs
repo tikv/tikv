@@ -36,15 +36,15 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     // wait for compaction.
     sleep_ms(1000);
 
-    for engine in cluster.engines.values() {
-        let cf_handle = get_cf_handle(engine, CF_DEFAULT).unwrap();
+    for &(ref kv_engine, ref _raft_engine) in cluster.engines.values() {
+        let cf_handle = get_cf_handle(kv_engine, CF_DEFAULT).unwrap();
         let approximate_size =
-            engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
+            kv_engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
         assert_eq!(approximate_size, 0);
 
-        let cf_handle = get_cf_handle(engine, CF_WRITE).unwrap();
+        let cf_handle = get_cf_handle(kv_engine, CF_WRITE).unwrap();
         let approximate_size =
-            engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
+            kv_engine.get_approximate_sizes_cf(cf_handle, &[Range::new(b"", b"k9")])[0];
         assert_eq!(approximate_size, 0);
     }
 }

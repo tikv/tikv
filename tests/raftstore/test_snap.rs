@@ -47,7 +47,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put(key.as_bytes(), value.as_bytes());
     }
 
-    let engine_2 = cluster.get_engine(2);
+    let engine_2 = cluster.get_kv_engine(2);
     must_get_none(&engine_2, &format!("{:01024}", 0).into_bytes());
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
@@ -78,7 +78,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         }
     }
     cluster.must_put(b"k3", b"v3");
-    let engine_3 = cluster.get_engine(3);
+    let engine_3 = cluster.get_kv_engine(3);
     must_get_equal(&engine_3, b"k3", b"v3");
 
     // TODO: add more tests.
@@ -111,7 +111,7 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(2, 2));
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_kv_engine(2), b"k1", b"v1");
 
     let (tx, rx) = mpsc::channel();
     // drop all the snapshot so we can detect stale snapfile.
@@ -124,11 +124,11 @@ fn test_snap_gc<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // node 1 and node 2 must have k2, but node 3 must not.
     for i in 1..3 {
-        let engine = cluster.get_engine(i);
+        let engine = cluster.get_kv_engine(i);
         must_get_equal(&engine, b"k2", b"v2");
     }
 
-    let engine3 = cluster.get_engine(3);
+    let engine3 = cluster.get_kv_engine(3);
     must_get_none(&engine3, b"k2");
 
     for _ in 0..30 {
@@ -224,12 +224,12 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     }
     // Split the region range and then there should be another snapshot for the split ranges.
     cluster.must_split(&region, b"k2");
-    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    must_get_equal(&cluster.get_kv_engine(3), b"k3", b"v3");
     // Ensure the regions work after split.
     cluster.must_put(b"k11", b"v11");
-    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    must_get_equal(&cluster.get_kv_engine(3), b"k11", b"v11");
     cluster.must_put(b"k4", b"v4");
-    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+    must_get_equal(&cluster.get_kv_engine(3), b"k4", b"v4");
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let cf = "lock";
     cluster.must_put_cf(cf, b"k1", b"v1");
     cluster.must_put_cf(cf, b"k2", b"v2");
-    let engine1 = cluster.get_engine(1);
+    let engine1 = cluster.get_kv_engine(1);
     must_get_cf_equal(&engine1, cf, b"k1", b"v1");
     must_get_cf_equal(&engine1, cf, b"k2", b"v2");
 
@@ -344,7 +344,7 @@ fn test_node_stale_snap() {
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
     cluster.must_put(b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_kv_engine(2), b"k1", b"v1");
 
     let (tx, rx) = mpsc::channel();
     let filter = StaleSnap {
@@ -354,18 +354,18 @@ fn test_node_stale_snap() {
     cluster.add_send_filter(CloneFilterFactory(Arc::new(filter)));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     cluster.must_put(b"k2", b"v2");
-    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    must_get_equal(&cluster.get_kv_engine(3), b"k2", b"v2");
     pd_client.must_remove_peer(r1, new_peer(3, 3));
-    must_get_none(&cluster.get_engine(3), b"k2");
+    must_get_none(&cluster.get_kv_engine(3), b"k2");
     pd_client.must_add_peer(r1, new_peer(3, 4));
 
     cluster.must_put(b"k3", b"v3");
-    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+    must_get_equal(&cluster.get_kv_engine(2), b"k3", b"v3");
     rx.recv().unwrap();
     sleep_ms(2000);
-    must_get_none(&cluster.get_engine(3), b"k3");
+    must_get_none(&cluster.get_kv_engine(3), b"k3");
     cluster.clear_send_filters();
-    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    must_get_equal(&cluster.get_kv_engine(3), b"k3", b"v3");
 }
 
 /// Pause Snap and wait till first append message arrives.
@@ -437,7 +437,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
-    let engine4 = cluster.get_engine(4);
+    let engine4 = cluster.get_kv_engine(4);
     must_get_equal(&engine4, b"k1", b"v1");
     must_get_equal(&engine4, b"k2", b"v2");
 }

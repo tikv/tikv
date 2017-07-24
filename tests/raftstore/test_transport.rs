@@ -21,7 +21,7 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let (key, value) = (b"k1", b"v1");
     cluster.must_put(key, value);
-    must_get_equal(&cluster.engines[&1], key, value);
+    must_get_equal(&cluster.engines[&1].0, key, value);
 
     let region_id = cluster.get_region_id(key);
 
@@ -46,8 +46,8 @@ fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     // when network recover, old leader should sync data
     cluster.reset_leader_of_region(region_id);
     cluster.must_put(b"k2", b"v2");
-    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
-    must_get_equal(&cluster.get_engine(1), key, b"changed");
+    must_get_equal(&cluster.get_kv_engine(1), b"k2", b"v2");
+    must_get_equal(&cluster.get_kv_engine(1), key, b"changed");
 }
 
 #[test]

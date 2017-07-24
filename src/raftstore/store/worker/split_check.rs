@@ -238,14 +238,14 @@ mod tests {
     use rocksdb::Writable;
     use kvproto::metapb::Peer;
 
-    use storage::ALL_CFS;
+    use storage::KV_CFS;
     use util::rocksdb;
     use super::*;
 
     #[test]
     fn test_split_check() {
         let path = TempDir::new("test-raftstore").unwrap();
-        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap());
+        let engine = Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), KV_CFS).unwrap());
 
         let mut region = Region::new();
         region.set_id(1);
@@ -290,7 +290,7 @@ mod tests {
         // So split key will be z0003
         for i in 0..6 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());
-            for cf in ALL_CFS {
+            for cf in KV_CFS {
                 let handle = engine.cf_handle(cf).unwrap();
                 engine.put_cf(handle, &s, &s).unwrap();
             }

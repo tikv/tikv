@@ -474,8 +474,7 @@ mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use rocksdb::{self, DB, Writable, WriteBatch};
     use std::sync::Arc;
-    use storage::{Options, Mutation, Statistics, ALL_CFS, CF_DEFAULT, CF_RAFT, CF_LOCK, CF_WRITE,
-                  make_key};
+    use storage::{Options, Mutation, Statistics, KV_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, make_key};
     use storage::engine::Modify;
     use storage::mvcc::{MvccTxn, MvccReader};
     use tempdir::TempDir;
@@ -563,14 +562,14 @@ mod tests {
         }
 
         fn flush(&mut self) {
-            for cf in ALL_CFS {
+            for cf in KV_CFS {
                 let cf = rocksdb_util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.flush_cf(cf, true).unwrap();
             }
         }
 
         fn compact(&mut self) {
-            for cf in ALL_CFS {
+            for cf in KV_CFS {
                 let cf = rocksdb_util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.compact_range_cf(cf, None, None);
             }
@@ -585,7 +584,6 @@ mod tests {
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, rocksdb::Options::new()),
-                            CFOptions::new(CF_RAFT, rocksdb::Options::new()),
                             CFOptions::new(CF_LOCK, rocksdb::Options::new()),
                             CFOptions::new(CF_WRITE, cf_opts)];
         Arc::new(rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
