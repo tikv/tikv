@@ -255,6 +255,16 @@ impl<'a> MvccReader<'a> {
         Ok(None)
     }
 
+    fn create_data_cursor(&mut self) -> Result<()> {
+        self.scan_mode = Some(ScanMode::Forward);
+        if self.data_cursor.is_none() {
+            let iter_opt = IterOption::new(None, self.fill_cache);
+            let iter = try!(self.snapshot.iter(iter_opt, self.get_scan_mode(true)));
+            self.data_cursor = Some(iter);
+        }
+        Ok(())
+    }
+
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
             let iter_opt = IterOption::new(self.upper_bound.as_ref().cloned(), self.fill_cache);
@@ -271,6 +281,23 @@ impl<'a> MvccReader<'a> {
             self.lock_cursor = Some(iter);
         }
         Ok(())
+    }
+
+    // Return the first committed key which start_ts equals to ts
+    pub fn seek_ts(&mut self, ts: u64) -> Result<Option<Key>> {
+        assert!(self.scan_mode.is_some());
+        try!(self.create_write_cursor());
+
+        let mut cursor = self.write_cursor.as_mut().unwrap();
+        let mut ok = cursor.seek_to_first(&mut self.statistics.write);
+
+        while ok {
+            if try!(Write::parse(cursor.value())).start_ts == ts {
+                return Ok(Some(try!(Key::from_encoded(cursor.key().to_vec()).truncate_ts())));
+            }
+            ok = cursor.next(&mut self.statistics.write);
+        }
+        Ok(None)
     }
 
     pub fn seek(&mut self, mut key: Key, ts: u64) -> Result<Option<(Key, Value)>> {
@@ -427,6 +454,29 @@ impl<'a> MvccReader<'a> {
             start = Some(key.append_ts(0));
             keys.push(key);
         }
+    }
+
+    // Get all Value of the given key in CF_DEFAULT
+    pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
+        try!(self.create_data_cursor());
+        let mut cursor = self.data_cursor.as_mut().unwrap();
+        let mut ok = try!(cursor.seek(key, &mut self.statistics.data));
+        if !ok {
+            return Ok(vec![]);
+        }
+        let mut v = vec![];
+        while ok {
+            let cur_key = Key::from_encoded(cursor.key().to_vec());
+            let cur_key_without_ts = try!(cur_key.truncate_ts());
+            if cur_key_without_ts.encoded().as_slice() == key.encoded().as_slice() {
+                v.push((try!(cur_key.decode_ts()), cursor.value().to_vec()));
+            }
+            if cur_key_without_ts.encoded().as_slice() != key.encoded().as_slice() {
+                break;
+            }
+            ok = cursor.next(&mut self.statistics.data);
+        }
+        Ok(v)
     }
 
     // Returns true if it needs gc.

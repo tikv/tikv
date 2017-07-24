@@ -21,6 +21,8 @@ use util::{escape, codec};
 use util::codec::number::{self, NumberEncoder, NumberDecoder};
 use util::codec::bytes::BytesDecoder;
 
+use storage::mvcc::{Write, Lock};
+
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
@@ -29,6 +31,17 @@ pub type Value = Vec<u8>;
 /// The value is simply raw bytes; the key is a little bit tricky, which is
 /// encoded bytes.
 pub type KvPair = (Vec<u8>, Value);
+
+/// `MvccInfo` stores all mvcc information of given key.
+/// Used by `MvccGetByKey` and `MvccGetByStartTs`.
+#[derive(Debug, Default)]
+pub struct MvccInfo {
+    pub lock: Option<Lock>,
+    /// commit_ts and write
+    pub writes: Vec<(u64, Write)>,
+    /// start_ts and value
+    pub values: Vec<(u64, bool, Value)>,
+}
 
 /// Key type.
 ///
