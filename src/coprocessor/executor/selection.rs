@@ -66,7 +66,7 @@ impl<'a> Executor for SelectionExecutor<'a> {
                                   &self.columns,
                                   row.handle));
             for expr in &self.conditions {
-                let val = box_try!(evaluator.eval(&self.ctx, expr));
+                let val = box_try!(evaluator.eval(&self.ctx, expr, evaluator.get_row().as_slice()));
                 if !box_try!(val.into_bool(&self.ctx)).unwrap_or(false) {
                     continue 'next;
                 }

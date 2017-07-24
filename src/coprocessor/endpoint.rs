@@ -909,7 +909,9 @@ impl SelectContextCore {
             return Ok(false);
         }
         try!(inflate_with_col(&mut self.eval, &self.ctx, values, &self.cond_cols, h));
-        let res = box_try!(self.eval.eval(&self.ctx, self.sel.get_field_where()));
+        let res = box_try!(self.eval.eval(&self.ctx,
+                                          self.sel.get_field_where(),
+                                          self.eval.get_row().as_slice()));
         let b = box_try!(res.into_bool(&self.ctx));
         Ok(b.map_or(true, |v| !v))
     }
@@ -919,7 +921,8 @@ impl SelectContextCore {
         let mut sort_keys = Vec::with_capacity(self.sel.get_order_by().len());
         // parse order by
         for col in self.sel.get_order_by() {
-            let v = box_try!(self.eval.eval(&self.ctx, col.get_expr()));
+            let v = box_try!(self.eval
+                .eval(&self.ctx, col.get_expr(), self.eval.get_row().as_slice()));
             sort_keys.push(v);
         }
 
@@ -968,7 +971,8 @@ impl SelectContextCore {
         }
         let mut vals = Vec::with_capacity(items.len());
         for item in items {
-            let v = box_try!(self.eval.eval(&self.ctx, item.get_expr()));
+            let v = box_try!(self.eval
+                .eval(&self.ctx, item.get_expr(), self.eval.get_row().as_slice()));
             vals.push(v);
         }
         let res = box_try!(datum::encode_value(&vals));
