@@ -120,7 +120,7 @@ impl Key {
         Ok(Key::from_encoded(self.0[..len - number::U64_SIZE].to_vec()))
     }
 
-    pub fn into_vec(self) -> Vec<u8> {
+    pub fn into_encoded(self) -> Vec<u8> {
         self.0
     }
 }

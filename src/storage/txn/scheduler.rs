@@ -613,7 +613,7 @@ fn process_raw_mget(snapshot: Box<Snapshot>,
     let mut pairs = vec![];
     for key in keys.drain(..) {
         if let Some(val) = try!(snapshot.get(&key)) {
-            pairs.push(Ok((key.into_vec(), val)));
+            pairs.push(Ok((key.into_encoded(), val)));
         }
     }
     Ok(pairs)
