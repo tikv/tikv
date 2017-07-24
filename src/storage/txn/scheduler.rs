@@ -294,7 +294,7 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
             }
             None => break,
         };
-        let write = &writes[writes.len()-1].1;
+        let write = &writes[writes.len() - 1].1;
         if let Some(v) = short_value {
             values.push((write.start_ts, true, v));
         }
