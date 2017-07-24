@@ -279,6 +279,13 @@ stats-dump-period-sec = 600
 # Max bytes for compaction.max_compaction_bytes
 # max-compaction-bytes = "2GB"
 
+# There are four different algorithms to pick files to compact.
+# 0 : ByCompensatedSize
+# 1 : OldestLargestSeqFirst
+# 2 : OldestSmallestSeqFirst
+# 3 : MinOverlappingRatio
+# compaction-pri = 0
+
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read.
 # in normal cases should tune to 30%-50% system's total memory.
 # block-cache-size = "1GB"
@@ -317,6 +324,7 @@ stats-dump-period-sec = 600
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "32MB"
+# compaction-pri = 0
 
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"
@@ -324,6 +332,7 @@ stats-dump-period-sec = 600
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# compaction-pri = 0
 
 [rocksdb.lockcf]
 # compression-per-level = "no:no:no:no:no:no:no"
@@ -338,6 +347,7 @@ stats-dump-period-sec = 600
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# compaction-pri = 0
 
 [storage]
 # notify capacity of scheduler's channel
