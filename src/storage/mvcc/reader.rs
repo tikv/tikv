@@ -256,6 +256,7 @@ impl<'a> MvccReader<'a> {
     }
 
     fn create_data_cursor(&mut self) -> Result<()> {
+        self.scan_mode = Some(ScanMode::Forward);
         if self.data_cursor.is_none() {
             let iter_opt = IterOption::new(None, self.fill_cache);
             let iter = try!(self.snapshot.iter(iter_opt, self.get_scan_mode(true)));
@@ -459,14 +460,9 @@ impl<'a> MvccReader<'a> {
     pub fn scan_values_in_default(&mut self, key: &Key) -> Result<Vec<(u64, Value)>> {
         try!(self.create_data_cursor());
         let mut cursor = self.data_cursor.as_mut().unwrap();
-        let mut ok = cursor.seek_to_first(&mut self.statistics.data);
+        let mut ok = try!(cursor.seek(key, &mut self.statistics.data));
         if !ok {
-            return Err(Error::Other(From::from("data_cursor cannot seek_to_first".to_string())));
-        }
-        ok = try!(cursor.seek(key, &mut self.statistics.data));
-        if !ok {
-            return Err(Error::Other(From::from(format!("data_cursor cannot seek to {:?}", key)
-                .to_string())));
+            return Ok(vec![]);
         }
         let mut v = vec![];
         while ok {
