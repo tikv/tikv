@@ -45,6 +45,7 @@ impl Evaluator {
         let d = try!(self.eval(ctx, child));
         match d {
             Datum::F64(f) => Ok(Datum::F64(f.abs())),
+            Datum::Null => Ok(Datum::Null),
             _ => invalid_type_error(&d, TYPE_FLOAT),
         }
     }
@@ -125,6 +126,10 @@ mod test {
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::AbsReal),
                      Datum::F64(1.0_f64)),
+                    (build_expr_with_sig(vec![Datum::Null],
+                                         ExprType::ScalarFunc,
+                                         ScalarFuncSig::AbsReal),
+                     Datum::Null),
                     (build_expr_with_sig(vec![Datum::F64(0.0_f64)],
                                          ExprType::ScalarFunc,
                                          ScalarFuncSig::AbsReal),
