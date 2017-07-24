@@ -868,13 +868,6 @@ impl Snapshot for Snap {
                 let mut file = box_try!(File::open(&cf_file.path));
                 try!(apply_plain_cf_file(&mut file, &options, cf_handle));
             } else {
-                // We move instead of copy file when ingest_external_file_cf
-                // so method delete will not sub size_track.
-                // So we check and sub size_track here, before it's moved.
-                if file_exists(&cf_file.path) {
-                    let mut size_track = self.size_track.wl();
-                    *size_track = size_track.saturating_sub(cf_file.size);
-                }
                 let ingest_opt = IngestExternalFileOptions::new();
                 // TODO: move SST file instead of copy
                 // after changing logic in raft, ask for resending snapshot if applying fail.
