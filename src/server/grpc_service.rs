@@ -756,9 +756,9 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             lock_info.set_lock_ttl(ttl);
             key_error.set_locked(lock_info);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict)) |
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound)) => {
-            debug!("txn conflicts: {}", err);
+        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict { .. })) |
+        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+            warn!("txn conflicts: {}", err);
             key_error.set_retryable(format!("{:?}", err));
         }
         _ => {

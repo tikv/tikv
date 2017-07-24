@@ -120,7 +120,12 @@ impl<'a> MvccTxn<'a> {
             if let Some((commit, _)) = try!(self.reader.seek_write(key, u64::max_value())) {
                 // Abort on writes after our start timestamp ...
                 if commit >= self.start_ts {
-                    return Err(Error::WriteConflict);
+                    return Err(Error::WriteConflict {
+                        start_ts: self.start_ts,
+                        conflict_ts: commit,
+                        key: key.encoded().to_owned(),
+                        primary: primary.to_vec(),
+                    });
                 }
             }
         }
@@ -181,7 +186,11 @@ impl<'a> MvccTxn<'a> {
                               key,
                               self.start_ts,
                               commit_ts);
-                        Err(Error::TxnLockNotFound)
+                        Err(Error::TxnLockNotFound {
+                            start_ts: self.start_ts,
+                            commit_ts: commit_ts,
+                            key: key.encoded().to_owned(),
+                        })
                     }
                     // Committed by concurrent transaction.
                     Some((_, WriteType::Put)) |
