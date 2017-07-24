@@ -94,48 +94,89 @@ pub enum CompressionType {
     Disable,
 }
 
-pub mod recovery_mode_serde {
-    use std::fmt;
+macro_rules! numeric_enum_mod {
+    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
+        pub mod $name {
+            use std::fmt;
 
-    use serde::{Serializer, Deserializer};
-    use serde::de::{self, Unexpected, Visitor};
-    use rocksdb::DBRecoveryMode;
+            use serde::{Serializer, Deserializer};
+            use serde::de::{self, Unexpected, Visitor};
+            use rocksdb::$enum;
 
-    pub fn serialize<S>(mode: &DBRecoveryMode, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
-    {
-        serializer.serialize_i64(*mode as i64)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<DBRecoveryMode, D::Error>
-        where D: Deserializer<'de>
-    {
-        struct ModeVisitor;
-
-        impl<'de> Visitor<'de> for ModeVisitor {
-            type Value = DBRecoveryMode;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("valid recovery mode, only 0, 1, 2, 3 are supported")
+            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
+                where S: Serializer
+            {
+                serializer.serialize_i64(*mode as i64)
             }
 
-            fn visit_i64<E>(self, mode: i64) -> Result<DBRecoveryMode, E>
-                where E: de::Error
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
+                where D: Deserializer<'de>
             {
-                match mode {
-                    0 => Ok(DBRecoveryMode::TolerateCorruptedTailRecords),
-                    1 => Ok(DBRecoveryMode::AbsoluteConsistency),
-                    2 => Ok(DBRecoveryMode::PointInTime),
-                    3 => Ok(DBRecoveryMode::SkipAnyCorruptedRecords),
-                    _ => Err(E::invalid_value(Unexpected::Signed(mode), &"0, 1, 2, 3")),
+                struct EnumVisitor;
+
+                impl<'de> Visitor<'de> for EnumVisitor {
+                    type Value = $enum;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                        write!(formatter, concat!("valid ", stringify!($enum)))
+                    }
+
+                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $( $value => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
+                        }
+                    }
+                }
+
+                deserializer.deserialize_i64(EnumVisitor)
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use toml;
+                use rocksdb::$enum;
+
+                #[test]
+                fn test_serde() {
+                    #[derive(Serialize, Deserialize, PartialEq)]
+                    struct EnumHolder {
+                        #[serde(with = "super")]
+                        e: $enum,
+                    }
+
+                    let cases = vec![
+                        $(($enum::$variant, $value), )*
+                    ];
+                    for (e, v) in cases {
+                        let holder = EnumHolder { e };
+                        let res = toml::to_string(&holder).unwrap();
+                        let exp = format!("e = {}\n", v);
+                        assert_eq!(res, exp);
+                        let h: EnumHolder = toml::from_str(&exp).unwrap();
+                        assert!(h == holder);
+                    }
                 }
             }
         }
-
-        // Deserialize the enum from a u64.
-        deserializer.deserialize_u64(ModeVisitor)
     }
 }
+
+numeric_enum_mod!{compaction_pri_serde CompactionPriority {
+    ByCompensatedSize = 0,
+    OldestLargestSeqFirst = 1,
+    OldestSmallestSeqFirst = 2,
+    MinOverlappingRatio = 3,
+}}
+
+numeric_enum_mod!{recovery_mode_serde DBRecoveryMode {
+    TolerateCorruptedTailRecords = 0,
+    AbsoluteConsistency = 1,
+    PointInTime = 2,
+    SkipAnyCorruptedRecords = 3,
+}}
 
 pub fn parse_rocksdb_compaction_pri(priority: i64) -> Result<CompactionPriority, ConfigError> {
     match priority {
@@ -737,31 +778,6 @@ mod test {
     }
 
     #[test]
-    fn test_parse_recovery_mode() {
-        #[derive(Serialize, Deserialize, PartialEq)]
-        struct RecoveryModeHolder {
-            #[serde(with = "recovery_mode_serde")]
-            mode: DBRecoveryMode,
-        }
-        let cases = vec![
-            (DBRecoveryMode::TolerateCorruptedTailRecords, 0),
-            (DBRecoveryMode::AbsoluteConsistency, 1),
-            (DBRecoveryMode::PointInTime, 2),
-            (DBRecoveryMode::SkipAnyCorruptedRecords, 3),
-        ];
-        for (mode, num) in cases {
-            let holder = RecoveryModeHolder { mode };
-            let res = toml::to_string(&holder).unwrap();
-            let exp = format!("mode = {}\n", num);
-            assert_eq!(res, exp);
-            let h: RecoveryModeHolder = toml::from_str(&exp).unwrap();
-            assert!(h == holder);
-        }
-
-        assert!(toml::from_str::<RecoveryModeHolder>("mode = 5").is_err());
-    }
-
-    #[test]
     fn test_parse_compression_type() {
         #[derive(Serialize, Deserialize)]
         struct CompressionTypeHolder {
@@ -792,7 +808,7 @@ mod test {
         assert!(toml::from_str::<CompressionTypeHolder>("tp = \"tp\"").is_err());
     }
 
-
+    #[test]
     fn test_parse_rocksdb_compaction_pri() {
         assert!(CompactionPriority::ByCompensatedSize == parse_rocksdb_compaction_pri(0).unwrap());
         assert!(CompactionPriority::OldestLargestSeqFirst ==
