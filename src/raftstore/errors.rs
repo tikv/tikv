@@ -12,11 +12,9 @@
 // limitations under the License.
 
 use std::error;
-use std::boxed::Box;
 use std::result;
 use std::io;
 use std::net;
-use std::vec::Vec;
 
 use protobuf::{ProtobufError, RepeatedField};
 

@@ -90,7 +90,7 @@ pub fn flush_raft_engine_ticker_metrics(t: TickerType, value: u64) {
 
 pub fn flush_raft_engine_histogram_metrics(t: HistType, value: HistogramData) {
     match t {
-        HistType::DbGetMicros => {
+        HistType::GetMicros => {
             RAFT_ENGINE_GET_MICROS_VEC.with_label_values(&["get_median"]).set(value.median);
             RAFT_ENGINE_GET_MICROS_VEC.with_label_values(&["get_percentile95"])
                 .set(value.percentile95);
@@ -100,7 +100,7 @@ pub fn flush_raft_engine_histogram_metrics(t: HistType, value: HistogramData) {
             RAFT_ENGINE_GET_MICROS_VEC.with_label_values(&["get_standard_deviation"])
                 .set(value.standard_deviation);
         }
-        HistType::DbWriteMicros => {
+        HistType::WriteMicros => {
             RAFT_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_median"]).set(value.median);
             RAFT_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_percentile95"])
                 .set(value.percentile95);
@@ -110,7 +110,7 @@ pub fn flush_raft_engine_histogram_metrics(t: HistType, value: HistogramData) {
             RAFT_ENGINE_WRITE_MICROS_VEC.with_label_values(&["write_standard_deviation"])
                 .set(value.standard_deviation);
         }
-        HistType::DbSeekMicros => {
+        HistType::SeekMicros => {
             RAFT_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_median"]).set(value.median);
             RAFT_ENGINE_SEEK_MICROS_VEC.with_label_values(&["seek_percentile95"])
                 .set(value.percentile95);

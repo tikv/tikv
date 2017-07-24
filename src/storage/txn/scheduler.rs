@@ -31,7 +31,6 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::boxed::Box;
 use std::fmt::{self, Formatter, Debug};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;

@@ -1003,7 +1003,7 @@ mod v2 {
                     // compression_per_level first, so to make sure our specified compression type
                     // being used, we must set them empty or disabled.
                     io_options.compression_per_level(&[]);
-                    io_options.bottommost_compression(DBCompressionType::DBDisableCompression);
+                    io_options.bottommost_compression(DBCompressionType::Disable);
                     let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
                     box_try!(writer.open(cf_file.tmp_path.as_path().to_str().unwrap()));
                     cf_file.sst_writer = Some(writer);
