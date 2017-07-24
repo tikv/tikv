@@ -673,8 +673,8 @@ mod test {
             (2, 0, "2s"),
             (4 * 60, 0, "4m"),
             (5 * 3600, 0, "5h"),
-            (1 * 3600 + 2 * 60, 0, "1h2m"),
-            (1 * 3600 + 2, 5, "1h2s5ms"),
+            (3600 + 2 * 60, 0, "1h2m"),
+            (3600 + 2, 5, "1h2s5ms"),
         ];
         for (secs, ms, exp) in legal_cases {
             let d = DurHolder { d: ReadableDuration(Duration::new(secs, ms * 1_000_000)) };
