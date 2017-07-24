@@ -42,6 +42,7 @@ extern crate tempdir;
 extern crate grpc;
 
 mod signal_handler;
+#[cfg(unix)]
 mod profiling;
 
 use std::process;
@@ -123,8 +124,20 @@ fn get_flag_int(matches: &ArgMatches, name: &str) -> Option<i64> {
     i
 }
 
+fn lookup<'a>(config: &'a toml::Value, key: &str) -> Option<&'a toml::Value> {
+    let keys = key.split('.');
+    let mut res = config;
+    for key in keys {
+        match res.get(key) {
+            Some(v) => res = v,
+            None => return None,
+        }
+    }
+    Some(res)
+}
+
 fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> bool {
-    let b = match config.get(name) {
+    let b = match lookup(config, name) {
         Some(&toml::Value::Boolean(b)) => b,
         None => {
             info!("{} use default {:?}", name, default);
@@ -138,7 +151,7 @@ fn get_toml_boolean(config: &toml::Value, name: &str, default: Option<bool>) -> 
 }
 
 fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) -> String {
-    let s = match config.get(name) {
+    let s = match lookup(config, name) {
         Some(&toml::Value::String(ref s)) => s.clone(),
         None => {
             info!("{} use default {:?}", name, default);
@@ -152,13 +165,13 @@ fn get_toml_string(config: &toml::Value, name: &str, default: Option<String>) ->
 }
 
 fn get_toml_string_opt(config: &toml::Value, name: &str) -> Option<String> {
-    config.get(name)
+    lookup(config, name)
         .and_then(|val| val.as_str())
         .map(|s| s.to_owned())
 }
 
 fn get_toml_int_opt(config: &toml::Value, name: &str) -> Option<i64> {
-    let res = match config.get(name) {
+    let res = match lookup(config, name) {
         Some(&toml::Value::Integer(i)) => Some(i),
         Some(&toml::Value::String(ref s)) => {
             Some(util::config::parse_readable_int(s)
@@ -182,7 +195,7 @@ fn get_toml_int(config: &toml::Value, name: &str, default: Option<i64>) -> i64 {
 }
 
 fn get_toml_float_opt(config: &toml::Value, name: &str) -> Option<f64> {
-    let res = match config.get(name) {
+    let res = match lookup(config, name) {
         Some(&toml::Value::Float(f)) => Some(f),
         Some(&toml::Value::String(ref s)) => {
             Some(s.parse()
@@ -439,6 +452,7 @@ struct CfOptValues {
     pub level_zero_slowdown_writes_trigger: i64,
     pub level_zero_stop_writes_trigger: i64,
     pub max_compaction_bytes: i64,
+    pub compaction_pri: i64,
 }
 
 impl Default for CfOptValues {
@@ -461,6 +475,7 @@ impl Default for CfOptValues {
             level_zero_slowdown_writes_trigger: 20,
             level_zero_stop_writes_trigger: 36,
             max_compaction_bytes: 2 * GB as i64,
+            compaction_pri: 0,
         }
     }
 }
@@ -559,6 +574,13 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                                             (prefix.clone() + "max-compaction-bytes").as_str(),
                                             Some(default_values.max_compaction_bytes));
     opts.set_max_compaction_bytes(max_compaction_bytes as u64);
+
+    let priority = get_toml_int(config,
+                                (prefix.clone() + "compaction-pri").as_str(),
+                                Some(0));
+    let compaction_priority = util::config::parse_rocksdb_compaction_pri(priority)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    opts.compaction_priority(compaction_priority);
 
     opts
 }
@@ -1027,7 +1049,7 @@ fn main() {
             let mut config_file = File::open(&path).expect("config open failed");
             let mut s = String::new();
             config_file.read_to_string(&mut s).expect("config read failed");
-            s.parse::<toml::Value>().expect("malformed config file")
+            s.parse().expect("malformed config file")
         }
         // Default empty value, lookup() always returns `None`.
         None => toml::Value::Integer(0),
@@ -1095,4 +1117,33 @@ fn main() {
     }
     let _m = TimeMonitor::default();
     run_raft_server(pd_client, cfg, &backup_path, &config, total_mem);
+}
+
+#[cfg(test)]
+mod tests {
+    use toml::Value;
+
+    #[test]
+    fn test_lookup() {
+        let value = r#"
+            foo = 'bar'
+            [rocksdb]
+            compaction-readahead-size = 0
+            [rocksdb.defaultcf]
+            compression-per-level = "no"
+            "#
+            .parse()
+            .unwrap();
+
+        let queries = vec![
+            ("foo", Value::String("bar".to_owned())),
+            ("rocksdb.compaction-readahead-size", Value::Integer(0)),
+            ("rocksdb.defaultcf.compression-per-level", Value::String("no".to_owned())),
+        ];
+        for (key, exp) in queries {
+            let res = super::lookup(&value, key).unwrap();
+            assert_eq!(*res, exp);
+        }
+        assert!(super::lookup(&value, "foo1").is_none());
+    }
 }
