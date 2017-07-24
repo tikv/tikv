@@ -141,6 +141,7 @@ pub enum Command {
         keys: Vec<Key>,
     },
     RawGet { ctx: Context, key: Key },
+    RawMGet { ctx: Context, keys: Vec<Key> },
     RawScan {
         ctx: Context,
         start_key: Key,
@@ -217,6 +218,9 @@ impl Display for Command {
             Command::RawGet { ref ctx, ref key } => {
                 write!(f, "kv::command::rawget {:?} | {:?}", key, ctx)
             }
+            Command::RawMGet { ref ctx, ref keys } => {
+                write!(f, "kv::command::rawmget {} | {:?}", keys.len(), ctx)
+            }
             Command::RawScan { ref ctx, ref start_key, limit } => {
                 write!(f,
                        "kv::command::rawscan {:?} {} | {:?}",
@@ -253,6 +257,7 @@ impl Command {
             Command::Scan { .. } |
             Command::ScanLock { .. } |
             Command::RawGet { .. } |
+            Command::RawMGet { .. } |
             Command::RawScan { .. } |
             Command::Pause { .. } |
             Command::MvccByKey { .. } |
@@ -292,6 +297,7 @@ impl Command {
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => CMD_TAG_GC,
             Command::RawGet { .. } => "raw_get",
+            Command::RawMGet { .. } => "raw_mget",
             Command::RawScan { .. } => "raw_scan",
             Command::Pause { .. } => "pause",
             Command::MvccByKey { .. } => "key_mvcc",
@@ -313,6 +319,7 @@ impl Command {
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::Gc { safe_point, .. } => safe_point,
             Command::RawGet { .. } |
+            Command::RawMGet { .. } |
             Command::RawScan { .. } |
             Command::Pause { .. } |
             Command::MvccByKey { .. } => 0,
@@ -332,6 +339,7 @@ impl Command {
             Command::ResolveLock { ref ctx, .. } |
             Command::Gc { ref ctx, .. } |
             Command::RawGet { ref ctx, .. } |
+            Command::RawMGet { ref ctx, .. } |
             Command::RawScan { ref ctx, .. } |
             Command::Pause { ref ctx, .. } |
             Command::MvccByKey { ref ctx, .. } |
@@ -352,6 +360,7 @@ impl Command {
             Command::ResolveLock { ref mut ctx, .. } |
             Command::Gc { ref mut ctx, .. } |
             Command::RawGet { ref mut ctx, .. } |
+            Command::RawMGet { ref mut ctx, .. } |
             Command::RawScan { ref mut ctx, .. } |
             Command::Pause { ref mut ctx, .. } |
             Command::MvccByKey { ref mut ctx, .. } |
@@ -717,6 +726,37 @@ impl Storage {
         };
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
         RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["scan"]).inc();
+        Ok(())
+    }
+
+    pub fn async_raw_mget(&self,
+                          ctx: Context,
+                          keys: Vec<Vec<u8>>,
+                          callback: Callback<Vec<Result<KvPair>>>)
+                          -> Result<()> {
+        let cmd = Command::RawMGet {
+            ctx: ctx,
+            keys: keys.into_iter().map(Key::from_encoded).collect(),
+        };
+        try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["mget"]).inc();
+        Ok(())
+    }
+
+    pub fn async_raw_mput(&self,
+                          ctx: Context,
+                          kvs: Vec<KvPair>,
+                          callback: Callback<()>)
+                          -> Result<()> {
+        let modifies = kvs.into_iter()
+            .map(|pair| Modify::Put(CF_DEFAULT, Key::from_encoded(pair.0), pair.1))
+            .collect();
+        try!(self.engine.async_write(&ctx,
+                                     modifies,
+                                     box |(_, res): (_, engine::Result<_>)| {
+                                         callback(res.map_err(Error::from))
+                                     }));
+        RAWKV_COMMAND_COUNTER_VEC.with_label_values(&["mput"]).inc();
         Ok(())
     }
 

@@ -441,6 +441,10 @@ fn test_txn_store_rawkv() {
                       vec![(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")]);
     store.raw_scan_ok(b"".to_vec(), 0, vec![]);
     store.raw_scan_ok(b"k5".to_vec(), 1, vec![]);
+
+    store.raw_mput_ok(vec![(b"k1".to_vec(), b"vv".to_vec()), (b"kk".to_vec(), b"vv".to_vec())]);
+    store.raw_mget_ok(vec![b"k1", b"k2", b"kk", b"kx"],
+                      vec![(b"k1", b"vv"), (b"k2", b"v2"), (b"kk", b"vv")]);
 }
 
 #[test]

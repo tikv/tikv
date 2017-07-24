@@ -340,6 +340,23 @@ impl AssertionStorage {
         assert_eq!(result, expect);
     }
 
+    pub fn raw_mget_ok(&self, keys: Vec<&[u8]>, expect: Vec<(&[u8], &[u8])>) {
+        let keys = keys.into_iter().map(|x| x.to_vec()).collect();
+        let result: Vec<KvPair> = self.store
+            .raw_mget(self.ctx.clone(), keys)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        let expect: Vec<KvPair> =
+            expect.into_iter().map(|(k, v)| (k.to_vec(), v.to_vec())).collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_mput_ok(&self, kvs: Vec<KvPair>) {
+        self.store.raw_mput(self.ctx.clone(), kvs).unwrap();
+    }
+
     pub fn test_txn_store_gc(&self, key: &str) {
         let key_bytes = key.as_bytes();
         self.put_ok(key_bytes, b"v1", 5, 10);

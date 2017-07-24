@@ -148,6 +148,14 @@ impl SyncStorage {
             })
             .unwrap()
     }
+
+    pub fn raw_mget(&self, ctx: Context, keys: Vec<Vec<u8>>) -> Result<Vec<Result<KvPair>>> {
+        wait_op!(|cb| self.store.async_raw_mget(ctx, keys, cb).unwrap()).unwrap()
+    }
+
+    pub fn raw_mput(&self, ctx: Context, kvs: Vec<KvPair>) -> Result<()> {
+        wait_op!(|cb| self.store.async_raw_mput(ctx, kvs, cb).unwrap()).unwrap()
+    }
 }
 
 impl Clone for SyncStorage {
