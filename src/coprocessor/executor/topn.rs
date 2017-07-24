@@ -67,7 +67,8 @@ impl<'a> TopNExecutor<'a> {
             try!(inflate_with_col(&mut eval, &self.ctx, &row.data, &self.columns, row.handle));
             let mut ob_values = Vec::with_capacity(self.order_by.len());
             for by_item in self.order_by.as_ref().iter() {
-                let v = box_try!(eval.eval(&self.ctx, by_item.get_expr()));
+                let v =
+                    box_try!(eval.eval(&self.ctx, by_item.get_expr(), eval.get_row().as_slice()));
                 ob_values.push(v);
             }
             try!(self.heap.as_mut().unwrap().try_add_row(row.handle,

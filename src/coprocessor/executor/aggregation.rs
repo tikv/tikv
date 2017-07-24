@@ -77,7 +77,7 @@ impl<'a> AggregationExecutor<'a> {
         }
         let mut vals = Vec::with_capacity(self.group_by.len());
         for expr in &self.group_by {
-            let v = box_try!(eval.eval(&self.ctx, expr));
+            let v = box_try!(eval.eval(&self.ctx, expr, eval.get_row().as_slice()));
             vals.push(v);
         }
         let res = box_try!(datum::encode_value(&vals));

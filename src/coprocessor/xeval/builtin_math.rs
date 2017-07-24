@@ -23,9 +23,9 @@ pub fn invalid_type_error(datum: &Datum, expected_type: &str) -> Result<Datum> {
 }
 
 impl Evaluator {
-    pub fn abs_int(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    pub fn abs_int(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         let child = try!(self.get_one_child(expr));
-        let d = try!(self.eval(ctx, child));
+        let d = try!(self.eval(ctx, child, row));
         match d {
             Datum::I64(i) => {
                 if i >= 0 {
@@ -39,27 +39,27 @@ impl Evaluator {
         }
     }
 
-    pub fn abs_real(&self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+    pub fn abs_real(&self, _ctx: &EvalContext, _expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         // TODO add impl
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 
-    pub fn ceil_int(&self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+    pub fn ceil_int(&self, _ctx: &EvalContext, _expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         // TODO add impl
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 
-    pub fn ceil_real(&self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+    pub fn ceil_real(&self, _ctx: &EvalContext, _expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         // TODO add impl
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 
-    pub fn floor_int(&self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+    pub fn floor_int(&self, _ctx: &EvalContext, _expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         // TODO add impl
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
 
-    pub fn floor_real(&self, _ctx: &EvalContext, _expr: &Expr) -> Result<Datum> {
+    pub fn floor_real(&self, _ctx: &EvalContext, _expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         // TODO add impl
         Err(Error::Eval(ERROR_UNIMPLEMENTED.to_owned()))
     }
@@ -79,7 +79,8 @@ mod test {
                 let mut test_cases = $cases;
                 let evaluator = Evaluator::default();
                 for (i, (expr, expected)) in test_cases.drain(..).enumerate() {
-                    let res = evaluator.eval(&Default::default(), &expr);
+                    let res = evaluator.eval(
+                        &Default::default(), &expr, evaluator.get_row().as_slice());
                     assert!(res.is_ok(),
                             "#{} expect eval expr {:?} ok but got {:?}",
                             i,

@@ -174,75 +174,79 @@ impl Evaluator {
         }
     }
 
-    fn eval_int(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_int(&self, expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         let i = try!(expr.get_val().decode_i64());
         Ok(Datum::I64(i))
     }
 
-    fn eval_uint(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_uint(&self, expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         let u = try!(expr.get_val().decode_u64());
         Ok(Datum::U64(u))
     }
 
-    fn eval_float(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_float(&self, expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         let f = try!(expr.get_val().decode_f64());
         Ok(Datum::F64(f))
     }
 
-    fn eval_duration(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_duration(&self, expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         let n = try!(expr.get_val().decode_i64());
         let dur = try!(Duration::from_nanos(n, MAX_FSP));
         Ok(Datum::Dur(dur))
     }
 
-    fn eval_decimal(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_decimal(&self, expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         let d = try!(expr.get_val().decode_decimal());
         Ok(Datum::Dec(d))
     }
 
-    fn eval_column_ref(&self, expr: &Expr) -> Result<Datum> {
+    fn eval_column_ref(&self, expr: &Expr, _: &[&Datum]) -> Result<Datum> {
         let i = try!(expr.get_val().decode_i64());
         self.row.get(&i).cloned().ok_or_else(|| Error::Eval(format!("column {} not found", i)))
     }
 
-    fn eval_lt(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_lt(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr, row));
         Ok(cmp.map(|c| c < Ordering::Equal).into())
     }
 
-    fn eval_le(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_le(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr, row));
         Ok(cmp.map(|c| c <= Ordering::Equal).into())
     }
 
-    fn eval_eq(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_eq(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr, row));
         Ok(cmp.map(|c| c == Ordering::Equal).into())
     }
 
-    fn eval_ne(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_ne(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr, row));
         Ok(cmp.map(|c| c != Ordering::Equal).into())
     }
 
-    fn eval_ge(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_ge(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr, row));
         Ok(cmp.map(|c| c >= Ordering::Equal).into())
     }
 
-    fn eval_gt(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let cmp = try!(self.cmp_children(ctx, expr));
+    fn eval_gt(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let cmp = try!(self.cmp_children(ctx, expr, row));
         Ok(cmp.map(|c| c > Ordering::Equal).into())
     }
 
-    fn eval_null_eq(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+    fn eval_null_eq(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let (left, right) = try!(self.eval_two_children(ctx, expr, row));
         let cmp = try!(left.cmp(ctx, &right));
         Ok((cmp == Ordering::Equal).into())
     }
 
-    fn cmp_children(&self, ctx: &EvalContext, expr: &Expr) -> Result<Option<Ordering>> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+    fn cmp_children(&self,
+                    ctx: &EvalContext,
+                    expr: &Expr,
+                    row: &[&Datum])
+                    -> Result<Option<Ordering>> {
+        let (left, right) = try!(self.eval_two_children(ctx, expr, row));
         if left == Datum::Null || right == Datum::Null {
             return Ok(None);
         }
@@ -267,19 +271,28 @@ impl Evaluator {
         Ok((&children[0], &children[1]))
     }
 
-    fn eval_one_child(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_one_child(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         let child_expr = try!(self.get_one_child(expr));
-        self.eval(ctx, child_expr)
+        self.eval(ctx, child_expr, row)
     }
 
-    fn eval_two_children(&self, ctx: &EvalContext, expr: &Expr) -> Result<(Datum, Datum)> {
+    fn eval_two_children(&self,
+                         ctx: &EvalContext,
+                         expr: &Expr,
+                         row: &[&Datum])
+                         -> Result<(Datum, Datum)> {
         let (left_expr, right_expr) = try!(self.get_two_children(expr));
-        let left = try!(self.eval(ctx, left_expr));
-        let right = try!(self.eval(ctx, right_expr));
+        let left = try!(self.eval(ctx, left_expr, row));
+        let right = try!(self.eval(ctx, right_expr, row));
         Ok((left, right))
     }
 
-    fn eval_more_children(&self, ctx: &EvalContext, expr: &Expr, num: usize) -> Result<Vec<Datum>> {
+    fn eval_more_children(&self,
+                          ctx: &EvalContext,
+                          expr: &Expr,
+                          num: usize,
+                          row: &[&Datum])
+                          -> Result<Vec<Datum>> {
         let children = expr.get_children();
         if children.len() < num {
             return Err(Error::Expr(format!("expect more than {} operands, got {}",
@@ -287,16 +300,16 @@ impl Evaluator {
                                            children.len())));
         }
         children.iter()
-            .map(|child| self.eval(ctx, child))
+            .map(|child| self.eval(ctx, child, row))
             .collect()
     }
 
-    fn eval_not(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_not(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         let children_cnt = expr.get_children().len();
         if children_cnt != 1 {
             return Err(Error::Expr(format!("expect 1 operand, got {}", children_cnt)));
         }
-        let d = try!(self.eval(ctx, &expr.get_children()[0]));
+        let d = try!(self.eval(ctx, &expr.get_children()[0], row));
         if d == Datum::Null {
             return Ok(Datum::Null);
         }
@@ -304,8 +317,8 @@ impl Evaluator {
         Ok((b.map(|v| !v)).into())
     }
 
-    fn eval_like(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let (target, pattern) = try!(self.eval_two_children(ctx, expr));
+    fn eval_like(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let (target, pattern) = try!(self.eval_two_children(ctx, expr, row));
         if Datum::Null == target || Datum::Null == pattern {
             return Ok(Datum::Null);
         }
@@ -330,13 +343,13 @@ impl Evaluator {
         }
     }
 
-    fn eval_in(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_in(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         if expr.get_children().len() != 2 {
             return Err(Error::Expr(format!("IN need 2 operand, got {}",
                                            expr.get_children().len())));
         }
         let children = expr.get_children();
-        let target = try!(self.eval(ctx, &children[0]));
+        let target = try!(self.eval(ctx, &children[0], row));
         if let Datum::Null = target {
             return Ok(target);
         }
@@ -355,16 +368,16 @@ impl Evaluator {
         Ok(false.into())
     }
 
-    fn eval_arith<F>(&self, ctx: &EvalContext, expr: &Expr, f: F) -> Result<Datum>
+    fn eval_arith<F>(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum], f: F) -> Result<Datum>
         where F: FnOnce(Datum, &EvalContext, Datum) -> codec::Result<Datum>
     {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+        let (left, right) = try!(self.eval_two_children(ctx, expr, row));
         eval_arith(ctx, left, right, f)
     }
 
-    fn eval_case_when(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_case_when(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         for chunk in expr.get_children().chunks(2) {
-            let res = try!(self.eval(ctx, &chunk[0]));
+            let res = try!(self.eval(ctx, &chunk[0], row));
             if chunk.len() == 1 {
                 // else statement
                 return Ok(res);
@@ -372,27 +385,27 @@ impl Evaluator {
             if !try!(res.into_bool(ctx)).unwrap_or(false) {
                 continue;
             }
-            return self.eval(ctx, &chunk[1]).map_err(From::from);
+            return self.eval(ctx, &chunk[1], row).map_err(From::from);
         }
         Ok(Datum::Null)
     }
 
-    fn eval_if(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_if(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         let children = expr.get_children();
         if children.len() != 3 {
             return Err(Error::Expr(format!("expect 3 operands, got {}", children.len())));
         }
-        let cond = try!(self.eval(ctx, &children[0]));
+        let cond = try!(self.eval(ctx, &children[0], row));
         let d = match try!(cond.into_bool(ctx)) {
-            Some(true) => try!(self.eval(ctx, &children[1])),
-            _ => try!(self.eval(ctx, &children[2])),
+            Some(true) => try!(self.eval(ctx, &children[1], row)),
+            _ => try!(self.eval(ctx, &children[2], row)),
         };
         Ok(d)
     }
 
-    fn eval_coalesce(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_coalesce(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         for child in expr.get_children() {
-            match try!(self.eval(ctx, child)) {
+            match try!(self.eval(ctx, child, row)) {
                 Datum::Null => {}
                 res => return Ok(res),
             }
@@ -400,30 +413,30 @@ impl Evaluator {
         Ok(Datum::Null)
     }
 
-    fn eval_if_null(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_if_null(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         let children = expr.get_children();
         if children.len() != 2 {
             return Err(Error::Expr(format!("expect 2 operands, got {}", children.len())));
         }
-        let left = try!(self.eval(ctx, &children[0]));
+        let left = try!(self.eval(ctx, &children[0], row));
         if left == Datum::Null {
-            Ok(try!(self.eval(ctx, &children[1])))
+            Ok(try!(self.eval(ctx, &children[1], row)))
         } else {
             Ok(left)
         }
     }
 
-    fn eval_is_null(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_is_null(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
         let children = expr.get_children();
         if children.len() != 1 {
             return Err(Error::Expr(format!("expect 1 operand, got {}", children.len())));
         }
-        let d = try!(self.eval(ctx, &children[0]));
+        let d = try!(self.eval(ctx, &children[0], row));
         Ok((d == Datum::Null).into())
     }
 
-    fn eval_null_if(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let (left, right) = try!(self.eval_two_children(ctx, expr));
+    fn eval_null_if(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let (left, right) = try!(self.eval_two_children(ctx, expr, row));
         if left == Datum::Null || right == Datum::Null {
             return Ok(left);
         }
@@ -434,8 +447,13 @@ impl Evaluator {
         }
     }
 
-    fn eval_json_modify(&self, ctx: &EvalContext, expr: &Expr, mt: ModifyType) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 2));
+    fn eval_json_modify(&self,
+                        ctx: &EvalContext,
+                        expr: &Expr,
+                        row: &[&Datum],
+                        mt: ModifyType)
+                        -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2, row));
         if is_even(children.len()) {
             return Err(Error::Expr(format!("expect odd number operands, got {}", children.len())));
         }
@@ -469,8 +487,8 @@ impl Evaluator {
         Ok(Datum::Json(json))
     }
 
-    fn eval_json_unquote(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child = try!(self.eval_one_child(ctx, expr));
+    fn eval_json_unquote(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr, row));
         if child == Datum::Null {
             return Ok(Datum::Null);
         }
@@ -486,8 +504,8 @@ impl Evaluator {
         Ok(Datum::Bytes(unquote_data.into_bytes()))
     }
 
-    fn eval_json_extract(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 2));
+    fn eval_json_extract(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2, row));
         if children.iter().any(|item| *item == Datum::Null) {
             return Ok(Datum::Null);
         }
@@ -502,8 +520,8 @@ impl Evaluator {
         }
     }
 
-    fn eval_json_type(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let child = try!(self.eval_one_child(ctx, expr));
+    fn eval_json_type(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let child = try!(self.eval_one_child(ctx, expr, row));
         if Datum::Null == child {
             return Ok(Datum::Null);
         }
@@ -512,8 +530,8 @@ impl Evaluator {
         Ok(Datum::Bytes(json_type))
     }
 
-    fn eval_json_merge(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 2));
+    fn eval_json_merge(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 2, row));
         if children.iter().any(|item| *item == Datum::Null) {
             return Ok(Datum::Null);
         }
@@ -524,26 +542,30 @@ impl Evaluator {
         Ok(Datum::Json(first.merge(suffixes)))
     }
 
-    fn eval_json_object(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 0));
+    fn eval_json_object(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 0, row));
         let obj = try!(json_object(children));
         Ok(Datum::Json(obj))
     }
 
-    fn eval_json_array(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
-        let children = try!(self.eval_more_children(ctx, expr, 0));
+    fn eval_json_array(&self, ctx: &EvalContext, expr: &Expr, row: &[&Datum]) -> Result<Datum> {
+        let children = try!(self.eval_more_children(ctx, expr, 0, row));
         let arr = try!(json_array(children));
         Ok(Datum::Json(arr))
     }
 
-    fn eval_scalar_function(&self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
+    fn eval_scalar_function(&self,
+                            ctx: &EvalContext,
+                            expr: &Expr,
+                            row: &[&Datum])
+                            -> Result<Datum> {
         match expr.get_sig() {
-            ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
-            ScalarFuncSig::AbsReal => self.abs_real(ctx, expr),
-            ScalarFuncSig::CeilInt => self.ceil_int(ctx, expr),
-            ScalarFuncSig::CeilReal => self.ceil_real(ctx, expr),
-            ScalarFuncSig::FloorInt => self.floor_int(ctx, expr),
-            ScalarFuncSig::FloorReal => self.floor_real(ctx, expr),
+            ScalarFuncSig::AbsInt => self.abs_int(ctx, expr, row),
+            ScalarFuncSig::AbsReal => self.abs_real(ctx, expr, row),
+            ScalarFuncSig::CeilInt => self.ceil_int(ctx, expr, row),
+            ScalarFuncSig::CeilReal => self.ceil_real(ctx, expr, row),
+            ScalarFuncSig::FloorInt => self.floor_int(ctx, expr, row),
+            ScalarFuncSig::FloorReal => self.floor_real(ctx, expr, row),
             _ => Err(Error::Expr(format!("unsupported scalar function: {:?}", expr.get_sig()))),
         }
     }
@@ -551,18 +573,19 @@ impl Evaluator {
     fn eval_logic<F>(&self,
                      ctx: &EvalContext,
                      expr: &Expr,
+                     row: &[&Datum],
                      break_res: Option<bool>,
                      logic_func: F)
                      -> Result<Datum>
         where F: FnOnce(Option<bool>, Option<bool>) -> Datum
     {
         let (left_expr, right_expr) = try!(self.get_two_children(expr));
-        let left_datum = try!(self.eval(ctx, left_expr));
+        let left_datum = try!(self.eval(ctx, left_expr, row));
         let left = try!(left_datum.into_bool(ctx));
         if left == break_res {
             return Ok(left.into());
         }
-        let right_datum = try!(self.eval(ctx, right_expr));
+        let right_datum = try!(self.eval(ctx, right_expr, row));
         let right = try!(right_datum.into_bool(ctx));
         if right == break_res {
             return Ok(right.into());
@@ -744,7 +767,8 @@ pub mod test {
                 let mut xevaluator = Evaluator::default();
                 xevaluator.row.insert(1, Datum::I64(100));
                 for (expr, exp) in cases {
-                    let res = xevaluator.eval(&Default::default(), &expr);
+                    let res = xevaluator.eval(
+                        &Default::default(), &expr, xevaluator.get_row().as_slice());
                     if res.is_err() {
                         panic!("failed to eval {:?}: {:?}", expr, res);
                     }
@@ -766,7 +790,8 @@ pub mod test {
                 let mut xevaluator = Evaluator::default();
                 xevaluator.row.insert(1, Datum::I64(100));
                 for expr in cases {
-                    let res = xevaluator.eval(&Default::default(), &expr);
+                    let res = xevaluator.eval(
+                        &Default::default(), &expr, xevaluator.get_row().as_slice());
                     assert!(res.is_err());
                 }
             }
@@ -1169,9 +1194,9 @@ pub mod test {
              b"bab".as_ref().into()]), Datum::I64(0)),
         ];
 
-        let mut eval = Evaluator::default();
+        let eval = Evaluator::default();
         for (expr, expect_res) in cases {
-            let res = eval.eval(&Default::default(), &expr);
+            let res = eval.eval(&Default::default(), &expr, eval.get_row().as_slice());
             if res.is_err() {
                 panic!("failed to execute {:?}: {:?}", expr, res);
             }
