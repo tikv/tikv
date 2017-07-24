@@ -18,7 +18,7 @@ use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::{self, Ordering as CmpOrdering};
 use std::cell::RefCell;
-use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::{sync_channel, TrySendError};
 use tipb::select::{self, SelectRequest, SelectResponse, DAGRequest, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType, ByItem};
@@ -305,9 +305,15 @@ impl BatchRunnable<Task> for Host {
             self.last_req_id += 1;
             let id = self.last_req_id;
             let tx = tx.clone();
+            let sched = self.sched.clone();
             let cb: engine::Callback<Box<Snapshot>> = box move |(_, res)| {
-                tx.send((id, res))
-                    .unwrap()
+                match tx.try_send((id, res)) {
+                    Ok(_) => (),
+                    Err(TrySendError::Disconnected((id, res))) => {
+                        sched.schedule(Task::SnapRes(id, res)).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
             };
             let ctx = reqs[0].req.get_context().clone();
             self.reqs.insert(id, reqs);
@@ -321,8 +327,8 @@ impl BatchRunnable<Task> for Host {
             while let Ok(task) = rx.try_recv() {
                 batch.push(task);
             }
-            sched.schedule(Task::SnapResBatch(batch))
-                .unwrap()
+            drop(rx);
+            sched.schedule(Task::SnapResBatch(batch)).unwrap()
         };
 
         if let Err(e) = self.engine.async_snapshots_batch(batch, on_finish) {
