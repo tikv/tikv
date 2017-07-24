@@ -84,7 +84,6 @@ impl<'a> AggregationExecutor<'a> {
     fn aggregate(&mut self) -> Result<()> {
         while let Some(row) = try!(self.src.next()) {
             let mut eval = Evaluator::default();
-            error!("col_len:{}", self.cols.len());
             try!(inflate_with_col_for_dag(&mut eval,
                                           &self.ctx,
                                           &row.data,
