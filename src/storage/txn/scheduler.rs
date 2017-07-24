@@ -281,10 +281,12 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
     let lock = try!(reader.load_lock(key));
     loop {
         let opt = try!(reader.seek_write(key, ts));
+        let mut short_value: Option<Value> = None;
         match opt {
-            Some((commit_ts, write)) => {
+            Some((commit_ts, mut write)) => {
                 ts = commit_ts - 1;
                 let write_type = write.write_type;
+                short_value = write.short_value.take();
                 writes.push((commit_ts, write));
                 if write_type != WriteType::Put {
                     continue;
@@ -292,8 +294,8 @@ fn find_mvcc_infos_by_key(reader: &mut MvccReader,
             }
             None => break,
         };
-        let write = &writes[writes.len() - 1].1;
-        if let Some(v) = write.short_value.clone() {
+        let write = &writes[writes.len()-1].1;
+        if let Some(v) = short_value {
             values.push((write.start_ts, true, v));
         }
     }
