@@ -215,7 +215,10 @@ stats-dump-period-sec = 600
 # Use O_DIRECT for both reads and writes in background flush and compactions
 # use-direct-io-for-flush-and-compaction = false
 
-# Limit the disk IO of compaction and flush.
+# Limit the disk IO of compaction and flush. Compaction and flush can cause
+# terrible spikes if they exceed a certain threshold. Consider setting this to
+# 50% ~ 80% of the disk throughput for a more stable result. However, in heavy
+# write workload, limiting compaction and flush speed can cause write stalls too.
 # rate-bytes-per-sec = 0
 
 # Enable or disable the pipelined write
@@ -273,6 +276,16 @@ stats-dump-period-sec = 600
 # Target file size for compaction.
 # target-file-size-base = "32MB"
 
+# Max bytes for compaction.max_compaction_bytes
+# max-compaction-bytes = "2GB"
+
+# There are four different algorithms to pick files to compact.
+# 0 : ByCompensatedSize
+# 1 : OldestLargestSeqFirst
+# 2 : OldestSmallestSeqFirst
+# 3 : MinOverlappingRatio
+# compaction-pri = 0
+
 # block-cache used to cache uncompressed blocks, big block-cache can speed up read.
 # in normal cases should tune to 30%-50% system's total memory.
 # block-cache-size = "1GB"
@@ -311,6 +324,7 @@ stats-dump-period-sec = 600
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "32MB"
+# compaction-pri = 0
 
 # should tune to 256MB~2GB.
 # block-cache-size = "256MB"
@@ -318,6 +332,7 @@ stats-dump-period-sec = 600
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# compaction-pri = 0
 
 [rocksdb.lockcf]
 # compression-per-level = "no:no:no:no:no:no:no"
@@ -332,6 +347,7 @@ stats-dump-period-sec = 600
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
+# compaction-pri = 0
 
 [storage]
 # notify capacity of scheduler's channel
