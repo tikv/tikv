@@ -282,15 +282,15 @@ impl Serialize for ReadableSize {
         let size = self.0;
         let mut buffer = String::new();
         if size % PB == 0 {
-            write!(buffer, "{}P", size / PB).unwrap();
+            write!(buffer, "{}PB", size / PB).unwrap();
         } else if size % TB == 0 {
-            write!(buffer, "{}T", size / TB).unwrap();
+            write!(buffer, "{}TB", size / TB).unwrap();
         } else if size % GB as u64 == 0 {
-            write!(buffer, "{}G", size / GB).unwrap();
+            write!(buffer, "{}GB", size / GB).unwrap();
         } else if size % MB as u64 == 0 {
-            write!(buffer, "{}M", size / MB).unwrap();
+            write!(buffer, "{}MB", size / MB).unwrap();
         } else if size % KB as u64 == 0 {
-            write!(buffer, "{}K", size / KB).unwrap();
+            write!(buffer, "{}KB", size / KB).unwrap();
         } else {
             return serializer.serialize_u64(size);
         }
@@ -632,11 +632,11 @@ mod test {
         }
 
         let legal_cases = vec![
-            (2 * KB, "2K"),
-            (4 * MB, "4M"),
-            (5 * GB, "5G"),
-            (7 * TB, "7T"),
-            (11 * PB, "11P"),
+            (2 * KB, "2KB"),
+            (4 * MB, "4MB"),
+            (5 * GB, "5GB"),
+            (7 * TB, "7TB"),
+            (11 * PB, "11PB"),
         ];
         for (size, exp) in legal_cases {
             let c = SizeHolder { s: ReadableSize(size) };
