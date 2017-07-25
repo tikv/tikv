@@ -282,15 +282,15 @@ impl Serialize for ReadableSize {
         let size = self.0;
         let mut buffer = String::new();
         if size % PB == 0 {
-            write!(buffer, "{}PB", size / PB).unwrap();
+            write!(buffer, "{}P", size / PB).unwrap();
         } else if size % TB == 0 {
-            write!(buffer, "{}TB", size / TB).unwrap();
+            write!(buffer, "{}T", size / TB).unwrap();
         } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GB", size / GB).unwrap();
+            write!(buffer, "{}G", size / GB).unwrap();
         } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MB", size / MB).unwrap();
+            write!(buffer, "{}M", size / MB).unwrap();
         } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KB", size / KB).unwrap();
+            write!(buffer, "{}K", size / KB).unwrap();
         } else {
             return serializer.serialize_u64(size);
         }
@@ -333,16 +333,32 @@ impl<'de> Deserialize<'de> for ReadableSize {
                 let err_msg = "valid size, only KB, MB, GB, TB, PB are supported.";
                 let size_str = size_str.trim();
                 if size_str.len() < 2 {
+                    // When it's a string, it should contains a unit and a number.
+                    // So its length should be at least 2.
                     return Err(E::invalid_value(Unexpected::Str(size_str), &err_msg));
                 }
-                
-                let (number_str, unit_str) = size_str.split_at(size_str.len() - 2);
-                let unit = match &*unit_str.to_lowercase() {
-                    "kb" => KB as u64,
-                    "mb" => MB as u64,
-                    "gb" => GB as u64,
-                    "tb" => TB,
-                    "pb" => PB,
+
+                if !size_str.is_ascii() {
+                    return Err(E::invalid_value(Unexpected::Str(size_str), &"ascii str"));
+                }
+
+                let mut chrs = size_str.chars();
+                let mut unit_char = chrs.next_back().unwrap();
+                let mut number_str = chrs.as_str();
+                if unit_char == 'B' {
+                    let b = chrs.next_back().unwrap();
+                    if b < '0' || b > '9' {
+                        number_str = chrs.as_str();
+                        unit_char = b;
+                    }
+                }
+
+                let unit = match unit_char {
+                    'K' => KB,
+                    'M' => MB,
+                    'G' => GB,
+                    'T' => TB,
+                    'P' => PB,
                     _ => return Err(E::invalid_value(Unexpected::Str(size_str), &err_msg)),
                 };
                 match number_str.trim().parse::<f64>() {
@@ -616,11 +632,11 @@ mod test {
         }
 
         let legal_cases = vec![
-            (2 * KB, "2KB"),
-            (4 * MB, "4MB"),
-            (5 * GB, "5GB"),
-            (7 * TB, "7TB"),
-            (11 * PB, "11PB"),
+            (2 * KB, "2K"),
+            (4 * MB, "4M"),
+            (5 * GB, "5G"),
+            (7 * TB, "7T"),
+            (11 * PB, "11P"),
         ];
         for (size, exp) in legal_cases {
             let c = SizeHolder { s: ReadableSize(size) };
@@ -638,11 +654,16 @@ mod test {
         assert_eq!(res_size.s.0, c.s.0);
 
         let decode_cases = vec![
-            (" 0.5 pb", PB / 2),
-            ("0.5 tb", TB / 2),
-            ("0.5gb ", GB / 2),
-            ("0.5mb", MB / 2),
-            ("0.5kb", KB / 2),
+            (" 0.5 PB", PB / 2),
+            ("0.5 TB", TB / 2),
+            ("0.5GB ", GB / 2),
+            ("0.5MB", MB / 2),
+            ("0.5KB", KB / 2),
+            ("0.5P", PB / 2),
+            ("0.5T", TB / 2),
+            ("0.5G", GB / 2),
+            ("0.5M", MB / 2),
+            ("0.5K", KB / 2),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
@@ -651,6 +672,10 @@ mod test {
         }
 
         let illegal_cases = vec![
+            "0.5kb",
+            "0.5kB",
+            "0.5Kb",
+            "0.5k",
             "0.5g",
             "gb",
             "1b",
