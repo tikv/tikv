@@ -122,6 +122,15 @@ impl Time {
         self.time.timestamp() == ZERO_TIMESTAMP
     }
 
+    pub fn get_time(&self) -> DateTime<FixedOffset> {
+        self.time
+    }
+
+    pub fn get_tp(&self) -> u8 {
+        self.tp
+    }
+
+
     pub fn get_fsp(&self) -> u8 {
         self.fsp
     }

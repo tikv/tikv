@@ -535,6 +535,26 @@ impl Evaluator {
 
     fn eval_scalar_function(&mut self, ctx: &EvalContext, expr: &Expr) -> Result<Datum> {
         match expr.get_sig() {
+            // Casting
+            ScalarFuncSig::CastRealAsInt => self.cast_real_as_int(ctx, expr),
+            ScalarFuncSig::CastRealAsReal => self.cast_real_as_real(ctx, expr),
+            ScalarFuncSig::CastRealAsString => self.cast_real_as_string(ctx, expr),
+            ScalarFuncSig::CastRealAsDecimal => self.cast_real_as_decimal(ctx, expr),
+            ScalarFuncSig::CastRealAsTime => self.cast_real_as_time(ctx, expr),
+            ScalarFuncSig::CastRealAsDuration => self.cast_real_as_duration(ctx, expr),
+            ScalarFuncSig::CastDecimalAsInt => self.cast_decimal_as_int(ctx, expr),
+            ScalarFuncSig::CastDecimalAsReal => self.cast_decimal_as_real(ctx, expr),
+            ScalarFuncSig::CastDecimalAsString => self.cast_decimal_as_string(ctx, expr),
+            ScalarFuncSig::CastDecimalAsDecimal => self.cast_decimal_as_decimal(ctx, expr),
+            ScalarFuncSig::CastDecimalAsTime => self.cast_decimal_as_time(ctx, expr),
+            ScalarFuncSig::CastDecimalAsDuration => self.cast_decimal_as_duration(ctx, expr),
+            ScalarFuncSig::CastStringAsInt => self.cast_string_as_int(ctx, expr),
+            ScalarFuncSig::CastStringAsReal => self.cast_string_as_real(ctx, expr),
+            ScalarFuncSig::CastStringAsString => self.cast_string_as_string(ctx, expr),
+            ScalarFuncSig::CastStringAsDecimal => self.cast_string_as_decimal(ctx, expr),
+            ScalarFuncSig::CastStringAsTime => self.cast_string_as_time(ctx, expr),
+            ScalarFuncSig::CastStringAsDuration => self.cast_string_as_duration(ctx, expr),
+            // Math
             ScalarFuncSig::AbsInt => self.abs_int(ctx, expr),
             ScalarFuncSig::AbsReal => self.abs_real(ctx, expr),
             ScalarFuncSig::CeilInt => self.ceil_int(ctx, expr),
@@ -628,7 +648,7 @@ pub mod test {
 
     use std::i32;
 
-    use tipb::expression::{Expr, ExprType};
+    use tipb::expression::{Expr, ExprType, FieldType};
     use tipb::select::SelectRequest;
     use protobuf::RepeatedField;
 
@@ -689,9 +709,14 @@ pub mod test {
         build_expr(vec![left, right], tp)
     }
 
-    pub fn build_expr_with_sig(children: Vec<Datum>, tp: ExprType, sig: ScalarFuncSig) -> Expr {
+    pub fn build_expr_with_sig(children: Vec<Datum>,
+                               tp: ExprType,
+                               sig: ScalarFuncSig,
+                               field_type: FieldType)
+                               -> Expr {
         let mut expr = build_expr(children, tp);
         expr.set_sig(sig);
+        expr.set_field_type(field_type);
         expr
     }
 

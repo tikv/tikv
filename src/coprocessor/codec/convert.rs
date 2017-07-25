@@ -16,6 +16,66 @@ use std::borrow::Cow;
 
 use coprocessor::xeval::EvalContext;
 use super::Result;
+use super::util::round_float;
+use super::field_type::UNSPECIFIED_LENGTH;
+
+pub fn truncate_str(mut s: String, flen: isize) -> String {
+    if flen != UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
+        s.truncate(flen as usize);
+        s
+    } else {
+        s
+    }
+}
+
+// `overflow` returns an overflowed error.
+#[macro_export]
+macro_rules! overflow {
+    ($val:ident, $bound:ident) => ({
+        Err(box_err!("constant {} overflows {}", $val, $bound))
+    });
+}
+
+// `convert_float_to_int` converts  a float value to an int value.
+pub fn convert_float_to_int(val: f64, lower_bound: i64, upper_bound: i64) -> Result<i64> {
+    let v = round_float(val);
+    if v < lower_bound as f64 {
+        return overflow!(v, lower_bound);
+    }
+    if v > upper_bound as f64 {
+        return overflow!(v, upper_bound);
+    }
+    Ok(v as i64)
+}
+
+// `convert_float_to_uint` converts a float value to an uint value.
+pub fn convert_float_to_uint(val: f64, upper_bound: u64) -> Result<u64> {
+    let lower_bound = 0 as u64;
+    let v = round_float(val);
+    if v < lower_bound as f64 {
+        return overflow!(v, lower_bound);
+    }
+    if v > upper_bound as f64 {
+        return overflow!(v, upper_bound);
+    }
+    Ok(v as u64)
+}
+
+pub fn str_to_int(ctx: &EvalContext, s: &str) -> Result<i64> {
+    let s = s.trim();
+    let vs = try!(get_valid_int_prefix(ctx, s));
+
+    let r = box_try!(vs.as_ref().parse::<i64>());
+    Ok(r)
+}
+
+pub fn str_to_uint(ctx: &EvalContext, s: &str) -> Result<u64> {
+    let s = s.trim();
+    let vs = try!(get_valid_int_prefix(ctx, s));
+
+    let r = box_try!(vs.as_ref().parse::<u64>());
+    Ok(r)
+}
 
 /// `bytes_to_int_without_context` converts a byte arrays to an i64
 /// in best effort, but without context.
