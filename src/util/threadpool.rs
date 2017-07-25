@@ -25,6 +25,7 @@ use std::sync::mpsc::{Sender, Receiver, channel};
 use super::collections::HashMap;
 
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
+const QUEUE_MAX_CAPACITY: usize = 8 * DEFAULT_QUEUE_CAPACITY;
 
 pub struct Task<T> {
     // The task's id in the pool. Each task has a unique id,
@@ -206,7 +207,7 @@ pub struct FifoQueue<T> {
 
 impl<T: Hash + Ord + Send + Clone + Debug> FifoQueue<T> {
     pub fn new() -> FifoQueue<T> {
-        FifoQueue { queue: VecDeque::new() }
+        FifoQueue { queue: VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY) }
     }
 }
 
@@ -216,7 +217,13 @@ impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for FifoQueue<T> {
     }
 
     fn pop(&mut self) -> Option<Task<T>> {
-        self.queue.pop_front()
+        let task = self.queue.pop_front();
+
+        if self.queue.is_empty() && self.queue.capacity() > QUEUE_MAX_CAPACITY {
+            self.queue = VecDeque::with_capacity(DEFAULT_QUEUE_CAPACITY);
+        }
+
+        task
     }
 
     fn on_task_started(&mut self, _: &T) {}
