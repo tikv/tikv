@@ -99,8 +99,7 @@ impl Host {
     }
 
     fn running_task_count(&self) -> usize {
-        self.pool.get_task_count() +
-        self.low_priority_pool.get_task_count() +
+        self.pool.get_task_count() + self.low_priority_pool.get_task_count() +
         self.high_priority_pool.get_task_count()
     }
 }
@@ -1379,9 +1378,17 @@ mod tests {
         end_point.max_running_task_count = 3;
         worker.start_batch(end_point, 30).unwrap();
         let (tx, rx) = mpsc::channel();
-        for _ in 0..30 * 4 {
+        for pos in 0..30 * 4 {
             let tx = tx.clone();
-            let task = RequestTask::new(Request::new(),
+            let mut req = Request::new();
+            if pos % 3 == 0 {
+                req.mut_context().set_priority(CommandPri::Low);
+            } else if pos % 3 == 1 {
+                req.mut_context().set_priority(CommandPri::Normal);
+            } else {
+                req.mut_context().set_priority(CommandPri::High);
+            }
+            let task = RequestTask::new(req,
                                         box move |msg| {
                                             thread::sleep(Duration::from_millis(100));
                                             let _ = tx.send(msg);
