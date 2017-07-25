@@ -58,7 +58,7 @@ use super::engine::{Iterable, Peekable, Snapshot as EngineSnapshot};
 use super::config::Config;
 use super::peer::{self, Peer, StaleState, ConsistencyState, ReadyContext};
 use super::peer_storage::{self, ApplySnapResult, CacheQueryStats};
-use super::msg::Callback;
+use super::msg::{Callback, BatchCallback};
 use super::cmd_resp::{bind_term, bind_error};
 use super::transport::Transport;
 use super::metrics::*;
@@ -1290,10 +1290,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // we will call the callback with timeout error.
     }
 
-    fn batch_propose_raft_commands(&mut self, batch: Vec<(RaftCmdRequest, Callback)>) {
-        let mut batches: HashMap<u64, Vec<(Callback, RaftCmdRequest, RaftCmdResponse)>> =
+    fn batch_propose_raft_commands(&mut self,
+                                   batch: Vec<(RaftCmdRequest, Callback)>,
+                                   on_finish: BatchCallback) {
+        let size = batch.len();
+        let mut batches: HashMap<u64, Vec<(usize, Callback, RaftCmdRequest, RaftCmdResponse)>> =
             HashMap::default();
-        for (msg, cb) in batch {
+        for (idx, (msg, cb)) in batch.into_iter().enumerate() {
             let mut resp = RaftCmdResponse::new();
 
             if let Err(e) = self.validate_store_id(&msg) {
@@ -1323,7 +1326,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             let term = peer.term();
             bind_term(&mut resp, term);
             let mut group = batches.entry(region_id).or_insert_with(Vec::new);
-            group.push((cb, msg, resp));
+            group.push((idx, cb, msg, resp));
         }
 
         // Note:
@@ -1331,12 +1334,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // later. It doesn't matter whether the peer is a leader or not.
         // If it's not a leader, the proposing command log entry can't be committed.
 
+        let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
         for (region_id, batch) in batches {
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
-            peer.batch_propose(batch,
-                               &mut self.raft_metrics.propose,
-                               &mut self.pending_raft_groups);
+            let resps = peer.batch_propose(batch,
+                                           &mut self.raft_metrics.propose,
+                                           &mut self.pending_raft_groups);
+            for (idx, resp) in resps {
+                ret[idx] = Some(resp);
+            }
         }
+        on_finish.call_box((ret,));
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
@@ -2103,8 +2111,7 @@ impl<T: Transport, C: PdClient> mio::Handler for Store<T, C> {
                     .propose
                     .request_wait_time
                     .observe(duration_to_sec(send_time.elapsed()) as f64);
-                self.batch_propose_raft_commands(batch);
-                on_finish.call_box((RaftCmdResponse::new(),));
+                self.batch_propose_raft_commands(batch, on_finish);
             }
             Msg::Quit => {
                 info!("{} receive quit message", self.tag);

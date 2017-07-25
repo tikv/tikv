@@ -18,7 +18,7 @@ use std::rc::Rc;
 use std::fmt::{self, Display, Formatter, Debug};
 use std::cmp::{self, Ordering as CmpOrdering};
 use std::cell::RefCell;
-use std::sync::mpsc::{sync_channel, TrySendError};
+
 use tipb::select::{self, SelectRequest, SelectResponse, DAGRequest, Chunk, RowMeta};
 use tipb::schema::ColumnInfo;
 use tipb::expression::{Expr, ExprType, ByItem};
@@ -300,24 +300,14 @@ impl BatchRunnable<Task> for Host {
             return;
         }
 
-        // `send` and `try_recv` should be called in the same thread and in order.
-        // It should not cause any `pthread_cond_wait`.
-        let (tx, rx) = sync_channel(total_reqs);
         let mut req_ids = Vec::new();
         let mut batch = Vec::with_capacity(grouped_reqs.len());
         for (_, reqs) in grouped_reqs {
             self.last_req_id += 1;
             let id = self.last_req_id;
-            let tx = tx.clone();
             let sched = self.sched.clone();
             let cb: engine::Callback<Box<Snapshot>> = box move |(_, res)| {
-                match tx.try_send((id, res)) {
-                    Ok(_) => (),
-                    Err(TrySendError::Disconnected((id, res))) => {
-                        sched.schedule(Task::SnapRes(id, res)).unwrap();
-                    }
-                    _ => unreachable!(),
-                }
+                sched.schedule(Task::SnapRes(id, res)).unwrap();
             };
             let ctx = reqs[0].req.get_context().clone();
             self.reqs.insert(id, reqs);
@@ -325,15 +315,23 @@ impl BatchRunnable<Task> for Host {
             batch.push((ctx, cb));
         }
 
+        let req_ids1 = req_ids.clone();
         let sched = self.sched.clone();
-        let on_finish: engine::Callback<()> = box move |_| {
-            let mut batch = Vec::with_capacity(total);
-            while let Ok(task) = rx.try_recv() {
-                batch.push(task);
-            }
-            drop(rx);
-            sched.schedule(Task::SnapResBatch(batch)).unwrap()
-        };
+        let on_finish: engine::Callback<Vec<Option<engine::Result<Box<Snapshot>>>>> =
+            box move |(_, results)| {
+                if let Ok(results) = results {
+                    let batch = req_ids1.into_iter().zip(results).filter_map(|(id, res)| {
+                        if let Some(res) = res {
+                            Some((id, res))
+                        } else {
+                            None
+                        }
+                    });
+                    sched.schedule(Task::SnapResBatch(batch.collect())).unwrap()
+                } else {
+                    unreachable!();
+                }
+            };
 
         if let Err(e) = self.engine.async_snapshots_batch(batch, on_finish) {
             for id in req_ids {

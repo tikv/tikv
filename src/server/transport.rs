@@ -22,7 +22,7 @@ use util::HandyRwLock;
 use util::worker::{Stopped, Scheduler};
 use util::collections::HashSet;
 use raft::SnapshotStatus;
-use raftstore::store::{Msg as StoreMsg, SnapshotStatusMsg, Transport, Callback};
+use raftstore::store::{Msg as StoreMsg, SnapshotStatusMsg, Transport, Callback, BatchCallback};
 use raftstore::Result as RaftStoreResult;
 use server::raft_client::RaftClient;
 use server::Result;
@@ -50,7 +50,7 @@ pub trait RaftStoreRouter: Send + Clone {
     // Send a batch of RaftCmdRequest to local store.
     fn send_commands_batch(&self,
                            batch: Vec<(RaftCmdRequest, Callback)>,
-                           on_finish: Callback)
+                           on_finish: BatchCallback)
                            -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmds_batch(batch, on_finish))
     }
@@ -95,7 +95,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_commands_batch(&self,
                            batch: Vec<(RaftCmdRequest, Callback)>,
-                           on_finish: Callback)
+                           on_finish: BatchCallback)
                            -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmds_batch(batch, on_finish))
     }

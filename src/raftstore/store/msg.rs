@@ -23,6 +23,7 @@ use raft::SnapshotStatus;
 use util::escape;
 
 pub type Callback = Box<FnBox(RaftCmdResponse) + Send>;
+pub type BatchCallback = Box<FnBox(Vec<Option<RaftCmdResponse>>) + Send>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Tick {
@@ -59,7 +60,7 @@ pub enum Msg {
     RaftCmdsBatch {
         send_time: Instant,
         batch: Vec<(RaftCmdRequest, Callback)>,
-        on_finish: Callback,
+        on_finish: BatchCallback,
     },
 
     // For split check
@@ -117,7 +118,9 @@ impl Msg {
         }
     }
 
-    pub fn new_raft_cmds_batch(batch: Vec<(RaftCmdRequest, Callback)>, on_finish: Callback) -> Msg {
+    pub fn new_raft_cmds_batch(batch: Vec<(RaftCmdRequest, Callback)>,
+                               on_finish: BatchCallback)
+                               -> Msg {
         Msg::RaftCmdsBatch {
             send_time: Instant::now(),
             batch: batch,

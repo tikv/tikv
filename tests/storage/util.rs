@@ -118,7 +118,7 @@ impl Engine for BlockEngine {
 
     fn async_snapshots_batch(&self,
                              batch: Vec<(Context, Callback<Box<Snapshot>>)>,
-                             on_finish: Callback<()>)
+                             on_finish: Callback<Vec<Option<Result<Box<Snapshot>>>>>)
                              -> Result<()> {
         let block_snapshot = self.block_snapshot.clone();
         let sender = self.sender.clone();

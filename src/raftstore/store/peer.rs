@@ -994,11 +994,12 @@ impl Peer {
 
     /// Batch propose requests.
     pub fn batch_propose(&mut self,
-                         batch: Vec<(Callback, RaftCmdRequest, RaftCmdResponse)>,
+                         batch: Vec<(usize, Callback, RaftCmdRequest, RaftCmdResponse)>,
                          metrics: &mut RaftProposeMetrics,
-                         pending_raft_groups: &mut HashSet<u64>) {
-        let mut batch_read = Vec::with_capacity(batch.len());
-        for (cb, req, mut err_resp) in batch {
+                         pending_raft_groups: &mut HashSet<u64>)
+                         -> Vec<(usize, RaftCmdResponse)> {
+        let mut reqs = Vec::with_capacity(batch.len());
+        for (idx, cb, req, mut err_resp) in batch {
             if self.pending_remove {
                 continue;
             }
@@ -1009,7 +1010,9 @@ impl Peer {
 
             let res = match self.get_handle_policy(&req) {
                 Ok(RequestPolicy::ReadLocal) => {
-                    batch_read.push((req, cb));
+                    reqs.push((idx, req));
+                    // The corresponding callback is dropped here,
+                    // the response will be collected and sent in a batch.
                     continue;
                 }
                 Ok(RequestPolicy::ReadIndex) => {
@@ -1049,7 +1052,7 @@ impl Peer {
             }
         }
 
-        self.batch_read_local(batch_read, metrics);
+        self.batch_read_local(reqs, metrics)
     }
 
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
@@ -1239,11 +1242,12 @@ impl Peer {
     }
 
     fn batch_read_local(&mut self,
-                        batch: Vec<(RaftCmdRequest, Callback)>,
-                        metrics: &mut RaftProposeMetrics) {
+                        batch: Vec<(usize, RaftCmdRequest)>,
+                        metrics: &mut RaftProposeMetrics)
+                        -> Vec<(usize, RaftCmdResponse)> {
         metrics.local_read += batch.len() as u64;
         metrics.batch_local_read.observe(batch.len() as f64);
-        self.handle_batch_read(batch);
+        self.handle_batch_read(batch)
     }
 
     fn read_index(&mut self,
@@ -1404,26 +1408,24 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn handle_batch_read(&mut self, batch: Vec<(RaftCmdRequest, Callback)>) {
-        let mut reqs = Vec::with_capacity(batch.len());
-        let mut cbs = Vec::with_capacity(batch.len());
-        for (req, cb) in batch {
-            reqs.push(req);
-            cbs.push(cb);
-        }
-        for (resp, cb) in self.batch_exec_read(reqs).into_iter().zip(cbs) {
-            let mut resp = resp.unwrap_or_else(|e| {
-                match e {
-                    Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
-                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
-                }
-                cmd_resp::new_error(e)
-            });
+    fn handle_batch_read(&mut self,
+                         batch: Vec<(usize, RaftCmdRequest)>)
+                         -> Vec<(usize, RaftCmdResponse)> {
+        self.batch_exec_read(batch)
+            .into_iter()
+            .map(|(idx, resp)| {
+                let mut resp = resp.unwrap_or_else(|e| {
+                    match e {
+                        Error::StaleEpoch(..) => info!("{} stale epoch err: {:?}", self.tag, e),
+                        _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                    }
+                    cmd_resp::new_error(e)
+                });
 
-            cmd_resp::bind_term(&mut resp, self.term());
-
-            cb(resp);
-        }
+                cmd_resp::bind_term(&mut resp, self.term());
+                (idx, resp)
+            })
+            .collect()
     }
 
     fn handle_read(&mut self, req: RaftCmdRequest, cb: Callback) {
@@ -1635,13 +1637,15 @@ impl Peer {
         Ok(resp)
     }
 
-    fn batch_exec_read(&mut self, batch: Vec<RaftCmdRequest>) -> Vec<Result<RaftCmdResponse>> {
+    fn batch_exec_read(&mut self,
+                       batch: Vec<(usize, RaftCmdRequest)>)
+                       -> Vec<(usize, Result<RaftCmdResponse>)> {
         let mut snap = None;
         let mut ret = Vec::with_capacity(batch.len());
 
-        'bat: for cmd in batch {
+        'bat: for (idx, cmd) in batch {
             if let Err(e) = check_epoch(self.region(), &cmd) {
-                ret.push(Err(e));
+                ret.push((idx, Err(e)));
                 continue;
             }
 
@@ -1657,7 +1661,7 @@ impl Peer {
                         match apply::do_get(&self.tag, self.region(), snap.as_ref().unwrap(), req) {
                             Ok(resp) => resp,
                             Err(e) => {
-                                ret.push(Err(e));
+                                ret.push((idx, Err(e)));
                                 continue 'bat;
                             }
                         }
@@ -1666,7 +1670,7 @@ impl Peer {
                         match apply::do_snap(self.region().to_owned()) {
                             Ok(resp) => resp,
                             Err(e) => {
-                                ret.push(Err(e));
+                                ret.push((idx, Err(e)));
                                 continue 'bat;
                             }
                         }
@@ -1681,7 +1685,7 @@ impl Peer {
             }
             let mut resp = RaftCmdResponse::new();
             resp.set_responses(protobuf::RepeatedField::from_vec(responses));
-            ret.push(Ok(resp));
+            ret.push((idx, Ok(resp)));
         }
 
         ret
