@@ -199,6 +199,30 @@ impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQ
     }
 }
 
+// First in first out queue.
+pub struct FIFOQueue<T> {
+    queue: VecDeque<Task<T>>,
+}
+
+impl<T: Hash + Ord + Send + Clone + Debug> FIFOQueue<T> {
+    pub fn new() -> FIFOQueue<T> {
+        FIFOQueue { queue: VecDeque::new() }
+    }
+}
+
+impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for FIFOQueue<T> {
+    fn push(&mut self, task: Task<T>) {
+        self.queue.push_back(task);
+    }
+
+    fn pop(&mut self) -> Option<Task<T>> {
+        self.queue.pop_front()
+    }
+
+    fn on_task_started(&mut self, _: &T) {}
+    fn on_task_finished(&mut self, _: &T) {}
+}
+
 // `BigGroupThrottledQueue` tries to throttle group's concurrency to
 //  `group_concurrency_limit` when all threads are busy.
 // When one worker asks a task to run, it schedules in the following way:
@@ -537,7 +561,7 @@ impl<Q, T> Worker<Q, T>
 
 #[cfg(test)]
 mod test {
-    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SmallGroupFirstQueue};
+    use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SmallGroupFirstQueue, FIFOQueue};
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Mutex};
@@ -771,5 +795,19 @@ mod test {
         let task = queue.pop().unwrap();
         queue.on_task_started(&task.gid);
         assert_eq!(task.gid, group1);
+    }
+
+    #[test]
+    fn test_fifo_queue() {
+        let mut queue = FIFOQueue::new();
+        for id in 0..10 {
+            let mut task = Task::new(0, move || {});
+            task.id = id;
+            queue.push(task);
+        }
+        for id in 0..10 {
+            let task = queue.pop().unwrap();
+            assert_eq!(id, task.id);
+        }
     }
 }
