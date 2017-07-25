@@ -33,7 +33,7 @@ use rocksdb::DB;
 use protobuf::RepeatedField;
 
 use storage::engine;
-use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback,
+use super::{CbContext, Engine, Modify, Cursor, Snapshot, ScanMode, Callback, BatchCallback,
             Iterator as EngineIterator};
 use storage::{Key, Value, CfName, CF_DEFAULT};
 use super::metrics::*;
@@ -354,7 +354,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 
     fn async_snapshots_batch(&self,
                              batch: Vec<(Context, Callback<Box<Snapshot>>)>,
-                             on_finish: Callback<Vec<Option<super::Result<Box<Snapshot>>>>>)
+                             on_finish: BatchCallback<Box<Snapshot>>)
                              -> engine::Result<()> {
         let batch = batch.into_iter().map(|(ctx, cb)| {
             let mut req = Request::new();

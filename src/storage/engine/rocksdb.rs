@@ -20,14 +20,14 @@ use raftstore::store::engine::{SyncSnapshot as RocksSnapshot, Peekable, Iterable
 use util::escape;
 use util::rocksdb;
 use util::worker::{Runnable, Worker, Scheduler};
-use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, TEMP_DIR,
+use super::{Engine, Snapshot, Modify, Cursor, Iterator as EngineIterator, Callback, BatchCallback, TEMP_DIR,
             ScanMode, Result, Error, CbContext};
 use tempdir::TempDir;
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
     Snapshot(Callback<Box<Snapshot>>),
-    SnapshotBath(Vec<Callback<Box<Snapshot>>>, Callback<Vec<Option<super::Result<Box<Snapshot>>>>>),
+    SnapshotBath(Vec<Callback<Box<Snapshot>>>, BatchCallback<Box<Snapshot>>),
 }
 
 impl Display for Task {
@@ -156,7 +156,7 @@ impl Engine for EngineRocksdb {
 
     fn async_snapshots_batch(&self,
                              batch: Vec<(Context, Callback<Box<Snapshot>>)>,
-                             on_finish: Callback<Vec<Option<super::Result<Box<Snapshot>>>>>)
+                             on_finish: BatchCallback<Box<Snapshot>>)
                              -> Result<()> {
         let batch = batch.into_iter().map(|(_, cb)| cb);
         box_try!(self.sched.schedule(Task::SnapshotBath(batch.collect(), on_finish)));

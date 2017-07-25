@@ -317,7 +317,7 @@ impl BatchRunnable<Task> for Host {
 
         let req_ids1 = req_ids.clone();
         let sched = self.sched.clone();
-        let on_finish: engine::Callback<Vec<Option<engine::Result<Box<Snapshot>>>>> =
+        let on_finish: engine::BatchCallback<Box<Snapshot>> =
             box move |(_, results)| {
                 if let Ok(results) = results {
                     let batch = req_ids1.into_iter().zip(results).filter_map(|(id, res)| {
