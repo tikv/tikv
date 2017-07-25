@@ -267,7 +267,7 @@ impl BatchRunnable<Task> for Host {
     // TODO: limit pending reqs
     #[allow(for_kv_map)]
     fn run_batch(&mut self, tasks: &mut Vec<Task>) {
-        let total = tasks.len();
+        let mut total_reqs = 0;
         let mut grouped_reqs = map![];
         for task in tasks.drain(..) {
             match task {
@@ -284,6 +284,7 @@ impl BatchRunnable<Task> for Host {
                     };
                     let mut group = grouped_reqs.entry(key).or_insert_with(Vec::new);
                     group.push(req);
+                    total_reqs += 1;
                 }
                 Task::SnapRes(q_id, snap_res) => {
                     self.handle_snapshot_result(q_id, snap_res);
@@ -295,10 +296,13 @@ impl BatchRunnable<Task> for Host {
                 }
             }
         }
+        if total_reqs <= 0 {
+            return;
+        }
 
         // `send` and `try_recv` should be called in the same thread and in order.
         // It should not cause any `pthread_cond_wait`.
-        let (tx, rx) = sync_channel(total);
+        let (tx, rx) = sync_channel(total_reqs);
         let mut req_ids = Vec::new();
         let mut batch = Vec::with_capacity(grouped_reqs.len());
         for (_, reqs) in grouped_reqs {
