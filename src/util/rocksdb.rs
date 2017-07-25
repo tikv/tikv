@@ -15,7 +15,7 @@ use std::fs;
 use std::path::Path;
 
 use storage::CF_DEFAULT;
-use rocksdb::{DB, Options, SliceTransform, DBCompressionType};
+use rocksdb::{DB, ColumnFamilyOptions, DBOptions, SliceTransform, DBCompressionType};
 use rocksdb::rocksdb::supported_compression;
 
 pub use rocksdb::CFHandle;
@@ -39,31 +39,30 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
 }
 
 pub fn open(path: &str, cfs: &[&str]) -> Result<DB, String> {
-    let mut opts = Options::new();
+    let mut opts = DBOptions::new();
     opts.create_if_missing(false);
     let mut cfs_opts = vec![];
     for _ in 0..cfs.len() {
-        cfs_opts.push(Options::new());
+        cfs_opts.push(ColumnFamilyOptions::new());
     }
-    open_opt(opts, path, cfs, cfs_opts)
+    open_opt(opts, path, cfs.to_vec(), cfs_opts)
 }
 
-pub fn open_opt(opts: Options,
+pub fn open_opt(opts: DBOptions,
                 path: &str,
-                cfs: &[&str],
-                cfs_opts: Vec<Options>)
+                cfs: Vec<&str>,
+                cfs_opts: Vec<ColumnFamilyOptions>)
                 -> Result<DB, String> {
-    let cfs_ref_opts: Vec<&Options> = cfs_opts.iter().collect();
-    DB::open_cf(opts, path, cfs, &cfs_ref_opts)
+    DB::open_cf(opts, path, cfs, cfs_opts)
 }
 
 pub struct CFOptions<'a> {
     cf: &'a str,
-    options: Options,
+    options: ColumnFamilyOptions,
 }
 
 impl<'a> CFOptions<'a> {
-    pub fn new(cf: &'a str, options: Options) -> CFOptions<'a> {
+    pub fn new(cf: &'a str, options: ColumnFamilyOptions) -> CFOptions<'a> {
         CFOptions {
             cf: cf,
             options: options,
@@ -72,32 +71,35 @@ impl<'a> CFOptions<'a> {
 }
 
 pub fn new_engine(path: &str, cfs: &[&str]) -> Result<DB, String> {
-    let mut db_opts = Options::new();
+    let mut db_opts = DBOptions::new();
     db_opts.enable_statistics();
     let mut cfs_opts = Vec::with_capacity(cfs.len());
     for cf in cfs {
-        cfs_opts.push(CFOptions::new(*cf, Options::new()));
+        cfs_opts.push(CFOptions::new(*cf, ColumnFamilyOptions::new()));
     }
     new_engine_opt(path, db_opts, cfs_opts)
 }
 
-fn check_and_open(path: &str, mut db_opt: Options, cfs_opts: Vec<CFOptions>) -> Result<DB, String> {
+fn check_and_open(path: &str,
+                  mut db_opt: DBOptions,
+                  cfs_opts: Vec<CFOptions>)
+                  -> Result<DB, String> {
     // If db not exist, create it.
     if !db_exist(path) {
         db_opt.create_if_missing(true);
 
-        let mut cfs = vec![];
-        let mut cfs_opts_ref = vec![];
+        let mut cfs_v = vec![];
+        let mut cf_opts_v = vec![];
         if let Some(x) = cfs_opts.iter().find(|x| x.cf == CF_DEFAULT) {
-            cfs.push(CF_DEFAULT);
-            cfs_opts_ref.push(&x.options);
+            cfs_v.push(x.cf);
+            cf_opts_v.push(x.options.clone());
         }
-        let mut db = try!(DB::open_cf(db_opt, path, cfs.as_slice(), cfs_opts_ref.as_slice()));
-        for x in &cfs_opts {
+        let mut db = try!(DB::open_cf(db_opt, path, cfs_v, cf_opts_v));
+        for x in cfs_opts {
             if x.cf == CF_DEFAULT {
                 continue;
             }
-            try!(db.create_cf(x.cf, &x.options));
+            try!(db.create_cf(x.cf, x.options));
         }
 
         return Ok(db);
@@ -112,32 +114,31 @@ fn check_and_open(path: &str, mut db_opt: Options, cfs_opts: Vec<CFOptions>) -> 
 
     // If all column families are exist, just open db.
     if existed == needed {
-        let mut cfs = vec![];
-        let mut cfs_opts_ref = vec![];
-        for x in &cfs_opts {
-            cfs.push(x.cf);
-            cfs_opts_ref.push(&x.options);
+        let mut cfs_v = vec![];
+        let mut cfs_opts_v = vec![];
+        for x in cfs_opts {
+            cfs_v.push(x.cf);
+            cfs_opts_v.push(x.options);
         }
 
-        return DB::open_cf(db_opt, path, cfs.as_slice(), cfs_opts_ref.as_slice());
+        return DB::open_cf(db_opt, path, cfs_v, cfs_opts_v);
     }
 
     // Open db.
-    let common_opt = Options::new();
-    let mut cfs = vec![];
-    let mut cfs_opts_ref = vec![];
+    let mut cfs_v: Vec<&str> = Vec::new();
+    let mut cfs_opts_v: Vec<ColumnFamilyOptions> = Vec::new();
     for cf in &existed {
-        cfs.push(*cf);
+        cfs_v.push(cf);
         match cfs_opts.iter().find(|x| x.cf == *cf) {
             Some(x) => {
-                cfs_opts_ref.push(&x.options);
+                cfs_opts_v.push(x.options.clone());
             }
             None => {
-                cfs_opts_ref.push(&common_opt);
+                cfs_opts_v.push(ColumnFamilyOptions::new());
             }
         }
     }
-    let mut db = DB::open_cf(db_opt, path, cfs.as_slice(), cfs_opts_ref.as_slice()).unwrap();
+    let mut db = DB::open_cf(db_opt, path, cfs_v, cfs_opts_v).unwrap();
 
     // Drop discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
@@ -150,13 +151,14 @@ fn check_and_open(path: &str, mut db_opt: Options, cfs_opts: Vec<CFOptions>) -> 
 
     // Create needed column families not existed yet.
     for cf in cfs_diff(&needed, &existed) {
-        try!(db.create_cf(cf, &cfs_opts.iter().find(|x| x.cf == cf).unwrap().options));
+        try!(db.create_cf(cf,
+                          cfs_opts.iter().find(|x| x.cf == cf).unwrap().options.clone()));
     }
 
     Ok(db)
 }
 
-pub fn new_engine_opt(path: &str, opts: Options, cfs_opts: Vec<CFOptions>) -> Result<DB, String> {
+pub fn new_engine_opt(path: &str, opts: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<DB, String> {
     check_and_open(path, opts, cfs_opts)
 }
 
@@ -240,7 +242,7 @@ impl SliceTransform for NoopSliceTransform {
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{DB, Options};
+    use rocksdb::{DB, DBOptions, ColumnFamilyOptions};
     use tempdir::TempDir;
     use storage::CF_DEFAULT;
     use super::{check_and_open, CFOptions};
@@ -251,29 +253,29 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
 
         // create db when db not exist
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, Options::new())];
-        check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, &[CF_DEFAULT]);
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
+        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT]);
 
         // add cf1.
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, Options::new()),
-                            CFOptions::new("cf1", Options::new())];
-        check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, &[CF_DEFAULT, "cf1"]);
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+                            CFOptions::new("cf1", ColumnFamilyOptions::new())];
+        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf1"]);
 
         // drop cf1.
-        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, Options::new())];
-        check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, &[CF_DEFAULT]);
+        let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
+        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT]);
 
         // never drop default cf
         let cfs_opts = vec![];
-        check_and_open(path_str, Options::new(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, &[CF_DEFAULT]);
+        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT]);
     }
 
-    fn column_families_must_eq(path: &str, excepted: &[&str]) {
-        let opts = Options::new();
+    fn column_families_must_eq(path: &str, excepted: Vec<&str>) {
+        let opts = DBOptions::new();
         let cfs_list = DB::list_column_families(&opts, path).unwrap();
 
         let mut cfs_existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
