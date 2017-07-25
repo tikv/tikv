@@ -200,17 +200,17 @@ impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for SmallGroupFirstQ
 }
 
 // First in first out queue.
-pub struct FIFOQueue<T> {
+pub struct FifoQueue<T> {
     queue: VecDeque<Task<T>>,
 }
 
-impl<T: Hash + Ord + Send + Clone + Debug> FIFOQueue<T> {
-    pub fn new() -> FIFOQueue<T> {
-        FIFOQueue { queue: VecDeque::new() }
+impl<T: Hash + Ord + Send + Clone + Debug> FifoQueue<T> {
+    pub fn new() -> FifoQueue<T> {
+        FifoQueue { queue: VecDeque::new() }
     }
 }
 
-impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for FIFOQueue<T> {
+impl<T: Hash + Ord + Send + Clone + Debug> ScheduleQueue<T> for FifoQueue<T> {
     fn push(&mut self, task: Task<T>) {
         self.queue.push_back(task);
     }
@@ -562,7 +562,7 @@ impl<Q, T> Worker<Q, T>
 #[cfg(test)]
 mod test {
     use super::{ThreadPool, BigGroupThrottledQueue, Task, ScheduleQueue, SmallGroupFirstQueue,
-                FIFOQueue};
+                FifoQueue};
     use std::time::Duration;
     use std::sync::mpsc::channel;
     use std::sync::{Arc, Mutex};
@@ -800,7 +800,7 @@ mod test {
 
     #[test]
     fn test_fifo_queue() {
-        let mut queue = FIFOQueue::new();
+        let mut queue = FifoQueue::new();
         for id in 0..10 {
             let mut task = Task::new(0, move || {});
             task.id = id;
