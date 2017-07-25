@@ -28,7 +28,7 @@ use super::super::metrics::*;
 pub struct TopNExecutor<'a> {
     order_by: Rc<Vec<ByItem>>,
     cols: Rc<Vec<ColumnInfo>>,
-    related_cols: Vec<usize>, // offset of related columns
+    related_cols_offset: Vec<usize>, // offset of related columns
     heap: Option<TopNHeap>,
     iter: Option<IntoIter<SortRow>>,
     ctx: Rc<EvalContext>,
@@ -53,7 +53,7 @@ impl<'a> TopNExecutor<'a> {
             order_by: Rc::new(order_by),
             heap: Some(try!(TopNHeap::new(meta.get_limit() as usize))),
             cols: columns_info,
-            related_cols: visitor.cols(),
+            related_cols_offset: visitor.column_offsets(),
             iter: None,
             ctx: ctx,
             src: src,
@@ -67,7 +67,7 @@ impl<'a> TopNExecutor<'a> {
                                           &self.ctx,
                                           &row.data,
                                           self.cols.clone(),
-                                          &self.related_cols,
+                                          &self.related_cols_offset,
                                           row.handle));
             let mut ob_values = Vec::with_capacity(self.order_by.len());
             for by_item in self.order_by.as_ref().iter() {
@@ -121,7 +121,6 @@ pub mod test {
     use super::*;
     use super::super::table_scan::TableScanExecutor;
     use super::super::scanner::test::{TestStore, get_range, new_col_info};
-
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();

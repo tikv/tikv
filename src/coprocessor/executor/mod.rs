@@ -24,6 +24,7 @@ use super::codec::table::{RowColsDict, TableDecoder};
 use super::endpoint::get_pk;
 use super::xeval::{Evaluator, EvalContext};
 use super::Result;
+use super::Error;
 
 mod scanner;
 pub mod table_scan;
@@ -51,9 +52,12 @@ impl ExprColumnRefVisitor {
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
             let offset = box_try!(expr.get_val().decode_i64()) as usize;
-            if offset < self.cols_len {
-                self.cols_offset.insert(offset);
+            if offset > self.cols_len {
+                return Err(Error::Other(box_err!("offset {} overflow,should be less than {}",
+                                                 offset,
+                                                 self.cols_len)));
             }
+            self.cols_offset.insert(offset);
         } else {
             for sub_expr in expr.get_children() {
                 try!(self.visit(sub_expr));
@@ -69,7 +73,7 @@ impl ExprColumnRefVisitor {
         Ok(())
     }
 
-    pub fn cols(self) -> Vec<usize> {
+    pub fn column_offsets(self) -> Vec<usize> {
         self.cols_offset.into_iter().collect()
     }
 }

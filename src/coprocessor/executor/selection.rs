@@ -24,7 +24,7 @@ use super::super::metrics::*;
 pub struct SelectionExecutor<'a> {
     conditions: Vec<Expr>,
     cols: Rc<Vec<ColumnInfo>>,
-    related_cols: Vec<usize>, // offset of related columns
+    related_cols_offset: Vec<usize>, // offset of related columns
     ctx: Rc<EvalContext>,
     src: Box<Executor + 'a>,
 }
@@ -45,7 +45,7 @@ impl<'a> SelectionExecutor<'a> {
         Ok(SelectionExecutor {
             conditions: conditions,
             cols: columns_info,
-            related_cols: visitor.cols(),
+            related_cols_offset: visitor.column_offsets(),
             ctx: ctx,
             src: src,
         })
@@ -61,7 +61,7 @@ impl<'a> Executor for SelectionExecutor<'a> {
                                           &self.ctx,
                                           &row.data,
                                           self.cols.clone(),
-                                          &self.related_cols,
+                                          &self.related_cols_offset,
                                           row.handle));
             for expr in &self.conditions {
                 let val = box_try!(evaluator.eval(&self.ctx, expr));

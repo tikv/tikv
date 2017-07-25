@@ -36,7 +36,7 @@ pub struct AggregationExecutor<'a> {
     executed: bool,
     ctx: Rc<EvalContext>,
     cols: Rc<Vec<ColumnInfo>>,
-    related_cols: Vec<usize>, // offset of related columns
+    related_cols_offset: Vec<usize>, // offset of related columns
     src: Box<Executor + 'a>,
 }
 
@@ -62,7 +62,7 @@ impl<'a> AggregationExecutor<'a> {
             executed: false,
             ctx: ctx,
             cols: columns,
-            related_cols: visitor.cols(),
+            related_cols_offset: visitor.column_offsets(),
             src: src,
         })
     }
@@ -88,7 +88,7 @@ impl<'a> AggregationExecutor<'a> {
                                           &self.ctx,
                                           &row.data,
                                           self.cols.clone(),
-                                          &self.related_cols,
+                                          &self.related_cols_offset,
                                           row.handle));
             let group_key = Rc::new(try!(self.get_group_key(&mut eval)));
             match self.group_key_aggrs.entry(group_key.clone()) {
