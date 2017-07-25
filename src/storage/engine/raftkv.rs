@@ -201,7 +201,7 @@ impl<S: RaftStoreRouter> RaftKv<S> {
                 }
             }
 
-            on_finish((ctx.unwrap(), Ok(batch)));
+            on_finish((ctx.unwrap_or_else(CbContext::new), Ok(batch)));
         };
         try!(self.router.send_commands_batch(batch1, on_finish));
         Ok(())

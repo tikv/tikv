@@ -1334,6 +1334,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         // later. It doesn't matter whether the peer is a leader or not.
         // If it's not a leader, the proposing command log entry can't be committed.
 
+        let mut call_on_finish = false;
         let mut ret: Vec<Option<RaftCmdResponse>> = vec![None; size];
         for (region_id, batch) in batches {
             let mut peer = self.region_peers.get_mut(&region_id).unwrap();
@@ -1342,9 +1343,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                                            &mut self.pending_raft_groups);
             for (idx, resp) in resps {
                 ret[idx] = Some(resp);
+                call_on_finish = true;
             }
         }
-        on_finish.call_box((ret,));
+        if call_on_finish {
+            on_finish.call_box((ret,));
+        }
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.

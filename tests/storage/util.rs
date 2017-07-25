@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use tikv::storage::{Engine, Snapshot, Modify, ALL_CFS};
-use tikv::storage::engine::{Callback, Result};
+use tikv::storage::engine::{Callback, Result, BatchCallback};
 use tikv::storage::config::Config;
 use kvproto::kvrpcpb::Context;
 use raftstore::cluster::Cluster;
@@ -118,7 +118,7 @@ impl Engine for BlockEngine {
 
     fn async_snapshots_batch(&self,
                              batch: Vec<(Context, Callback<Box<Snapshot>>)>,
-                             on_finish: Callback<Vec<Option<Result<Box<Snapshot>>>>>)
+                             on_finish: BatchCallback<Box<Snapshot>>)
                              -> Result<()> {
         let block_snapshot = self.block_snapshot.clone();
         let sender = self.sender.clone();
