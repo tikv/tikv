@@ -11,23 +11,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use std::cmp::Ordering;
 use std::str;
 use std::fmt::{self, Formatter, Display};
+use std::time::Duration as StdDuration;
 
-use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration, TimeZone};
+use chrono::{DateTime, Timelike, UTC, Datelike, FixedOffset, Duration as ChronoDuration, TimeZone,
+             NaiveDateTime};
 
 use coprocessor::codec::mysql::{self, types, parse_frac, check_fsp};
 use coprocessor::codec::mysql::Decimal;
+use super::duration::Duration;
+use super::round_frac;
 use super::super::{Result, TEN_POW};
-
 
 const ZERO_DATETIME_STR: &'static str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &'static str = "0000-00-00";
 /// In go, `time.Date(0, 0, 0, 0, 0, 0, 0, time.UTC)` will be adjusted to
 /// `-0001-11-30 00:00:00 +0000 UTC`, whose timestamp is -62169984000.
 const ZERO_TIMESTAMP: i64 = -62169984000;
+
+// maxDatetime is the maximum for mysql datetime type. 9999/12/31 23:59:59
+const MAX_DATETIME: i64 = 253402300799;
+// maxTimestamp is the maximum for mysql timestamp type. 2038/1/19 03:14:07
+const MAX_TIMESTAMP: i64 = 2147483647;
+// minTimestamp is the minimum for mysql timestamp type. 1970/1/1 00:00:01
+const MIN_TIMESTAMP: i64 = 1;
 
 #[inline]
 fn zero_time(tz: &FixedOffset) -> DateTime<FixedOffset> {
@@ -41,19 +50,19 @@ fn zero_datetime(tz: &FixedOffset) -> Time {
 
 #[allow(too_many_arguments)]
 #[inline]
-fn ymd_hms_nanos<T: TimeZone>(tz: &T,
-                              year: i32,
-                              month: u32,
-                              day: u32,
-                              hour: u32,
-                              min: u32,
-                              secs: u32,
-                              nanos: u32)
-                              -> Result<DateTime<T>> {
+pub fn ymd_hms_nanos<T: TimeZone>(tz: &T,
+                                  year: i32,
+                                  month: u32,
+                                  day: u32,
+                                  hour: u32,
+                                  min: u32,
+                                  secs: u32,
+                                  nanos: i64)
+                                  -> Result<DateTime<T>> {
     tz.ymd_opt(year, month, day)
         .and_hms_opt(hour, min, secs)
         .single()
-        .and_then(|t| t.checked_add(Duration::nanoseconds(nanos as i64)))
+        .and_then(|t| t.checked_add(ChronoDuration::nanoseconds(nanos as i64)))
         .ok_or_else(|| {
             box_err!("'{}-{}-{} {}:{}:{}.{:09}' is not a valid datetime",
                      year,
@@ -134,12 +143,85 @@ impl Time {
             let s = self.time.format("%Y%m%d%H%M%S");
             if self.fsp > 0 {
                 // Do we need to round the result?
-                let nanos = self.time.nanosecond() / TEN_POW[9 - self.fsp as usize];
+                let nanos = self.time.nanosecond() as f64 / TEN_POW[9 - self.fsp as usize] as f64;
                 format!("{}.{1:02$}", s, nanos, self.fsp as usize)
             } else {
                 format!("{}", s)
             }
         }
+    }
+
+    pub fn round_frac(self, fsp: i8) -> Result<Time> {
+        if self.tp == types::DATE {
+            return Ok(self);
+        }
+        let fsp = try!(check_fsp(fsp));
+        let sec = self.time.timestamp();
+        let nanos = round_frac(self.time.timestamp_subsec_nanos(), fsp as i8);
+        let t = DateTime::from_utc(NaiveDateTime::from_timestamp(sec, nanos),
+                                   self.time.timezone());
+        Time::new(t, self.tp, fsp as i8)
+    }
+
+    pub fn check(&self) -> Result<()> {
+        if self.is_zero() {
+            return Ok(());
+        }
+
+        match self.tp {
+            types::TIMESTAMP => {
+                if self.time.timestamp() > MAX_TIMESTAMP || self.time.timestamp() < MIN_TIMESTAMP {
+                    return Err(box_err!("invalid time format"));
+                }
+            }
+            types::DATETIME | types::DATE => {
+                if self.time.timestamp() > MAX_DATETIME {
+                    return Err(box_err!("invalid time format"));
+                }
+            }
+            _ => return Err(box_err!("invalid datetype for time type")),
+        }
+        Ok(())
+    }
+
+    // converts time with type tp.
+    pub fn convert(self, tp: u8) -> Result<Time> {
+        if self.tp == tp {
+            return Ok(self);
+        }
+        if self.is_zero() {
+            return Time::new(self.time, tp, self.fsp as i8);
+        }
+
+        let t = try!(Time::new(self.time, tp, self.fsp as i8));
+        try!(t.check());
+
+        if tp == types::DATE {
+            let t = try!(ymd_hms_nanos(&t.time.timezone(),
+                                       t.time.year(),
+                                       t.time.month(),
+                                       t.time.day(),
+                                       0,
+                                       0,
+                                       0,
+                                       0));
+            return Time::new(t, tp, self.fsp as i8);
+        }
+        Ok(t)
+    }
+
+    // ConvertToDuration converts mysql datetime, timestamp and date to mysql time type.
+    // e.g,
+    // 2012-12-12T10:10:10 -> 10:10:10
+    // 2012-12-12 -> 0
+    pub fn to_dur(&self) -> Result<Duration> {
+        if self.is_zero() {
+            return Ok(Duration::zero());
+        }
+        let time = self.time.time();
+        let d = StdDuration::new((time.hour() * 3600 + time.minute() * 60 + time.second()) as u64,
+                                 time.nanosecond());
+        Duration::new(d, false, self.get_fsp() as i8)
     }
 
     pub fn to_decimal(&self) -> Result<Decimal> {
@@ -247,7 +329,7 @@ impl Time {
                                    h,
                                    minute,
                                    sec,
-                                   frac * TEN_POW[9 - fsp as usize]));
+                                   (frac * TEN_POW[9 - fsp as usize]) as i64));
         Time::new(t, types::DATETIME as u8, fsp as i8)
     }
 
@@ -269,7 +351,7 @@ impl Time {
         let second = (hms & ((1 << 6) - 1)) as u32;
         let minute = ((hms >> 6) & ((1 << 6) - 1)) as u32;
         let hour = (hms >> 12) as u32;
-        let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
+        let nanosec = ((u & ((1 << 24) - 1)) * 1000) as i64;
         let t = if tp == types::TIMESTAMP {
             let t = try!(ymd_hms_nanos(&UTC, year, month, day, hour, minute, second, nanosec));
             tz.from_utc_datetime(&t.naive_utc())

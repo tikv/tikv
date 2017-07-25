@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use super::Result;
+use super::TEN_POW;
 use util::escape;
 
 /// `UN_SPECIFIED_FSP` is the unspecified fractional seconds part.
@@ -56,11 +57,19 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
     }
 }
 
-mod duration;
+// round up a fsp integer acorrding to the `fsp`
+// We will use the “round half up” rule, e.g, >= 0.5 -> 1, < 0.5 -> 0,
+pub fn round_frac(number: u32, fsp: i8) -> u32 {
+    let divisor = TEN_POW[9 - fsp as usize];
+    (number as f64 / divisor as f64).round() as u32 * divisor
+}
+
+pub mod duration;
 pub mod decimal;
 pub mod types;
-mod time;
+pub mod time;
 pub mod json;
+pub mod charset;
 
 pub use self::duration::Duration;
 pub use self::decimal::{Decimal, Res, DecimalEncoder, DecimalDecoder, dec_encoded_len};

@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 pub mod evaluator;
 mod builtin_math;
+mod builtin_cast;
 
 use util::codec;
 
@@ -39,3 +39,5 @@ use std::result;
 pub type Result<T> = result::Result<T, Error>;
 
 pub use self::evaluator::{Evaluator, EvalContext};
+
+pub const ERROR_UNIMPLEMENTED: &'static str = "unimplemented";
